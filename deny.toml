@@ -1,0 +1,33 @@
+# Dependency policy for cargo-deny (AGENTS.md §3.7). ./scripts/verify.sh and CI run
+# `cargo deny check licenses bans sources` once the Cargo workspace exists.
+#
+# ninge is Apache-2.0. Only permissive licenses that can be combined with it are allowed;
+# no GPL / LGPL / AGPL / SSPL / weak-copyleft crate enters the dependency graph. Adding a
+# license to this list is a `decision` issue, not a drive-by edit.
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

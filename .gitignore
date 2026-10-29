@@ -1,0 +1,52 @@
+# Rust build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Test-ROM build output — the sources in testroms/ are tracked; built ROMs are never
+# committed, ours included (AGENTS.md §3.1).
+/testroms/**/build/
+*.elf
+
+# CPU JSON test suites are fetched, not vendored (AGENTS.md §5.1).
+/tests/data/
+
+# Never commit a ROM, save, savestate, BIOS, or firmware dump (AGENTS.md §3).
+# The clean-room scan in CI fails if one is tracked anyway (e.g. with `git add -f`).
+*.nds
+*.srl
+*.dsi
+*.ids
+*.gba
+*.sav
+*.dsv
+*bios*.bin
+*bios*.rom
+*firmware*.bin
+*firmware*.rom
+nand.bin
+
+# Python caches from the hook scripts
+__pycache__/
+*.py[cod]
+
+# Local
+.DS_Store
+*.swp
+.env
+.env.*
+
+# Agent configuration and the .agents/skills symlink must be tracked so every clone gets the
+# same workflow. A user's global exclude often ignores `.claude/`, so re-include it here (a
+# repo .gitignore outranks the global excludesFile).
+!.claude/
+!.claude/**
+!.codex/
+!.cursor/
+!.opencode/
+!.pi/
+!.agents/
+
+# A machine's own agent permissions (the `/permissions` approvals Claude Code writes) are
+# personal — a path or a tool this machine approved must not reach a clone.
+.claude/settings.local.json

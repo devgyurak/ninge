@@ -1,0 +1,52 @@
+name: ci
+
+# Runs ./scripts/verify.sh — the same gate an agent or a contributor runs locally. Until
+# Phase 0 adds Cargo.toml, the Rust steps are skipped and only the Python gates run.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS is included on purpose: Apple Silicon is the target machine (plan §5, Phase 8).
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # rustup installs the exact version and components pinned in rust-toolchain.toml
+      # (AGENTS.md §4) — never a floating `stable`.
+      - name: Rust toolchain (pinned)
+        if: hashFiles('Cargo.toml') != ''
+        run: rustup toolchain install
+
+      - name: cargo-nextest · cargo-llvm-cov · cargo-deny
+        if: hashFiles('Cargo.toml') != ''
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov,cargo-deny
+
+      # Built test ROMs are never committed (AGENTS.md §3.1), so the golden tests build them
+      # from testroms/ sources with BlocksDS — the official Docker image pinned by digest,
+      # the same one contributors use locally. Phase 0 adds that step here.
+
+      - name: Verify
+        run: ./scripts/verify.sh

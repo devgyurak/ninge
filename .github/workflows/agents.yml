@@ -1,0 +1,34 @@
+name: agents
+
+# Guards the agent configuration itself: broken pointers, subagent body drift, or a hook
+# whose script went missing fail here (and in the PR) instead of on a contributor's machine.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agents-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  config:
+    name: agent-config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check agent config
+        run: python3 scripts/check_agent_config.py
+
+      - name: Hook selftest
+        run: python3 scripts/agent_hooks/selftest.py

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! ninge: the terminal frontend. Terminal output arrives with issue #5.
+//! ninge: the terminal frontend.
 
 // TODO(phase0): terminal output (#5).
 

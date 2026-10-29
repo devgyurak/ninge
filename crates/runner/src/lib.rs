@@ -4,8 +4,6 @@
 use ninge_core::{Machine, Screen};
 
 /// Builds a machine and returns the top screen's frame.
-///
-/// Deferred: ROM loading arrives with issue #3.
 // TODO(phase0): ROM loading (#3).
 pub fn render_top_frame() -> Vec<u32> {
     Machine::new().frame(Screen::Top).to_vec()

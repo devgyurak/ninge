@@ -3,7 +3,7 @@
 Sources: GBATEK "DS Technical Data" (video list: two LCD screens, 256x192 pixels each,
 18-bit colour depth); "DS Display Dimensions / Timings" (256 visible dots per line, 192
 visible lines); "DS Touch Screen Controller (TSC)" (the touch controller belongs to the lower
-screen); the `4000304h POWCNT1` register description (bit 15, display swap between the upper
+screen); "DS Power Control" (the `4000304h POWCNT1` register, bit 15, display swap between the upper
 and lower screen).
 Used by: `crates/core/src/lib.rs` (`Machine`, `Screen`, `SCREEN_WIDTH`, `SCREEN_HEIGHT`)   Phase: 0
 

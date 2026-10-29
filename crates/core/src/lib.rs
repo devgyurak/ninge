@@ -9,6 +9,9 @@ pub const SCREEN_WIDTH: usize = 256;
 pub const SCREEN_HEIGHT: usize = 192;
 
 /// One of the two physical screens.
+///
+/// `Top` and `Bottom` are the physical screens, not graphics engines A/B: which engine shows
+/// on which screen is set by POWCNT1 (Phase 2-3). See `docs/hw/display.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Screen {
     /// The upper screen.
@@ -24,9 +27,19 @@ pub enum Screen {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machine {
     // Invariant: each buffer holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels. They are
-    // `Vec`s because serde does not derive for arrays this large.
+    // `Vec`s because serde does not derive for arrays this large. The buffers are derived
+    // output, not savestate data: they are skipped on save, and a load recreates them blank
+    // (restoring the invariant) until the next frame is drawn. The savestate format itself
+    // is owned by #19.
+    #[serde(skip, default = "blank_screen")]
     top: Vec<u32>,
+    #[serde(skip, default = "blank_screen")]
     bottom: Vec<u32>,
+}
+
+/// A black screen of exactly `SCREEN_WIDTH * SCREEN_HEIGHT` pixels.
+fn blank_screen() -> Vec<u32> {
+    vec![0x0000_0000; SCREEN_WIDTH * SCREEN_HEIGHT]
 }
 
 impl Machine {
@@ -36,8 +49,8 @@ impl Machine {
     pub fn new() -> Self {
         // TODO(phase2): execution entry point (run a frame) arrives with the ARM9 bring-up.
         Self {
-            top: vec![0x0000_0000; SCREEN_WIDTH * SCREEN_HEIGHT],
-            bottom: vec![0x0000_0000; SCREEN_WIDTH * SCREEN_HEIGHT],
+            top: blank_screen(),
+            bottom: blank_screen(),
         }
     }
 
@@ -59,9 +72,7 @@ impl Default for Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::de::DeserializeOwned;
-
-    fn assert_savestate_data<T: Serialize + DeserializeOwned>(_state: &T) {}
+    use serde::de::value::{Error, MapDeserializer};
 
     #[test]
     fn given_new_machine_when_reading_each_screen_then_length_is_256_by_192() {
@@ -83,8 +94,14 @@ mod tests {
     }
 
     #[test]
-    fn given_machine_when_checked_against_serde_bounds_then_it_is_savestate_data() {
-        // TODO: the real save -> load round trip comes with the savestate encoder issue.
-        assert_savestate_data(&Machine::new());
+    fn given_empty_savestate_map_when_deserializing_machine_then_both_screens_are_full_size() {
+        // TODO(phase2): save -> load round trip with the savestate encoder (#19).
+        let empty = MapDeserializer::<_, Error>::new(std::iter::empty::<(&str, u32)>());
+        let machine = Machine::deserialize(empty).expect("an empty map is a valid Machine");
+        let lengths = [
+            machine.frame(Screen::Top).len(),
+            machine.frame(Screen::Bottom).len(),
+        ];
+        assert_eq!(lengths, [49_152, 49_152]);
     }
 }

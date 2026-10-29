@@ -4,6 +4,7 @@ description = "Dual-screen handheld emulator core: pure logic, no IO"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 
 [dependencies]

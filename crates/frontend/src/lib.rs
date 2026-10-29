@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! ninge: the terminal frontend. Terminal output arrives with issue #5.
 
+// TODO(phase0): terminal output (#5).
+
 use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 /// Application entry point; returns the process banner for now.

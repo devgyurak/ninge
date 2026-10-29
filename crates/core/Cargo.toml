@@ -1,0 +1,13 @@
+[package]
+name = "ninge-core"
+description = "Dual-screen handheld emulator core: pure logic, no IO"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

@@ -20,6 +20,9 @@
       "Bash(git log:*)",
       "Bash(git show:*)",
       "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
       "Bash(rg:*)",
       "Bash(wc:*)"
     ],
@@ -30,8 +33,6 @@
       "Bash(cargo insta accept:*)",
       "Bash(rustup:*)",
       "Bash(python3 -c:*)",
-      "Bash(git commit:*)",
-      "Bash(git push:*)",
       "Bash(gh issue create:*)",
       "Bash(gh pr create:*)"
     ],

@@ -436,9 +436,10 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   imports the hooks' lists to prove §2 and §3.3 state the same ones.
 - **One permission policy across harnesses.** Allow read-only verification
   (`cargo fmt|clippy|check|test|nextest|llvm-cov|tree|doc`, `python3 scripts/…`, `./scripts/verify.sh`,
-  `git status|diff|log|show`); **ask** for mutating or networked commands (`cargo add`,
-  `cargo install`, `cargo update`, `git commit`, `git push`); **deny** destructive ones
-  (`rm -rf`, force-push). Wired in `.claude/settings.json` and `.opencode/opencode.json`; Pi
+  `git status|diff|log|show`) and `git add|commit|push` — an agent still commits or pushes
+  only when the user asks (§8), so a prompt adds nothing; **ask** for dependency and
+  outward-facing commands (`cargo add`, `cargo install`, `cargo update`, `gh issue create`,
+  `gh pr create`); **deny** destructive ones (`rm -rf`, force-push). Wired in `.claude/settings.json` and `.opencode/opencode.json`; Pi
   and Codex follow their own settings, and the shared guard still runs.
 
 ---
@@ -452,6 +453,8 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 4. `./scripts/verify.sh`, all green.
 5. Report factually what changed and what you verified. If something failed or was skipped,
    say so.
+6. **Commit and push only when the user asks.** The permissions do not prompt for
+   `git commit` / `git push`; the user's request is the approval.
 
 ### Commit · PR · branch names
 

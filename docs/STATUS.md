@@ -78,7 +78,7 @@ Facts to confirm while building Phase 0, not decisions:
 
 - [ ] Ghostty's kitty-graphics shared-memory (`t=s`) support (plan §3.3).
 - [ ] The BlocksDS image digest to pin, and that it builds a bare-metal test ROM.
-- [ ] The current stable Rust version to pin.
+- [x] The current stable Rust version to pin — `1.99.1` (released 2026-10-13).
 - [x] **ARM7TDMI JSON suite** — `SingleStepTests/ARM7TDMI` (MIT, Apache-2.0-compatible),
       pinned to commit `e3097d88d428752736b949d94c094d5da50f0db6`. About 1 GB of `.json.bin`
       files across 46 instruction groups: fetched into `tests/data/` (git-ignored) with

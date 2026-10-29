@@ -1,0 +1,18 @@
+[package]
+name = "ninge"
+description = "Terminal-native dual-screen handheld emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+ninge-core.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ninge"
+path = "src/main.rs"

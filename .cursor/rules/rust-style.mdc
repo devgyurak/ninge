@@ -1,0 +1,32 @@
+---
+description: ninge Rust conventions — guest arithmetic, named bits, errors, unsafe, comments
+globs: crates/**/*.rs
+alwaysApply: false
+---
+
+# Rust conventions
+
+Full text: `AGENTS.md` §2 and §4.
+
+- **Apache-2.0.** Line 1 of every `.rs` file is `// SPDX-License-Identifier: Apache-2.0`.
+- **Edition 2024, stable.** `cargo fmt` and `cargo clippy -D warnings` stay clean.
+- **Guest arithmetic wraps explicitly** — `wrapping_add`, `overflowing_sub`, `rotate_right`.
+  Never rely on debug overflow panics; write narrowing casts deliberately.
+- **Guest input never panics the core.** A ROM, register write, or DMA length can be anything:
+  mask, mirror, or open-bus as the `docs/hw/` note says. `unwrap`/`expect` only on invariants
+  we own, with the invariant in the message.
+- **Name the bits.** Register fields through named constants or accessors; the doc comment
+  cites the `docs/hw/` note. A bare address or shift in logic needs a comment.
+- **Comments explain why** and cite the note, so a hardware quirk is not "fixed" into a bug.
+- **Errors**: `thiserror` in ninge-core, `anyhow` in binaries.
+- **Lint exceptions**: `#[expect(clippy::<lint>, reason = "...")]` on the item — never a
+  crate-wide `allow`.
+- **`unsafe`**: workspace lints deny it; opt in with `#[expect(unsafe_code, reason = "...")]`,
+  a `// SAFETY:` comment that argues soundness, and the benchmark cited in the PR.
+- **Hot path** (CPU step, bus access, pixel loops): no `dyn`, no allocation, no `format!`, no
+  `collect()`; `#[inline]` only with a measurement.
+- **Visibility** `pub(crate)` by default; `pub` items have doc comments.
+- **Exceptions to core purity**: `// PURITY-OK: <reason>` on the line or the line above —
+  a reason a reviewer will accept.
+- **Markers**: `TODO(hw-unverified)`, `TODO(phaseN)`.
+- **English** comments and identifiers only.

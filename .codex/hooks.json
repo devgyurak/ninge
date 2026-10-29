@@ -1,0 +1,49 @@
+{
+  "description": "ninge hooks. Scripts live in scripts/agent_hooks/ and are shared with Claude Code, Cursor, OpenCode, and Pi. Paths use the git root so the hooks work from a subdirectory.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|exec_command|write_stdin",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/agent_hooks/guard_cleanroom.py\" --tool codex",
+            "statusMessage": "Checking clean-room rules...",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/agent_hooks/format_rust.py\" --tool codex",
+            "statusMessage": "Applying rustfmt...",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/agent_hooks/check_architecture.py\" --tool codex",
+            "statusMessage": "Checking architecture rules...",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/agent_hooks/check_tests.py\" --tool codex",
+            "statusMessage": "Checking test conventions...",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/agent_hooks/check_language.py\" --tool codex",
+            "statusMessage": "Checking English-only text...",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+# Codex CLI project settings (layered over your personal ~/.codex/config.toml).
+#
+# Model choice and approval policy are intentionally left out — those are personal
+# preferences for ~/.codex/config.toml. This file holds only what working in *this*
+# repository needs.
+
+# AGENTS.md is read up to 32 KiB by default. The canon lives in the single root AGENTS.md,
+# and scripts/check_agent_config.py fails if it outgrows this budget.
+project_doc_max_bytes = 32768
+
+# Agents read GBATEK and hardware write-ups online, so the workspace sandbox keeps network
+# access. The clean-room guard (scripts/agent_hooks/guard_cleanroom.py) still blocks GPL
+# emulator source on code hosts.
+[sandbox_workspace_write]
+network_access = true
+exclude_tmpdir_env_var = false

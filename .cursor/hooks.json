@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeReadFile": [
+      { "command": "python3 scripts/agent_hooks/guard_cleanroom.py --tool cursor", "failClosed": true }
+    ],
+    "beforeShellExecution": [
+      { "command": "python3 scripts/agent_hooks/guard_cleanroom.py --tool cursor", "failClosed": true }
+    ],
+    "afterFileEdit": [
+      { "command": "python3 scripts/agent_hooks/format_rust.py --tool cursor" }
+    ],
+    "stop": [
+      { "command": "python3 scripts/agent_hooks/check_architecture.py --tool cursor --event stop", "failClosed": false },
+      { "command": "python3 scripts/agent_hooks/check_tests.py --tool cursor --event stop", "failClosed": false },
+      { "command": "python3 scripts/agent_hooks/check_language.py --tool cursor --event stop", "failClosed": false }
+    ]
+  }
+}

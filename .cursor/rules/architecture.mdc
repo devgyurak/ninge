@@ -1,0 +1,56 @@
+---
+description: ninge crate graph, core purity, and clean-room invariants — the rules that must not be broken
+alwaysApply: true
+---
+
+# ninge architecture
+
+The full canon is in `AGENTS.md`. This rule is the **always-on** part. The current phase is
+the `▶` line in `docs/STATUS.md` — work inside it only.
+
+## Crates (edges point at ninge-core)
+
+```
+ninge (frontend) ┐
+ninge-tracediff ─┼──▶ ninge-core      (pure; depends on no workspace crate)
+ninge-runner ────┘                    nothing depends on the frontend (`ninge`)
+```
+
+## ninge-core rules
+
+1. **Pure** — no IO, clocks, randomness, threads, printing. Inputs: button/touch state and
+   bytes handed in. Outputs: two frame buffers and audio samples.
+2. **Single owner** — `Machine` owns all state; `&mut self`. No `Rc`/`RefCell`/`Cell`/`Arc`/
+   `Mutex`/`static mut`.
+3. **Static dispatch** — CPU generic over a bus trait, `Cpu<const ARM9: bool>`; no `dyn`; no
+   allocation on the hot path.
+4. **Plain serde data** — no pointers, closures, trait objects; `BTreeMap`, never `HashMap`.
+5. **Deterministic** — same ROM + inputs ⇒ same frames and savestate bytes; scheduler ties by
+   (timestamp, sequence).
+6. **`unsafe`** — measurement + `// SAFETY:`.
+
+## Clean room (the most dangerous)
+
+- No ROM, save, BIOS, firmware, extracted data, or commercial screenshot — anywhere, ever.
+  Built test ROMs are never committed either; only their sources.
+- HLE BIOS + direct boot + synthetic firmware. Agents never open a dump.
+- Agents never open GPL emulator source; never copy or translate emulator code.
+- Every behavior comes from `docs/hw/<feature>.md` in our own words; guesses are
+  `TODO(hw-unverified)`.
+- No trademarks in crate, binary, or identifier names (register/part names are exempt).
+
+## License
+
+Apache-2.0. Every source starts with `SPDX-License-Identifier: Apache-2.0`; dependencies stay
+on the `deny.toml` allow-list (no copyleft).
+
+## English only
+
+Code, comments, docs, and messages are English. A translated document is `<name>-<code>.md`
+next to its English original, and only when a human approved it.
+
+## Gate
+
+```bash
+./scripts/verify.sh
+```

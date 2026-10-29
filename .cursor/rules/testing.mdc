@@ -1,0 +1,67 @@
+---
+description: ninge test conventions — GWT names, no control flow, determinism, golden frames, our own test ROMs only
+globs: "**/tests/**/*.rs, testroms/**"
+alwaysApply: false
+---
+
+# Test conventions
+
+Full text: `AGENTS.md` §5. These also apply to `#[cfg(test)]` modules inside `src/`.
+
+## Names (auto-enforced)
+
+`given_<state>_when_<action>_then_<observable>`. The part after the last `_then_` is
+observable — `then_r1_includes_carry`, never `then_works` / `then_ok`.
+
+## No control flow in a test body (auto-enforced)
+
+No `if` / `else` / `for` / `while` / `loop` / `match` / `let … else` / `for_each`. Put the
+table in a harness function that returns the failures and assert the list is empty.
+
+```rust
+// Bad — stops at the first failing case
+#[test]
+fn given_adc_suite_when_run_then_all_match() {
+    for case in load_cases("arm/adc.json") {
+        assert_eq!(run_case(&case), case.expected);
+    }
+}
+
+// Good — every failing case shows at once
+#[test]
+fn given_adc_json_suite_when_each_case_runs_then_no_case_differs() {
+    let failures = run_json_suite::<false>("arm/adc.json");
+    assert_eq!(failures, Vec::<CaseDiff>::new());
+}
+```
+
+## Every test asserts (auto-enforced)
+
+`assert*!`, `prop_assert*!`, an insta snapshot, an `assert_*` helper, or
+`#[should_panic(expected = "...")]`.
+
+## What to test
+
+- The failing test comes **before** the implementation; a `FIX:` carries its reproduction.
+- Expected values come from `docs/hw/` / GBATEK / the ARM ARM — never from our own output.
+- Determinism: two runs of the same ROM + input log give identical frame hashes and
+  savestate bytes; save → load → continue matches an uninterrupted run.
+- Edges: pipeline offsets, r15 writes, banked registers, interworking, unaligned access,
+  open bus, mirrors, bank remaps, IRQ with IME=0, FIFO full/empty, timer cascade, DMA modes,
+  scheduler ties.
+
+## Golden frames and snapshots
+
+Both screens are hashed. **Never regenerate a hash or bulk-accept snapshots to go green.**
+A changed hash needs its reason in the PR. Commit `proptest-regressions/`.
+
+## Coverage floor 90%
+
+`cargo llvm-cov --fail-under-lines 90` runs in `./scripts/verify.sh` and CI. **Never lower
+the floor or exclude files** — write tests that assert behavior.
+
+## Nothing commercial, no network
+
+Only our own `testroms/` (sources only — built ROMs are never committed) and synthetic
+data. A local-only test needing a user's ROM reads `NINGE_USER_ROM` and is
+`#[ignore = "needs a user-supplied ROM"]`.

@@ -17,8 +17,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Builds the test ROMs once, on ubuntu where Docker runs, with the BlocksDS image pinned by
+  # digest inside scripts/build_testroms.sh (the only place the digest lives). macOS runners
+  # cannot run Docker, so the verify jobs download this artifact instead. Decided in #65.
+  testroms:
+    name: testroms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build test ROMs
+        run: ./scripts/build_testroms.sh
+
+      - name: Upload test ROMs (with SHA256SUMS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: testroms
+          path: testroms/build/
+          if-no-files-found: error
+
   verify:
     name: verify (${{ matrix.os }})
+    needs: testroms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -44,9 +64,17 @@ jobs:
         with:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny
 
-      # Built test ROMs are never committed (AGENTS.md §3.1), so the golden tests build them
-      # from testroms/ sources with BlocksDS — the official Docker image pinned by digest,
-      # the same one contributors use locally. Phase 0 adds that step here.
+      # Built test ROMs are never committed (AGENTS.md §3.1); the testroms job builds them.
+      - name: Download test ROMs
+        uses: actions/download-artifact@v4
+        with:
+          name: testroms
+          path: testroms/build/
 
+      # Decided in #65. Ubuntu has Docker and rebuilds the ROMs; macOS only verifies the
+      # artifact's checksums. The variable is set for macOS alone, so a runner without
+      # Docker cannot silently skip the build.
       - name: Verify
+        env:
+          NINGE_PREBUILT_TESTROMS: ${{ runner.os == 'macOS' && '1' || '' }}
         run: ./scripts/verify.sh

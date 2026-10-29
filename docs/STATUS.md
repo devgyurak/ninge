@@ -55,7 +55,8 @@ gates; reopening one is a new `decision` issue.
 - [x] **Toolchain** — an exact stable version in `rust-toolchain.toml` (≥ 1.85), bumped by
       its own `UPT:` PR; `verify.sh` refuses a floating channel. (AGENTS.md §4.)
 - [x] **BlocksDS is required** — the official Docker image pinned by digest, the same locally
-      and in CI; Phase 0 wires it in. (AGENTS.md §7.)
+      and in CI. macOS CI cannot run Docker: the ubuntu `testroms` job builds the ROMs and the
+      macOS job verifies that artifact's checksums. (AGENTS.md §7, decision #65.)
 - [x] **Platforms** — macOS first-class, Linux CI-verified, **Windows planned**: no Windows
       code path yet, OS-specific frontend pieces stay behind one module. (AGENTS.md §2.)
 - [x] **Savestate format** — binary serde encoding with a magic number and a format version;
@@ -77,7 +78,10 @@ gates; reopening one is a new `decision` issue.
 Facts to confirm while building Phase 0, not decisions:
 
 - [ ] Ghostty's kitty-graphics shared-memory (`t=s`) support (plan §3.3).
-- [ ] The BlocksDS image digest to pin, and that it builds a bare-metal test ROM.
+- [x] **BlocksDS image** — `skylyrac/blocksds` tag `slim-v1.24.0`, multi-arch index digest
+      `sha256:779f6193d1030c62e60d1f0f39c3e32cf4045c0bd224a45c0ceadf9d9ab01a51` (recorded here;
+      `scripts/build_testroms.sh` is the only place code reads it — update both together). It builds the bare-metal `smoke` ROM; the build is
+      byte-identical across clean rebuilds and across arm64 and amd64.
 - [x] The current stable Rust version to pin — `1.99.1` (released 2026-10-13).
 - [x] **ARM7TDMI JSON suite** — `SingleStepTests/ARM7TDMI` (MIT, Apache-2.0-compatible),
       pinned to commit `e3097d88d428752736b949d94c094d5da50f0db6`. About 1 GB of `.json.bin`

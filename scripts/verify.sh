@@ -57,6 +57,26 @@ INSTALL="cargo install --locked cargo-deny"
 need cargo deny --version
 cargo deny --locked check licenses bans sources
 
+# Test ROMs (AGENTS.md §3.1, §7). Built ROMs are never committed, so the golden tests need
+# them built from testroms/ sources. Decided in #65.
+#   1. Docker present      -> build with the pinned BlocksDS image (local, ubuntu CI).
+#   2. no Docker, and NINGE_PREBUILT_TESTROMS=1 -> verify the prebuilt artifact's checksums
+#      (the macOS CI job, which cannot run Docker). Only ci.yml sets the variable, so a stale
+#      local build/ directory can never pass.
+#   3. otherwise           -> fail. A missing toolchain is never a pass.
+step "test ROMs (BlocksDS)"
+if command -v docker >/dev/null 2>&1; then
+  ./scripts/build_testroms.sh
+  (cd testroms/build && shasum -a 256 -c SHA256SUMS)
+elif [ "${NINGE_PREBUILT_TESTROMS:-}" = "1" ]; then
+  [ -f testroms/build/SHA256SUMS ] || { echo "testroms/build/SHA256SUMS is missing — the testroms artifact was not downloaded" >&2; exit 1; }
+  (cd testroms/build && shasum -a 256 -c SHA256SUMS)
+  echo "  verified prebuilt test ROMs (not built on this runner)"
+else
+  echo "Docker is required to build the test ROMs — install Docker (https://docs.docker.com/get-docker/) and retry." >&2
+  exit 1
+fi
+
 # Line-coverage floor (AGENTS.md §5.9). scripts/check_agent_config.py fails if this number
 # and the one in AGENTS.md differ — lowering it is a decision, not an edit.
 COVERAGE_FLOOR=90

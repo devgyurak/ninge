@@ -3,9 +3,10 @@
 
 use ninge_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use ninge_runner::{frame_hash, testrom_path};
+use std::ffi::OsStr;
 use std::process::{Command, Output};
 
-fn run_cli(args: &[&str]) -> Output {
+fn run_cli<S: AsRef<OsStr>>(args: &[S]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ninge-runner"))
         .args(args)
         .output()
@@ -55,10 +56,29 @@ fn given_nonexistent_rom_path_when_cli_runs_then_stderr_is_not_empty() {
 
 #[test]
 fn given_no_arguments_when_cli_runs_then_exit_code_is_two() {
-    assert_eq!(run_cli(&[]).status.code(), Some(2));
+    assert_eq!(run_cli::<&str>(&[]).status.code(), Some(2));
 }
 
 #[test]
 fn given_no_arguments_when_cli_runs_then_stderr_is_not_empty() {
-    assert!(!run_cli(&[]).stderr.is_empty());
+    assert!(!run_cli::<&str>(&[]).stderr.is_empty());
+}
+
+#[test]
+fn given_extra_argument_when_cli_runs_then_exit_code_is_two() {
+    let out = run_cli_on_smoke(&["--frames", "2", "extra"]);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn given_help_flag_when_cli_runs_then_exit_code_is_two() {
+    assert_eq!(run_cli(&["--help"]).status.code(), Some(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn given_non_utf8_missing_rom_path_when_cli_runs_then_exit_code_is_one() {
+    use std::os::unix::ffi::OsStringExt;
+    let path = std::ffi::OsString::from_vec(b"/nonexistent/ninge/\xFF\xFE.nds".to_vec());
+    assert_eq!(run_cli(&[path]).status.code(), Some(1));
 }

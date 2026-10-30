@@ -19,7 +19,7 @@ fn main() -> ExitCode {
 }
 
 fn execute() -> Result<String, RunnerError> {
-    let args = parse_args(std::env::args().skip(1))?;
+    let args = parse_args(std::env::args_os().skip(1))?;
     let rom = load_rom_file(args.rom())?;
     Ok(run(rom, args.frames()).to_string())
 }

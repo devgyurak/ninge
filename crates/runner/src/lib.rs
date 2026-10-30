@@ -7,9 +7,12 @@
 //! ninge-runner <rom> [--frames N]    # N defaults to 1
 //! ```
 //!
+//! A ROM path that starts with `-` is read as a flag and refused; pass `./-x.nds` instead.
+//!
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error.
 
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -69,27 +72,41 @@ impl Args {
 const USAGE: &str = "usage: ninge-runner <rom> [--frames N]";
 
 /// Parses the arguments after the program name.
-pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, RunnerError> {
+///
+/// The ROM path stays an [`OsString`], so a path that is not UTF-8 still works.
+pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, RunnerError> {
     let mut args = args.into_iter();
     let rom = args
         .next()
         .ok_or_else(|| RunnerError::Usage(format!("missing ROM path\n{USAGE}")))?;
-    let frames = match args.next().as_deref() {
+    if rom.as_encoded_bytes().first() == Some(&b'-') {
+        return Err(RunnerError::Usage(format!(
+            "expected a ROM path, found {}\n{USAGE}",
+            rom.to_string_lossy()
+        )));
+    }
+    let frames = match args.next() {
         None => 1,
-        Some("--frames") => args
+        Some(flag) if flag == "--frames" => args
             .next()
-            .and_then(|value| value.parse().ok())
+            .and_then(|value| value.to_str().and_then(|text| text.parse().ok()))
             .ok_or_else(|| RunnerError::Usage(format!("--frames needs a number\n{USAGE}")))?,
-        Some(other) => {
-            return Err(RunnerError::Usage(format!(
-                "unexpected argument {other}\n{USAGE}"
-            )));
-        }
+        Some(other) => return Err(unexpected(&other)),
     };
+    if let Some(extra) = args.next() {
+        return Err(unexpected(&extra));
+    }
     Ok(Args {
         rom: PathBuf::from(rom),
         frames,
     })
+}
+
+fn unexpected(argument: &OsStr) -> RunnerError {
+    RunnerError::Usage(format!(
+        "unexpected argument {}\n{USAGE}",
+        argument.to_string_lossy()
+    ))
 }
 
 /// Reads a ROM file into memory; the bytes go to the core unparsed.
@@ -150,6 +167,8 @@ pub fn frame_hash(pixels: &[u32]) -> u64 {
 }
 
 /// Path of a built test ROM, `testroms/build/<name>.nds` (built by `build_testroms.sh`).
+///
+/// For in-repo tests only: it resolves into this source checkout.
 pub fn testrom_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../testroms/build")
@@ -160,10 +179,11 @@ pub fn testrom_path(name: &str) -> PathBuf {
 mod tests {
     use super::*;
     use std::error::Error as _;
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     fn parse(args: &[&str]) -> Result<Args, RunnerError> {
-        parse_args(args.iter().map(|a| a.to_string()))
+        parse_args(args.iter().map(OsString::from))
     }
 
     fn missing_rom_error() -> RunnerError {
@@ -179,13 +199,19 @@ mod tests {
     #[test]
     fn given_only_a_rom_path_when_parsing_args_then_frames_default_to_one() {
         let args = parse(&["game.nds"]).expect("valid args");
-        assert_eq!((args.rom, args.frames), (PathBuf::from("game.nds"), 1));
+        assert_eq!(
+            (args.rom().to_path_buf(), args.frames()),
+            (PathBuf::from("game.nds"), 1)
+        );
     }
 
     #[test]
     fn given_frames_flag_when_parsing_args_then_frames_is_the_given_count() {
         let args = parse(&["game.nds", "--frames", "5"]).expect("valid args");
-        assert_eq!((args.rom, args.frames), (PathBuf::from("game.nds"), 5));
+        assert_eq!(
+            (args.rom().to_path_buf(), args.frames()),
+            (PathBuf::from("game.nds"), 5)
+        );
     }
 
     #[test]
@@ -203,6 +229,33 @@ mod tests {
     fn given_frames_flag_without_value_when_parsing_args_then_usage_error() {
         let result = parse(&["game.nds", "--frames"]);
         assert!(matches!(result, Err(RunnerError::Usage { .. })));
+    }
+
+    #[test]
+    fn given_extra_argument_after_frames_when_parsing_args_then_usage_error() {
+        let result = parse(&["rom", "--frames", "2", "extra"]);
+        assert!(matches!(result, Err(RunnerError::Usage { .. })));
+    }
+
+    #[test]
+    fn given_repeated_frames_flag_when_parsing_args_then_usage_error() {
+        let result = parse(&["rom", "--frames", "2", "--frames", "3"]);
+        assert!(matches!(result, Err(RunnerError::Usage { .. })));
+    }
+
+    #[test]
+    fn given_flag_in_rom_position_when_parsing_args_then_usage_error() {
+        let result = parse(&["--help"]);
+        assert!(matches!(result, Err(RunnerError::Usage { .. })));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn given_non_utf8_rom_path_when_parsing_args_then_rom_path_is_kept() {
+        use std::os::unix::ffi::OsStringExt;
+        let raw = OsString::from_vec(vec![b'r', 0xFF, 0xFE, b'.', b'n', b'd', b's']);
+        let args = parse_args([raw.clone()]).expect("valid args");
+        assert_eq!(args.rom(), Path::new(&raw));
     }
 
     #[test]

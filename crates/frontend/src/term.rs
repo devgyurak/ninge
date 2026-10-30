@@ -5,7 +5,7 @@
 //! tested through [`crate::app`] with a test backend. OS-specific pieces stay here so a
 //! Windows backend is an addition (AGENTS.md §2).
 
-use crate::app::{Action, App, frame_step, map_event};
+use crate::app::{Action, App, frame_step, map_event, poll_timeout};
 use crate::layout::TermSize;
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 
 /// Fixed output rate; adaptive rate is #63.
 const FRAME_TIME: Duration = Duration::from_micros(16_667);
+
+/// Most input events handled between two frames.
+const MAX_EVENTS_PER_FRAME: usize = 64;
 
 /// Restores the terminal on drop.
 struct Restore;
@@ -59,12 +62,15 @@ pub fn run() -> anyhow::Result<()> {
     while !app.should_quit() {
         let deadline = Instant::now() + FRAME_TIME;
         frame_step(&mut app, &mut terminal, &mut gfx)?;
-        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-            if event::poll(left)? {
-                match map_event(&event::read()?) {
-                    Action::Resized => app.resize(size()?),
-                    other => app.apply(other),
-                }
+        // Poll at least once per frame, even after an overrun, so quit and resize are
+        // always read. The cap keeps a flood of input (key repeat) from starving drawing.
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            if !event::poll(poll_timeout(deadline, Instant::now()))? {
+                break;
+            }
+            match map_event(&event::read()?) {
+                Action::Resized => app.resize(size()?),
+                other => app.apply(other),
             }
         }
     }

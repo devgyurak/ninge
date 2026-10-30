@@ -9,7 +9,7 @@
 //! documentation links (https://sw.kovidgoyal.net/kitty/graphics-protocol/, the docs
 //! download, not the kitty source tree). Only the code points are imported, in file
 //! order; no names, comments, or other content.
-//! Decided in #NN. (TODO: replace NN with the decision issue number.)
+//! Decided in #71.
 
 /// Code points of the row/column diacritics, in index order (index = number).
 pub(crate) const DIACRITICS: [u32; 297] = [

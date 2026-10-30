@@ -2,7 +2,9 @@
 //! Kitty graphics protocol encoder: pure functions from pixels to escape bytes.
 //!
 //! Frames go over as direct (`t=d`) zlib-compressed (`o=z`) 24-bit RGB data under one
-//! image id; re-sending the same id replaces the pixels. Shared memory (`t=s`) is #6.
+//! image id. Re-transmitting an id deletes the existing image and all its placements
+//! (protocol doc), so every transmit also creates the virtual placement (`a=T,U=1`).
+//! Shared memory (`t=s`) is #6.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -33,12 +35,14 @@ fn push_chunk(out: &mut Vec<u8>, keys: &str, payload: &[u8]) {
     out.extend_from_slice(APC_END);
 }
 
-/// Encodes one frame as the transmit sequence for `image_id` (replacing earlier data).
+/// Encodes one frame as the transmit-and-place sequence for `image_id`.
 ///
-/// `frame` must hold `SCREEN_WIDTH * SCREEN_HEIGHT` pixels. The first chunk carries every
-/// key; later chunks carry only the `m` flag. `q=2` suppresses terminal replies so
-/// nothing leaks into the input stream.
-pub fn transmit(image_id: u32, frame: &[u32]) -> Vec<u8> {
+/// The image is placed virtually over `cols` x `rows` cells, which Unicode placeholder
+/// cells then reference. `frame` must hold `SCREEN_WIDTH * SCREEN_HEIGHT` pixels. The
+/// first chunk carries every key; later chunks carry `m` and `q`. `q=2` suppresses
+/// terminal replies on every chunk, because a leaked reply starts with ESC and the input
+/// reader would take it for the Esc key.
+pub fn transmit(image_id: u32, frame: &[u32], cols: u16, rows: u16) -> Vec<u8> {
     let mut zlib = ZlibEncoder::new(Vec::new(), Compression::fast());
     zlib.write_all(&rgb24(frame))
         .expect("writing to a Vec cannot fail");
@@ -50,24 +54,14 @@ pub fn transmit(image_id: u32, frame: &[u32]) -> Vec<u8> {
     for (i, chunk) in chunks.iter().enumerate() {
         let more = u8::from(i != last);
         let keys = if i == 0 {
-            format!("a=t,f=24,s={SCREEN_WIDTH},v={SCREEN_HEIGHT},i={image_id},t=d,o=z,q=2,m={more}")
+            format!(
+                "a=T,U=1,c={cols},r={rows},f=24,s={SCREEN_WIDTH},v={SCREEN_HEIGHT},i={image_id},t=d,o=z,q=2,m={more}"
+            )
         } else {
-            format!("m={more}")
+            format!("m={more},q=2")
         };
         push_chunk(&mut out, &keys, chunk);
     }
-    out
-}
-
-/// Creates (or replaces) the virtual placement of `image_id` over `cols` x `rows` cells,
-/// which Unicode placeholder cells then reference.
-pub fn virtual_placement(image_id: u32, cols: u16, rows: u16) -> Vec<u8> {
-    let mut out = Vec::new();
-    push_chunk(
-        &mut out,
-        &format!("a=p,U=1,i={image_id},c={cols},r={rows},q=2"),
-        b"",
-    );
     out
 }
 
@@ -77,25 +71,22 @@ mod tests {
     use flate2::read::ZlibDecoder;
     use std::io::Read as _;
 
-    /// Splits an output stream into `(keys, payload)` per escape sequence.
-    fn parse(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
-        let text = bytes.to_vec();
-        text.split(|&b| b == 0x1b)
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| s.strip_prefix(b"_G"))
-            .map(|s| {
-                // The ST's backslash lands in the next segment, so `s` is already the body.
-                let body = s;
-                let at = body
-                    .iter()
-                    .position(|&b| b == b';')
-                    .expect("keys end with ;");
-                (
-                    String::from_utf8(body[..at].to_vec()).expect("keys are ASCII"),
-                    body[at + 1..].to_vec(),
-                )
+    /// Splits a stream into `(keys, payload)` per sequence; `None` unless the stream is
+    /// exactly a series of `ESC _G keys ; payload ESC \` sequences.
+    fn parse(bytes: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+        let text = std::str::from_utf8(bytes).ok()?;
+        text.strip_suffix("\x1b\\")?
+            .split("\x1b\\")
+            .map(|seq| {
+                let body = seq.strip_prefix("\x1b_G")?;
+                let (keys, payload) = body.split_once(';')?;
+                Some((keys.to_string(), payload.as_bytes().to_vec()))
             })
             .collect()
+    }
+
+    fn seqs(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        parse(bytes).expect("stream is well-formed ESC _G ... ESC \\ sequences")
     }
 
     fn gradient() -> Vec<u32> {
@@ -105,7 +96,7 @@ mod tests {
     }
 
     fn decoded(bytes: &[u8]) -> Vec<u8> {
-        let payload: Vec<u8> = parse(bytes).into_iter().flat_map(|(_, p)| p).collect();
+        let payload: Vec<u8> = seqs(bytes).into_iter().flat_map(|(_, p)| p).collect();
         let raw = STANDARD.decode(payload).expect("valid base64");
         let mut out = Vec::new();
         ZlibDecoder::new(raw.as_slice())
@@ -124,20 +115,20 @@ mod tests {
 
     #[test]
     fn given_frame_when_transmitting_then_first_chunk_carries_all_keys() {
-        let seqs = parse(&transmit(7, &gradient()));
+        let seqs = seqs(&transmit(7, &gradient(), 40, 30));
         assert!(
             seqs[0]
                 .0
-                .starts_with("a=t,f=24,s=256,v=192,i=7,t=d,o=z,q=2,m=")
+                .starts_with("a=T,U=1,c=40,r=30,f=24,s=256,v=192,i=7,t=d,o=z,q=2,m=")
         );
     }
 
     #[test]
-    fn given_large_frame_when_transmitting_then_later_chunks_carry_only_m_flag() {
-        let seqs = parse(&transmit(7, &gradient()));
+    fn given_large_frame_when_transmitting_then_later_chunks_carry_only_m_and_q_flags() {
+        let seqs = seqs(&transmit(7, &gradient(), 40, 30));
         let later: Vec<&str> = seqs[1..].iter().map(|s| s.0.as_str()).collect();
         let expected: Vec<String> = (2..=seqs.len())
-            .map(|n| format!("m={}", u8::from(n != seqs.len())))
+            .map(|n| format!("m={},q=2", u8::from(n != seqs.len())))
             .collect();
         assert_eq!(
             (seqs.len() > 1, later),
@@ -147,7 +138,7 @@ mod tests {
 
     #[test]
     fn given_large_frame_when_transmitting_then_every_payload_fits_the_chunk_limit() {
-        let largest = parse(&transmit(7, &gradient()))
+        let largest = seqs(&transmit(7, &gradient(), 40, 30))
             .iter()
             .map(|s| s.1.len())
             .max();
@@ -157,20 +148,27 @@ mod tests {
     #[test]
     fn given_frame_when_transmitting_then_payload_round_trips_to_rgb24() {
         let frame = gradient();
-        assert_eq!(decoded(&transmit(7, &frame)), rgb24(&frame));
+        assert_eq!(decoded(&transmit(7, &frame, 40, 30)), rgb24(&frame));
     }
 
     #[test]
     fn given_small_input_when_transmitting_then_single_chunk_has_m_zero() {
-        let seqs = parse(&transmit(1, &vec![0; SCREEN_WIDTH * SCREEN_HEIGHT]));
+        let seqs = seqs(&transmit(1, &vec![0; SCREEN_WIDTH * SCREEN_HEIGHT], 40, 30));
         assert_eq!((seqs.len(), seqs[0].0.ends_with("m=0")), (1, true));
     }
 
     #[test]
-    fn given_cell_counts_when_placing_virtually_then_sequence_names_id_and_size() {
-        assert_eq!(
-            virtual_placement(3, 40, 30),
-            b"\x1b_Ga=p,U=1,i=3,c=40,r=30,q=2;\x1b\\".to_vec()
-        );
+    fn given_transmit_when_parsing_strictly_then_stream_is_exact_sequences() {
+        assert!(parse(&transmit(7, &gradient(), 40, 30)).is_some());
+    }
+
+    #[test]
+    fn given_broken_terminator_when_parsing_strictly_then_stream_is_rejected() {
+        assert_eq!(parse(b"\x1b_Gm=0;abc\x1bX"), None);
+    }
+
+    #[test]
+    fn given_stray_bytes_between_sequences_when_parsing_strictly_then_stream_is_rejected() {
+        assert_eq!(parse(b"\x1b_Gm=1;a\x1b\\zz\x1b_Gm=0;b\x1b\\"), None);
     }
 }

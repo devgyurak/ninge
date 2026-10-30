@@ -12,6 +12,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use std::io::Write;
+use std::time::{Duration, Instant};
 
 /// Image id of the top screen.
 pub const TOP_IMAGE_ID: u32 = 1;
@@ -57,7 +58,6 @@ pub struct App {
     areas: Option<Areas>,
     frame_no: u64,
     quit: bool,
-    placement_pending: bool,
 }
 
 impl App {
@@ -68,15 +68,13 @@ impl App {
             areas: compute(size),
             frame_no: 0,
             quit: false,
-            placement_pending: true,
         }
     }
 
-    /// Records that the terminal is now `size`; placements are re-sent next frame.
+    /// Records that the terminal is now `size`; the next frame places the images anew.
     pub fn resize(&mut self, size: TermSize) {
         self.size = size;
         self.areas = compute(size);
-        self.placement_pending = true;
     }
 
     /// Applies an [`Action`]; `Resized` is handled by the caller through [`App::resize`].
@@ -94,32 +92,26 @@ impl App {
         self.areas
     }
 
-    /// The graphics bytes for this frame: both screens' pixels, then the virtual
-    /// placements when the layout changed. Advances the frame counter.
+    /// The graphics bytes for this frame: each screen's pixels with its virtual
+    /// placement. Re-transmitting an image deletes its placements, so every frame
+    /// places both again. Advances the frame counter.
     pub fn graphics(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         if let Some(areas) = self.areas {
+            let top = dummy_frame(self.frame_no, 0);
+            let bottom = dummy_frame(self.frame_no, 1);
             out.extend(kitty::transmit(
                 TOP_IMAGE_ID,
-                &dummy_frame(self.frame_no, 0),
+                &top,
+                areas.top.width,
+                areas.top.height,
             ));
             out.extend(kitty::transmit(
                 BOTTOM_IMAGE_ID,
-                &dummy_frame(self.frame_no, 1),
+                &bottom,
+                areas.bottom.width,
+                areas.bottom.height,
             ));
-            if self.placement_pending {
-                out.extend(kitty::virtual_placement(
-                    TOP_IMAGE_ID,
-                    areas.top.width,
-                    areas.top.height,
-                ));
-                out.extend(kitty::virtual_placement(
-                    BOTTOM_IMAGE_ID,
-                    areas.bottom.width,
-                    areas.bottom.height,
-                ));
-                self.placement_pending = false;
-            }
         }
         self.frame_no += 1;
         out
@@ -160,6 +152,13 @@ impl App {
             areas.disasm,
         );
     }
+}
+
+/// How long to wait for input: the time left until `deadline`, or zero once it has
+/// passed. Zero still polls, so pending keys and resizes are read every frame even when
+/// drawing overran the frame time.
+pub fn poll_timeout(deadline: Instant, now: Instant) -> Duration {
+    deadline.saturating_duration_since(now)
 }
 
 /// One tick: write the graphics to `gfx`, then draw with ratatui.
@@ -270,36 +269,42 @@ mod tests {
     }
 
     #[test]
-    fn given_new_app_when_taking_graphics_then_pixels_then_both_placements_are_sent() {
+    fn given_frames_when_taking_graphics_then_every_frame_places_both_images_in_order() {
         let mut app = App::new(size());
-        let out = String::from_utf8_lossy(&app.graphics()).into_owned();
-        let at = |needle: &str| out.find(needle);
-        assert!(
-            at("a=t,f=24,s=256,v=192,i=1")
-                .is_some_and(|t| at("a=p,U=1,i=1").is_some_and(|p| t < p))
-        );
-        assert!(at("a=p,U=1,i=2").is_some());
+        let areas = app.areas().expect("fits");
+        let place = |id: u32, a: ratatui::layout::Rect| {
+            format!(
+                "a=T,U=1,c={},r={},f=24,s=256,v=192,i={id},t=d",
+                a.width, a.height
+            )
+        };
+        let frames: Vec<String> = (0..3)
+            .map(|_| String::from_utf8_lossy(&app.graphics()).into_owned())
+            .collect();
+        let bad: Vec<usize> = frames
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| {
+                let top = f.find(&place(TOP_IMAGE_ID, areas.top));
+                let bottom = f.find(&place(BOTTOM_IMAGE_ID, areas.bottom));
+                !top.zip(bottom).is_some_and(|(t, b)| t < b)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(bad, Vec::<usize>::new());
     }
 
     #[test]
-    fn given_placements_already_sent_when_taking_graphics_again_then_only_pixels_follow() {
+    fn given_resize_when_taking_graphics_then_placement_uses_the_new_size() {
         let mut app = App::new(size());
-        let _ = app.graphics();
-        let out = String::from_utf8_lossy(&app.graphics()).into_owned();
-        assert!(out.contains("i=2,t=d") && !out.contains("a=p"));
-    }
-
-    #[test]
-    fn given_resize_when_taking_graphics_then_placements_are_re_sent() {
-        let mut app = App::new(size());
-        let _ = app.graphics();
         app.resize(TermSize {
             cols: 100,
             rows: 40,
             ..size()
         });
+        let a = app.areas().expect("fits");
         let out = String::from_utf8_lossy(&app.graphics()).into_owned();
-        assert!(out.contains("a=p,U=1,i=1"));
+        assert!(out.contains(&format!("a=T,U=1,c={},r={},", a.top.width, a.top.height)));
     }
 
     #[test]
@@ -323,8 +328,26 @@ mod tests {
             .symbol()
             .to_string();
         assert_eq!(
-            (gfx.starts_with(b"\x1b_Ga=t"), cell),
+            (gfx.starts_with(b"\x1b_Ga=T,U=1"), cell),
             (true, "\u{10EEEE}\u{305}\u{305}".to_string())
+        );
+    }
+
+    #[test]
+    fn given_time_left_when_choosing_poll_timeout_then_it_is_the_remainder() {
+        let now = Instant::now();
+        assert_eq!(
+            poll_timeout(now + Duration::from_millis(10), now),
+            Duration::from_millis(10)
+        );
+    }
+
+    #[test]
+    fn given_deadline_passed_when_choosing_poll_timeout_then_it_is_zero() {
+        let now = Instant::now();
+        assert_eq!(
+            poll_timeout(now, now + Duration::from_millis(20)),
+            Duration::ZERO
         );
     }
 

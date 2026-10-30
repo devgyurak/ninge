@@ -18,6 +18,7 @@ it). The current phase and the open decisions are in `docs/STATUS.md`.
 
 ```bash
 ./scripts/verify.sh                                        # the whole gate, in order — CI runs the same script
+./scripts/build_testroms.sh                                # build testroms/ into git-ignored testroms/build/ (needs Docker)
 cargo fmt --all                                            # format
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny --locked check licenses bans sources            # dependency licenses (deny.toml)
@@ -420,9 +421,14 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   `Cargo.toml` exists.
 - **BlocksDS is required** (decided). Built test ROMs are never committed (§3.1), so the
   golden tests — and therefore the 90% coverage floor — need the SDK. It comes from the
-  official BlocksDS Docker image **pinned by digest**, the same image locally and in CI;
-  Phase 0 wires it into `verify.sh` and `ci.yml`. Bumping the digest is an `UPT:` PR, and
-  every golden hash it changes needs its reason.
+  official BlocksDS Docker image **pinned by digest**, the same image locally and in CI.
+  Code reads the digest only from `scripts/build_testroms.sh`; `docs/STATUS.md` records it
+  and `check_agent_config.py` keeps the two equal. Bumping it is an `UPT:` PR, and
+  every golden hash it changes needs its reason. macOS runners cannot run Docker, so CI
+  builds the ROMs once on ubuntu (`testroms` job). The ubuntu verify job rebuilds from source
+  and must match that artifact's `SHA256SUMS`; the macOS job checks the artifact against it
+  (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only).
+  Without Docker and without that variable `verify.sh` fails — it never skips the step.
 - **The coverage floor is not CI-only and is never disabled.** `check_agent_config.py` fails
   if the floor in §5.9 and the one in `scripts/verify.sh` differ.
 - **Agent config** (`.github/workflows/agents.yml`) runs `scripts/check_agent_config.py` and

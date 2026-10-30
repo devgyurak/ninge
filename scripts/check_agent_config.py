@@ -26,6 +26,8 @@ Checks:
  12. docs/STATUS.md has exactly one `▶` (current phase) line.
  13. AGENTS.md fits Codex's project-doc budget (32 KiB).
  14. The coverage floor in AGENTS.md §5.9 equals COVERAGE_FLOOR in scripts/verify.sh.
+ 15. The BlocksDS image digest recorded in docs/STATUS.md equals BLOCKSDS_IMAGE in
+     scripts/build_testroms.sh.
 """
 
 from __future__ import annotations
@@ -50,6 +52,9 @@ GPL_MARKER = "**GPL emulators agents do not open:**"
 COVERAGE_MARKER = "**Coverage floor:**"
 _CANON_FLOOR_RE = re.compile(r"`(\d+)%`")
 _SCRIPT_FLOOR_RE = re.compile(r"^COVERAGE_FLOOR=(\d+)\s*$", re.MULTILINE)
+_DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
+_IMAGE_ENTRY_MARKER = "**BlocksDS image**"
+_IMAGE_RE = re.compile(r'^BLOCKSDS_IMAGE="[^"@]+@sha256:([0-9a-f]{64})"\s*$', re.MULTILINE)
 
 CANON_FILES = (
     "AGENTS.md",
@@ -347,6 +352,35 @@ def check_coverage_floor() -> None:
             fail(message)
 
 
+def image_digest_mismatch(status_text: str, script_text: str) -> str | None:
+    """Compare the BlocksDS digest docs/STATUS.md records with the one the build script uses. Pure."""
+    script = _IMAGE_RE.findall(script_text)
+    # Only the BlocksDS entry counts: another checksum elsewhere in STATUS.md is not a digest.
+    entry = status_text.split(_IMAGE_ENTRY_MARKER, 1)[1].split("\n- ", 1)[0] if _IMAGE_ENTRY_MARKER in status_text else ""
+    recorded = _DIGEST_RE.findall(entry)
+    if len(script) != 1:
+        return 'scripts/build_testroms.sh must set BLOCKSDS_IMAGE="<name>@sha256:<64 hex>" exactly once'
+    if len(recorded) != 1:
+        return "docs/STATUS.md must record the BlocksDS image digest (sha256:<64 hex>) exactly once"
+    if recorded != script:
+        return "BlocksDS digest differs: docs/STATUS.md and scripts/build_testroms.sh must match"
+    return None
+
+
+def check_image_digest() -> None:
+    status, script = ROOT / "docs" / "STATUS.md", ROOT / "scripts" / "build_testroms.sh"
+    if not status.is_file():
+        return
+    status_text = status.read_text(encoding="utf-8")
+    if _IMAGE_ENTRY_MARKER in status_text and not script.is_file():
+        fail("docs/STATUS.md records a BlocksDS digest but scripts/build_testroms.sh is missing")
+        return
+    if script.is_file():
+        message = image_digest_mismatch(status_text, script.read_text(encoding="utf-8"))
+        if message:
+            fail(message)
+
+
 def check_status() -> None:
     status = ROOT / "docs" / "STATUS.md"
     if not status.is_file():
@@ -371,6 +405,7 @@ def main() -> int:
     check_gate_lists()
     check_status()
     check_coverage_floor()
+    check_image_digest()
 
     if FAILURES:
         print("agent config check FAILED:", file=sys.stderr)

@@ -29,7 +29,7 @@ binaries and guard the header are listed here; the rest are added with #17.
 | ARM9 size | at most 0x3B_FE00 |
 | ARM7 ROM offset | 0x8000 or higher |
 | ARM7 entry / RAM address | 0x0200_0000 to 0x023B_FE00, or 0x037F_8000 to 0x0380_7E00 (shared WRAM mirror + ARM7 WRAM) |
-| ARM7 size | at most 0x3B_FE00 (main RAM) or 0xFE00 (ARM7 WRAM) |
+| ARM7 size | at most 0x3B_FE00 (main RAM) or 0xFE00 (the 0x037F_8000 range: shared WRAM mirror + ARM7 WRAM) |
 
 See `memory-map.md` for the regions these ranges fall in.
 

@@ -53,6 +53,7 @@ COVERAGE_MARKER = "**Coverage floor:**"
 _CANON_FLOOR_RE = re.compile(r"`(\d+)%`")
 _SCRIPT_FLOOR_RE = re.compile(r"^COVERAGE_FLOOR=(\d+)\s*$", re.MULTILINE)
 _DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
+_IMAGE_ENTRY_MARKER = "**BlocksDS image**"
 _IMAGE_RE = re.compile(r'^BLOCKSDS_IMAGE="[^"@]+@sha256:([0-9a-f]{64})"\s*$', re.MULTILINE)
 
 CANON_FILES = (
@@ -354,7 +355,9 @@ def check_coverage_floor() -> None:
 def image_digest_mismatch(status_text: str, script_text: str) -> str | None:
     """Compare the BlocksDS digest docs/STATUS.md records with the one the build script uses. Pure."""
     script = _IMAGE_RE.findall(script_text)
-    recorded = _DIGEST_RE.findall(status_text)
+    # Only the BlocksDS entry counts: another checksum elsewhere in STATUS.md is not a digest.
+    entry = status_text.split(_IMAGE_ENTRY_MARKER, 1)[1].split("\n- ", 1)[0] if _IMAGE_ENTRY_MARKER in status_text else ""
+    recorded = _DIGEST_RE.findall(entry)
     if len(script) != 1:
         return 'scripts/build_testroms.sh must set BLOCKSDS_IMAGE="<name>@sha256:<64 hex>" exactly once'
     if len(recorded) != 1:
@@ -366,8 +369,14 @@ def image_digest_mismatch(status_text: str, script_text: str) -> str | None:
 
 def check_image_digest() -> None:
     status, script = ROOT / "docs" / "STATUS.md", ROOT / "scripts" / "build_testroms.sh"
-    if status.is_file() and script.is_file():
-        message = image_digest_mismatch(status.read_text(encoding="utf-8"), script.read_text(encoding="utf-8"))
+    if not status.is_file():
+        return
+    status_text = status.read_text(encoding="utf-8")
+    if _IMAGE_ENTRY_MARKER in status_text and not script.is_file():
+        fail("docs/STATUS.md records a BlocksDS digest but scripts/build_testroms.sh is missing")
+        return
+    if script.is_file():
+        message = image_digest_mismatch(status_text, script.read_text(encoding="utf-8"))
         if message:
             fail(message)
 

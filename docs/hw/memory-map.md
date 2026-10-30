@@ -16,7 +16,8 @@ Used by: `crates/core/src/bus/` (planned, #18)   Phase: 0 (regions the smoke ROM
 ## Behavior
 
 Programs commonly reach shared WRAM through a mirror at 0x037F_8000 on both CPUs; on the ARM7
-this is contiguous with ARM7 WRAM, giving one 96 KiB block.
+this is contiguous with ARM7 WRAM, giving one 96 KiB block when all 32 KiB of shared WRAM are
+allocated to the ARM7.
 
 ## Phase 0 use
 

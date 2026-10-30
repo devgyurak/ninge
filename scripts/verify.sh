@@ -74,7 +74,8 @@ if [ "${NINGE_PREBUILT_TESTROMS:-}" = "1" ]; then
 elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   ./scripts/build_testroms.sh -B
   if [ -n "${NINGE_EXPECTED_TESTROM_SUMS:-}" ]; then
-    diff "$NINGE_EXPECTED_TESTROM_SUMS" testroms/build/SHA256SUMS
+    diff "$NINGE_EXPECTED_TESTROM_SUMS" testroms/build/SHA256SUMS \
+      || { echo "rebuilt test ROMs differ from the testroms artifact — the build is not reproducible" >&2; exit 1; }
     echo "  rebuilt test ROMs match the testroms artifact"
   fi
 else

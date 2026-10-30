@@ -486,8 +486,10 @@ def test_config_drift_helpers() -> None:
 
     digest_a, digest_b = "a" * 64, "b" * 64
     script = f'BLOCKSDS_IMAGE="skylyrac/blocksds@sha256:{digest_a}"\n'
-    _checked("config: matching image digests pass", cfg.image_digest_mismatch(f"x sha256:{digest_a}", script) is None)
-    bumped = cfg.image_digest_mismatch(f"x sha256:{digest_b}", script)
+    _checked("config: matching image digests pass", cfg.image_digest_mismatch(f"**BlocksDS image** sha256:{digest_a}", script) is None)
+    entry = f"- [x] **BlocksDS image** `sha256:{digest_a}`\n- [x] **Other** `sha256:{digest_b}`\n"
+    _checked("config: another sha256 in STATUS is ignored", cfg.image_digest_mismatch(entry, script) is None)
+    bumped = cfg.image_digest_mismatch(f"**BlocksDS image** sha256:{digest_b}", script)
     _checked("config: a stale STATUS digest is reported", bumped is not None and "differs" in bumped, str(bumped))
     unrecorded = cfg.image_digest_mismatch("no digest here", script)
     _checked("config: an unrecorded digest is reported", unrecorded is not None and "STATUS" in unrecorded, str(unrecorded))

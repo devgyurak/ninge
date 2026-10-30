@@ -20,11 +20,16 @@ format were decided in [#68](https://github.com/devgyurak/ninge/issues/68).
 
 ```text
 # Comment lines start with '#'; blank lines are allowed.
-frames=3 top=<16 hex digits> bottom=<16 hex digits>
+frames=3 top=<16 lowercase hex digits> bottom=<16 lowercase hex digits>
 ```
 
-Each data line is exactly the output of `ninge-runner`. A `frames=N` value appears at most
-once per file.
+Each data line is exactly the output of `ninge-runner`, and the parser rejects anything else:
+
+- `frames` is a plain decimal: ASCII digits only, no sign, no leading zero (`0` alone is fine).
+- `top` and `bottom` are 16 lowercase hex digits: no `0x` prefix, no uppercase, no shorter or
+  longer value.
+- The fields come in the order `frames`, `top`, `bottom`, with nothing after them.
+- A `frames=N` value appears at most once per file.
 
 ## Review flow
 

@@ -15,6 +15,11 @@ use crate::{RunReport, frame_hash, load_rom_file, run, testrom_path};
 /// Why a golden file or a comparison against it failed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum GoldenError {
+    /// The golden file could not be read.
+    Unreadable {
+        /// The IO error's message, kept as text so the error stays comparable.
+        reason: String,
+    },
     /// A data line is not `frames=N top=<hex> bottom=<hex>`.
     Malformed {
         /// 1-based line number in the golden file.
@@ -46,6 +51,7 @@ pub enum GoldenError {
 impl fmt::Display for GoldenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Unreadable { reason } => write!(f, "{reason}"),
             Self::Malformed { line, reason } => write!(f, "golden line {line}: {reason}"),
             Self::DuplicateFrames { line, frames } => {
                 write!(f, "golden line {line}: frames={frames} is already defined")
@@ -86,8 +92,7 @@ fn hash_field(part: Option<&str>, key: &str, line: usize) -> Result<u64, GoldenE
             &format!("`{key}` must be 16 lowercase hex digits"),
         ));
     }
-    u64::from_str_radix(text, 16)
-        .map_err(|_| malformed(line, &format!("`{key}` must be 16 lowercase hex digits")))
+    Ok(u64::from_str_radix(text, 16).expect("16 lowercase hex digits always fit in u64"))
 }
 
 fn frames_field(part: Option<&str>, line: usize) -> Result<u64, GoldenError> {
@@ -185,9 +190,10 @@ fn load_rom(rom: &str) -> Vec<u8> {
 /// The panic text for a golden that is bad or does not match; pure so a test can pin it.
 fn failure_message(rom: &str, frames: u64, path: &Path, error: &GoldenError) -> String {
     let headline = match error {
+        GoldenError::Unreadable { .. } => format!("cannot read golden {}", path.display()),
         GoldenError::Mismatch { .. } => format!("golden mismatch for {rom} ({})", path.display()),
-        GoldenError::MissingFrames { frames } => {
-            format!("no golden line for frames={frames} in {}", path.display())
+        GoldenError::MissingFrames { .. } => {
+            format!("missing golden line in {}", path.display())
         }
         GoldenError::Malformed { .. } | GoldenError::DuplicateFrames { .. } => {
             format!("bad golden {}", path.display())
@@ -205,15 +211,16 @@ fn failure_message(rom: &str, frames: u64, path: &Path, error: &GoldenError) -> 
 ///
 /// # Panics
 ///
-/// On a missing or malformed golden, a missing ROM, or a mismatch; the message carries the
-/// expected and actual lines and the command that reproduces the run.
+/// On an unreadable or malformed golden, a missing ROM, a frame count the golden has no line
+/// for, or a mismatch. Every message carries the command that reproduces the run and the
+/// `tests/golden/README.md` pointer; the expected and actual lines appear only for a mismatch.
 pub fn assert_frame_hash(rom: &str, frames: u64) {
     let path = golden_path(rom);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "cannot read golden {}: {error}\nsee {README}",
-            path.display()
-        )
+        let error = GoldenError::Unreadable {
+            reason: error.to_string(),
+        };
+        panic!("{}", failure_message(rom, frames, &path, &error))
     });
     let golden = parse_golden(&text)
         .unwrap_or_else(|error| panic!("{}", failure_message(rom, frames, &path, &error)));
@@ -526,16 +533,18 @@ mod tests {
         let error = GoldenError::MissingFrames { frames: 7 };
         let message = failure_message("smoke", 7, Path::new("g/smoke.txt"), &error);
         let wanted = [
-            "no golden line for frames=7",
+            "missing golden line in g/smoke.txt",
+            "frames=7",
             "cargo run -p ninge-runner -- testroms/build/smoke.nds --frames 7",
             "tests/golden/README.md",
         ];
         assert_eq!(
             (
                 missing_substrings(&message, &wanted),
+                message.matches("frames=7").count(),
                 message.contains("mismatch")
             ),
-            (Vec::<&str>::new(), false)
+            (Vec::<&str>::new(), 1, false)
         );
     }
 
@@ -559,5 +568,28 @@ mod tests {
     #[should_panic(expected = "at least one frame")]
     fn given_zero_frames_when_asserting_deterministic_then_panic_says_nothing_would_be_compared() {
         assert_deterministic("nonexistent_rom_for_test", 0);
+    }
+
+    #[test]
+    fn given_unreadable_golden_when_building_failure_message_then_it_has_path_repro_and_readme() {
+        let error = GoldenError::Unreadable {
+            reason: "No such file".to_owned(),
+        };
+        let message = failure_message("smoke", 3, Path::new("g/smoke.txt"), &error);
+        let wanted = [
+            "cannot read golden g/smoke.txt",
+            "No such file",
+            "cargo run -p ninge-runner -- testroms/build/smoke.nds --frames 3",
+            "tests/golden/README.md",
+        ];
+        assert_eq!(missing_substrings(&message, &wanted), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn given_unreadable_error_when_displayed_then_message_is_the_io_reason() {
+        let error = GoldenError::Unreadable {
+            reason: "No such file".to_owned(),
+        };
+        assert_eq!(error.to_string(), "No such file");
     }
 }

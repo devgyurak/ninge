@@ -23,7 +23,8 @@ format were decided in [#68](https://github.com/devgyurak/ninge/issues/68).
 frames=3 top=<16 lowercase hex digits> bottom=<16 lowercase hex digits>
 ```
 
-Each data line is exactly the output of `ninge-runner`, and the parser rejects anything else:
+Each data line is the output of `ninge-runner`. Fields are separated by whitespace and
+whitespace around a line is ignored; the field values themselves must be exact:
 
 - `frames` is a plain decimal: ASCII digits only, no sign, no leading zero (`0` alone is fine).
 - `top` and `bottom` are 16 lowercase hex digits: no `0x` prefix, no uppercase, no shorter or

@@ -12,3 +12,7 @@ ninge-core.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "ninge-runner"
+path = "src/main.rs"

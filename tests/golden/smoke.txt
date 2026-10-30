@@ -1,0 +1,2 @@
+# Golden frames for testroms/smoke. Format and review flow: tests/golden/README.md.
+frames=3 top=1a0564b2e8de2325 bottom=1a0564b2e8de2325

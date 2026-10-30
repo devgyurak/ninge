@@ -25,7 +25,7 @@ Line 1 of every source file is the SPDX line (`@ ...` in ARM assembly). Addresse
 ## Running a ROM headlessly
 
 `ninge-runner` loads a ROM, runs N frames, and prints one line with the frame count and an
-FNV-1a 64 hash of each screen (the hash is documented with the golden-frame infra, #4):
+FNV-1a 64 hash of each screen (the hash is defined in [`tests/golden/README.md`](../tests/golden/README.md)):
 
 ```bash
 cargo run -p ninge-runner -- testroms/build/smoke.nds --frames 3

@@ -12,6 +12,8 @@
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error.
 
+pub mod golden;
+
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -154,7 +156,7 @@ pub fn run(rom: Vec<u8>, frames: u64) -> RunReport {
 
 /// FNV-1a 64 over each pixel's little-endian bytes, in row order.
 ///
-/// The hash is documented and used for golden frames by #4.
+/// Decided in #68; defined in `tests/golden/README.md` and used by [`golden`].
 pub fn frame_hash(pixels: &[u32]) -> u64 {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;

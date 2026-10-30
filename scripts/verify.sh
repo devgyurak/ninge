@@ -59,21 +59,26 @@ cargo deny --locked check licenses bans sources
 
 # Test ROMs (AGENTS.md §3.1, §7). Built ROMs are never committed, so the golden tests need
 # them built from testroms/ sources. Decided in #65.
-#   1. Docker present      -> build with the pinned BlocksDS image (local, ubuntu CI).
-#   2. no Docker, and NINGE_PREBUILT_TESTROMS=1 -> verify the prebuilt artifact's checksums
-#      (the macOS CI job, which cannot run Docker). Only ci.yml sets the variable, so a stale
-#      local build/ directory can never pass.
-#   3. otherwise           -> fail. A missing toolchain is never a pass.
+#   1. NINGE_PREBUILT_TESTROMS=1 -> verify the prebuilt artifact's checksums (the macOS CI
+#      job, which cannot run Docker). Only ci.yml sets it, so a stale local build/ directory
+#      can never pass.
+#   2. a running Docker daemon   -> rebuild from source with the pinned BlocksDS image (-B
+#      ignores timestamps, so nothing stale is trusted). If NINGE_EXPECTED_TESTROM_SUMS names
+#      the checksums of the CI artifact, the rebuild must match them byte for byte.
+#   3. otherwise                 -> fail. A missing toolchain is never a pass.
 step "test ROMs (BlocksDS)"
-if command -v docker >/dev/null 2>&1; then
-  ./scripts/build_testroms.sh
-  (cd testroms/build && shasum -a 256 -c SHA256SUMS)
-elif [ "${NINGE_PREBUILT_TESTROMS:-}" = "1" ]; then
+if [ "${NINGE_PREBUILT_TESTROMS:-}" = "1" ]; then
   [ -f testroms/build/SHA256SUMS ] || { echo "testroms/build/SHA256SUMS is missing — the testroms artifact was not downloaded" >&2; exit 1; }
   (cd testroms/build && shasum -a 256 -c SHA256SUMS)
   echo "  verified prebuilt test ROMs (not built on this runner)"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  ./scripts/build_testroms.sh -B
+  if [ -n "${NINGE_EXPECTED_TESTROM_SUMS:-}" ]; then
+    diff "$NINGE_EXPECTED_TESTROM_SUMS" testroms/build/SHA256SUMS
+    echo "  rebuilt test ROMs match the testroms artifact"
+  fi
 else
-  echo "Docker is required to build the test ROMs — install Docker (https://docs.docker.com/get-docker/) and retry." >&2
+  echo "A running Docker is required to build the test ROMs — install and start Docker (https://docs.docker.com/get-docker/) and retry." >&2
   exit 1
 fi
 

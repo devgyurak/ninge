@@ -6,5 +6,5 @@
     .global _start
 _start:
     b _start
-    @ ndstool probes 12 bytes before the end of each binary for a footer; pad past that.
+    @ ndstool failed with "Failed to seek footer" on a 4-byte binary; this padding fixed it.
     .space 28, 0

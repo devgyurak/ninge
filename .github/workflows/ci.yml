@@ -29,12 +29,19 @@ jobs:
       - name: Build test ROMs
         run: ./scripts/build_testroms.sh
 
+      # Printed so a reviewer can read the ROM hash from the log.
+      - name: ROM checksums
+        run: cat testroms/build/SHA256SUMS
+
       - name: Upload test ROMs (with SHA256SUMS)
         uses: actions/upload-artifact@v4
         with:
           name: testroms
-          path: testroms/build/
+          path: |
+            testroms/build/*.nds
+            testroms/build/SHA256SUMS
           if-no-files-found: error
+          retention-days: 7
 
   verify:
     name: verify (${{ matrix.os }})
@@ -65,16 +72,27 @@ jobs:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny
 
       # Built test ROMs are never committed (AGENTS.md §3.1); the testroms job builds them.
-      - name: Download test ROMs
+      # macOS cannot run Docker: it verifies the artifact in place. Ubuntu keeps the artifact
+      # outside testroms/build/ so verify.sh rebuilds from source and compares the two.
+      - name: Download test ROMs (macOS, verified in place)
+        if: runner.os == 'macOS'
         uses: actions/download-artifact@v4
         with:
           name: testroms
           path: testroms/build/
 
-      # Decided in #65. Ubuntu has Docker and rebuilds the ROMs; macOS only verifies the
-      # artifact's checksums. The variable is set for macOS alone, so a runner without
-      # Docker cannot silently skip the build.
+      - name: Download test ROMs (Linux, compared with the rebuild)
+        if: runner.os != 'macOS'
+        uses: actions/download-artifact@v4
+        with:
+          name: testroms
+          path: ${{ runner.temp }}/testroms
+
+      # Decided in #65. Ubuntu has Docker: it rebuilds the ROMs and must match the artifact.
+      # macOS only verifies the artifact's checksums. The prebuilt variable is set for macOS
+      # alone, so a runner without Docker cannot silently skip the build.
       - name: Verify
         env:
           NINGE_PREBUILT_TESTROMS: ${{ runner.os == 'macOS' && '1' || '' }}
+          NINGE_EXPECTED_TESTROM_SUMS: ${{ runner.os != 'macOS' && format('{0}/testroms/SHA256SUMS', runner.temp) || '' }}
         run: ./scripts/verify.sh

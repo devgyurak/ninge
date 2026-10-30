@@ -1,7 +1,7 @@
 # Cartridge header
 
 Sources: GBATEK "DS Cartridge Header".
-Used by: `crates/core/src/cart/` (header parse, direct boot)   Phase: 0 (fields the smoke ROM relies on); #17 extends it
+Used by: `crates/core/src/cart/` (planned, #17: header parse, direct boot)   Phase: 0 (fields the smoke ROM relies on); #17 extends it
 
 ## Layout (Phase 0 subset)
 
@@ -28,7 +28,7 @@ binaries and guard the header are listed here; the rest are added with #17.
 | ARM9 entry / RAM address | 0x0200_0000 to 0x023B_FE00 |
 | ARM9 size | at most 0x3B_FE00 |
 | ARM7 ROM offset | 0x8000 or higher |
-| ARM7 entry / RAM address | 0x0200_0000 to 0x023B_FE00, or 0x037F_8000 to 0x0380_7E00 |
+| ARM7 entry / RAM address | 0x0200_0000 to 0x023B_FE00, or 0x037F_8000 to 0x0380_7E00 (shared WRAM mirror + ARM7 WRAM) |
 | ARM7 size | at most 0x3B_FE00 (main RAM) or 0xFE00 (ARM7 WRAM) |
 
 See `memory-map.md` for the regions these ranges fall in.
@@ -54,5 +54,3 @@ Not covered in Phase 0 (#17): misaligned or out-of-range fields, size zero, CRC 
 
 - Whether direct boot should validate the header CRC16 or ignore it — decide in #17; verify
   with a test ROM carrying a bad CRC.
-- The ARM7 size limit of 0xFE00 for the ARM7 WRAM case is taken as written in GBATEK and is
-  not independently confirmed.

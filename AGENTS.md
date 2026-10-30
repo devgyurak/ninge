@@ -422,10 +422,12 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 - **BlocksDS is required** (decided). Built test ROMs are never committed (§3.1), so the
   golden tests — and therefore the 90% coverage floor — need the SDK. It comes from the
   official BlocksDS Docker image **pinned by digest**, the same image locally and in CI.
-  The digest lives only in `scripts/build_testroms.sh`. Bumping it is an `UPT:` PR, and
+  Code reads the digest only from `scripts/build_testroms.sh`; `docs/STATUS.md` records it
+  and `check_agent_config.py` keeps the two equal. Bumping it is an `UPT:` PR, and
   every golden hash it changes needs its reason. macOS runners cannot run Docker, so CI
-  builds the ROMs once on ubuntu (`testroms` job) and the macOS verify job checks that
-  artifact against its `SHA256SUMS` (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only).
+  builds the ROMs once on ubuntu (`testroms` job). The ubuntu verify job rebuilds from source
+  and must match that artifact's `SHA256SUMS`; the macOS job checks the artifact against it
+  (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only).
   Without Docker and without that variable `verify.sh` fails — it never skips the step.
 - **The coverage floor is not CI-only and is never disabled.** `check_agent_config.py` fails
   if the floor in §5.9 and the one in `scripts/verify.sh` differ.

@@ -21,3 +21,16 @@ itself. Local runs, `./scripts/verify.sh`, and CI all go through it.
 
 Line 1 of every source file is the SPDX line (`@ ...` in ARM assembly). Addresses come from
 `docs/hw/cart-header.md` and `docs/hw/memory-map.md`.
+
+## Running a ROM headlessly
+
+`ninge-runner` loads a ROM, runs N frames, and prints one line with the frame count and an
+FNV-1a 64 hash of each screen (the hash is documented with the golden-frame infra, #4):
+
+```bash
+cargo run -p ninge-runner -- testroms/build/smoke.nds --frames 3
+# frames=3 top=<016x> bottom=<016x>
+```
+
+Exit code 0 on success, 1 on an IO error (missing ROM), 2 on a usage error. Tests find a
+built ROM with `ninge_runner::testrom_path("smoke")`.

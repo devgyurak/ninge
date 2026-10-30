@@ -35,6 +35,16 @@ pub struct Machine {
     top: Vec<u32>,
     #[serde(skip, default = "blank_screen")]
     bottom: Vec<u32>,
+    // The ROM image is an input, not machine state: it is skipped on save and a savestate
+    // loads onto a machine that was handed the ROM again, so a savestate never embeds the
+    // (possibly commercial) image. Defaults to empty.
+    // TODO(phase2): the savestate loader (#19) must re-attach the ROM and check it matches.
+    #[serde(skip)]
+    rom: Vec<u8>,
+    // Frames completed by `run_frame`; plain state, so it is serialized. A missing field
+    // loads as 0, like the skipped fields above.
+    #[serde(default)]
+    frame_count: u64,
 }
 
 /// A black screen of exactly `SCREEN_WIDTH * SCREEN_HEIGHT` pixels.
@@ -47,11 +57,38 @@ impl Machine {
     ///
     /// Black is a Phase 0 placeholder value, not the hardware power-on state.
     pub fn new() -> Self {
-        // TODO(phase2): execution entry point (run a frame) arrives with the ARM9 bring-up.
         Self {
             top: blank_screen(),
             bottom: blank_screen(),
+            rom: Vec::new(),
+            frame_count: 0,
         }
+    }
+
+    /// Hands the machine a ROM image, kept verbatim.
+    ///
+    /// Any length is accepted, including empty or odd: the image is guest-controlled input
+    /// and never panics the core.
+    pub fn load_rom(&mut self, rom: Vec<u8>) {
+        // TODO(phase2): header parse and direct boot (#17).
+        self.rom = rom;
+    }
+
+    /// Returns the loaded ROM image; empty until [`Machine::load_rom`] is called.
+    pub fn rom(&self) -> &[u8] {
+        &self.rom
+    }
+
+    /// Runs the machine for one frame.
+    pub fn run_frame(&mut self) {
+        // TODO(phase2): execution entry point (#17) arrives with the ARM9 bring-up; until then a
+        // frame only advances the counter and leaves both screens black.
+        self.frame_count = self.frame_count.wrapping_add(1);
+    }
+
+    /// Returns how many frames [`Machine::run_frame`] has completed.
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.
@@ -103,5 +140,61 @@ mod tests {
             machine.frame(Screen::Bottom).len(),
         ];
         assert_eq!(lengths, [49_152, 49_152]);
+    }
+
+    #[test]
+    fn given_rom_bytes_when_loading_then_rom_is_kept_verbatim() {
+        let mut machine = Machine::new();
+        machine.load_rom(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
+        assert_eq!(machine.rom(), &[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
+    }
+
+    #[test]
+    fn given_new_machine_when_running_one_frame_then_frame_count_is_one() {
+        let mut machine = Machine::new();
+        machine.run_frame();
+        assert_eq!(machine.frame_count(), 1);
+    }
+
+    #[test]
+    fn given_new_machine_when_reading_counters_then_frame_count_is_zero_and_rom_is_empty() {
+        let machine = Machine::new();
+        assert_eq!((machine.frame_count(), machine.rom().len()), (0, 0));
+    }
+
+    #[test]
+    fn given_empty_rom_when_running_a_frame_then_rom_stays_empty_and_frame_count_is_one() {
+        let mut machine = Machine::new();
+        machine.load_rom(Vec::new());
+        machine.run_frame();
+        assert_eq!((machine.rom().len(), machine.frame_count()), (0, 1));
+    }
+
+    #[test]
+    fn given_odd_length_rom_when_running_a_frame_then_rom_is_unchanged_and_frame_count_is_one() {
+        let mut machine = Machine::new();
+        machine.load_rom(vec![1, 2, 3]);
+        machine.run_frame();
+        assert_eq!(
+            (machine.rom().to_vec(), machine.frame_count()),
+            (vec![1, 2, 3], 1)
+        );
+    }
+
+    #[test]
+    fn given_three_frames_run_when_reading_frame_count_then_it_is_three() {
+        let mut machine = Machine::new();
+        machine.run_frame();
+        machine.run_frame();
+        machine.run_frame();
+        assert_eq!(machine.frame_count(), 3);
+    }
+
+    #[test]
+    fn given_empty_savestate_map_when_deserializing_machine_then_rom_is_empty_and_frame_count_is_zero()
+     {
+        let empty = MapDeserializer::<_, Error>::new(std::iter::empty::<(&str, u32)>());
+        let machine = Machine::deserialize(empty).expect("an empty map is a valid Machine");
+        assert_eq!((machine.rom().len(), machine.frame_count()), (0, 0));
     }
 }

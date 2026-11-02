@@ -1,7 +1,7 @@
 # ARM barrel shifter
 
 Sources: GBATEK "ARM Opcodes: Data Processing (ALU)" (operand 2 and the shift-type
-paragraphs); ARM ARM "Addressing Mode 1 — Data-processing operands".
+paragraphs); ARM ARM "Addressing Mode 1 — Data-processing operands" (background; not re-read for this note).
 Used by: `crates/core/src/cpu/shifter.rs`   Phase: 1 (#8; reused by #10 and #13)
 
 Every ARM data-processing instruction and the single-data-transfer register offset pass one
@@ -44,13 +44,18 @@ Let `v` be the value, `n` the amount, `C` the current carry flag.
 - The special meanings of an immediate field of 0 (LSR #32, ASR #32, RRX) apply only to the
   immediate-shift form. A register amount of 0 is "no shift" for every type.
 - With a register-specified shift, reading R15 as the shifted register or as Rn gives the
-  instruction address + 12 (see `arm-data-processing.md`).
+  instruction address + 12 (see `arm-data-processing.md`). This is GBATEK's statement ("PC+12
+  if I=0,R=1 (shift by register), otherwise PC+8"); GBATEK also lists Rs as R0–R14 only. The
+  ARM ARM (not re-read for this note; the claim comes from the PR #79 review) treats R15 as Rd, Rn,
+  Rm or Rs in a register-shifted operand as UNPREDICTABLE, so the +12 rule is GBATEK's reading
+  of a case the ARM ARM leaves undefined.
 - Arithmetic operations ignore the carry-out of the shifter; they derive C from the ALU.
 
 ## Unverified
 
-- Rs = R15 (the amount register is the PC) — GBATEK calls R15 in a register-shift form
-  unpredictable. The suite reads the amount from the **+8** view (the instruction address + 8),
-  while Rn and Rm as R15 read +12; 483 cases fail if Rs uses +12 too. — `data_processing` in
-  `crates/core/src/cpu/arm.rs` — carries `TODO(hw-unverified)`; verify by a test ROM on real
+- Rs = R15 (the amount register is the PC) — GBATEK allows Rs only as R0–R14, and the ARM ARM
+  is reported (PR #79 review; not re-read) to leave R15 unpredictable. The suite reads the amount from the **+8** view (the instruction
+  address + 8), while Rn and Rm as R15 read +12; 483 cases of `arm_data_proc_register_shift`
+  fail if Rs uses +12 too (1,591 passing-condition cases have Rs = R15). — `data_processing`
+  in `crates/core/src/cpu/arm.rs` — carries `TODO(hw-unverified)`; verify by a test ROM on real
   hardware.

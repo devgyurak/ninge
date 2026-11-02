@@ -343,18 +343,31 @@ fn mrs_rd_pc_problems() -> Vec<String> {
 
 /// MRS SPSR in User/System with Rd < 8 (no banking in the way) reads the CPSR.
 fn mrs_spsr_user_problems() -> Vec<String> {
-    let mut problems: Vec<String> = cases_of("arm_mrs.json.bin")
-        .iter()
+    let cases: Vec<Case> = cases_of("arm_mrs.json.bin")
+        .into_iter()
         .filter(|c| {
             condition_passes(c)
                 && is_user_or_system(c)
                 && c.opcode >> 22 & 1 == 1
                 && c.opcode >> 12 & 0xF < 8
         })
-        .filter(|c| c.expected.r[(c.opcode >> 12 & 0xF) as usize] != c.initial.cpsr)
-        .map(|c| format!("{:#010x}: Rd is not the CPSR", c.opcode))
         .collect();
-    problems.truncate(5);
+    let wrong: Vec<&Case> = cases
+        .iter()
+        .filter(|c| c.expected.r[(c.opcode >> 12 & 0xF) as usize] != c.initial.cpsr)
+        .collect();
+    let mut problems: Vec<String> = (!wrong.is_empty())
+        .then(|| {
+            format!(
+                "{} of {} cases: Rd is not the CPSR",
+                wrong.len(),
+                cases.len()
+            )
+        })
+        .into_iter()
+        .collect();
+    problems.extend(wrong.iter().take(5).map(|c| format!("{:#010x}", c.opcode)));
+    problems.extend((cases.len() < 1000).then(|| format!("only {} cases", cases.len())));
     problems
 }
 
@@ -386,38 +399,120 @@ fn invalid_mode_msr_problems() -> Vec<String> {
 
 /// S with Rd = R15 in User/System keeps the control byte of the CPSR.
 fn user_s_pc_problems() -> Vec<String> {
-    let mut problems = Vec::new();
-    for file in &SUITE_FILES_8[..3] {
-        problems.extend(
-            cases_of(file)
-                .iter()
-                .filter(|c| {
-                    condition_passes(c)
-                        && is_user_or_system(c)
-                        && c.opcode >> 20 & 1 == 1
-                        && c.opcode >> 12 & 0xF == 15
-                })
-                .filter(|c| c.expected.cpsr & 0xFF != c.initial.cpsr & 0xFF)
-                .map(|c| format!("{file} {:#010x}: control byte changed", c.opcode)),
-        );
-    }
+    let cases: Vec<(&str, Case)> = SUITE_FILES_8[..3]
+        .iter()
+        .flat_map(|file| cases_of(file).into_iter().map(move |c| (*file, c)))
+        .filter(|(_, c)| {
+            condition_passes(c)
+                && is_user_or_system(c)
+                && c.opcode >> 20 & 1 == 1
+                && c.opcode >> 12 & 0xF == 15
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|(_, c)| c.expected.cpsr & 0xFF != c.initial.cpsr & 0xFF)
+        .map(|(file, c)| format!("{file} {:#010x}: control byte changed", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 3000).then(|| format!("only {} cases", cases.len())));
     problems
 }
 
 /// After MSR to the CPSR from User mode, the control byte is unchanged.
 fn user_msr_problems() -> Vec<String> {
-    ["arm_msr_imm.json.bin", "arm_msr_reg.json.bin"]
+    let cases: Vec<(&str, Case)> = ["arm_msr_imm.json.bin", "arm_msr_reg.json.bin"]
         .iter()
-        .flat_map(|file| {
-            cases_of(file)
-                .into_iter()
-                .filter(|c| {
-                    condition_passes(c) && c.initial.cpsr & 0x1F == 0x10 && c.opcode >> 22 & 1 == 0
-                })
-                .filter(|c| c.expected.cpsr & 0xFF != c.initial.cpsr & 0xFF)
-                .map(move |c| format!("{file} {:#010x}: control byte changed", c.opcode))
+        .flat_map(|file| cases_of(file).into_iter().map(move |c| (*file, c)))
+        .filter(|(_, c)| {
+            condition_passes(c) && c.initial.cpsr & 0x1F == 0x10 && c.opcode >> 22 & 1 == 0
         })
-        .collect()
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|(_, c)| c.expected.cpsr & 0xFF != c.initial.cpsr & 0xFF)
+        .map(|(file, c)| format!("{file} {:#010x}: control byte changed", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 3000).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// MSR to the CPSR control byte from a privileged mode, Rm < 8, with a value whose bit 4 is
+/// clear: the result must still have M4 set.
+fn m4_forced_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_msr_reg.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && !is_user_mode(c)
+                && c.opcode >> 22 & 1 == 0
+                && c.opcode >> 16 & 1 == 1
+                && c.opcode & 0xF < 8
+                && c.initial.r[(c.opcode & 0xF) as usize] & 0x10 == 0
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.cpsr & 0x10 == 0)
+        .map(|c| format!("{:#010x}: M4 is clear after the write", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 500).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// Whether the case starts in User mode proper (System is privileged).
+fn is_user_mode(case: &Case) -> bool {
+    case.initial.cpsr & 0x1F == 0x10
+}
+
+/// The barrel shifter on its own, as the notes describe it.
+fn reference_shift(kind: u32, value: u32, amount: u32) -> u32 {
+    match kind {
+        0 => value.checked_shl(amount).unwrap_or(0),
+        1 => value.checked_shr(amount).unwrap_or(0),
+        2 => ((value as i32) >> amount.min(31)) as u32,
+        _ => value.rotate_right(amount % 32),
+    }
+}
+
+/// MOV/MVN with a register shift whose amount register is R15, Rm and Rd below 8: the amount is
+/// the low byte of the +8 view (the start R15), and the +12 view would give a different result in
+/// some of the cases.
+fn rs_pc_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_data_proc_register_shift.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && c.opcode >> 8 & 0xF == 15
+                && c.opcode & 0xF < 8
+                && c.opcode >> 12 & 0xF < 8
+                && matches!(c.opcode >> 21 & 0xF, 13 | 15)
+        })
+        .collect();
+    let result = |c: &Case, r15: u32| {
+        let shifted = reference_shift(
+            c.opcode >> 5 & 3,
+            c.initial.r[(c.opcode & 0xF) as usize],
+            r15 & 0xFF,
+        );
+        shifted
+            ^ match c.opcode >> 21 & 0xF {
+                15 => u32::MAX,
+                _ => 0,
+            }
+    };
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.r[(c.opcode >> 12 & 0xF) as usize] != result(c, c.initial.r[15]))
+        .map(|c| format!("{:#010x}: Rd differs from the +8 view", c.opcode))
+        .collect();
+    let discriminating = cases
+        .iter()
+        .filter(|c| result(c, c.initial.r[15]) != result(c, c.initial.r[15].wrapping_add(4)))
+        .count();
+    problems.extend((cases.len() < 20).then(|| format!("only {} cases", cases.len())));
+    problems
+        .extend((discriminating < 5).then(|| format!("only {discriminating} tell +8 from +12")));
+    problems
 }
 
 #[test]
@@ -448,4 +543,14 @@ fn given_s_with_rd_pc_in_user_or_system_when_comparing_then_the_control_byte_is_
 #[test]
 fn given_msr_cpsr_in_user_mode_when_comparing_then_the_control_byte_is_kept() {
     assert_eq!(user_msr_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_msr_cpsr_control_writes_with_bit_4_clear_when_comparing_then_m4_is_set_in_the_result() {
+    assert_eq!(m4_forced_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_register_shift_with_rs_r15_when_comparing_then_the_amount_is_the_plus_8_view() {
+    assert_eq!(rs_pc_problems(), Vec::<String>::new());
 }

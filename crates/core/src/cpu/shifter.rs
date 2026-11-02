@@ -69,5 +69,8 @@ pub(crate) fn shift_register(kind: ShiftKind, value: u32, amount: u32, carry: bo
 pub(crate) fn rotated_immediate(imm8: u32, rotate_field: u32, carry: bool) -> (u32, bool) {
     let rotation = (rotate_field & 0xF) * 2;
     let value = (imm8 & 0xFF).rotate_right(rotation);
-    (value, [carry, value >> 31 == 1][usize::from(rotation != 0)])
+    match rotation {
+        0 => (value, carry),
+        _ => (value, value >> 31 == 1),
+    }
 }

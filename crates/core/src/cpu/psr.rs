@@ -43,18 +43,21 @@ pub(crate) fn condition_holds(cond: u32, cpsr: u32) -> bool {
 pub(crate) fn with_flags(cpsr: u32, n: bool, z: bool, c: bool, v: bool) -> u32 {
     let flags = [(n, FLAG_N), (z, FLAG_Z), (c, FLAG_C), (v, FLAG_V)]
         .iter()
-        .fold(0, |acc, &(set, bit)| acc | [0, bit][usize::from(set)]);
+        .filter(|&&(set, _)| set)
+        .fold(0, |acc, &(_, bit)| acc | bit);
     (cpsr & !(FLAG_N | FLAG_Z | FLAG_C | FLAG_V)) | flags
 }
 
 /// The bytes an MSR field mask (bits 19–16: `f`, `s`, `x`, `c`) selects.
 pub(crate) fn field_mask(mask: u32) -> u32 {
-    (0..4).fold(0, |acc, field| {
-        acc | [0, 0xFF << (8 * field)][usize::from(mask >> field & 1 == 1)]
-    })
+    (0..4)
+        .filter(|field| mask >> field & 1 == 1)
+        .fold(0, |acc, field| acc | 0xFF << (8 * field))
 }
 
 /// Whether the CPSR is in User mode, where only the flags byte can be written by MSR.
+// TODO(hw-unverified): mode bits that name no mode count as privileged here. No suite case
+// starts in such a mode, so this is inference (`docs/hw/arm-data-processing.md`, "Unverified").
 pub(crate) fn is_user(cpsr: u32) -> bool {
     cpsr & MODE_MASK == USER_MODE
 }

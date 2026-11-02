@@ -2,7 +2,7 @@
 
 Sources: GBATEK "ARM Opcodes: Data Processing (ALU)"; GBATEK "ARM Opcodes: PSR Transfer
 (MRS, MSR)"; GBATEK "ARM CPU Flags & Condition Field (cond)"; ARM ARM "Data-processing
-instructions", "MRS", "MSR".
+instructions", "MRS", "MSR" (listed as background; not re-read for this note).
 Used by: `crates/core/src/cpu/` (`alu.rs`, `psr.rs`, `arm.rs`)   Phase: 1 (#8)
 
 Shifter details are in `arm-barrel-shifter.md`; registers and modes in `cpu-registers.md`.
@@ -59,7 +59,8 @@ give address + 12.
 - `S = 1`, Rd = R15, opcode not TST/TEQ/CMP/CMN, in a mode with an SPSR: the result is written
   to R15 and **CPSR ← SPSR of the current mode** (the exception-return form). The mode, and
   with it the register bank, switches as the SPSR dictates.
-- `S = 1`, Rd = R15 in User mode: GBATEK calls this unpredictable; see Unverified.
+- `S = 1`, Rd = R15 in User/System (modes without an SPSR): GBATEK says it should not be
+  used in User mode; see Unverified.
 - TST/TEQ/CMP/CMN write no register, so with Rd = R15 R15 itself is not written. See
   Unverified for what the S bit does there.
 
@@ -85,7 +86,7 @@ Unselected bytes keep their value.
 - A failed condition makes the instruction a no-op that still advances the PC.
 - ADC/SBC/RSC use the C flag as it is before the instruction.
 - `MOV R15, …` without S is a plain branch; the low bits of the value are not aligned by the
-  data-processing instruction itself (the state change belongs to BX, #9).
+  data-processing instruction itself (the state change belongs to BX, #11).
 
 ## Unverified
 
@@ -96,26 +97,36 @@ chip), not by hardware.
   the suite keeps them as written. The pipeline is #11. — `write_pc` in
   `crates/core/src/cpu/arm.rs` — carries `TODO(hw-unverified)`; verify by a test ROM on
   real hardware.
-- TST/TEQ/CMP/CMN with S = 1 and Rd = R15 in a mode with an SPSR — the suite restores
+- TST/TEQ/CMP/CMN with S = 1 and Rd = R15 in a mode with an SPSR — GBATEK limits the
+  `{P}` forms (TSTP, TEQP, CMPP, CMNP) to ARMv2 and below, yet the suite restores
   CPSR ← SPSR (the old `TEQP` form) and leaves R15 alone. — `data_processing` in `arm.rs` —
   carries `TODO(hw-unverified)`.
 - MSR writing the CPSR control byte — the suite forces bit 4 (M4) to 1 in the result for
   every written value; this is also why a written value like `0x1A` reads back `0x1A | 0x10`.
   — `msr` in `arm.rs` — carries `TODO(hw-unverified)`.
 - MSR changing the T bit from a privileged mode — the suite shows cases where it changes;
-  the code lets the control byte through unfiltered. — `mrs`/`msr` in `crates/core/src/cpu/arm.rs` —
+  the code lets the control byte through unfiltered. — `msr` in `crates/core/src/cpu/arm.rs` —
   carries `TODO(hw-unverified)`.
 - MSR writing mode bits that match no mode — the suite leaves every register unchanged and
   keeps the written bits (matches `cpu-registers.md`). — `Registers::set_cpsr` — carries
   `TODO(hw-unverified)`.
 - Rs = R15 in a register-shift operand — see `arm-barrel-shifter.md`.
+- Rm = R15 in MSR (register form) — GBATEK does not define it (the ARM ARM was not re-read for this note; the claim comes from the PR #79 review). The
+  suite reads the +8 view: all 784 passing-condition CPSR cases match it, and 286 of them (the
+  ones writing the control byte) would differ with +12. — `msr` in `arm.rs` — carries
+  `TODO(hw-unverified)`.
+- Behavior once the mode bits name no mode (after the case above): the SPSR selected by MRS,
+  MSR and the S + R15 restore follows the bank that was kept, and `is_user` treats such a
+  mode as privileged. **No suite evidence**: none of the 300,000 cases in the six files starts
+  in such a mode, so this is inference. — `data_processing`, `mrs`, `msr` in `arm.rs` and
+  `is_user` in `psr.rs` — carry `TODO(hw-unverified)`; see also `cpu-registers.md`.
 - `S = 1`, Rd = R15 in User/System (no SPSR) — the suite behaves as an ordinary flag-setting
   op: flags from the result, control bits untouched, no SPSR restore. — `arm.rs` — carries
   `TODO(hw-unverified)`.
 - MRS with R = 1 (SPSR) in User/System — the suite returns the CPSR (4,404 cases). —
   `mrs` in `arm.rs` — carries `TODO(hw-unverified)`. SPSR reads/writes in `Registers` stay as #76
   defined them.
-- MRS with Rd = R15 (unpredictable per the ARM ARM) — the suite ends with R15 = value + 4:
+- MRS with Rd = R15 (unpredictable per the PR #79 review of the ARM ARM; the ARM ARM was not re-read for this note) — the suite ends with R15 = value + 4:
   an ordinary register write followed by the normal advance, without the +8 of an ALU PC
   write (1,580 cases). — `arm.rs` — carries `TODO(hw-unverified)`.
 - MSR to SPSR in User/System — ignored. — `msr` in `arm.rs` — carries `TODO(hw-unverified)`.

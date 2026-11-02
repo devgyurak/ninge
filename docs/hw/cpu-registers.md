@@ -94,7 +94,9 @@ instructions are conditional.
 
 - Mode bits that match none of the rows above (including the 26-bit values): GBATEK only says
   not to write them. The emulator keeps the written bits in CPSR and leaves the register bank
-  as it was. — `crates/core/src/cpu/` — verify by a test ROM on real hardware or a trace
+  as it was. What the instructions do *from* such a mode (SPSR choice, User-mode check) is
+  inference with no suite evidence; see `arm-data-processing.md`, "Unverified". —
+  `crates/core/src/cpu/` — verify by a test ROM on real hardware or a trace
   against the reference emulator; carries `TODO(hw-unverified)`.
 - What an SPSR read gives in User/System mode — `Registers` exposes no SPSR there. The MRS
   handler reads the CPSR instead, which is what the JSON suite shows (see

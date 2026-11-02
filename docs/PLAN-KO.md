@@ -68,7 +68,7 @@
 
 | 기능 | 사용 방식 | 비고 |
 |---|---|---|
-| Kitty graphics protocol | 같은 image id로 프레임 데이터 교체, Unicode placeholder로 셀 그리드에 배치 | 로컬: shared memory(`t=s`), 그 외: zlib 직접 전송(`t=d`, `o=z`). **Ghostty의 shm 지원 범위 확인 필요** |
+| Kitty graphics protocol | 같은 image id로 프레임 데이터 교체, Unicode placeholder로 셀 그리드에 배치 | 시작할 때 보내는 질의로 터미널이 받아들이는 것이 확인되면 shared memory(`t=s`)(macOS의 Ghostty 1.3.1과 kitty는 받아들임), 아니면 zlib 직접 전송(`t=d`, `o=z`) |
 | Kitty keyboard protocol | press / repeat / release 이벤트 수신 | 게임 입력의 전제 조건 |
 | 마우스 | SGR 1006 + SGR-Pixels(1016) | 하단 화면 터치 좌표 매핑. 지원 여부 런타임 감지 |
 
@@ -283,6 +283,6 @@ ninge/
 
 - [x] 프로젝트명: `ninge` (crates.io 사용 가능 확인), 저장소 `github.com/devgyurak/ninge`
 - [x] 라이선스: `Apache-2.0`
-- [ ] Ghostty의 kitty graphics shared memory 전송 지원 여부 확인 (Phase 0에서 확인, 그 전까지 zlib 직접 전송이 기본)
+- [x] Ghostty의 kitty graphics shared memory 전송 지원 여부 — macOS에서 지원함 (Ghostty 1.3.1, kitty 0.49.2; Phase 0, docs/STATUS.md). 전송 방식은 시작할 때 `t=s` 질의로 정함
 - [x] 세이브스테이트: 매직 넘버와 포맷 버전을 붙인 바이너리 serde 인코딩. 1.0 전에는 하위 호환 없음, 버전 불일치는 명확한 에러로 거부
 - [x] 첫 목표 상용 게임: 포켓몬스터 다이아몬드 (Phase 5 부팅~저장, Phase 7 완전 플레이)

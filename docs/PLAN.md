@@ -77,7 +77,7 @@
 
 | Feature | How it is used | Notes |
 |---|---|---|
-| Kitty graphics protocol | Replace frame data under the same image id; place it on the cell grid with Unicode placeholders | Shared memory (`t=s`) where a startup query shows the terminal accepts it (Ghostty and kitty do); otherwise direct zlib transfer (`t=d`, `o=z`) |
+| Kitty graphics protocol | Replace frame data under the same image id; place it on the cell grid with Unicode placeholders | Shared memory (`t=s`) where a startup query shows the terminal accepts it (Ghostty 1.3.1 and kitty on macOS do); otherwise direct zlib transfer (`t=d`, `o=z`) |
 | Kitty keyboard protocol | Receive press / repeat / release events | A precondition for game input |
 | Mouse | SGR 1006 + SGR-Pixels (1016) | Maps to touch coordinates on the bottom screen. Support is detected at runtime |
 
@@ -337,8 +337,8 @@ game (Pokémon Diamond) is playable.
 
 - [x] Project name: `ninge` (available on crates.io); repository `github.com/devgyurak/ninge`
 - [x] License: `Apache-2.0`
-- [x] Whether Ghostty supports kitty graphics shared-memory transfer — it does (Phase 0,
-      docs/STATUS.md); the transfer is chosen at startup by a `t=s` query
+- [x] Whether Ghostty supports kitty graphics shared-memory transfer — it does on macOS
+      (Ghostty 1.3.1, kitty 0.49.2; Phase 0, docs/STATUS.md); the transfer is chosen at startup by a `t=s` query
 - [x] Savestates: a binary serde encoding with a magic number and a format version; no
       backward compatibility before 1.0, and a version mismatch is refused with a clear error
 - [x] The first commercial target game: Pokémon Diamond (Phase 5 boot-to-save, Phase 7 fully

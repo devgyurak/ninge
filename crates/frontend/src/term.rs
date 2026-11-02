@@ -54,13 +54,13 @@ impl Drop for Restore {
     }
 }
 
-/// Reads stdin until the DA1 answer arrives or `timeout` passes, and returns the bytes.
+/// Reads `fd` until the DA1 answer arrives, `timeout` passes, or the other end closes,
+/// and returns the bytes.
 ///
-/// Reads the descriptor directly so the answer never reaches the event reader, which
-/// would take its leading ESC for the Esc key.
+/// The caller passes stdin and reads the descriptor directly, so the answer never reaches
+/// the event reader, which would take its leading ESC for the Esc key.
 #[cfg(unix)]
-fn read_reply(timeout: Duration) -> Vec<u8> {
-    let stdin = io::stdin();
+fn read_reply(fd: impl AsFd, timeout: Duration) -> Vec<u8> {
     let deadline = Instant::now() + timeout;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 256];
@@ -73,14 +73,14 @@ fn read_reply(timeout: Duration) -> Vec<u8> {
             tv_sec: left.as_secs().cast_signed(),
             tv_nsec: i64::from(left.subsec_nanos()),
         };
-        let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
+        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
         match poll(&mut fds, Some(&wait)) {
             Ok(0) => break,
             Err(Errno::INTR) => continue,
             Err(_) => break,
             Ok(_) => {}
         }
-        match rustix::io::read(stdin.as_fd(), &mut chunk) {
+        match rustix::io::read(&fd, &mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
         }
@@ -104,7 +104,7 @@ fn negotiate() -> (ShmWriter, Transfer) {
                 .and_then(|()| out.flush())
                 .map_err(|e| format!("probe not sent: {e}"))
         })
-        .map(|()| kitty::parse_probe_reply(&read_reply(PROBE_TIMEOUT)));
+        .map(|()| kitty::parse_probe_reply(&read_reply(io::stdin(), PROBE_TIMEOUT)));
     writer.release();
     let transfer = probe.map_or_else(Transfer::direct, Transfer::from_probe);
     (writer, transfer)
@@ -157,4 +157,53 @@ pub fn run() -> anyhow::Result<()> {
     }
     gfx.flush()?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::io::pipe;
+
+    const OK_AND_DA1: &[u8] = b"\x1b_Gi=31;OK\x1b\\\x1b[?62;22;52c";
+
+    #[test]
+    fn given_answer_already_written_when_reading_then_it_returns_before_the_deadline() {
+        let (reader, mut writer) = pipe().expect("pipe");
+        writer.write_all(OK_AND_DA1).expect("write");
+        let started = Instant::now();
+        let got = read_reply(reader, Duration::from_secs(30));
+        assert_eq!(
+            (got, started.elapsed() < Duration::from_secs(10)),
+            (OK_AND_DA1.to_vec(), true)
+        );
+    }
+
+    #[test]
+    fn given_no_answer_when_reading_then_it_gives_up_after_the_timeout_with_nothing() {
+        let (reader, _writer) = pipe().expect("pipe");
+        let got = read_reply(reader, Duration::from_millis(50));
+        assert_eq!(got, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn given_partial_answer_and_closed_writer_when_reading_then_it_returns_what_arrived() {
+        let (reader, mut writer) = pipe().expect("pipe");
+        writer.write_all(b"\x1b_Gi=31;OK").expect("write");
+        drop(writer);
+        let got = read_reply(reader, Duration::from_secs(30));
+        assert_eq!(got, b"\x1b_Gi=31;OK".to_vec());
+    }
+
+    #[test]
+    fn given_answer_in_two_writes_when_reading_then_it_waits_for_the_da1() {
+        let (reader, mut writer) = pipe().expect("pipe");
+        writer.write_all(b"\x1b_Gi=31;OK\x1b\\").expect("write");
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            writer.write_all(b"\x1b[?62c").expect("write");
+        });
+        let got = read_reply(reader, Duration::from_secs(30));
+        late.join().expect("writer thread");
+        assert_eq!(got, b"\x1b_Gi=31;OK\x1b\\\x1b[?62c".to_vec());
+    }
 }

@@ -135,14 +135,20 @@ impl ShmSink for ShmWriter {
 }
 
 /// Maps `file` (already `data.len()` bytes long), copies `data` in, and unmaps.
+///
+/// The object is ours alone at this point: created here with `O_EXCL`, sized to
+/// `data.len()`, and its name not yet sent to the terminal. The name is guessable, so a
+/// process of the same user could still open and truncate it, and the next access would
+/// raise `SIGBUS`; that is outside the threat model, since such a process already holds
+/// the user's own rights.
 #[expect(
     unsafe_code,
     reason = "mmap and a raw copy: there is no safe API for mapping a file"
 )]
 fn copy_in(file: &File, data: &[u8]) -> io::Result<()> {
-    // SAFETY: `data` is non-empty and `file` is `data.len()` bytes, so the mapping covers
-    // the copy. The object is ours (O_EXCL) and its name is unsent, so nothing else maps
-    // it; the mapping is unmapped before returning and no reference into it escapes.
+    // SAFETY: `file` is `data.len()` bytes and ours (O_EXCL), so the mapping covers the
+    // copy; it is unmapped before returning and no reference escapes. A truncation by
+    // another process (SIGBUS) is outside the threat model, see the fn docs.
     unsafe {
         let map = mmap(
             ptr::null_mut(),
@@ -175,8 +181,9 @@ mod tests {
     #[expect(unsafe_code, reason = "mmap to read an object back")]
     fn read_back(name: &str, len: usize) -> Vec<u8> {
         let fd = shm::open(name, OFlags::RDONLY, Mode::empty()).expect("object exists");
-        // SAFETY: the object is `len` bytes (set by the writer under test), the mapping is
-        // read-only, and it is copied out and unmapped before returning.
+        // SAFETY: the object is `len` bytes (set by the writer under test) and the mapping
+        // is read-only, copied out, and unmapped before returning. As in `copy_in`, a
+        // truncation by another process (SIGBUS) is outside the threat model.
         unsafe {
             let map = mmap(
                 ptr::null_mut(),
@@ -197,7 +204,19 @@ mod tests {
         shm::open(name, OFlags::RDONLY, Mode::empty()).map(drop)
     }
 
+    /// A writer for `pid` after removing objects an earlier, killed run may have left
+    /// under the names it would use. The pids above belong to no real process (above the
+    /// kernel's pid range), and each test has its own, so tests running in parallel never
+    /// share a name; two `cargo test` runs at once would, which this does not guard.
+    fn writer_for(pid: u32) -> ShmWriter {
+        for seq in 0..CREATE_TRIES {
+            let _ = shm::unlink(object_name(pid, seq));
+        }
+        ShmWriter::with_pid(pid)
+    }
+
     fn create_raw(name: &str) {
+        let _ = shm::unlink(name);
         shm::open(
             name,
             OFlags::CREATE | OFlags::EXCL | OFlags::RDWR,
@@ -246,14 +265,14 @@ mod tests {
 
     #[test]
     fn given_bytes_when_putting_then_mapping_the_named_object_reads_them_back() {
-        let mut writer = ShmWriter::with_pid(PID_ROUND_TRIP);
+        let mut writer = writer_for(PID_ROUND_TRIP);
         let name = writer.put(&[1, 2, 3, 250]).expect("put");
         assert_eq!(read_back(&name, 4), vec![1, 2, 3, 250]);
     }
 
     #[test]
     fn given_object_read_by_the_terminal_when_unlinked_then_reopening_gives_enoent() {
-        let mut writer = ShmWriter::with_pid(PID_ROUND_TRIP + 100);
+        let mut writer = writer_for(PID_ROUND_TRIP + 100);
         let name = writer.put(&[9]).expect("put");
         shm::unlink(&name).expect("terminal unlinks");
         assert_eq!(exists(&name), Err(Errno::NOENT));
@@ -261,7 +280,7 @@ mod tests {
 
     #[test]
     fn given_two_puts_when_comparing_names_then_each_frame_gets_a_fresh_object() {
-        let mut writer = ShmWriter::with_pid(PID_DISTINCT);
+        let mut writer = writer_for(PID_DISTINCT);
         let first = writer.put(&[1]).expect("put");
         let second = writer.put(&[2]).expect("put");
         assert_eq!(
@@ -272,8 +291,8 @@ mod tests {
 
     #[test]
     fn given_next_name_already_exists_when_putting_then_the_following_name_is_used() {
+        let mut writer = writer_for(PID_TAKEN);
         create_raw("/ninge-4000000003-0");
-        let mut writer = ShmWriter::with_pid(PID_TAKEN);
         let name = writer.put(&[1]).expect("put");
         shm::unlink("/ninge-4000000003-0").expect("clean up the squatter");
         assert_eq!(name, "/ninge-4000000003-1");
@@ -284,17 +303,16 @@ mod tests {
         let names: Vec<String> = (0..CREATE_TRIES)
             .map(|seq| object_name(PID_EXHAUSTED, seq))
             .collect();
+        let mut writer = writer_for(PID_EXHAUSTED);
         create_all(&names);
-        let kind = ShmWriter::with_pid(PID_EXHAUSTED)
-            .put(&[1])
-            .map_err(|e| e.kind());
+        let kind = writer.put(&[1]).map_err(|e| e.kind());
         unlink_all(&names);
         assert_eq!(kind, Err(io::ErrorKind::AlreadyExists));
     }
 
     #[test]
     fn given_unread_objects_when_releasing_then_they_are_unlinked() {
-        let mut writer = ShmWriter::with_pid(PID_RELEASE);
+        let mut writer = writer_for(PID_RELEASE);
         let name = writer.put(&[1]).expect("put");
         writer.release();
         assert_eq!(exists(&name), Err(Errno::NOENT));
@@ -302,7 +320,7 @@ mod tests {
 
     #[test]
     fn given_object_the_terminal_already_unlinked_when_releasing_then_enoent_is_ignored() {
-        let mut writer = ShmWriter::with_pid(PID_RELEASE + 100);
+        let mut writer = writer_for(PID_RELEASE + 100);
         let name = writer.put(&[1]).expect("put");
         shm::unlink(&name).expect("terminal unlinks");
         writer.release();
@@ -311,7 +329,7 @@ mod tests {
 
     #[test]
     fn given_unread_objects_when_the_writer_drops_then_they_are_unlinked() {
-        let mut writer = ShmWriter::with_pid(PID_DROP);
+        let mut writer = writer_for(PID_DROP);
         let name = writer.put(&[1]).expect("put");
         drop(writer);
         assert_eq!(exists(&name), Err(Errno::NOENT));
@@ -319,7 +337,7 @@ mod tests {
 
     #[test]
     fn given_more_puts_than_remembered_when_the_oldest_is_evicted_then_it_is_unlinked_at_once() {
-        let mut writer = ShmWriter::with_pid(PID_DROP + 100);
+        let mut writer = writer_for(PID_DROP + 100);
         let names: Vec<String> = (0..=REMEMBERED)
             .map(|_| writer.put(&[1]).expect("put"))
             .collect();
@@ -331,7 +349,7 @@ mod tests {
 
     #[test]
     fn given_empty_data_when_putting_then_it_is_rejected_without_creating_an_object() {
-        let mut writer = ShmWriter::with_pid(PID_EMPTY);
+        let mut writer = writer_for(PID_EMPTY);
         let kind = writer.put(&[]).map_err(|e| e.kind());
         assert_eq!(
             (kind, exists("/ninge-4000000006-0")),

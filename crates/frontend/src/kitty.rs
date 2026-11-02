@@ -123,12 +123,20 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// End offset of the first DA1 answer (`ESC [ ? digits and ; c`) in `buf`.
+///
+/// Every `ESC [ ?` is tried in turn: a private-mode sequence before the answer must not
+/// hide it.
 fn da1_end(buf: &[u8]) -> Option<usize> {
-    let start = find(buf, b"\x1b[?")? + 3;
-    let len = buf[start..]
-        .iter()
-        .position(|b| !b.is_ascii_digit() && *b != b';')?;
-    (buf[start + len] == b'c').then_some(start + len + 1)
+    buf.windows(3)
+        .enumerate()
+        .filter(|(_, w)| *w == b"\x1b[?")
+        .find_map(|(at, _)| {
+            let start = at + 3;
+            let len = buf[start..]
+                .iter()
+                .position(|b| !b.is_ascii_digit() && *b != b';')?;
+            (buf[start + len] == b'c').then_some(start + len + 1)
+        })
 }
 
 /// Whether the DA1 answer has arrived, so nothing more is coming for the query.
@@ -365,6 +373,12 @@ mod tests {
     #[test]
     fn given_graphics_reply_without_da1_when_checking_completeness_then_it_is_not_complete() {
         assert_eq!(first_complete(&reply("i=31;OK")), None);
+    }
+
+    #[test]
+    fn given_private_csi_before_da1_when_checking_completeness_then_the_da1_still_completes() {
+        let bytes = joined(&[b"\x1b[?25h", DA1_ANSWER]);
+        assert_eq!(first_complete(&bytes), Some(bytes.len()));
     }
 
     #[test]

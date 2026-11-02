@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Kitty graphics protocol encoder: pure functions from pixels to escape bytes.
 //!
-//! Frames go over as direct (`t=d`) zlib-compressed (`o=z`) 24-bit RGB data under one
-//! image id. Re-transmitting an id deletes the existing image and all its placements
-//! (protocol doc), so every transmit also creates the virtual placement (`a=T,U=1`).
-//! Shared memory (`t=s`) is #6.
+//! Frames go over either as shared memory (`t=s`, [`transmit_shm`]: only the object's
+//! name is sent) or as direct (`t=d`) zlib-compressed (`o=z`) 24-bit RGB data
+//! ([`transmit`]), under one image id. Which one is used is decided at startup by a `t=s`
+//! query ([`probe_query`], [`parse_probe_reply`]). Re-transmitting an id deletes the
+//! existing image and all its placements (protocol doc), so every transmit also creates
+//! the virtual placement (`a=T,U=1`).
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -18,6 +20,19 @@ pub const CHUNK_SIZE: usize = 4096;
 
 const APC_START: &[u8] = b"\x1b_G";
 const APC_END: &[u8] = b"\x1b\\";
+
+/// Image id of the support query; no placement is made, so it never shows.
+const PROBE_IMAGE_ID: u32 = 31;
+
+/// Primary device attributes request. Every terminal answers it, and it answers after
+/// any graphics reply, so its answer marks the end of the wait.
+const DA1_REQUEST: &[u8] = b"\x1b[c";
+
+/// Bytes of a frame in the shared-memory object: RGB24 for the whole screen.
+pub const FRAME_BYTES: usize = SCREEN_WIDTH * SCREEN_HEIGHT * 3;
+
+/// Bytes of the object the support query names.
+pub const PROBE_BYTES: usize = 3;
 
 /// Converts xRGB8888 pixels (`0x00RRGGBB`, high byte ignored) to packed RGB24 bytes.
 pub fn rgb24(frame: &[u32]) -> Vec<u8> {
@@ -63,6 +78,89 @@ pub fn transmit(image_id: u32, frame: &[u32], cols: u16, rows: u16) -> Vec<u8> {
         push_chunk(&mut out, &keys, chunk);
     }
     out
+}
+
+/// Encodes one frame that already sits in the shared-memory object `name`.
+///
+/// Same placement as [`transmit`]; only the medium differs. The payload is the object's
+/// name (base64), `S` its size, and the terminal reads the object and then unlinks it.
+/// One chunk always suffices: a name is far below [`CHUNK_SIZE`].
+pub fn transmit_shm(image_id: u32, name: &str, cols: u16, rows: u16) -> Vec<u8> {
+    let keys = format!(
+        "a=T,U=1,c={cols},r={rows},f=24,s={SCREEN_WIDTH},v={SCREEN_HEIGHT},i={image_id},t=s,S={FRAME_BYTES},q=2"
+    );
+    let mut out = Vec::new();
+    push_chunk(&mut out, &keys, STANDARD.encode(name).as_bytes());
+    out
+}
+
+/// The query that asks whether the terminal accepts `t=s`, followed by a DA1 request.
+///
+/// `name` is an object of [`PROBE_BYTES`] bytes. `q=0` asks for a reply either way; it
+/// arrives before the DA1 answer.
+pub fn probe_query(name: &str) -> Vec<u8> {
+    let keys = format!("a=q,i={PROBE_IMAGE_ID},t=s,f=24,s=1,v=1,S={PROBE_BYTES},q=0");
+    let mut out = Vec::new();
+    push_chunk(&mut out, &keys, STANDARD.encode(name).as_bytes());
+    out.extend_from_slice(DA1_REQUEST);
+    out
+}
+
+/// What the terminal said to [`probe_query`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Probe {
+    /// The terminal replied `OK`.
+    Supported,
+    /// The terminal replied with something else; the text is its message.
+    Unsupported(String),
+    /// No graphics reply: the terminal ignores the graphics protocol, or the reply is
+    /// incomplete.
+    NoReply,
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// End offset of the first DA1 answer (`ESC [ ? digits and ; c`) in `buf`.
+///
+/// Every `ESC [ ?` is tried in turn: a private-mode sequence before the answer must not
+/// hide it.
+fn da1_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(3)
+        .enumerate()
+        .filter(|(_, w)| *w == b"\x1b[?")
+        .find_map(|(at, _)| {
+            let start = at + 3;
+            let len = buf[start..]
+                .iter()
+                .position(|b| !b.is_ascii_digit() && *b != b';')?;
+            (buf[start + len] == b'c').then_some(start + len + 1)
+        })
+}
+
+/// Whether the DA1 answer has arrived, so nothing more is coming for the query.
+pub fn reply_complete(buf: &[u8]) -> bool {
+    da1_end(buf).is_some()
+}
+
+/// Reads the terminal's answer to [`probe_query`] out of the bytes received.
+///
+/// Only a complete `ESC _G ... ESC \` reply counts. Anything else, including a DA1
+/// answer alone, is [`Probe::NoReply`].
+pub fn parse_probe_reply(buf: &[u8]) -> Probe {
+    let reply = find(buf, APC_START).and_then(|start| {
+        let body = &buf[start + APC_START.len()..];
+        find(body, APC_END).map(|end| &body[..end])
+    });
+    let Some(body) = reply else {
+        return Probe::NoReply;
+    };
+    match body.splitn(2, |&b| b == b';').nth(1) {
+        Some(b"OK") => Probe::Supported,
+        Some(message) => Probe::Unsupported(String::from_utf8_lossy(message).into_owned()),
+        None => Probe::Unsupported("malformed reply".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +268,121 @@ mod tests {
     #[test]
     fn given_stray_bytes_between_sequences_when_parsing_strictly_then_stream_is_rejected() {
         assert_eq!(parse(b"\x1b_Gm=1;a\x1b\\zz\x1b_Gm=0;b\x1b\\"), None);
+    }
+    fn reply(keys_and_message: &str) -> Vec<u8> {
+        format!("\x1b_G{keys_and_message}\x1b\\").into_bytes()
+    }
+
+    const DA1_ANSWER: &[u8] = b"\x1b[?62;22;52c";
+
+    /// Probes with `(label, bytes, expected)`; returns the labels that differ.
+    fn probe_failures(cases: &[(&str, Vec<u8>, Probe)]) -> Vec<String> {
+        cases
+            .iter()
+            .filter(|(_, bytes, expected)| parse_probe_reply(bytes) != *expected)
+            .map(|(label, ..)| (*label).to_string())
+            .collect()
+    }
+
+    fn joined(parts: &[&[u8]]) -> Vec<u8> {
+        parts.concat()
+    }
+
+    #[test]
+    fn given_shm_name_when_transmitting_shm_then_keys_name_the_medium_and_size() {
+        let seqs = seqs(&transmit_shm(7, "/ninge-1-2", 40, 30));
+        assert_eq!(
+            seqs[0].0,
+            "a=T,U=1,c=40,r=30,f=24,s=256,v=192,i=7,t=s,S=147456,q=2"
+        );
+    }
+
+    #[test]
+    fn given_shm_name_when_transmitting_shm_then_payload_decodes_to_the_name_in_one_chunk() {
+        let seqs = seqs(&transmit_shm(7, "/ninge-1-2", 40, 30));
+        let name = STANDARD.decode(&seqs[0].1).expect("valid base64");
+        assert_eq!((seqs.len(), name), (1, b"/ninge-1-2".to_vec()));
+    }
+
+    #[test]
+    fn given_name_when_building_probe_query_then_query_keys_payload_and_da1_follow_in_order() {
+        let query = probe_query("/ninge-1-2");
+        let (graphics, da1) = query.split_at(query.len() - 3);
+        let seqs = seqs(graphics);
+        assert_eq!(
+            (seqs[0].0.as_str(), STANDARD.decode(&seqs[0].1).ok(), da1),
+            (
+                "a=q,i=31,t=s,f=24,s=1,v=1,S=3,q=0",
+                Some(b"/ninge-1-2".to_vec()),
+                b"\x1b[c".as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn given_assorted_replies_when_parsing_probe_then_each_is_classified() {
+        let ok = reply("i=31;OK");
+        let refused = reply("i=31;EINVAL:unsupported transmission medium");
+        let cases = [
+            ("ok alone", ok.clone(), Probe::Supported),
+            ("ok then da1", joined(&[&ok, DA1_ANSWER]), Probe::Supported),
+            (
+                "error text",
+                refused.clone(),
+                Probe::Unsupported("EINVAL:unsupported transmission medium".to_string()),
+            ),
+            (
+                "error then da1",
+                joined(&[&refused, DA1_ANSWER]),
+                Probe::Unsupported("EINVAL:unsupported transmission medium".to_string()),
+            ),
+            ("da1 only", DA1_ANSWER.to_vec(), Probe::NoReply),
+            ("nothing", Vec::new(), Probe::NoReply),
+            (
+                "ok split before terminator",
+                b"\x1b_Gi=31;OK".to_vec(),
+                Probe::NoReply,
+            ),
+            (
+                "reply with no message",
+                reply("i=31"),
+                Probe::Unsupported("malformed reply".to_string()),
+            ),
+            (
+                "echoed noise before the reply",
+                joined(&[b"junk", &ok]),
+                Probe::Supported,
+            ),
+        ];
+        assert_eq!(probe_failures(&cases), Vec::<String>::new());
+    }
+
+    /// Feeds `bytes` one at a time and returns the prefix lengths at which the reply
+    /// first reads as complete.
+    fn first_complete(bytes: &[u8]) -> Option<usize> {
+        (0..=bytes.len()).find(|&n| reply_complete(&bytes[..n]))
+    }
+
+    #[test]
+    fn given_da1_answer_arriving_in_pieces_when_checking_completeness_then_it_completes_at_the_final_byte()
+     {
+        let bytes = joined(&[&reply("i=31;OK"), DA1_ANSWER]);
+        assert_eq!(first_complete(&bytes), Some(bytes.len()));
+    }
+
+    #[test]
+    fn given_graphics_reply_without_da1_when_checking_completeness_then_it_is_not_complete() {
+        assert_eq!(first_complete(&reply("i=31;OK")), None);
+    }
+
+    #[test]
+    fn given_private_csi_before_da1_when_checking_completeness_then_the_da1_still_completes() {
+        let bytes = joined(&[b"\x1b[?25h", DA1_ANSWER]);
+        assert_eq!(first_complete(&bytes), Some(bytes.len()));
+    }
+
+    #[test]
+    fn given_csi_that_is_not_da1_when_checking_completeness_then_it_is_not_complete() {
+        assert_eq!(first_complete(b"\x1b[?25h"), None);
     }
 }

@@ -22,9 +22,18 @@ fi
 command -v curl >/dev/null 2>&1 || { echo "curl not found — install curl to fetch the CPU test suite" >&2; exit 1; }
 mkdir -p "$DEST"
 
+# Each line is "<sha256>  <name>". The name becomes a path and a URL, and curl normalizes
+# "../", so anything but a plain file name is refused before it can write outside DEST.
+LINE_FORMAT='^[0-9a-f]{64}  [a-z0-9_]+\.json\.bin$'
+
 fetched=0
 kept=0
-while read -r want name; do
+# "|| [ -n ... ]" keeps a last line that has no trailing newline.
+while read -r want name || [ -n "$want" ]; do
+  if ! printf '%s  %s\n' "$want" "$name" | grep -Eq "$LINE_FORMAT"; then
+    echo "malformed line in tests/cpu_suite/SHA256SUMS: '$want  $name'" >&2
+    exit 1
+  fi
   file="$DEST/$name"
   if [ -f "$file" ] && [ "$(sha256 "$file")" = "$want" ]; then
     kept=$((kept + 1))

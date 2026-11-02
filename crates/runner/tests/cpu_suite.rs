@@ -208,3 +208,349 @@ fn given_fetched_suite_cases_when_comparing_slot_changes_then_bank_slots_change_
 fn given_a_fetched_suite_file_when_run_then_every_diff_names_the_file_and_a_case_index_in_range() {
     assert_eq!(run_problems(), Vec::<String>::new());
 }
+
+/// Runs one suite file on the ARM7 and returns the cases that differ; a file that cannot be
+/// read is a panic, not an empty list.
+fn arm7_diffs(file: &str) -> Vec<ninge_runner::cpu_suite::CaseDiff> {
+    run_json_suite::<false>(&suite_dir().join(file))
+        .unwrap_or_else(|e| panic!("{file}: {e} — run ./scripts/fetch_cpu_suite.sh"))
+}
+
+#[test]
+fn given_arm_data_proc_immediate_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_data_proc_immediate.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_data_proc_immediate_shift_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_data_proc_immediate_shift.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_data_proc_register_shift_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_data_proc_register_shift.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_mrs_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_mrs.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_msr_imm_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_msr_imm.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_msr_reg_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_msr_reg.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+/// Decoded cases of one suite file.
+fn cases_of(file: &str) -> Vec<Case> {
+    decode(&std::fs::read(suite_dir().join(file)).unwrap_or_else(|e| panic!("{file}: {e}")))
+        .unwrap_or_else(|e| panic!("{file}: {e}"))
+}
+
+/// Whether the instruction's condition holds for the case's starting flags.
+fn condition_passes(case: &Case) -> bool {
+    let cpsr = case.initial.cpsr;
+    let (n, z, c, v) = (
+        cpsr >> 31 & 1 == 1,
+        cpsr >> 30 & 1 == 1,
+        cpsr >> 29 & 1 == 1,
+        cpsr >> 28 & 1 == 1,
+    );
+    match case.opcode >> 28 {
+        0 => z,
+        1 => !z,
+        2 => c,
+        3 => !c,
+        4 => n,
+        5 => !n,
+        6 => v,
+        7 => !v,
+        8 => c && !z,
+        9 => !c || z,
+        10 => n == v,
+        11 => n != v,
+        12 => !z && n == v,
+        13 => z || n != v,
+        _ => true,
+    }
+}
+
+fn is_user_or_system(case: &Case) -> bool {
+    matches!(case.initial.cpsr & 0x1F, 0x10 | 0x1F)
+}
+
+/// Problems with "every case starts with R15 = fetch address + 8" for the six #8 files.
+fn start_r15_problems() -> Vec<String> {
+    SUITE_FILES_8
+        .iter()
+        .flat_map(|file| {
+            cases_of(file)
+                .into_iter()
+                .enumerate()
+                .filter(|(_, c)| c.initial.r[15] != c.base_addr.wrapping_add(8))
+                .map(move |(i, _)| format!("{file}[{i}]: R15 is not base + 8"))
+        })
+        .collect()
+}
+
+const SUITE_FILES_8: [&str; 6] = [
+    "arm_data_proc_immediate.json.bin",
+    "arm_data_proc_immediate_shift.json.bin",
+    "arm_data_proc_register_shift.json.bin",
+    "arm_mrs.json.bin",
+    "arm_msr_imm.json.bin",
+    "arm_msr_reg.json.bin",
+];
+
+/// MRS CPSR cases that pass their condition with Rd = R15 end with R15 = CPSR + 4, an
+/// ordinary register write plus the normal advance.
+fn mrs_rd_pc_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_mrs.json.bin")
+        .into_iter()
+        .filter(|c| condition_passes(c) && c.opcode >> 12 & 0xF == 15 && c.opcode >> 22 & 1 == 0)
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.r[15] != c.initial.cpsr.wrapping_add(4))
+        .map(|c| format!("{:#010x}: R15 is not the CPSR + 4", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 500).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// MRS SPSR in User/System with Rd < 8 (no banking in the way) reads the CPSR.
+fn mrs_spsr_user_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_mrs.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && is_user_or_system(c)
+                && c.opcode >> 22 & 1 == 1
+                && c.opcode >> 12 & 0xF < 8
+        })
+        .collect();
+    let wrong: Vec<&Case> = cases
+        .iter()
+        .filter(|c| c.expected.r[(c.opcode >> 12 & 0xF) as usize] != c.initial.cpsr)
+        .collect();
+    let mut problems: Vec<String> = (!wrong.is_empty())
+        .then(|| {
+            format!(
+                "{} of {} cases: Rd is not the CPSR",
+                wrong.len(),
+                cases.len()
+            )
+        })
+        .into_iter()
+        .collect();
+    problems.extend(wrong.iter().take(5).map(|c| format!("{:#010x}", c.opcode)));
+    problems.extend((cases.len() < 1000).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// MSR CPSR cases that end with mode bits naming no mode must leave every register slot but R15
+/// and every SPSR as it was, which is what keeping the bank means (#76).
+fn invalid_mode_msr_problems() -> Vec<String> {
+    let valid = [0x10, 0x11, 0x12, 0x13, 0x17, 0x1B, 0x1F];
+    let cases: Vec<Case> = cases_of("arm_msr_reg.json.bin")
+        .into_iter()
+        .filter(|c| !valid.contains(&(c.expected.cpsr & 0x1F)))
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| {
+            let (a, b) = (&c.initial, &c.expected);
+            a.r[..15] != b.r[..15]
+                || a.r_fiq != b.r_fiq
+                || a.r_svc != b.r_svc
+                || a.r_abt != b.r_abt
+                || a.r_irq != b.r_irq
+                || a.r_und != b.r_und
+                || a.spsr != b.spsr
+        })
+        .map(|c| format!("{:#010x}: a register changed", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 1000).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// S with Rd = R15 in User/System keeps the control byte of the CPSR.
+fn user_s_pc_problems() -> Vec<String> {
+    let cases: Vec<(&str, Case)> = SUITE_FILES_8[..3]
+        .iter()
+        .flat_map(|file| cases_of(file).into_iter().map(move |c| (*file, c)))
+        .filter(|(_, c)| {
+            condition_passes(c)
+                && is_user_or_system(c)
+                && c.opcode >> 20 & 1 == 1
+                && c.opcode >> 12 & 0xF == 15
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|(_, c)| c.expected.cpsr & 0xFF != c.initial.cpsr & 0xFF)
+        .map(|(file, c)| format!("{file} {:#010x}: control byte changed", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 3000).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// After MSR to the CPSR from User mode, the control byte is unchanged.
+fn user_msr_problems() -> Vec<String> {
+    let cases: Vec<(&str, Case)> = ["arm_msr_imm.json.bin", "arm_msr_reg.json.bin"]
+        .iter()
+        .flat_map(|file| cases_of(file).into_iter().map(move |c| (*file, c)))
+        .filter(|(_, c)| {
+            condition_passes(c) && c.initial.cpsr & 0x1F == 0x10 && c.opcode >> 22 & 1 == 0
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|(_, c)| c.expected.cpsr & 0xFF != c.initial.cpsr & 0xFF)
+        .map(|(file, c)| format!("{file} {:#010x}: control byte changed", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 3000).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// MSR to the CPSR control byte from a privileged mode, Rm < 8, with a value whose bit 4 is
+/// clear: the result must still have M4 set.
+fn m4_forced_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_msr_reg.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && !is_user_mode(c)
+                && c.opcode >> 22 & 1 == 0
+                && c.opcode >> 16 & 1 == 1
+                && c.opcode & 0xF < 8
+                && c.initial.r[(c.opcode & 0xF) as usize] & 0x10 == 0
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.cpsr & 0x10 == 0)
+        .map(|c| format!("{:#010x}: M4 is clear after the write", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 500).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// Whether the case starts in User mode proper (System is privileged).
+fn is_user_mode(case: &Case) -> bool {
+    case.initial.cpsr & 0x1F == 0x10
+}
+
+/// The barrel shifter on its own, as the notes describe it.
+fn reference_shift(kind: u32, value: u32, amount: u32) -> u32 {
+    match kind {
+        0 => value.checked_shl(amount).unwrap_or(0),
+        1 => value.checked_shr(amount).unwrap_or(0),
+        2 => ((value as i32) >> amount.min(31)) as u32,
+        _ => value.rotate_right(amount % 32),
+    }
+}
+
+/// MOV/MVN with a register shift whose amount register is R15, Rm and Rd below 8: the amount is
+/// the low byte of the +8 view (the start R15), and the +12 view would give a different result in
+/// some of the cases.
+fn rs_pc_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_data_proc_register_shift.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && c.opcode >> 8 & 0xF == 15
+                && c.opcode & 0xF < 8
+                && c.opcode >> 12 & 0xF < 8
+                && matches!(c.opcode >> 21 & 0xF, 13 | 15)
+        })
+        .collect();
+    let result = |c: &Case, r15: u32| {
+        let shifted = reference_shift(
+            c.opcode >> 5 & 3,
+            c.initial.r[(c.opcode & 0xF) as usize],
+            r15 & 0xFF,
+        );
+        shifted
+            ^ match c.opcode >> 21 & 0xF {
+                15 => u32::MAX,
+                _ => 0,
+            }
+    };
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.r[(c.opcode >> 12 & 0xF) as usize] != result(c, c.initial.r[15]))
+        .map(|c| format!("{:#010x}: Rd differs from the +8 view", c.opcode))
+        .collect();
+    let discriminating = cases
+        .iter()
+        .filter(|c| result(c, c.initial.r[15]) != result(c, c.initial.r[15].wrapping_add(4)))
+        .count();
+    problems.extend((cases.len() < 20).then(|| format!("only {} cases", cases.len())));
+    problems
+        .extend((discriminating < 5).then(|| format!("only {discriminating} tell +8 from +12")));
+    problems
+}
+
+#[test]
+fn given_the_six_arm_8_files_when_reading_start_states_then_r15_is_the_fetch_address_plus_8() {
+    assert_eq!(start_r15_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_mrs_cases_with_rd_pc_when_comparing_then_r15_is_the_value_plus_4() {
+    assert_eq!(mrs_rd_pc_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_mrs_spsr_in_user_or_system_when_comparing_then_rd_holds_the_cpsr() {
+    assert_eq!(mrs_spsr_user_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_msr_cases_ending_in_an_invalid_mode_when_comparing_then_no_register_or_spsr_changed() {
+    assert_eq!(invalid_mode_msr_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_s_with_rd_pc_in_user_or_system_when_comparing_then_the_control_byte_is_kept() {
+    assert_eq!(user_s_pc_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_msr_cpsr_in_user_mode_when_comparing_then_the_control_byte_is_kept() {
+    assert_eq!(user_msr_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_msr_cpsr_control_writes_with_bit_4_clear_when_comparing_then_m4_is_set_in_the_result() {
+    assert_eq!(m4_forced_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_register_shift_with_rs_r15_when_comparing_then_the_amount_is_the_plus_8_view() {
+    assert_eq!(rs_pc_problems(), Vec::<String>::new());
+}

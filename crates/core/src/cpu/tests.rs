@@ -381,11 +381,13 @@ fn given_register_index_above_fifteen_when_reading_then_only_the_low_four_bits_c
 }
 
 #[test]
-fn given_new_cpu_when_stepping_then_registers_are_unchanged() {
+fn given_new_cpu_when_stepping_a_failed_condition_then_only_r15_advances_by_4() {
+    // The all-zero word is `ANDEQ`, and a power-on CPU has Z clear.
     let mut cpu = Cpu::<false>::new();
-    let before = cpu.clone();
+    let mut expected = cpu.clone();
+    expected.regs_mut().set(15, 4);
     cpu.step(&mut NullBus);
-    assert_eq!(cpu, before);
+    assert_eq!(cpu, expected);
 }
 
 #[test]

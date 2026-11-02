@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! ARM-state execution: data processing and PSR transfer (#8). Notes:
-//! `docs/hw/arm-data-processing.md`, `docs/hw/arm-barrel-shifter.md`.
+//! ARM-state execution: data processing and PSR transfer (#8), multiply (#9). Notes:
+//! `docs/hw/arm-data-processing.md`, `docs/hw/arm-barrel-shifter.md`,
+//! `docs/hw/arm-multiply.md`.
 
 use super::alu;
 use super::decode::{Kind, decode};
@@ -17,6 +18,8 @@ const MODE_BIT_4: u32 = 0x10;
 const PC_READ_OFFSET: u32 = 8;
 /// A register-specified shift costs an extra cycle, so R15 reads that far ahead again.
 const REGISTER_SHIFT_EXTRA: u32 = 4;
+/// A multiply's R15 operand reads this far ahead again (the suite: address + 12).
+const MULTIPLY_OPERAND_EXTRA: u32 = 4;
 /// Size of an ARM instruction.
 const ARM_WORD: u32 = 4;
 
@@ -32,6 +35,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 }
                 Kind::Mrs => self.mrs(word),
                 Kind::MsrImmediate | Kind::MsrRegister => self.msr(word),
+                Kind::Multiply => self.multiply(word),
+                Kind::MultiplyLong => self.multiply_long(word),
                 Kind::Unhandled => false,
             };
         // A write to the PC already moved it; everything else, including a failed condition,
@@ -45,9 +50,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
     //
     // The JSON suite's convention: while an instruction executes R15 is its address + 8, a
     // step that does not write the PC ends with R15 + 4, and an ALU result written to R15 ends
-    // as the value + 8. Everything that depends on it is in this section and in the three
-    // constants above the `impl` (`PC_READ_OFFSET`, `REGISTER_SHIFT_EXTRA`, `ARM_WORD`); #11
-    // replaces the section and `operand` with the real pipeline.
+    // as the value + 8. Everything that depends on it is in this section and in the four
+    // constants above the `impl` (`PC_READ_OFFSET`, `REGISTER_SHIFT_EXTRA`,
+    // `MULTIPLY_OPERAND_EXTRA`, `ARM_WORD`);
+    // #11 replaces the section and `operand` with the real pipeline.
 
     /// The address `step_arm` fetches from: R15 less the interim read-ahead.
     fn fetch_address(&self) -> u32 {
@@ -213,5 +219,92 @@ impl<const ARM9: bool> Cpu<ARM9> {
             }
         }
         false
+    }
+
+    /// MUL and MLA (`docs/hw/arm-multiply.md`): Rd = Rm × Rs (+ Rn), low 32 bits. True if it
+    /// wrote the PC.
+    // TODO(hw-unverified): ARM7 C after S is left unchanged, which the suite contradicts in about
+    // half the S cases (#81); no carry model is implemented (its origin is the idea recorded in
+    // `docs/hw/arm-multiply.md`, "ARM7TDMI multiply carry", and is itself unverified). On ARM9 C
+    // is unaffected per GBATEK, no suite covers it. An R15 operand reads the address + 12 and an
+    // R15 Rd ends as the value + 8 (suite; the real pipeline is #11). Rd = Rm gives the plain
+    // result because every operand is read before the write (suite). MUL does not read its Rn
+    // field (inferred).
+    fn multiply(&mut self, word: u32) -> bool {
+        let rd = (word >> 16) & 0xF;
+        let rn = (word >> 12) & 0xF;
+        let rs = (word >> 8) & 0xF;
+        let rm = word & 0xF;
+        let product = self
+            .operand(rm, MULTIPLY_OPERAND_EXTRA)
+            .wrapping_mul(self.operand(rs, MULTIPLY_OPERAND_EXTRA));
+        // Bit 21 is A: only MLA reads Rn.
+        let result = match word >> 21 & 1 {
+            1 => product.wrapping_add(self.operand(rn, MULTIPLY_OPERAND_EXTRA)),
+            _ => product,
+        };
+        self.set_multiply_flags(word, result >> 31 == 1, result == 0);
+        match rd {
+            15 => self.write_pc(result),
+            _ => self.regs.set(rd as usize, result),
+        }
+        rd == 15
+    }
+
+    /// UMULL, UMLAL, SMULL and SMLAL (`docs/hw/arm-multiply.md`): RdHi:RdLo = Rm × Rs (+ the old
+    /// pair), wrapping at 64 bits. True if it wrote the PC.
+    // TODO(hw-unverified): ARM7 C after S is left unchanged (#81; no carry model, see `multiply`)
+    // and on ARM9 it is unaffected per GBATEK; V is left unchanged although GBATEK marks it
+    // "destroyed???" for ARMv4; RdHi = RdLo leaves the Hi half (suite); R15 operands and
+    // destinations follow the interim convention (suite, #11); RdHi/RdLo = Rm gives the plain
+    // result (suite).
+    fn multiply_long(&mut self, word: u32) -> bool {
+        let rd_hi = (word >> 16) & 0xF;
+        let rd_lo = (word >> 12) & 0xF;
+        let rs = (word >> 8) & 0xF;
+        let rm = word & 0xF;
+        let multiplicand = self.operand(rm, MULTIPLY_OPERAND_EXTRA);
+        let multiplier = self.operand(rs, MULTIPLY_OPERAND_EXTRA);
+        // Bit 22 is U: set for the signed forms. The sign-extending casts are the signed
+        // reading of the 32-bit operands.
+        let product = match word >> 22 & 1 {
+            1 => (i64::from(multiplicand as i32).wrapping_mul(i64::from(multiplier as i32))) as u64,
+            _ => u64::from(multiplicand).wrapping_mul(u64::from(multiplier)),
+        };
+        // Bit 21 is A: the accumulate forms add the old pair, read before either half is written.
+        let result = match word >> 21 & 1 {
+            1 => {
+                let high = u64::from(self.operand(rd_hi, MULTIPLY_OPERAND_EXTRA));
+                let low = u64::from(self.operand(rd_lo, MULTIPLY_OPERAND_EXTRA));
+                product.wrapping_add(high << 32 | low)
+            }
+            _ => product,
+        };
+        self.set_multiply_flags(word, result >> 63 == 1, result == 0);
+        // Lo first, so that with RdHi = RdLo the Hi half remains.
+        let lo = result as u32; // truncation: the low half
+        let hi = (result >> 32) as u32;
+        self.write_multiply_result(rd_lo, lo);
+        self.write_multiply_result(rd_hi, hi);
+        rd_lo == 15 || rd_hi == 15
+    }
+
+    /// Writes one half of a multiply result; R15 gets the value + 8.
+    fn write_multiply_result(&mut self, index: u32, value: u32) {
+        match index {
+            15 => self.write_pc(value),
+            _ => self.regs.set(index as usize, value),
+        }
+    }
+
+    /// With S (bit 20): N and Z from the result. V and C stay.
+    // TODO(hw-unverified): see `multiply` and `multiply_long` for C and V.
+    fn set_multiply_flags(&mut self, word: u32, negative: bool, zero: bool) {
+        let cpsr = self.regs.cpsr();
+        let flags = with_flags(cpsr, negative, zero, cpsr & FLAG_C != 0, cpsr & FLAG_V != 0);
+        self.regs.set_cpsr(match word >> 20 & 1 {
+            1 => flags,
+            _ => cpsr,
+        });
     }
 }

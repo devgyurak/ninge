@@ -1,6 +1,7 @@
 # CPU registers and modes
 
-Sources: GBATEK "ARM CPU Register Set"; GBATEK "ARM CPU Flags & Condition Field (cond)".
+Sources: GBATEK "ARM CPU Register Set"; GBATEK "ARM CPU Flags & Condition Field (cond)";
+GBATEK "ARM CPU Exceptions".
 Used by: `crates/core/src/cpu/` (#7, #76)   Phase: 1
 
 The ARM7TDMI (ARM7) and the ARM946E-S (ARM9) share one register model. This note covers the
@@ -43,13 +44,13 @@ only the current mode's R14.
 | 30 | Z | zero flag |
 | 29 | C | carry flag (not-borrow for subtraction) |
 | 28 | V | overflow flag |
-| 27 | Q | sticky overflow, ARMv5TE and up only; set by the saturating and the 16-bit multiply instructions, cleared only by an MSR |
+| 27 | Q | sticky overflow, ARMv5TE and up only; set by QADD, QSUB, QDADD, QDSUB, SMLAxy and SMLAWy when they overflow, left unchanged otherwise, and cleared only by an MSR |
 | 7 | I | IRQ disable (1 = disabled) |
 | 6 | F | FIQ disable (1 = disabled) |
 | 5 | T | state: 0 = ARM, 1 = Thumb; changed by the BX family, not by writing the register |
 | 4–0 | M | mode |
 
-Bits 26–8 other than Q are reserved. GBATEK says not to rely on their value.
+Bits 26–8 are reserved. GBATEK says not to rely on their value.
 
 ### Mode bits
 
@@ -79,6 +80,8 @@ instructions are conditional.
 - On exception entry the CPU copies CPSR into the SPSR of the mode it enters, then switches
   mode. There is one SPSR per mode, so a nested exception in the same mode must save the SPSR
   first.
+- A reset enters Supervisor mode with I = 1 and F = 1 and clears T (ARM state). The registers
+  R0–R14 and the flags N, Z, C, V are not stated for a reset.
 - Changing the mode swaps which physical registers R8–R14 (FIQ) or R13–R14 (the others) the
   program sees; the values of the mode being left are kept and are visible again on return.
 
@@ -93,8 +96,10 @@ instructions are conditional.
   not to write them. The emulator keeps the written bits in CPSR and leaves the register bank
   as it was. — `crates/core/src/cpu/` — verify by a test ROM on real hardware or a trace
   against the reference emulator; carries `TODO(hw-unverified)`.
-- What SPSR reads in User/System mode — not modeled; the emulator exposes no SPSR there.
-- The register state right after power-on or reset (the emulator starts in Supervisor mode
-  with I and F set, all registers zero): the GBATEK sections above do not state it. —
-  `crates/core/src/cpu/regs.rs` (`POWER_ON_CPSR`) — verify by a test ROM on real hardware or
-  a trace against the reference emulator; carries `TODO(hw-unverified)`.
+- What an SPSR read gives in User/System mode — not modeled; the emulator exposes no SPSR
+  there. — `Registers::spsr` and `Registers::set_spsr` in `crates/core/src/cpu/regs.rs`, which
+  carry `TODO(hw-unverified)` — verify by a test ROM on real hardware.
+- R0–R14 and N, Z, C, V after a reset: GBATEK "ARM CPU Exceptions" fixes the mode, I, F and
+  T but not these. The emulator starts them at zero. — `crates/core/src/cpu/regs.rs`
+  (`POWER_ON_CPSR`) — verify by a test ROM on real hardware or a trace against the reference
+  emulator; carries `TODO(hw-unverified)`.

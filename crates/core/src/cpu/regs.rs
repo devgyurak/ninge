@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 /// CPSR mode-bit field, M4–M0 (`docs/hw/cpu-registers.md`, "Mode bits").
 const MODE_MASK: u32 = 0x1F;
-/// CPSR value after power-on: Supervisor mode with IRQ and FIQ disabled.
-// TODO(hw-unverified): the sources used for `docs/hw/cpu-registers.md` do not state the
-// reset value; Supervisor with I and F set is the usual reset state. Verify with a test ROM
-// or a trace against the reference emulator.
+/// CPSR value after power-on: Supervisor mode, IRQ and FIQ disabled, ARM state. GBATEK
+/// "ARM CPU Exceptions" states the mode, I = 1, F = 1 and T = 0 for a reset.
+// TODO(hw-unverified): the sources do not state R0–R14 or N, Z, C, V after a reset; they are
+// zero here. Verify with a test ROM or a trace against the reference emulator.
 const POWER_ON_CPSR: u32 = 0xD3;
 
 /// An operating mode (`docs/hw/cpu-registers.md`, "Mode bits").
@@ -166,11 +166,14 @@ impl Registers {
     }
 
     /// The SPSR of `bank`, or `None` for User/System, which have none.
+    // TODO(hw-unverified): what a read of the SPSR gives in User/System mode is not stated by
+    // the sources (`docs/hw/cpu-registers.md`, "Unverified"); modeled as having none.
     pub fn spsr(&self, bank: Bank) -> Option<u32> {
         self.spsr.get(bank as usize).copied()
     }
 
     /// Writes the SPSR of `bank`; a write to User/System is ignored because they have none.
+    // TODO(hw-unverified): see `Registers::spsr`.
     pub fn set_spsr(&mut self, bank: Bank, value: u32) {
         if let Some(slot) = self.spsr.get_mut(bank as usize) {
             *slot = value;

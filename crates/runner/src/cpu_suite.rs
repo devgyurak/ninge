@@ -6,6 +6,34 @@
 //! vendored. Each file holds many cases; a case is one instruction with the CPU state before
 //! and after and the memory accesses in between.
 //!
+//! # Register convention
+//!
+//! A state lists the registers as *physical* storage, not as the current mode sees them:
+//! `R` holds R0–R15 of the User/System bank, and `R_fiq`, `R_svc`, `R_abt`, `R_irq`, `R_und`
+//! hold each exception mode's own registers (R8–R14 for FIQ, R13–R14 for the others), whether
+//! or not that mode is active. This was measured on the pinned suite, not assumed: in every
+//! case whose CPSR names an exception mode, the `R` slots that mode banks never equal its
+//! bank array, and across instructions that do not change the mode the bank slots change
+//! about 30 to 90 times as often as those `R` slots (`tests/cpu_suite.rs` pins both facts). So the
+//! values a program sees in IRQ mode are `R0–R12` and `R_irq`, and the User R13–R14 stay in
+//! `R`. The harness loads and compares in exactly this form, so no bank is ever "unknown".
+//!
+//! Some final states carry mode bits that name no mode (an instruction wrote an invalid mode
+//! with MSR); what the registers mean then is left to the MSR work (#12).
+//!
+//! # File format
+//!
+//! Little-endian words: the magic `0xD33DBAE0`, the case count, then the cases. A case is its
+//! own size (including that word), an initial state block, a final state block, a
+//! transactions block, and an opcode block; every size word counts the whole block. A state
+//! block is 168 bytes: size, a marker (1 for the initial state, 2 for the final one), then 40
+//! words (R0–R15, R_fiq 7, R_svc 2, R_abt 2, R_irq 2, R_und 2, CPSR, five SPSRs, two pipeline
+//! words, access). A transactions block is `12 + 24 * count` bytes: size, the magic 3, the
+//! count, then `{kind, size, address, data, cycle, access}` per transaction. The opcode block
+//! is 16 bytes: size, the marker 4, the opcode, the base address. The reader checks every one
+//! of these and that no byte is left over; the three markers are constant in all 2,250,000
+//! cases of the pinned suite.
+//!
 //! The harness compares R0–R15, every register bank, CPSR, the five SPSRs, and the data
 //! transactions (kind, size, address, data, order). It does not compare `cycle` (the suite
 //! marks it experimental), `pipeline`, fetch transactions, or `access`: those depend on how the
@@ -22,14 +50,24 @@ const MAGIC: u32 = 0xD33D_BAE0;
 const TRANSACTIONS_MAGIC: u32 = 3;
 /// Registers, banked registers, CPSR, SPSRs, pipeline and access in a state block.
 const STATE_WORDS: usize = 40;
-/// A state block is its size, one word the converter skips, then [`STATE_WORDS`] words.
-const STATE_BLOCK_MIN: usize = 8 + 4 * STATE_WORDS;
-/// A transactions block is its size, the magic, and a count; entries follow.
-const TRANSACTIONS_BLOCK_MIN: usize = 12;
-/// An opcode block is its size, one skipped word, the opcode, and the base address.
-const OPCODE_BLOCK_MIN: usize = 16;
+/// Bytes of a state block: its size, a marker word, then [`STATE_WORDS`] words.
+const STATE_BLOCK_BYTES: usize = 8 + 4 * STATE_WORDS;
+/// Marker word of an initial state block, of a final one, and of the opcode block. The
+/// converter skips these words; in all 2,250,000 cases of the pinned suite they are constant,
+/// so the reader checks them as magic numbers.
+const INITIAL_MARKER: u32 = 1;
+const FINAL_MARKER: u32 = 2;
+const OPCODE_MARKER: u32 = 4;
+/// A transactions block is its size, the magic, and a count; the entries follow.
+const TRANSACTIONS_HEADER_BYTES: usize = 12;
 /// Bytes of one transaction: kind, size, address, data, cycle, access.
 const TRANSACTION_BYTES: usize = 24;
+/// Bytes of an opcode block: its size, a marker word, the opcode, and the base address.
+const OPCODE_BLOCK_BYTES: usize = 16;
+/// Bytes of a case's own size word.
+const CASE_SIZE_BYTES: usize = 4;
+/// Bytes of the file header: the magic and the case count.
+const FILE_HEADER_BYTES: usize = 8;
 
 /// Transaction kind of a data read.
 const KIND_READ: u32 = 1;
@@ -78,7 +116,8 @@ impl std::error::Error for SuiteError {
 /// CPU state as the suite stores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct State {
-    /// R0–R15 as the current mode sees them.
+    /// R0–R15 of the User/System bank: physical storage, not the active mode's view (see the
+    /// register convention in the module docs).
     pub r: [u32; 16],
     /// FIQ-banked R8–R14.
     pub r_fiq: [u32; 7],
@@ -139,6 +178,13 @@ fn format_error(offset: usize, reason: &str) -> SuiteError {
     }
 }
 
+/// `a + b` for offsets and sizes taken from the file; a sum that overflows `usize` (possible
+/// on a 32-bit host with a crafted file) is a format error, not a panic.
+fn add(a: usize, b: usize) -> Result<usize, SuiteError> {
+    a.checked_add(b)
+        .ok_or_else(|| format_error(a, "an offset overflows"))
+}
+
 /// Reads little-endian words out of a byte slice without ever panicking.
 struct Words<'a> {
     bytes: &'a [u8],
@@ -157,21 +203,14 @@ impl Words<'_> {
     fn many<const N: usize>(&self, offset: usize) -> Result<[u32; N], SuiteError> {
         let mut out = [0; N];
         for (i, slot) in out.iter_mut().enumerate() {
-            *slot = self.at(offset + 4 * i)?;
+            *slot = self.at(add(offset, 4 * i)?)?;
         }
         Ok(out)
     }
 
-    /// The size of the block at `offset`, checked against the least it can hold.
-    fn block_size(&self, offset: usize, least: usize) -> Result<usize, SuiteError> {
-        let size = usize::try_from(self.at(offset)?).unwrap_or(usize::MAX);
-        match size >= least {
-            true => Ok(size),
-            false => Err(format_error(
-                offset,
-                "a block is smaller than its fixed part",
-            )),
-        }
+    /// The size word at `offset` as a `usize`; a value that does not fit stays out of range.
+    fn size_at(&self, offset: usize) -> Result<usize, SuiteError> {
+        Ok(usize::try_from(self.at(offset)?).unwrap_or(usize::MAX))
     }
 }
 
@@ -181,10 +220,19 @@ fn take<const N: usize>(words: &[u32; STATE_WORDS], start: usize) -> [u32; N] {
     out
 }
 
-fn decode_state(words: &Words, offset: usize) -> Result<(State, usize), SuiteError> {
-    let size = words.block_size(offset, STATE_BLOCK_MIN)?;
-    let v: [u32; STATE_WORDS] = words.many(offset + 8)?;
-    let state = State {
+/// A state block: exactly [`STATE_BLOCK_BYTES`] long, with `marker` after its size.
+fn decode_state(words: &Words, offset: usize, marker: u32) -> Result<State, SuiteError> {
+    if words.size_at(offset)? != STATE_BLOCK_BYTES {
+        return Err(format_error(offset, "a state block is not 168 bytes"));
+    }
+    if words.at(add(offset, 4)?)? != marker {
+        return Err(format_error(
+            add(offset, 4)?,
+            "a state block has the wrong marker",
+        ));
+    }
+    let v: [u32; STATE_WORDS] = words.many(add(offset, 8)?)?;
+    Ok(State {
         r: take(&v, 0),
         r_fiq: take(&v, 16),
         r_svc: take(&v, 23),
@@ -195,25 +243,37 @@ fn decode_state(words: &Words, offset: usize) -> Result<(State, usize), SuiteErr
         spsr: take(&v, 32),
         pipeline: take(&v, 37),
         access: v[39],
-    };
-    Ok((state, size))
+    })
 }
 
+/// A transactions block: `12 + 24 * count` bytes, with the magic after its size.
 fn decode_transactions(
     words: &Words,
     offset: usize,
 ) -> Result<(Vec<Transaction>, usize), SuiteError> {
-    let size = words.block_size(offset, TRANSACTIONS_BLOCK_MIN)?;
-    if words.at(offset + 4)? != TRANSACTIONS_MAGIC {
+    let size = words.size_at(offset)?;
+    if words.at(add(offset, 4)?)? != TRANSACTIONS_MAGIC {
         return Err(format_error(
-            offset + 4,
+            add(offset, 4)?,
             "a transactions block has the wrong magic",
         ));
     }
-    let count = usize::try_from(words.at(offset + 8)?).unwrap_or(usize::MAX);
+    let count = usize::try_from(words.at(add(offset, 8)?)?).unwrap_or(usize::MAX);
+    let expected = count
+        .checked_mul(TRANSACTION_BYTES)
+        .and_then(|entries| entries.checked_add(TRANSACTIONS_HEADER_BYTES));
+    if expected != Some(size) {
+        return Err(format_error(
+            offset,
+            "a transactions block size does not match its count",
+        ));
+    }
     let mut list = Vec::new();
     for i in 0..count {
-        let at = offset + TRANSACTIONS_BLOCK_MIN + i * TRANSACTION_BYTES;
+        let at = add(
+            add(offset, TRANSACTIONS_HEADER_BYTES)?,
+            i * TRANSACTION_BYTES,
+        )?;
         let [kind, size, addr, data, cycle, access] = words.many(at)?;
         list.push(Transaction {
             kind,
@@ -227,17 +287,32 @@ fn decode_transactions(
     Ok((list, size))
 }
 
+/// One case: its size word, then the four blocks, whose sizes must add up to it exactly.
 fn decode_case(words: &Words, offset: usize) -> Result<(Case, usize), SuiteError> {
-    let size = words.block_size(offset, 4)?;
-    let mut at = offset + 4;
-    let (initial, n) = decode_state(words, at)?;
-    at += n;
-    let (expected, n) = decode_state(words, at)?;
-    at += n;
+    let size = words.size_at(offset)?;
+    let mut at = add(offset, CASE_SIZE_BYTES)?;
+    let initial = decode_state(words, at, INITIAL_MARKER)?;
+    at = add(at, STATE_BLOCK_BYTES)?;
+    let expected = decode_state(words, at, FINAL_MARKER)?;
+    at = add(at, STATE_BLOCK_BYTES)?;
     let (transactions, n) = decode_transactions(words, at)?;
-    at += n;
-    words.block_size(at, OPCODE_BLOCK_MIN)?;
-    let (opcode, base_addr) = (words.at(at + 8)?, words.at(at + 12)?);
+    at = add(at, n)?;
+    if words.size_at(at)? != OPCODE_BLOCK_BYTES {
+        return Err(format_error(at, "an opcode block is not 16 bytes"));
+    }
+    if words.at(add(at, 4)?)? != OPCODE_MARKER {
+        return Err(format_error(
+            add(at, 4)?,
+            "an opcode block has the wrong marker",
+        ));
+    }
+    let (opcode, base_addr) = (words.at(add(at, 8)?)?, words.at(add(at, 12)?)?);
+    if add(at, OPCODE_BLOCK_BYTES)? != add(offset, size)? {
+        return Err(format_error(
+            offset,
+            "a case size does not match its blocks",
+        ));
+    }
     let case = Case {
         initial,
         expected,
@@ -250,7 +325,9 @@ fn decode_case(words: &Words, offset: usize) -> Result<(Case, usize), SuiteError
 
 /// Decodes the bytes of one `.json.bin` file.
 ///
-/// Malformed or truncated data is an error, never a panic.
+/// The reader accepts exactly the layout the pinned suite has: every block has its fixed
+/// size, every case size equals the sum of its blocks, and the last case ends at the last
+/// byte. Malformed or truncated data is an error, never a panic.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Case>, SuiteError> {
     let words = Words { bytes };
     if words.at(0)? != MAGIC {
@@ -261,20 +338,16 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Case>, SuiteError> {
     }
     let count = usize::try_from(words.at(4)?).unwrap_or(usize::MAX);
     let mut cases = Vec::new();
-    let mut offset = 8;
+    let mut offset = FILE_HEADER_BYTES;
     for _ in 0..count {
         let (case, size) = decode_case(&words, offset)?;
         cases.push(case);
-        offset = offset
-            .checked_add(size)
-            .ok_or_else(|| format_error(offset, "a case size overflows"))?;
+        offset = add(offset, size)?;
+    }
+    if offset != bytes.len() {
+        return Err(format_error(offset, "bytes follow the last case"));
     }
     Ok(cases)
-}
-
-/// Where the fetched suite lives; for in-repo tests and the runner binary only.
-pub fn suite_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/arm7tdmi/v1")
 }
 
 /// One data access the CPU made, in the order it made it.
@@ -286,9 +359,11 @@ struct Access {
     data: u32,
 }
 
-/// A bus that replays one case: reads come from the case's recorded reads, fetches from its
-/// opcode, and every data access is logged for comparison.
-struct ReplayBus {
+/// The bus [`run_case_with`] hands to its step closure; it carries no public state.
+///
+/// It replays one case: reads come from the case's recorded reads, fetches from its opcode,
+/// and every data access is logged for comparison.
+pub struct ReplayBus {
     opcode: u32,
     base_addr: u32,
     reads: Vec<(Transaction, bool)>,
@@ -422,18 +497,21 @@ fn bank_values(state: &State, bank: Bank) -> &[u32] {
     }
 }
 
-/// Puts the CPU into `state`.
+/// Puts the CPU into `state` (see the register convention in the module docs).
 fn load<const ARM9: bool>(cpu: &mut Cpu<ARM9>, state: &State) {
     let regs = cpu.regs_mut();
+    // The mode first, so the banks are switched before any of them is written.
     regs.set_cpsr(state.cpsr);
+    for i in (0..8).chain([15]) {
+        regs.set(i, state.r[i]);
+    }
+    for i in 8..=14 {
+        regs.set_banked(Bank::UserSystem, i, state.r[i]);
+    }
     for (bank, _, first, count) in BANKED {
         for (i, &value) in bank_values(state, bank).iter().enumerate().take(count) {
             regs.set_banked(bank, first + i, value);
         }
-    }
-    // The visible registers are the truth for the active bank, so they go in last.
-    for (i, &value) in state.r.iter().enumerate() {
-        regs.set(i, value);
     }
     for (bank, slot) in [
         Bank::Fiq,
@@ -468,7 +546,12 @@ fn register_diffs<const ARM9: bool>(cpu: &Cpu<ARM9>, want: &State) -> Vec<FieldD
     let regs = cpu.regs();
     let mut out = Vec::new();
     for (i, &value) in want.r.iter().enumerate() {
-        push_if_different(&mut out, format!("R{i}"), value, regs.get(i));
+        push_if_different(
+            &mut out,
+            format!("R{i}"),
+            value,
+            regs.banked(Bank::UserSystem, i),
+        );
     }
     for (bank, name, first, count) in BANKED {
         for (i, &value) in bank_values(want, bank).iter().enumerate().take(count) {
@@ -542,25 +625,52 @@ fn transaction_diffs(case: &Case, log: &[Access]) -> Vec<FieldDiff> {
     out
 }
 
-/// Runs one case: loads the initial state, executes one instruction, and lists every
-/// difference from the expectation. An empty list means the case passed.
-pub fn run_case<const ARM9: bool>(case: &Case) -> Vec<FieldDiff> {
+/// Runs one case through `step`: loads the initial state, lets `step` act on the CPU and the
+/// replay bus, and lists every difference from the expectation. An empty list means the case
+/// passed. Harness tests pass their own closure, so they do not depend on what
+/// [`Cpu::step`] executes.
+pub fn run_case_with<const ARM9: bool>(
+    case: &Case,
+    step: impl FnOnce(&mut Cpu<ARM9>, &mut ReplayBus),
+) -> Vec<FieldDiff> {
     let mut cpu = Cpu::<ARM9>::new();
     load(&mut cpu, &case.initial);
     let mut bus = ReplayBus::new(case);
-    cpu.step(&mut bus);
+    step(&mut cpu, &mut bus);
     let mut diffs = register_diffs(&cpu, &case.expected);
     diffs.extend(transaction_diffs(case, &bus.log));
     diffs
 }
 
+/// Runs one case with [`Cpu::step`] as the step.
+pub fn run_case<const ARM9: bool>(case: &Case) -> Vec<FieldDiff> {
+    run_case_with::<ARM9>(case, |cpu, bus| cpu.step(bus))
+}
+
+/// What one case does between loading and comparing; [`Cpu::step`] outside of tests.
+type StepFn<const ARM9: bool> = fn(&mut Cpu<ARM9>, &mut ReplayBus);
+
+fn step_cpu<const ARM9: bool>(cpu: &mut Cpu<ARM9>, bus: &mut ReplayBus) {
+    cpu.step(bus);
+}
+
 /// Runs every case in decoded `cases`; `file` only labels the diffs.
 pub fn run_cases<const ARM9: bool>(file: &str, cases: &[Case]) -> Vec<CaseDiff> {
+    run_cases_with::<ARM9>(file, cases, step_cpu::<ARM9>)
+}
+
+/// [`run_cases`] with the step chosen by the caller, so tests of the file and directory
+/// plumbing do not depend on what [`Cpu::step`] executes.
+pub(crate) fn run_cases_with<const ARM9: bool>(
+    file: &str,
+    cases: &[Case],
+    step: StepFn<ARM9>,
+) -> Vec<CaseDiff> {
     cases
         .iter()
         .enumerate()
         .filter_map(|(index, case)| {
-            let fields = run_case::<ARM9>(case);
+            let fields = run_case_with::<ARM9>(case, step);
             (!fields.is_empty()).then(|| CaseDiff {
                 file: file.to_string(),
                 index,
@@ -573,6 +683,13 @@ pub fn run_cases<const ARM9: bool>(file: &str, cases: &[Case]) -> Vec<CaseDiff> 
 
 /// Reads one suite file and returns the cases that differ.
 pub fn run_json_suite<const ARM9: bool>(path: &Path) -> Result<Vec<CaseDiff>, SuiteError> {
+    run_json_suite_with::<ARM9>(path, step_cpu::<ARM9>)
+}
+
+pub(crate) fn run_json_suite_with<const ARM9: bool>(
+    path: &Path,
+    step: StepFn<ARM9>,
+) -> Result<Vec<CaseDiff>, SuiteError> {
     let bytes = std::fs::read(path).map_err(|source| SuiteError::Io {
         path: path.to_path_buf(),
         source,
@@ -580,7 +697,7 @@ pub fn run_json_suite<const ARM9: bool>(path: &Path) -> Result<Vec<CaseDiff>, Su
     let file = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    Ok(run_cases::<ARM9>(&file, &decode(&bytes)?))
+    Ok(run_cases_with::<ARM9>(&file, &decode(&bytes)?, step))
 }
 
 /// Pass and fail counts for one suite file.
@@ -606,6 +723,13 @@ impl fmt::Display for FileSummary {
 
 /// Runs every `*.json.bin` file in `dir`, in file-name order, as the ARM7TDMI.
 pub fn summarize_dir(dir: &Path) -> Result<Vec<FileSummary>, SuiteError> {
+    summarize_dir_with(dir, step_cpu::<false>)
+}
+
+pub(crate) fn summarize_dir_with(
+    dir: &Path,
+    step: StepFn<false>,
+) -> Result<Vec<FileSummary>, SuiteError> {
     let io = |source| SuiteError::Io {
         path: dir.to_path_buf(),
         source,
@@ -628,7 +752,7 @@ pub fn summarize_dir(dir: &Path) -> Result<Vec<FileSummary>, SuiteError> {
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
             cases: cases.len(),
-            failed: run_cases::<false>("", &cases).len(),
+            failed: run_cases_with::<false>("", &cases, step).len(),
         });
     }
     Ok(out)
@@ -636,7 +760,11 @@ pub fn summarize_dir(dir: &Path) -> Result<Vec<FileSummary>, SuiteError> {
 
 /// The text the `cpu-suite` command prints: one line per file and a total.
 pub fn report_dir(dir: &Path) -> Result<String, SuiteError> {
-    let files = summarize_dir(dir)?;
+    report_dir_with(dir, step_cpu::<false>)
+}
+
+pub(crate) fn report_dir_with(dir: &Path, step: StepFn<false>) -> Result<String, SuiteError> {
+    let files = summarize_dir_with(dir, step)?;
     let cases: usize = files.iter().map(|f| f.cases).sum();
     let failed: usize = files.iter().map(|f| f.failed).sum();
     let mut lines: Vec<String> = files.iter().map(ToString::to_string).collect();

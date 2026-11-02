@@ -83,20 +83,32 @@ fn given_non_utf8_missing_rom_path_when_cli_runs_then_exit_code_is_one() {
     assert_eq!(run_cli(&[path]).status.code(), Some(1));
 }
 
-fn suite_dir_with(name: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ninge-cli-suite-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir is writable");
-    files
-        .iter()
-        .for_each(|(file, bytes)| std::fs::write(dir.join(file), bytes).expect("write"));
-    dir
+/// A temp directory holding the given files; it is removed when dropped.
+struct SuiteDir(std::path::PathBuf);
+
+impl SuiteDir {
+    fn with(name: &str, files: &[(&str, &[u8])]) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("ninge-cli-suite-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir is writable");
+        files
+            .iter()
+            .for_each(|(file, bytes)| std::fs::write(dir.join(file), bytes).expect("write"));
+        Self(dir)
+    }
+}
+
+impl Drop for SuiteDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[test]
 fn given_an_empty_suite_directory_when_cli_runs_cpu_suite_then_it_prints_the_zero_total_and_exits_zero()
  {
-    let dir = suite_dir_with("empty", &[]);
-    let out = run_cli(&[OsStr::new("cpu-suite"), dir.as_os_str()]);
+    let dir = SuiteDir::with("empty", &[]);
+    let out = run_cli(&[OsStr::new("cpu-suite"), dir.0.as_os_str()]);
     assert_eq!(
         (
             out.status.code(),
@@ -111,8 +123,8 @@ fn given_a_suite_file_with_no_cases_when_cli_runs_cpu_suite_then_the_file_has_it
     let mut header = Vec::new();
     header.extend_from_slice(&0xD33D_BAE0u32.to_le_bytes());
     header.extend_from_slice(&0u32.to_le_bytes());
-    let dir = suite_dir_with("one", &[("a.json.bin", &header)]);
-    let out = run_cli(&[OsStr::new("cpu-suite"), dir.as_os_str()]);
+    let dir = SuiteDir::with("one", &[("a.json.bin", &header)]);
+    let out = run_cli(&[OsStr::new("cpu-suite"), dir.0.as_os_str()]);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         "a.json.bin: 0 cases, 0 failed\ntotal: 0 cases, 0 failed\n"
@@ -128,5 +140,11 @@ fn given_a_missing_suite_directory_when_cli_runs_cpu_suite_then_exit_code_is_one
 #[test]
 fn given_cpu_suite_without_a_directory_when_cli_runs_then_exit_code_is_two() {
     let out = run_cli(&["cpu-suite"]);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn given_cpu_suite_with_a_flag_as_the_directory_when_cli_runs_then_exit_code_is_two() {
+    let out = run_cli(&["cpu-suite", "--help"]);
     assert_eq!(out.status.code(), Some(2));
 }

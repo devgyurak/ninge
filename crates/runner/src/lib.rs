@@ -9,7 +9,8 @@
 //! ```
 //!
 //! A ROM path that starts with `-` is read as a flag and refused; pass `./-x.nds` instead. A
-//! ROM literally named `cpu-suite` is passed as `./cpu-suite`.
+//! ROM literally named `cpu-suite` is passed as `./cpu-suite`. The same rule applies to the
+//! `cpu-suite` directory: pass `./-x` for a directory whose name starts with `-`.
 //!
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error.
@@ -90,6 +91,12 @@ pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command
     let dir = args
         .next()
         .ok_or_else(|| RunnerError::Usage(format!("missing suite directory\n{USAGE}")))?;
+    if dir.as_encoded_bytes().first() == Some(&b'-') {
+        return Err(RunnerError::Usage(format!(
+            "expected a directory, found {}\n{USAGE}",
+            dir.to_string_lossy()
+        )));
+    }
     match args.next() {
         Some(extra) => Err(unexpected(&extra)),
         None => Ok(Command::CpuSuite(PathBuf::from(dir))),
@@ -426,6 +433,15 @@ mod tests {
     #[test]
     fn given_no_arguments_when_parsing_a_command_then_it_is_the_missing_rom_usage_error() {
         assert_eq!(describe(command(&[])), "usage: missing ROM path");
+    }
+
+    #[test]
+    fn given_cpu_suite_with_a_flag_as_the_directory_when_parsing_a_command_then_it_is_a_usage_error()
+     {
+        assert_eq!(
+            describe(command(&["cpu-suite", "--help"])),
+            "usage: expected a directory, found --help"
+        );
     }
 
     #[test]

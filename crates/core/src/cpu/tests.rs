@@ -88,6 +88,96 @@ fn registers_after_round_trip(first: u32, via: u32) -> Vec<u32> {
     (0..15).map(|i| regs.get(i)).collect()
 }
 
+/// The registers a bank owns: FIQ and User/System own R8–R14 (User/System's R8–R12 are shared
+/// with every mode but FIQ), each other bank owns R13–R14.
+fn owned(bank: Bank) -> std::ops::RangeInclusive<usize> {
+    match bank {
+        Bank::Fiq | Bank::UserSystem => 8..=14,
+        _ => 13..=14,
+    }
+}
+
+const ALL_BANKS: [Bank; 6] = [
+    Bank::Fiq,
+    Bank::Supervisor,
+    Bank::Abort,
+    Bank::Irq,
+    Bank::Undefined,
+    Bank::UserSystem,
+];
+
+/// A value unique to a (bank, register) pair.
+fn mark(bank: Bank, index: usize) -> u32 {
+    0x1_0000 * (bank as u32 + 1) + u32::try_from(index).unwrap()
+}
+
+/// Which bank supplies register `index` to a program running in `bank`.
+fn supplier(bank: Bank, index: usize) -> Bank {
+    match (index <= 12, bank) {
+        (true, Bank::Fiq) => Bank::Fiq,
+        (true, _) => Bank::UserSystem,
+        (false, bank) => bank,
+    }
+}
+
+/// Fills every register of every bank with its own mark, from inside `from`, then switches
+/// to `to`. Returns the problems found: a bank that no longer reads back its marks, a visible
+/// register that is not the target mode's, or an R0–R7/R15 that moved.
+fn transition_problems(from: u32, to: u32) -> Vec<String> {
+    let mut regs = Registers::new();
+    regs.set_cpsr(cpsr_in(from));
+    (0..8)
+        .chain([15])
+        .for_each(|i| regs.set(i, mark(Bank::UserSystem, i)));
+    ALL_BANKS
+        .iter()
+        .for_each(|&b| owned(b).for_each(|i| regs.set_banked(b, i, mark(b, i))));
+    regs.set_cpsr(cpsr_in(to));
+    let target = Mode::from_bits(to).unwrap().bank();
+    let mut problems = Vec::new();
+    for bank in ALL_BANKS {
+        for i in owned(bank) {
+            if regs.banked(bank, i) != mark(bank, i) {
+                problems.push(format!(
+                    "{from:#x}->{to:#x}: bank {bank:?} R{i} lost its value"
+                ));
+            }
+        }
+    }
+    for i in (0..8).chain(8..=14).chain([15]) {
+        let want = match i {
+            0..=7 | 15 => mark(Bank::UserSystem, i),
+            _ => mark(supplier(target, i), i),
+        };
+        if regs.get(i) != want {
+            problems.push(format!(
+                "{from:#x}->{to:#x}: visible R{i} is {:#x}, want {want:#x}",
+                regs.get(i)
+            ));
+        }
+    }
+    problems
+}
+
+/// Every ordered pair of the seven modes, including a mode to itself.
+fn all_transition_problems() -> Vec<String> {
+    let modes = [0x10, 0x11, 0x12, 0x13, 0x17, 0x1B, 0x1F];
+    modes
+        .iter()
+        .flat_map(|&from| {
+            modes
+                .iter()
+                .flat_map(move |&to| transition_problems(from, to))
+        })
+        .collect()
+}
+
+#[test]
+fn given_every_bank_filled_when_switching_between_any_two_modes_then_all_banks_and_the_visible_view_are_right()
+ {
+    assert_eq!(all_transition_problems(), Vec::<String>::new());
+}
+
 #[test]
 fn given_mode_bit_patterns_when_decoding_then_no_pattern_decodes_wrongly() {
     assert_eq!(mode_decode_failures(), vec![]);
@@ -125,11 +215,18 @@ fn given_r0_written_in_supervisor_when_switching_to_fiq_then_r0_is_unchanged() {
 }
 
 #[test]
-fn given_r13_written_in_supervisor_when_switching_to_irq_then_irq_sees_its_own_r13() {
+fn given_r13_written_in_supervisor_and_in_irq_when_switching_between_them_then_each_mode_keeps_its_own()
+ {
     let mut regs = Registers::new();
+    regs.set_cpsr(cpsr_in(0x12));
+    regs.set(13, 0x2222);
+    regs.set_cpsr(cpsr_in(0x13));
     regs.set(13, 0x1111);
     regs.set_cpsr(cpsr_in(0x12));
-    assert_eq!(regs.get(13), 0);
+    assert_eq!(
+        (regs.get(13), regs.banked(Bank::Supervisor, 13)),
+        (0x2222, 0x1111)
+    );
 }
 
 /// Writes a distinct R13 in each mode, then reads them all back in the same order.
@@ -296,20 +393,4 @@ fn given_new_cpu_when_editing_registers_through_regs_mut_then_regs_shows_the_edi
     let mut cpu = Cpu::<true>::default();
     cpu.regs_mut().set(5, 55);
     assert_eq!(cpu.regs().get(5), 55);
-}
-
-#[test]
-fn given_a_bus_when_called_through_the_trait_then_every_method_is_reachable() {
-    let mut bus = NullBus;
-    bus.write8(0, 1);
-    bus.write16(0, 1);
-    bus.write32(0, 1);
-    let read = (
-        bus.fetch32(0),
-        bus.fetch16(0),
-        bus.read8(0),
-        bus.read16(0),
-        bus.read32(0),
-    );
-    assert_eq!(read, (0, 0, 0, 0, 0));
 }

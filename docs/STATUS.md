@@ -71,8 +71,9 @@ gates; reopening one is a new `decision` issue.
       test, a fixture, a golden hash, or a name in code (AGENTS.md §3.1, §3.5, §5.7). Its use
       of RTC, touch, and FLASH saves makes it a good Phase 5 exercise.
 - [x] **Frame transfer** — kitty shared memory (`t=s`) where supported, direct zlib transfer
-      (`t=d`, `o=z`) as the fallback and the default until Phase 0 confirms Ghostty's shm
-      support. (AGENTS.md §2 rule 12.)
+      (`t=d`, `o=z`) otherwise. Chosen at startup by a `t=s` query (Ghostty and kitty
+      accept it; see Phase 0 checks), never by the terminal's name; a failed shm write
+      falls back to zlib for good. (AGENTS.md §2 rule 12.)
 
 ## Phase 0 checks
 

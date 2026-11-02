@@ -144,10 +144,10 @@ direct boot) · `debug/` (breakpoint and trace hooks).
 12. **The frontend owns the terminal.** Threads (emu, render, input), triple-buffered frame
     hand-off, audio-based pacing, the kitty graphics/keyboard protocols, and cell-to-pixel
     mapping for touch all live in the frontend (plan §4.3). ninge-core never names a
-    terminal type, and the frontend never makes an emulation decision. Frame transfer prefers
-    kitty shared memory (`t=s`) where the terminal supports it and falls back to direct zlib
-    transfer (`t=d`, `o=z`); the fallback is the default until Phase 0 confirms Ghostty's shm
-    support.
+    terminal type, and the frontend never makes an emulation decision. Frame transfer uses
+    kitty shared memory (`t=s`) where the terminal supports it and direct zlib transfer
+    (`t=d`, `o=z`) otherwise. The choice is made at startup by a `t=s` query, never by the
+    terminal's name, and a failed shm write switches to zlib for good.
 
 **Platforms** (decided): macOS is first-class (Apple Silicon is the target machine); Linux is
 guaranteed to pass CI; **Windows support is planned**, not yet provided. Nothing needs a

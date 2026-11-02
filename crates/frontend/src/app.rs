@@ -5,12 +5,14 @@ use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
 use crate::placeholder::ScreenImage;
+use crate::transfer::{NoShm, ShmSink, Transfer};
 use anyhow::anyhow;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::layout::Rect;
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -52,23 +54,41 @@ pub fn map_event(event: &Event) -> Action {
     }
 }
 
-/// Frontend state.
-pub struct App {
+/// Frontend state. `S` is where shared-memory frames are written.
+pub struct App<S = NoShm> {
     size: TermSize,
     areas: Option<Areas>,
     frame_no: u64,
     quit: bool,
+    transfer: Transfer,
+    sink: S,
 }
 
-impl App {
-    /// A new app for a terminal of `size`.
+impl App<NoShm> {
+    /// A new app for a terminal of `size` that sends frames as zlib.
     pub fn new(size: TermSize) -> Self {
+        Self::with_transfer(size, NoShm, Transfer::Direct { reason: None })
+    }
+}
+
+impl<S: ShmSink> App<S> {
+    /// A new app that sends frames the `transfer` way, writing shared-memory frames
+    /// through `sink`.
+    pub fn with_transfer(size: TermSize, sink: S, transfer: Transfer) -> Self {
         Self {
             size,
             areas: compute(size),
             frame_no: 0,
             quit: false,
+            transfer,
+            sink,
         }
+    }
+
+    /// The medium frames go over now; it turns to zlib for good if a shared-memory write
+    /// fails.
+    pub fn transfer(&self) -> &Transfer {
+        &self.transfer
     }
 
     /// Records that the terminal is now `size`; the next frame places the images anew.
@@ -100,21 +120,25 @@ impl App {
         if let Some(areas) = self.areas {
             let top = dummy_frame(self.frame_no, 0);
             let bottom = dummy_frame(self.frame_no, 1);
-            out.extend(kitty::transmit(
-                TOP_IMAGE_ID,
-                &top,
-                areas.top.width,
-                areas.top.height,
-            ));
-            out.extend(kitty::transmit(
-                BOTTOM_IMAGE_ID,
-                &bottom,
-                areas.bottom.width,
-                areas.bottom.height,
-            ));
+            out.extend(self.send(TOP_IMAGE_ID, &top, areas.top));
+            out.extend(self.send(BOTTOM_IMAGE_ID, &bottom, areas.bottom));
         }
         self.frame_no += 1;
         out
+    }
+
+    /// One screen over the current medium. A failed shared-memory write is not retried:
+    /// this frame and every later one go as zlib, and the panel says why.
+    fn send(&mut self, image_id: u32, pixels: &[u32], area: Rect) -> Vec<u8> {
+        if self.transfer == Transfer::Shm {
+            match self.sink.put(&kitty::rgb24(pixels)) {
+                Ok(name) => {
+                    return kitty::transmit_shm(image_id, &name, area.width, area.height);
+                }
+                Err(e) => self.transfer = Transfer::direct(format!("shm write failed: {e}")),
+            }
+        }
+        kitty::transmit(image_id, pixels, area.width, area.height)
     }
 
     /// Draws the screens and panels.
@@ -142,8 +166,12 @@ impl App {
         };
         // TODO(phase1): real register and disassembly panels (#56).
         frame.render_widget(
-            Paragraph::new(format!("TODO(phase1) (#56){note}"))
-                .block(Block::new().borders(Borders::ALL).title("Registers")),
+            Paragraph::new(format!(
+                "TODO(phase1) (#56){note}\n{}",
+                self.transfer.label()
+            ))
+            .wrap(Wrap { trim: false })
+            .block(Block::new().borders(Borders::ALL).title("Registers")),
             areas.registers,
         );
         frame.render_widget(
@@ -162,8 +190,8 @@ pub fn poll_timeout(deadline: Instant, now: Instant) -> Duration {
 }
 
 /// One tick: write the graphics to `gfx`, then draw with ratatui.
-pub fn frame_step<B: Backend, W: Write>(
-    app: &mut App,
+pub fn frame_step<S: ShmSink, B: Backend, W: Write>(
+    app: &mut App<S>,
     terminal: &mut Terminal<B>,
     gfx: &mut W,
 ) -> anyhow::Result<()> {
@@ -376,5 +404,101 @@ mod tests {
         frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
         let text = format!("{}", terminal.backend());
         assert!(text.contains("cell size unknown"));
+    }
+
+    /// Hands out `/fake-<n>` names, or fails every put.
+    struct FakeSink {
+        puts: Vec<usize>,
+        fail: bool,
+    }
+
+    impl ShmSink for FakeSink {
+        fn put(&mut self, data: &[u8]) -> std::io::Result<String> {
+            self.puts.push(data.len());
+            if self.fail {
+                Err(std::io::Error::other("no space left"))
+            } else {
+                Ok(format!("/fake-{}", self.puts.len()))
+            }
+        }
+    }
+
+    fn shm_app(fail: bool) -> App<FakeSink> {
+        let sink = FakeSink {
+            puts: Vec::new(),
+            fail,
+        };
+        App::with_transfer(size(), sink, Transfer::Shm)
+    }
+
+    fn text(bytes: Vec<u8>) -> String {
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[test]
+    fn given_shm_transfer_when_taking_graphics_then_both_screens_go_as_object_names() {
+        let mut app = shm_app(false);
+        let out = text(app.graphics());
+        assert_eq!(
+            (
+                out.matches("t=s,S=147456,q=2").count(),
+                out.contains("t=d"),
+                app.sink.puts.clone()
+            ),
+            (2, false, vec![256 * 192 * 3, 256 * 192 * 3])
+        );
+    }
+
+    #[test]
+    fn given_shm_transfer_when_taking_graphics_then_payloads_encode_the_names_in_screen_order() {
+        let mut app = shm_app(false);
+        let out = text(app.graphics());
+        let b64 =
+            |name: &str| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, name);
+        let top = out.find(&format!(";{}\x1b\\", b64("/fake-1")));
+        let bottom = out.find(&format!(";{}\x1b\\", b64("/fake-2")));
+        assert!(top.zip(bottom).is_some_and(|(t, b)| t < b));
+    }
+
+    #[test]
+    fn given_failing_shm_write_when_taking_graphics_then_the_frame_falls_back_to_zlib() {
+        let mut app = shm_app(true);
+        let out = text(app.graphics());
+        assert_eq!(
+            (out.contains("t=s"), out.matches("t=d,o=z").count()),
+            (false, 2)
+        );
+    }
+
+    #[test]
+    fn given_failing_shm_write_when_taking_more_frames_then_shm_is_not_tried_again() {
+        let mut app = shm_app(true);
+        let _ = app.graphics();
+        let _ = app.graphics();
+        assert_eq!(app.sink.puts.len(), 1);
+    }
+
+    #[test]
+    fn given_failing_shm_write_when_drawing_then_the_panel_states_the_fallback_reason() {
+        let mut app = shm_app(true);
+        let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
+        frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
+        let text = format!("{}", terminal.backend());
+        assert!(text.contains("transfer: zlib (t=d)") && text.contains("shm write failed:"));
+    }
+
+    #[test]
+    fn given_working_shm_when_drawing_then_the_panel_says_shm() {
+        let mut app = shm_app(false);
+        let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
+        frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
+        let text = format!("{}", terminal.backend());
+        assert!(text.contains("transfer: shm (t=s)"));
+    }
+
+    #[test]
+    fn given_default_app_when_asking_for_transfer_then_it_is_direct_with_no_reason() {
+        let app = App::new(size());
+        assert_eq!(*app.transfer(), Transfer::Direct { reason: None });
     }
 }

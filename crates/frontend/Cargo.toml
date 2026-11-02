@@ -15,9 +15,19 @@ flate2 = "1.1.10"
 ninge-core.workspace = true
 ratatui = "0.30.2"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.6", features = ["shm", "mm", "event"] }
+
 [lints]
 workspace = true
 
 [[bin]]
 name = "ninge"
 path = "src/main.rs"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "transfer"
+harness = false

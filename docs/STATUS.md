@@ -4,12 +4,12 @@ The current phase is the single line that starts with `▶`. The SessionStart ho
 and `scripts/check_agent_config.py` fails unless there is exactly one. Move the marker only
 when the phase's DoD (plan §5) is met — that is a human decision.
 
-▶ Phase 0 — harness and tools (not started; the agent workflow is in place)
+▶ Phase 1 — CPU: ARMv4T, ARMv5TE extensions, minimal CP15, disassembler (started)
 
 | Phase | Scope (plan §5) | DoD | State |
 |---|---|---|---|
-| 0 | Workspace, CI, bare-metal test-ROM toolchain, golden-frame infra, TUI skeleton | A dummy frame buffer shows in Ghostty and kitty; one test ROM builds and `ninge-runner` loads it | Not started |
-| 1 | CPU: ARMv4T (ARM + Thumb), ARMv5TE extensions, minimal CP15, disassembler | ARM7TDMI JSON suite passes; a self-written test passes for each v5 extension | — |
+| 0 | Workspace, CI, bare-metal test-ROM toolchain, golden-frame infra, TUI skeleton | A dummy frame buffer shows in Ghostty and kitty; one test ROM builds and `ninge-runner` loads it | Done |
+| 1 | CPU: ARMv4T (ARM + Thumb), ARMv5TE extensions, minimal CP15, disassembler | ARM7TDMI JSON suite passes; a self-written test passes for each v5 extension | In progress |
 | 2 | First pixel, ARM9 only: header parse, direct boot, main RAM, TCM, VRAM A LCDC, display mode 2 | A test ROM's VRAM image shows in Ghostty, pinned by a golden-frame test | — |
 | 3 | Both CPUs: scheduler, two bus views, WRAMCNT, IPC, IRQ, timers, DMA, HLE SWI, text BG | A libnds homebrew's console printf output displays correctly | — |
 | 4 | 2D complete: engines A/B, sprites, ext palettes, windows, blending, brightness, VRAM page table, capture | Every 2D test ROM's golden frame passes | — |

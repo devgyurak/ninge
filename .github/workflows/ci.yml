@@ -88,6 +88,14 @@ jobs:
           name: testroms
           path: ${{ runner.temp }}/testroms
 
+      # The ARM7TDMI JSON suite (about 900 MB) is fetched by verify.sh. The cache is keyed by
+      # the tracked checksums, so it is reused until the pinned suite changes.
+      - name: Cache CPU test suite
+        uses: actions/cache@v4
+        with:
+          path: tests/data/arm7tdmi
+          key: cpu-suite-${{ hashFiles('tests/cpu_suite/SHA256SUMS') }}
+
       # Decided in #65. Ubuntu has Docker: it rebuilds the ROMs and must match the artifact.
       # macOS only verifies the artifact's checksums. The prebuilt variable is set for macOS
       # alone, so a runner without Docker cannot silently skip the build.

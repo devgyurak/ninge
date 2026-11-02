@@ -83,6 +83,11 @@ else
   exit 1
 fi
 
+# The ARM7TDMI JSON suite (AGENTS.md §5.1) is fetched, never vendored. Files whose checksum
+# already matches are kept; a missing suite is downloaded, never skipped. Decided with #7.
+step "CPU test suite (fetch + checksums)"
+./scripts/fetch_cpu_suite.sh
+
 # Line-coverage floor (AGENTS.md §5.9). scripts/check_agent_config.py fails if this number
 # and the one in AGENTS.md differ — lowering it is a decision, not an edit.
 COVERAGE_FLOOR=90

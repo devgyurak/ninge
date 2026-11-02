@@ -28,6 +28,8 @@ Checks:
  14. The coverage floor in AGENTS.md §5.9 equals COVERAGE_FLOOR in scripts/verify.sh.
  15. The BlocksDS image digest recorded in docs/STATUS.md equals BLOCKSDS_IMAGE in
      scripts/build_testroms.sh.
+ 16. The ARM7TDMI JSON suite commit recorded in docs/STATUS.md equals SUITE_COMMIT in
+     scripts/fetch_cpu_suite.sh.
 """
 
 from __future__ import annotations
@@ -55,6 +57,9 @@ _SCRIPT_FLOOR_RE = re.compile(r"^COVERAGE_FLOOR=(\d+)\s*$", re.MULTILINE)
 _DIGEST_RE = re.compile(r"sha256:([0-9a-f]{64})")
 _IMAGE_ENTRY_MARKER = "**BlocksDS image**"
 _IMAGE_RE = re.compile(r'^BLOCKSDS_IMAGE="[^"@]+@sha256:([0-9a-f]{64})"\s*$', re.MULTILINE)
+_SUITE_ENTRY_MARKER = "**ARM7TDMI JSON suite**"
+_COMMIT_RE = re.compile(r"\b([0-9a-f]{40})\b")
+_SUITE_RE = re.compile(r'^SUITE_COMMIT="([0-9a-f]{40})"\s*$', re.MULTILINE)
 
 CANON_FILES = (
     "AGENTS.md",
@@ -381,6 +386,35 @@ def check_image_digest() -> None:
             fail(message)
 
 
+def suite_commit_mismatch(status_text: str, script_text: str) -> str | None:
+    """Compare the suite commit docs/STATUS.md records with the one the fetch script pins. Pure."""
+    script = _SUITE_RE.findall(script_text)
+    # Only the suite entry counts: another 40-hex string elsewhere in STATUS.md is not the pin.
+    entry = status_text.split(_SUITE_ENTRY_MARKER, 1)[1].split("\n- ", 1)[0] if _SUITE_ENTRY_MARKER in status_text else ""
+    recorded = _COMMIT_RE.findall(entry)
+    if len(script) != 1:
+        return 'scripts/fetch_cpu_suite.sh must set SUITE_COMMIT="<40 hex>" exactly once'
+    if len(recorded) != 1:
+        return "docs/STATUS.md must record the ARM7TDMI suite commit (40 hex) exactly once"
+    if recorded != script:
+        return "ARM7TDMI suite commit differs: docs/STATUS.md and scripts/fetch_cpu_suite.sh must match"
+    return None
+
+
+def check_suite_commit() -> None:
+    status, script = ROOT / "docs" / "STATUS.md", ROOT / "scripts" / "fetch_cpu_suite.sh"
+    if not status.is_file():
+        return
+    status_text = status.read_text(encoding="utf-8")
+    if _SUITE_ENTRY_MARKER in status_text and not script.is_file():
+        fail("docs/STATUS.md records the ARM7TDMI suite commit but scripts/fetch_cpu_suite.sh is missing")
+        return
+    if script.is_file():
+        message = suite_commit_mismatch(status_text, script.read_text(encoding="utf-8"))
+        if message:
+            fail(message)
+
+
 def check_status() -> None:
     status = ROOT / "docs" / "STATUS.md"
     if not status.is_file():
@@ -406,6 +440,7 @@ def main() -> int:
     check_status()
     check_coverage_floor()
     check_image_digest()
+    check_suite_commit()
 
     if FAILURES:
         print("agent config check FAILED:", file=sys.stderr)

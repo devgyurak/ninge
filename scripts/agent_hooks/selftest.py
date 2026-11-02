@@ -494,6 +494,16 @@ def test_config_drift_helpers() -> None:
     unrecorded = cfg.image_digest_mismatch("no digest here", script)
     _checked("config: an unrecorded digest is reported", unrecorded is not None and "STATUS" in unrecorded, str(unrecorded))
 
+    commit_a, commit_b = "a" * 40, "b" * 40
+    fetch = f'SUITE_COMMIT="{commit_a}"\n'
+    _checked("config: matching suite commits pass", cfg.suite_commit_mismatch(f"**ARM7TDMI JSON suite** `{commit_a}`", fetch) is None)
+    suite_entry = f"- [x] **ARM7TDMI JSON suite** `{commit_a}`\n- [x] **Other** `{commit_b}`\n"
+    _checked("config: another commit in STATUS is ignored", cfg.suite_commit_mismatch(suite_entry, fetch) is None)
+    moved = cfg.suite_commit_mismatch(f"**ARM7TDMI JSON suite** `{commit_b}`", fetch)
+    _checked("config: a stale STATUS suite commit is reported", moved is not None and "differs" in moved, str(moved))
+    unpinned = cfg.suite_commit_mismatch(f"**ARM7TDMI JSON suite** `{commit_a}`", "no pin here")
+    _checked("config: a missing script pin is reported", unpinned is not None and "SUITE_COMMIT" in unpinned, str(unpinned))
+
 
 def main() -> int:
     test_guard_cleanroom()

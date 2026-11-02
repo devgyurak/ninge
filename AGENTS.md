@@ -19,6 +19,7 @@ it). The current phase and the open decisions are in `docs/STATUS.md`.
 ```bash
 ./scripts/verify.sh                                        # the whole gate, in order — CI runs the same script
 ./scripts/build_testroms.sh                                # build testroms/ into git-ignored testroms/build/ (needs Docker)
+./scripts/fetch_cpu_suite.sh                               # fetch the ARM7TDMI JSON suite into git-ignored tests/data/ (checksummed)
 cargo fmt --all                                            # format
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny --locked check licenses bans sources            # dependency licenses (deny.toml)

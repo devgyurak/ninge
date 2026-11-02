@@ -103,9 +103,12 @@ Facts to confirm while building Phase 0, not decisions:
 - [x] The current stable Rust version to pin — `1.99.1` (released 2026-10-13).
 - [x] **ARM7TDMI JSON suite** — `SingleStepTests/ARM7TDMI` (MIT, Apache-2.0-compatible),
       pinned to commit `e3097d88d428752736b949d94c094d5da50f0db6`. About 1 GB of `.json.bin`
-      files across 46 instruction groups: fetched into `tests/data/` (git-ignored) with
-      checksums, never vendored. ARMv4T only — v5TE gets self-written tests. The fetch script
-      and the `.json.bin` reader are Phase 1 work. (AGENTS.md §5.1.)
+      files in `v1/` (45 files, 891 MB): fetched into `tests/data/` (git-ignored) by
+      `scripts/fetch_cpu_suite.sh`, which checks each file against the tracked
+      `tests/cpu_suite/SHA256SUMS` (recorded after matching git blob ids with the commit's tree);
+      never vendored. `check_agent_config.py` keeps this commit equal to the script's. ARMv4T
+      only — v5TE gets self-written tests. The `.json.bin` reader is Phase 1 work.
+      (AGENTS.md §5.1.)
 - [x] **Trace-diff oracle** — a melonDS release binary over the GDB remote protocol (NooDS's
       binary as the fallback), installed by each developer, never redistributed. Line-oriented
       text traces, compared per CPU. Whether the stub reaches both CPUs is checked when the

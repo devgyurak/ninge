@@ -78,7 +78,22 @@ gates; reopening one is a new `decision` issue.
 
 Facts to confirm while building Phase 0, not decisions:
 
-- [ ] Ghostty's kitty-graphics shared-memory (`t=s`) support (plan §3.3).
+- [x] **Ghostty's kitty-graphics shared-memory (`t=s`) support** (plan §3.3) — supported.
+      Measured 2026-11-02 on macOS 26.5 (arm64) with a throwaway probe: Ghostty 1.3.1 and
+      kitty 0.49.2 answer an `a=q,t=s` query with `OK`, draw the image through both a plain
+      placement and `U=1` Unicode placeholders, and unlink the object after reading it
+      (`ENOENT` on reopen). Two images per frame, a fresh object name for each, aimed
+      at 60 fps for 20 s: Ghostty took 1058 frames (2116 objects) and kitty 1059 (2118), about
+      53 fps because the loop's own work was not subtracted from the pause. Both left 0
+      objects behind and showed no stalls. Orca 1.4.219 answers the
+      same query `EINVAL:unsupported transmission medium`, draws nothing, and leaves every
+      object in place, so the frontend must detect support at run time and unlink its own
+      probe object on a refusal. The reply (`ESC _G i=…;OK ESC \`) arrives before the DA1
+      reply, which is how "no graphics reply" is told apart. Unverified: Linux (Ghostty and
+      kitty); tmux and ssh were not tested, and the startup probe decides either way. macOS shm
+      constraints confirmed: a name is at most 31 bytes including the leading `/` (32 gives
+      `ENAMETOOLONG`); `write()` on the shm fd fails with `ENXIO`, so the data goes through
+      `mmap`; `ftruncate` works once (a second call gives `EINVAL`).
 - [x] **BlocksDS image** — `skylyrac/blocksds` tag `slim-v1.24.0`, multi-arch index digest
       `sha256:779f6193d1030c62e60d1f0f39c3e32cf4045c0bd224a45c0ceadf9d9ab01a51`. Code reads the
       digest only from `scripts/build_testroms.sh`; this line records it and

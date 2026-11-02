@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! ninge-core: the emulator itself. Pure logic with no IO; inputs in, frames out.
 
+pub mod cpu;
+
 use serde::{Deserialize, Serialize};
 
 /// Width of each screen in pixels (`docs/hw/display.md`).

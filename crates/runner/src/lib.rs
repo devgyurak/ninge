@@ -5,13 +5,20 @@
 //!
 //! ```text
 //! ninge-runner <rom> [--frames N]    # N defaults to 1
+//! ninge-runner cpu-suite <dir>       # run the ARM7TDMI JSON suite files in <dir>
 //! ```
 //!
-//! A ROM path that starts with `-` is read as a flag and refused; pass `./-x.nds` instead.
+//! A ROM path that starts with `-` is read as a flag and refused; pass `./-x.nds` instead. A
+//! ROM literally named `cpu-suite` is passed as `./cpu-suite`.
 //!
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error.
+//!
+//! `cpu-suite` prints one `<file>: <cases> cases, <failed> failed` line per `*.json.bin` file
+//! and a final `total:` line. Failing cases are expected until the CPU executes instructions
+//! (#8–#13), so they do not change the exit code; see [`cpu_suite`].
 
+pub mod cpu_suite;
 pub mod golden;
 
 use std::ffi::{OsStr, OsString};
@@ -32,6 +39,8 @@ pub enum RunnerError {
         /// The underlying IO error.
         source: std::io::Error,
     },
+    /// A CPU suite file could not be read or decoded.
+    Suite(cpu_suite::SuiteError),
 }
 
 impl fmt::Display for RunnerError {
@@ -39,6 +48,7 @@ impl fmt::Display for RunnerError {
         match self {
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io { path, source } => write!(f, "cannot read {}: {source}", path.display()),
+            Self::Suite(error) => write!(f, "{error}"),
         }
     }
 }
@@ -48,7 +58,41 @@ impl std::error::Error for RunnerError {
         match self {
             Self::Usage(_) => None,
             Self::Io { source, .. } => Some(source),
+            Self::Suite(error) => Some(error),
         }
+    }
+}
+
+impl From<cpu_suite::SuiteError> for RunnerError {
+    fn from(error: cpu_suite::SuiteError) -> Self {
+        Self::Suite(error)
+    }
+}
+
+/// What the command line asks for.
+#[derive(Debug)]
+pub enum Command {
+    /// Run a ROM for some frames and print its screen hashes.
+    Run(Args),
+    /// Run the ARM7TDMI JSON suite files in a directory.
+    CpuSuite(PathBuf),
+}
+
+/// Parses the arguments after the program name into a [`Command`].
+///
+/// `cpu-suite <dir>` selects the suite; anything else is a ROM run as in [`parse_args`].
+pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command, RunnerError> {
+    let mut args = args.into_iter().peekable();
+    if args.peek().is_none_or(|first| first != "cpu-suite") {
+        return parse_args(args).map(Command::Run);
+    }
+    args.next();
+    let dir = args
+        .next()
+        .ok_or_else(|| RunnerError::Usage(format!("missing suite directory\n{USAGE}")))?;
+    match args.next() {
+        Some(extra) => Err(unexpected(&extra)),
+        None => Ok(Command::CpuSuite(PathBuf::from(dir))),
     }
 }
 
@@ -71,7 +115,7 @@ impl Args {
     }
 }
 
-const USAGE: &str = "usage: ninge-runner <rom> [--frames N]";
+const USAGE: &str = "usage: ninge-runner <rom> [--frames N]\n       ninge-runner cpu-suite <dir>";
 
 /// Parses the arguments after the program name.
 ///
@@ -329,5 +373,75 @@ mod tests {
         let loaded = load_rom_file(&path).expect("file exists");
         std::fs::remove_file(&path).expect("cleanup");
         assert_eq!(loaded, vec![9, 8, 7]);
+    }
+
+    fn command(args: &[&str]) -> Result<Command, RunnerError> {
+        parse_command(args.iter().map(OsString::from))
+    }
+
+    /// A short description of a parsed command or of why it was refused.
+    fn describe(parsed: Result<Command, RunnerError>) -> String {
+        match parsed {
+            Ok(Command::Run(args)) => format!("run {} {}", args.rom().display(), args.frames()),
+            Ok(Command::CpuSuite(dir)) => format!("cpu-suite {}", dir.display()),
+            Err(RunnerError::Usage(message)) => {
+                format!("usage: {}", message.lines().next().unwrap_or(""))
+            }
+            Err(other) => format!("other: {other}"),
+        }
+    }
+
+    #[test]
+    fn given_cpu_suite_and_a_directory_when_parsing_a_command_then_it_selects_the_suite() {
+        assert_eq!(
+            describe(command(&["cpu-suite", "some/dir"])),
+            "cpu-suite some/dir"
+        );
+    }
+
+    #[test]
+    fn given_a_rom_path_when_parsing_a_command_then_it_selects_a_run() {
+        assert_eq!(
+            describe(command(&["game.nds", "--frames", "4"])),
+            "run game.nds 4"
+        );
+    }
+
+    #[test]
+    fn given_cpu_suite_without_a_directory_when_parsing_a_command_then_it_is_a_usage_error() {
+        assert_eq!(
+            describe(command(&["cpu-suite"])),
+            "usage: missing suite directory"
+        );
+    }
+
+    #[test]
+    fn given_cpu_suite_with_an_extra_argument_when_parsing_a_command_then_it_is_a_usage_error() {
+        assert_eq!(
+            describe(command(&["cpu-suite", "dir", "more"])),
+            "usage: unexpected argument more"
+        );
+    }
+
+    #[test]
+    fn given_no_arguments_when_parsing_a_command_then_it_is_the_missing_rom_usage_error() {
+        assert_eq!(describe(command(&[])), "usage: missing ROM path");
+    }
+
+    #[test]
+    fn given_a_rom_named_with_a_dot_slash_cpu_suite_when_parsing_a_command_then_it_is_a_rom() {
+        assert_eq!(describe(command(&["./cpu-suite"])), "run ./cpu-suite 1");
+    }
+
+    #[test]
+    fn given_a_suite_error_when_converted_then_it_displays_and_exposes_its_source() {
+        let error = RunnerError::from(cpu_suite::SuiteError::Format {
+            offset: 3,
+            reason: "bad".to_string(),
+        });
+        assert_eq!(
+            (error.to_string(), error.source().is_some()),
+            ("bad suite data at byte 3: bad".to_string(), true)
+        );
     }
 }

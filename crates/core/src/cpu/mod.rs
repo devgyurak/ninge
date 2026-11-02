@@ -2,8 +2,13 @@
 //! The ARM CPU shared by both processors: `Cpu<false>` is the ARM7TDMI, `Cpu<true>` the
 //! ARM946E-S. Phase 1 grows it instruction group by group (#8–#13).
 
+mod alu;
+mod arm;
 mod bus;
+mod decode;
+mod psr;
 mod regs;
+mod shifter;
 
 pub use bus::Bus;
 pub use regs::{Bank, Mode, Registers};
@@ -37,9 +42,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Executes one instruction.
-    pub fn step<B: Bus>(&mut self, _bus: &mut B) {
-        // TODO(phase1): instruction execution arrives group by group in #8–#13. Until then a
-        // step changes nothing.
+    pub fn step<B: Bus>(&mut self, bus: &mut B) {
+        self.step_arm(bus);
     }
 }
 
@@ -51,3 +55,6 @@ impl<const ARM9: bool> Default for Cpu<ARM9> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_arm;

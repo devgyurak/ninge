@@ -4,8 +4,10 @@ Sources: GBATEK, the ARM-opcode sections "Memory: Single Data Transfer (LDR, STR
 "Memory: Halfword, Doubleword, and Signed Data Transfer", "Memory: Block Data Transfer (LDM,
 STM)", "Memory: Single Data Swap (SWP)", and "ARM CPU Memory Alignments". Measured facts come
 from the pinned SingleStepTests/ARM7TDMI suite (MIT) and are marked **(suite)** below; each is
-pinned by a test in `crates/runner/tests/cpu_suite.rs`, except the empty list, whose single case is
-covered only by the whole-file test. The ARM ARM and the two TRMs
+pinned by a test in `crates/runner/tests/cpu_suite.rs`, except four facts that only the whole-file
+`no_case_differs` test covers: the empty list (one case), the User-bank base writeback of an LDM
+with S and W but no R15, the current-mode base writeback of an LDM that loads R15 with S and W,
+and the +12 after a halfword writeback to R15. The ARM ARM and the two TRMs
 are not re-read for this note.
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm_transfer.rs`,
 `crates/core/src/cpu/bus.rs`   Phase: 1 (#10)
@@ -73,8 +75,9 @@ exist for loads only.
 ### Single data swap (SWP, SWPB)
 
 `cond 00010 B 00 Rn Rd 0000 1001 Rm`: Rd = [Rn] and [Rn] = Rm. B = 1 swaps a byte. GBATEK says it
-works when Rm and Rn name the same register; the same holds for the other overlaps because every
-register is read before the memory access and Rd is written last. R15 is not allowed in any
+works when Rm and Rn name the same register; the other overlaps (Rm = Rd, Rn = Rd) are inferred
+from reading every register before the memory access and writing Rd last, and the whole-file
+suite test passes with that **(suite)**. R15 is not allowed in any
 field by GBATEK.
 
 ## Behavior

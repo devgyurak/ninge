@@ -41,6 +41,9 @@ pub(crate) enum Kind {
     Branch,
     /// BX.
     BranchExchange,
+    /// SMLAxy, SMLAWy, SMULWy, SMLALxy and SMULxy (ARM9; `docs/hw/armv5te.md`, "Signed halfword
+    /// multiplies").
+    SignedHalfwordMultiply,
     /// QADD, QSUB, QDADD and QDSUB (ARM9; `docs/hw/armv5te.md`, "Saturating arithmetic").
     SaturatingArithmetic,
     /// CLZ (ARM9; `docs/hw/armv5te.md`, "CLZ").
@@ -112,6 +115,8 @@ const fn classify(index: usize, arm9: bool) -> Kind {
                 (1, 1) if high == 0x12 => Kind::BranchExchange,
                 (3, 1) if arm9 && high == 0x12 => Kind::BranchLinkExchange,
                 (1, 1) if arm9 && high == 0x16 => Kind::CountLeadingZeros,
+                // bit 7 set and bit 4 clear in the PSR space
+                (_, _) if arm9 && low & 0b1001 == 0b1000 => Kind::SignedHalfwordMultiply,
                 // bits 7–4 = 0101 in the PSR space
                 (5, _) if arm9 => Kind::SaturatingArithmetic,
                 (0, 0) => Kind::Mrs,

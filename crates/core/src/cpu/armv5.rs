@@ -77,6 +77,45 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.write_destination(word >> RD_SHIFT & 0xF, result as u32) // truncation: the clamped value fits 32 bits
     }
 
+    /// SMLAxy, SMLAWy, SMULWy, SMLALxy and SMULxy (`docs/hw/armv5te.md`, "Signed halfword
+    /// multiplies"). Bits 22–21 pick the operation; `x` (bit 5) picks Rm's halfword and `y`
+    /// (bit 6) Rs's. Only the 32-bit accumulates touch Q; no form touches N, Z, C or V.
+    pub(super) fn signed_halfword_multiply(&mut self, word: u32) -> bool {
+        let rm = self.operand(word & 0xF, 0);
+        let rs = self.operand(word >> 8 & 0xF, 0);
+        let rd = word >> 16 & 0xF;
+        let rn = word >> RD_SHIFT & 0xF;
+        let y_half = halfword(rs, word >> 6 & 1 == 1);
+        match (word >> 21 & 3, word >> 5 & 1) {
+            // SMLAxy
+            (0, _) => self.accumulate(rd, halfword(rm, word >> 5 & 1 == 1) * y_half, rn),
+            // SMULWy (bit 5 set): the top 32 bits of the 48-bit product
+            (1, 1) => self.write_destination(rd, wide_product(rm, y_half) as u32), // truncation: fits 32 bits
+            // SMLAWy
+            (1, _) => self.accumulate(rd, wide_product(rm, y_half), rn),
+            // SMLALxy: RdHi is the Rd field, RdLo the Rn field.
+            (2, _) => {
+                let product = i64::from(halfword(rm, word >> 5 & 1 == 1) * y_half);
+                let high = u64::from(self.operand(rd, 0));
+                let low = u64::from(self.operand(rn, 0));
+                // The casts are the signed reading of the 64-bit pair.
+                let sum = ((high << 32 | low) as i64).wrapping_add(product) as u64;
+                let wrote_lo = self.write_destination(rn, sum as u32); // truncation: the low half
+                let wrote_hi = self.write_destination(rd, (sum >> 32) as u32);
+                wrote_lo || wrote_hi
+            }
+            // SMULxy
+            _ => self.write_destination(rd, (halfword(rm, word >> 5 & 1 == 1) * y_half) as u32), // two's complement bits
+        }
+    }
+
+    /// Rd = `product` + Rn, wrapping; Q is set if the signed add overflowed.
+    fn accumulate(&mut self, rd: u32, product: i32, rn: u32) -> bool {
+        let (sum, overflowed) = product.overflowing_add(self.operand(rn, 0) as i32); // signed reading
+        self.set_saturation(overflowed);
+        self.write_destination(rd, sum as u32) // two's complement bits
+    }
+
     /// Sets Q when `saturated`; otherwise leaves the CPSR alone.
     fn set_saturation(&mut self, saturated: bool) {
         let cpsr = self.regs.cpsr();
@@ -102,4 +141,19 @@ impl<const ARM9: bool> Cpu<ARM9> {
 fn saturate(value: i64) -> (i64, bool) {
     let clamped = value.clamp(i64::from(i32::MIN), i64::from(i32::MAX));
     (clamped, clamped != value)
+}
+
+/// The signed bottom (`top` false) or top halfword of `value`.
+fn halfword(value: u32, top: bool) -> i32 {
+    // The casts are the signed reading of the 16 bits.
+    match top {
+        true => i32::from((value >> 16) as u16 as i16),
+        false => i32::from(value as u16 as i16),
+    }
+}
+
+/// The top 32 bits of the 48-bit product of the signed word `rm` and halfword `half`.
+fn wide_product(rm: u32, half: i32) -> i32 {
+    // The 48-bit product shifted right by 16 always fits 32 bits.
+    ((i64::from(rm as i32) * i64::from(half)) >> 16) as i32
 }

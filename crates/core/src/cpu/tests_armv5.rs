@@ -553,3 +553,386 @@ proptest::proptest! {
         proptest::prop_assert_eq!((r.r(2), r.cpsr() & Q != 0), model_saturating(op, rm, rn));
     }
 }
+
+// ---------------------------------------------------------------- signed halfword multiplies
+
+const OP_SMLA: u32 = 0;
+const OP_SMLAW: u32 = 1;
+const OP_SMLAL: u32 = 2;
+const OP_SMUL: u32 = 3;
+
+/// The word for `op` with Rd/RdHi = R3, Rn/RdLo = R2, Rs = R1 and Rm = R0
+/// (`cond 0001 0 op 0 Rd Rn Rs 1 y x 0 Rm`); for the W forms `x` selects SMULW over SMLAW.
+fn h_word(op: u32, x: u32, y: u32) -> u32 {
+    0xE100_0080 | op << 21 | 3 << 16 | 2 << 12 | 1 << 8 | y << 6 | x << 5
+}
+
+/// A case: the word's op, x and y, the inputs (Rm, Rs, R2, R3), Q on entry, and the expected
+/// R3, R2 and Q.
+struct HCase {
+    op: u32,
+    x: u32,
+    y: u32,
+    rm: u32,
+    rs: u32,
+    r2: u32,
+    r3: u32,
+    q_in: bool,
+    want: (u32, u32, bool),
+}
+
+const fn h(
+    op: u32,
+    x: u32,
+    y: u32,
+    rm: u32,
+    rs: u32,
+    r2: u32,
+    r3: u32,
+    q_in: bool,
+    want: (u32, u32, bool),
+) -> HCase {
+    HCase {
+        op,
+        x,
+        y,
+        rm,
+        rs,
+        r2,
+        r3,
+        q_in,
+        want,
+    }
+}
+
+/// Rm = 0x0002_0003 (halves 3 and 2) and Rs = 0x0005_0007 (halves 7 and 5).
+const RM_2_3: u32 = 0x0002_0003;
+const RS_5_7: u32 = 0x0005_0007;
+
+/// Cases worked out from `docs/hw/armv5te.md`, "Signed halfword multiplies". `want` is
+/// (R3, R2, Q); R2 stays its input for the 32-bit forms.
+const H_CASES: [HCase; 21] = [
+    h(
+        OP_SMUL,
+        0,
+        0,
+        RM_2_3,
+        RS_5_7,
+        0x77,
+        0x88,
+        false,
+        (21, 0x77, false),
+    ),
+    h(
+        OP_SMUL,
+        1,
+        0,
+        RM_2_3,
+        RS_5_7,
+        0x77,
+        0x88,
+        false,
+        (14, 0x77, false),
+    ),
+    h(
+        OP_SMUL,
+        0,
+        1,
+        RM_2_3,
+        RS_5_7,
+        0x77,
+        0x88,
+        false,
+        (15, 0x77, false),
+    ),
+    h(
+        OP_SMUL,
+        1,
+        1,
+        RM_2_3,
+        RS_5_7,
+        0x77,
+        0x88,
+        false,
+        (10, 0x77, false),
+    ),
+    h(
+        OP_SMUL,
+        0,
+        0,
+        0xFFFF,
+        7,
+        0x77,
+        0x88,
+        false,
+        (0xFFFF_FFF9, 0x77, false),
+    ),
+    // (-32768) × (-32768) = 2^30; SMUL never sets Q.
+    h(
+        OP_SMUL,
+        0,
+        0,
+        0x8000,
+        0x8000,
+        0x77,
+        0x88,
+        false,
+        (0x4000_0000, 0x77, false),
+    ),
+    h(
+        OP_SMLA,
+        0,
+        0,
+        RM_2_3,
+        RS_5_7,
+        100,
+        0x88,
+        false,
+        (121, 100, false),
+    ),
+    h(
+        OP_SMLA,
+        1,
+        1,
+        RM_2_3,
+        RS_5_7,
+        100,
+        0x88,
+        false,
+        (110, 100, false),
+    ),
+    // 2^30 + 2^30 overflows to -2^31: Rd wraps and Q is set.
+    h(
+        OP_SMLA,
+        0,
+        0,
+        0x8000,
+        0x8000,
+        0x4000_0000,
+        0x88,
+        false,
+        (0x8000_0000, 0x4000_0000, true),
+    ),
+    // -2^31 + (-1) overflows to 2^31 - 1.
+    h(
+        OP_SMLA,
+        0,
+        0,
+        0xFFFF,
+        1,
+        0x8000_0000,
+        0x88,
+        false,
+        (0x7FFF_FFFF, 0x8000_0000, true),
+    ),
+    // An add that does not overflow leaves Q as it was.
+    h(
+        OP_SMLA,
+        0,
+        0,
+        RM_2_3,
+        RS_5_7,
+        100,
+        0x88,
+        true,
+        (121, 100, true),
+    ),
+    h(
+        OP_SMUL,
+        0,
+        0,
+        0xFFFF,
+        7,
+        0x77,
+        0x88,
+        true,
+        (0xFFFF_FFF9, 0x77, true),
+    ),
+    h(
+        OP_SMLAW,
+        0,
+        0,
+        0x0001_0000,
+        3,
+        10,
+        0x88,
+        false,
+        (13, 10, false),
+    ),
+    h(
+        OP_SMLAW,
+        0,
+        1,
+        0x0001_0000,
+        RS_5_7,
+        10,
+        0x88,
+        false,
+        (15, 10, false),
+    ),
+    h(
+        OP_SMLAW,
+        0,
+        0,
+        0x7FFF_FFFF,
+        0x7FFF,
+        0x7FFF_FFFF,
+        0x88,
+        false,
+        (0xBFFF_7FFE, 0x7FFF_FFFF, true),
+    ),
+    h(
+        OP_SMLAW,
+        1,
+        0,
+        0x0001_0000,
+        3,
+        10,
+        0x88,
+        false,
+        (3, 10, false),
+    ),
+    h(
+        OP_SMLAW,
+        1,
+        0,
+        0x7FFF_FFFF,
+        0x7FFF,
+        0x7FFF_FFFF,
+        0x88,
+        false,
+        (0x3FFF_7FFF, 0x7FFF_FFFF, false),
+    ),
+    // -3 >> 16 rounds down to -1, not toward zero.
+    h(
+        OP_SMLAW,
+        1,
+        0,
+        0xFFFF_FFFF,
+        3,
+        0,
+        0x88,
+        false,
+        (0xFFFF_FFFF, 0, false),
+    ),
+    h(
+        OP_SMLAL,
+        0,
+        0,
+        RM_2_3,
+        RS_5_7,
+        0xFFFF_FFFF,
+        0,
+        false,
+        (1, 0x14, false),
+    ),
+    h(
+        OP_SMLAL,
+        0,
+        0,
+        0xFFFF,
+        7,
+        5,
+        0,
+        false,
+        (0xFFFF_FFFF, 0xFFFF_FFFE, false),
+    ),
+    h(
+        OP_SMLAL,
+        0,
+        0,
+        1,
+        1,
+        0xFFFF_FFFF,
+        0x7FFF_FFFF,
+        false,
+        (0x8000_0000, 0, false),
+    ),
+];
+
+/// The cases (by index) whose R3, R2 or Q differ from the table.
+fn h_failures() -> Vec<(usize, (u32, u32, bool))> {
+    H_CASES
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let cpsr = [SVC, SVC | Q][usize::from(c.q_in)];
+            let r = run::<true>(
+                cpsr,
+                &[(0, c.rm), (1, c.rs), (2, c.r2), (3, c.r3)],
+                &[],
+                h_word(c.op, c.x, c.y),
+            );
+            (i, c.want, (r.r(3), r.r(2), r.cpsr() & Q != 0))
+        })
+        .filter(|(_, want, got)| want != got)
+        .map(|(i, _, got)| (i, got))
+        .collect()
+}
+
+/// Rd/RdHi, RdLo and Q for any inputs, computed in 64-bit arithmetic.
+fn model_halfword(op: u32, x: u32, y: u32, rm: u32, rs: u32, r2: u32, r3: u32) -> (u32, u32, bool) {
+    let half = |v: u32, top: u32| i64::from([v as i16, (v >> 16) as i16][top as usize]);
+    let (prod, acc) = match (op, x) {
+        (OP_SMLAW, 0) => (
+            (i64::from(rm as i32) * half(rs, y)) >> 16,
+            i64::from(r2 as i32),
+        ),
+        (OP_SMLAW, _) => ((i64::from(rm as i32) * half(rs, y)) >> 16, 0),
+        (OP_SMUL, _) => (half(rm, x) * half(rs, y), 0),
+        _ => (half(rm, x) * half(rs, y), i64::from(r2 as i32)),
+    };
+    let sum = prod + acc;
+    let in_range = i64::from(i32::MIN) <= sum && sum <= i64::from(i32::MAX);
+    let accumulates = op == OP_SMLA || (op == OP_SMLAW && x == 0);
+    match op {
+        OP_SMLAL => {
+            let pair =
+                (i64::from(r3) << 32 | i64::from(r2)).wrapping_add(half(rm, x) * half(rs, y));
+            ((pair >> 32) as u32, pair as u32, false)
+        }
+        _ => (sum as u32, r2, accumulates && !in_range),
+    }
+}
+
+#[test]
+fn given_the_halfword_multiplies_when_executed_at_the_edges_then_registers_and_q_follow_the_definitions()
+ {
+    assert_eq!(h_failures(), vec![]);
+}
+
+#[test]
+fn given_a_halfword_multiply_when_executed_with_every_flag_set_then_nzcv_is_unchanged() {
+    let r = run::<true>(
+        SVC | NZCV,
+        &[(0, 0xFFFF), (1, 7)],
+        &[],
+        h_word(OP_SMUL, 0, 0),
+    );
+    assert_eq!(r.cpsr(), SVC | NZCV);
+}
+
+#[test]
+fn given_an_arm7_halfword_multiply_word_when_executed_then_rd_is_kept_and_only_r15_advances() {
+    let r = arm::<false>(&[(0, 3), (1, 7), (3, 0x88)], &[], h_word(OP_SMUL, 0, 0));
+    assert_eq!((r.r(3), r.r(15)), (0x88, 0x100C));
+}
+
+proptest::proptest! {
+    #[test]
+    fn given_any_operands_when_an_arm9_halfword_multiply_executes_then_it_matches_the_i64_model(
+        op in 0u32..4,
+        x in 0u32..2,
+        y in 0u32..2,
+        rm in proptest::prelude::any::<u32>(),
+        rs in proptest::prelude::any::<u32>(),
+        r2 in proptest::prelude::any::<u32>(),
+        r3 in proptest::prelude::any::<u32>(),
+    ) {
+        let r = arm::<true>(&[(0, rm), (1, rs), (2, r2), (3, r3)], &[], h_word(op, x, y));
+        proptest::prop_assert_eq!(
+            (r.r(3), r.r(2), r.cpsr() & Q != 0),
+            model_halfword(op, x, y, rm, rs, r2, r3)
+        );
+    }
+}

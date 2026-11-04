@@ -1074,3 +1074,59 @@ fn given_an_arm7_ldrd_and_strd_words_when_executed_then_nothing_is_accessed() {
         (0x77, vec![], vec![])
     );
 }
+
+// ---------------------------------------------------------------- PLD
+
+/// PLD [R0, #4], PLD [R0, #-4], and PLD [R0, R1].
+const PLD_IMMEDIATE: u32 = 0xF5D0_F004;
+const PLD_NEGATIVE: u32 = 0xF550_F004;
+const PLD_REGISTER: u32 = 0xF7D0_F001;
+/// A word in the unconditional space that is neither BLX nor PLD: AND with condition 1111.
+const UNCONDITIONAL_OTHER: u32 = 0xF000_0000;
+
+#[test]
+fn given_an_arm9_pld_when_executed_then_no_memory_is_accessed_and_only_r15_advances() {
+    let r = run::<true>(SVC | NZCV, &[(0, 0x100), (1, 0x10)], &[], PLD_IMMEDIATE);
+    assert_eq!(
+        (
+            r.bus.reads.len(),
+            r.bus.writes.len(),
+            r.cpsr(),
+            r.r(0),
+            r.r(1),
+            r.r(15)
+        ),
+        (0, 0, SVC | NZCV, 0x100, 0x10, 0x100C)
+    );
+}
+
+#[test]
+fn given_an_arm9_pld_with_a_negative_offset_when_executed_then_nothing_but_r15_changes() {
+    let r = arm::<true>(&[(0, 0x100)], &[], PLD_NEGATIVE);
+    assert_eq!(
+        (r.bus.reads.len(), r.cpsr(), r.r(0), r.r(15)),
+        (0, SVC, 0x100, 0x100C)
+    );
+}
+
+#[test]
+fn given_an_arm9_pld_with_a_register_offset_when_executed_then_nothing_but_r15_changes() {
+    let r = arm::<true>(&[(0, 0x100), (1, 0x10)], &[], PLD_REGISTER);
+    assert_eq!(
+        (r.bus.reads.len(), r.cpsr(), r.r(1), r.r(15)),
+        (0, SVC, 0x10, 0x100C)
+    );
+}
+
+#[test]
+fn given_an_arm7_pld_word_when_executed_then_nothing_but_r15_changes() {
+    let r = arm::<false>(&[(0, 0x100)], &[], PLD_IMMEDIATE);
+    assert_eq!((r.bus.reads.len(), r.cpsr(), r.r(15)), (0, SVC, 0x100C));
+}
+
+#[test]
+fn given_an_arm9_word_in_the_unconditional_space_that_is_not_blx_or_pld_when_executed_then_only_r15_advances()
+ {
+    let r = arm::<true>(&[(0, 0x100), (1, 5)], &[], UNCONDITIONAL_OTHER);
+    assert_eq!((r.r(0), r.r(1), r.cpsr(), r.r(15)), (0x100, 5, SVC, 0x100C));
+}

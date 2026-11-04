@@ -54,6 +54,8 @@ pub(crate) enum Kind {
     BranchLinkExchange,
     /// BLX with an immediate, in the unconditional space (ARM9; `docs/hw/armv5te.md`, "BLX").
     BranchLinkExchangeImmediate,
+    /// PLD, a cache hint that does nothing (ARM9; `docs/hw/armv5te.md`, "PLD").
+    Preload,
     /// SWI (`docs/hw/arm-exceptions-modes.md`).
     Swi,
     /// The undefined-instruction space: bits 27–25 = 011 with bit 4 = 1.
@@ -173,9 +175,18 @@ const fn build_table(arm9: bool) -> [Kind; TABLE_SIZE] {
 /// ARM9 does not treat as "never" (`docs/hw/armv5te.md`, "Unconditional space").
 const fn unconditional_kind(index: usize) -> Kind {
     let high = index >> 4; // bits 27–20
+    let low = index & 0xF; // bits 7–4
+    // PLD is a byte load (P = 1, B = 1, W = 0, L = 1; U is free) with the PC-like Rd field 1111.
+    // TODO(hw-unverified): the Rd field (bits 15–12) is not checked
+    // (`docs/hw/armv5te.md`, "Unverified").
+    let pld_bits = high & 0x17 == 0x15;
     match high >> 5 {
         // bits 27–25 = 101: BLX with an immediate
         5 => Kind::BranchLinkExchangeImmediate,
+        // bits 27–25 = 010: PLD with an immediate offset
+        2 if pld_bits => Kind::Preload,
+        // bits 27–25 = 011: PLD with a register offset, which has bit 4 clear
+        3 if pld_bits && low & 1 == 0 => Kind::Preload,
         _ => Kind::Unhandled,
     }
 }
@@ -262,6 +273,51 @@ mod tests {
         (0xEC40_0000, Kind::Coprocessor), // MCRR
         (0xEC50_0000, Kind::Coprocessor), // MRRC
     ];
+
+    /// Words and the kind each must decode to on the ARM9 (`docs/hw/armv5te.md`).
+    const ARM9_CASES: [(u32, Kind); 28] = [
+        (0xE12F_FF31, Kind::BranchLinkExchange),          // BLX R1
+        (0xE12F_FF11, Kind::BranchExchange),              // BX R1 is unchanged
+        (0xE16F_2F11, Kind::CountLeadingZeros),           // CLZ R2, R1
+        (0xE100_0050, Kind::SaturatingArithmetic),        // QADD
+        (0xE120_0050, Kind::SaturatingArithmetic),        // QSUB
+        (0xE140_0050, Kind::SaturatingArithmetic),        // QDADD
+        (0xE160_0050, Kind::SaturatingArithmetic),        // QDSUB
+        (0xE100_0080, Kind::SignedHalfwordMultiply),      // SMLABB
+        (0xE100_00E0, Kind::SignedHalfwordMultiply),      // SMLATT
+        (0xE120_0080, Kind::SignedHalfwordMultiply),      // SMLAWB
+        (0xE120_00A0, Kind::SignedHalfwordMultiply),      // SMULWB
+        (0xE140_0080, Kind::SignedHalfwordMultiply),      // SMLALBB
+        (0xE160_0080, Kind::SignedHalfwordMultiply),      // SMULBB
+        (0xE1C0_20D8, Kind::DoubleTransfer),              // LDRD
+        (0xE1C0_20F8, Kind::DoubleTransfer),              // STRD
+        (0xE1D0_20D8, Kind::HalfwordTransfer),            // LDRSB is unchanged
+        (0xE1C0_20B8, Kind::HalfwordTransfer),            // STRH is unchanged
+        (0xF5D0_F004, Kind::Preload),                     // PLD [R0, #4]
+        (0xF550_F004, Kind::Preload),                     // PLD [R0, #-4]
+        (0xF7D0_F001, Kind::Preload),                     // PLD [R0, R1]
+        (0xF7D0_F011, Kind::Unhandled),                   // register form with bit 4 set
+        (0xF5C0_F004, Kind::Unhandled),                   // bits 22 and 20 not both set: not PLD
+        (0xFA00_0000, Kind::BranchLinkExchangeImmediate), // BLX +0
+        (0xFB00_0000, Kind::BranchLinkExchangeImmediate), // BLX +2
+        (0xFAFF_FFFE, Kind::BranchLinkExchangeImmediate), // BLX -8
+        (0xF000_0000, Kind::Unhandled),                   // another word in the 1111 space
+        (0xE000_0090, Kind::Multiply),                    // MUL is unchanged
+        (0xE12F_FF1E, Kind::BranchExchange),              // BX LR is unchanged
+    ];
+
+    fn arm9_classification_failures() -> Vec<(u32, Kind, Kind)> {
+        ARM9_CASES
+            .iter()
+            .map(|&(word, want)| (word, want, decode::<true>(word)))
+            .filter(|(_, want, got)| want != got)
+            .collect()
+    }
+
+    #[test]
+    fn given_arm9_encodings_when_decoded_then_each_gets_its_kind() {
+        assert_eq!(arm9_classification_failures(), vec![]);
+    }
 
     fn classification_failures() -> Vec<(u32, Kind, Kind)> {
         CASES

@@ -70,6 +70,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
                     self.single_transfer(bus, word)
                 }
                 Kind::HalfwordTransfer => self.halfword_transfer(bus, word),
+                // PLD is a cache hint: it changes no register, flag or memory, and takes no abort.
+                Kind::Preload => false,
                 Kind::DoubleTransfer => self.double_transfer(bus, word),
                 Kind::Swap => self.swap(bus, word),
                 Kind::BlockTransfer => self.block_transfer(bus, word),

@@ -554,3 +554,141 @@ fn given_msr_cpsr_control_writes_with_bit_4_clear_when_comparing_then_m4_is_set_
 fn given_register_shift_with_rs_r15_when_comparing_then_the_amount_is_the_plus_8_view() {
     assert_eq!(rs_pc_problems(), Vec::<String>::new());
 }
+
+/// Whether `diff` is exactly the known ARM7 multiply-carry gap: the only difference is the CPSR,
+/// it is in bit 29 alone, and the case sets flags with a passing condition.
+fn is_c_only_gap(diff: &ninge_runner::cpu_suite::CaseDiff, cases: &[Case]) -> bool {
+    let case = &cases[diff.index];
+    let cpsr_bits = |text: &str| u32::from_str_radix(text.trim_start_matches("0x"), 16);
+    match diff.fields.as_slice() {
+        [field] => {
+            field.name == "CPSR"
+                && cpsr_bits(&field.expected)
+                    .ok()
+                    .zip(cpsr_bits(&field.actual).ok())
+                    .is_some_and(|(want, got)| want ^ got == 1 << 29)
+                && condition_passes(case)
+                && case.opcode >> 20 & 1 == 1
+        }
+        _ => false,
+    }
+}
+
+/// Condition-passing S cases whose expected C differs from their initial C: the most a CPU that
+/// leaves C unchanged can get wrong.
+fn expected_c_changes(cases: &[Case]) -> usize {
+    cases
+        .iter()
+        .filter(|c| condition_passes(c) && c.opcode >> 20 & 1 == 1)
+        .filter(|c| (c.initial.cpsr ^ c.expected.cpsr) >> 29 & 1 == 1)
+        .count()
+}
+
+/// Problems with a multiply file run on the ARM7: every diff that is not the C-only gap, and a
+/// C-only count that does not equal the number of S cases whose C the suite changes.
+fn multiply_gap_problems(file: &str) -> Vec<String> {
+    let cases = cases_of(file);
+    let diffs = arm7_diffs(file);
+    let others: Vec<String> = diffs
+        .iter()
+        .filter(|d| !is_c_only_gap(d, &cases))
+        .map(|d| format!("{file}[{}] {:#010x}: {:?}", d.index, d.opcode, d.fields))
+        .collect();
+    let c_only = diffs.len() - others.len();
+    let want = expected_c_changes(&cases);
+    others
+        .into_iter()
+        .chain((c_only != want).then(|| format!("{file}: {c_only} C-only diffs, {want} expected")))
+        .collect()
+}
+
+/// The ARM7 C after an S multiply is the gap of #81: the CPU leaves C unchanged, the suite
+/// changes it in about half of the cases. When #81 closes, this becomes
+/// `given_arm_mul_mla_when_run_on_arm7_then_no_case_differs`.
+#[test]
+fn given_arm_mul_mla_when_run_on_arm7_then_only_the_c_bit_of_s_cases_differs() {
+    assert_eq!(
+        multiply_gap_problems("arm_mul_mla.json.bin"),
+        Vec::<String>::new()
+    );
+}
+
+/// The ARM7 C after an S long multiply is the gap of #81 (see above). When it closes, this
+/// becomes `given_arm_mull_mlal_when_run_on_arm7_then_no_case_differs`.
+#[test]
+fn given_arm_mull_mlal_when_run_on_arm7_then_only_the_c_bit_of_s_cases_differs() {
+    assert_eq!(
+        multiply_gap_problems("arm_mull_mlal.json.bin"),
+        Vec::<String>::new()
+    );
+}
+
+/// Problems with "an R15 operand reads base + 12": the multiply cases whose Rm is R15 with a
+/// passing condition and Rs, Rd below 8 hold product = (base + 12) * Rs.
+fn multiply_r15_operand_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_mul_mla.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && c.opcode & 0xF == 15
+                && c.opcode >> 21 & 1 == 0
+                && c.opcode >> 8 & 0xF < 8
+                && c.opcode >> 16 & 0xF < 8
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| {
+            let rs = c.initial.r[(c.opcode >> 8 & 0xF) as usize];
+            c.expected.r[(c.opcode >> 16 & 0xF) as usize]
+                != c.base_addr.wrapping_add(12).wrapping_mul(rs)
+        })
+        .map(|c| format!("{:#010x}: not (base + 12) * Rs", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 20).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+/// Problems with "RdHi = RdLo keeps Hi": passing UMULL/SMULL cases with RdHi = RdLo end with
+/// that register holding the high half of the 64-bit product.
+fn long_multiply_equal_halves_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_mull_mlal.json.bin")
+        .into_iter()
+        .filter(|c| {
+            condition_passes(c)
+                && c.opcode >> 21 & 1 == 0
+                && c.opcode >> 16 & 0xF == c.opcode >> 12 & 0xF
+                && c.opcode >> 16 & 0xF < 8
+                && c.opcode & 0xF < 8
+                && c.opcode >> 8 & 0xF < 8
+        })
+        .collect();
+    let hi = |c: &Case| {
+        let (a, b) = (
+            c.initial.r[(c.opcode & 0xF) as usize],
+            c.initial.r[(c.opcode >> 8 & 0xF) as usize],
+        );
+        match c.opcode >> 22 & 1 {
+            1 => ((i64::from(a as i32) * i64::from(b as i32)) >> 32) as u32,
+            _ => ((u64::from(a) * u64::from(b)) >> 32) as u32,
+        }
+    };
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.r[(c.opcode >> 16 & 0xF) as usize] != hi(c))
+        .map(|c| format!("{:#010x}: the register is not the high half", c.opcode))
+        .collect();
+    problems.extend((cases.len() < 20).then(|| format!("only {} cases", cases.len())));
+    problems
+}
+
+#[test]
+fn given_mul_cases_with_rm_r15_when_comparing_then_the_operand_is_the_base_plus_12() {
+    assert_eq!(multiply_r15_operand_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_long_multiplies_with_rdhi_equal_rdlo_when_comparing_then_the_register_holds_the_high_half()
+{
+    assert_eq!(long_multiply_equal_halves_problems(), Vec::<String>::new());
+}

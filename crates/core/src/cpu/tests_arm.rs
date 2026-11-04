@@ -713,3 +713,514 @@ proptest! {
         prop_assert_eq!(mov_reg_shift(ROR, v, s), v.rotate_right(s & 0xFF));
     }
 }
+
+// ---------------------------------------------------------------- multiply (docs/hw/arm-multiply.md)
+
+/// `cond=AL` multiply word: `bits` is (long, signed, accumulate, flags).
+/// Fields: `hi` = Rd/RdHi (19-16), `lo` = Rn/RdLo (15-12), Rs, Rm.
+const fn mul_op(bits: (u32, u32, u32, u32), hi: u32, lo: u32, rs: u32, rm: u32) -> u32 {
+    let (l, u, a, s) = bits;
+    0xE000_0090 | l << 23 | u << 22 | a << 21 | s << 20 | hi << 16 | lo << 12 | rs << 8 | rm
+}
+
+/// Rm = R1, Rs = R2, Rn/RdLo = R3, Rd/RdHi = R4 throughout.
+const MUL: u32 = mul_op((0, 0, 0, 0), 4, 0, 2, 1);
+const MLA: u32 = mul_op((0, 0, 1, 0), 4, 3, 2, 1);
+const UMULL: u32 = mul_op((1, 0, 0, 0), 4, 3, 2, 1);
+const UMLAL: u32 = mul_op((1, 0, 1, 0), 4, 3, 2, 1);
+const SMULL: u32 = mul_op((1, 1, 0, 0), 4, 3, 2, 1);
+const SMLAL: u32 = mul_op((1, 1, 1, 0), 4, 3, 2, 1);
+const S_BIT: u32 = 1 << 20;
+
+/// One multiply: registers set before, registers expected after.
+struct MulCase {
+    name: &'static str,
+    opcode: u32,
+    setup: &'static [(usize, u32)],
+    want: &'static [(usize, u32)],
+}
+
+const fn mc(
+    name: &'static str,
+    opcode: u32,
+    setup: &'static [(usize, u32)],
+    want: &'static [(usize, u32)],
+) -> MulCase {
+    MulCase {
+        name,
+        opcode,
+        setup,
+        want,
+    }
+}
+
+/// Names of the cases whose registers differ from `want`, with the registers' actual values.
+fn mul_failures(cases: &[MulCase]) -> Vec<String> {
+    cases
+        .iter()
+        .filter_map(|c| {
+            let cpu = run(SVC, c.setup, c.opcode);
+            let got: Vec<u32> = c.want.iter().map(|&(i, _)| reg(&cpu, i)).collect();
+            let want: Vec<u32> = c.want.iter().map(|&(_, v)| v).collect();
+            (got != want).then(|| format!("{}: got {got:x?}, want {want:x?}", c.name))
+        })
+        .collect()
+}
+
+#[test]
+fn given_mul_and_mla_operands_when_executed_then_rd_is_the_low_32_bits() {
+    let cases = [
+        mc("mul", MUL, &[(1, 6), (2, 7)], &[(4, 42)]),
+        mc(
+            "mul wraps",
+            MUL,
+            &[(1, 0x1_0000), (2, 0x1_0001)],
+            &[(4, 0x0001_0000)],
+        ),
+        mc(
+            "mul negative",
+            MUL,
+            &[(1, 0xFFFF_FFFF), (2, 3)],
+            &[(4, 0xFFFF_FFFD)],
+        ),
+        mc("mla", MLA, &[(1, 3), (2, 4), (3, 5)], &[(4, 17)]),
+        mc(
+            "mla wraps",
+            MLA,
+            &[(1, 0xFFFF_FFFF), (2, 2), (3, 3)],
+            &[(4, 1)],
+        ),
+        mc(
+            "mul Rd = Rm",
+            mul_op((0, 0, 0, 0), 1, 0, 2, 1),
+            &[(1, 5), (2, 6)],
+            &[(1, 30)],
+        ),
+        mc(
+            "mla Rd = Rm",
+            mul_op((0, 0, 1, 0), 1, 3, 2, 1),
+            &[(1, 5), (2, 6), (3, 1)],
+            &[(1, 31)],
+        ),
+        mc(
+            "mul ignores Rn",
+            mul_op((0, 0, 0, 0), 4, 3, 2, 1),
+            &[(1, 6), (2, 7), (3, 100)],
+            &[(4, 42)],
+        ),
+    ];
+    assert_eq!(mul_failures(&cases), Vec::<String>::new());
+}
+
+#[test]
+fn given_long_multiply_operands_when_executed_then_hi_and_lo_hold_the_64_bit_result() {
+    let cases = [
+        mc(
+            "umull max",
+            UMULL,
+            &[(1, u32::MAX), (2, u32::MAX)],
+            &[(4, 0xFFFF_FFFE), (3, 1)],
+        ),
+        mc(
+            "smull minus one squared",
+            SMULL,
+            &[(1, u32::MAX), (2, u32::MAX)],
+            &[(4, 0), (3, 1)],
+        ),
+        mc(
+            "smull negative",
+            SMULL,
+            &[(1, u32::MAX), (2, 2)],
+            &[(4, u32::MAX), (3, 0xFFFF_FFFE)],
+        ),
+        mc(
+            "umull same bits unsigned",
+            UMULL,
+            &[(1, u32::MAX), (2, 2)],
+            &[(4, 1), (3, 0xFFFF_FFFE)],
+        ),
+        mc(
+            "umlal carries into hi",
+            UMLAL,
+            &[(1, 2), (2, 3), (4, 1), (3, u32::MAX)],
+            &[(4, 2), (3, 5)],
+        ),
+        mc(
+            "umlal wraps at 64",
+            UMLAL,
+            &[(1, 1), (2, 1), (4, u32::MAX), (3, u32::MAX)],
+            &[(4, 0), (3, 0)],
+        ),
+        mc(
+            "smlal",
+            SMLAL,
+            &[(1, 0xFFFF_FFFD), (2, 4), (4, 0), (3, 10)],
+            &[(4, u32::MAX), (3, 0xFFFF_FFFE)],
+        ),
+        mc(
+            "umull RdLo = Rm",
+            mul_op((1, 0, 0, 0), 4, 1, 2, 1),
+            &[(1, 0x10), (2, 0x10)],
+            &[(1, 0x100), (4, 0)],
+        ),
+        mc(
+            "umull RdHi = Rm",
+            mul_op((1, 0, 0, 0), 1, 3, 2, 1),
+            &[(1, 0x1_0000), (2, 0x1_0000)],
+            &[(1, 1), (3, 0)],
+        ),
+    ];
+    assert_eq!(mul_failures(&cases), Vec::<String>::new());
+}
+
+#[test]
+fn given_rdhi_equal_rdlo_when_umull_executes_then_the_hi_half_remains() {
+    let both = mul_op((1, 0, 0, 0), 4, 4, 2, 1);
+    let cpu = run(SVC, &[(1, u32::MAX), (2, u32::MAX)], both);
+    assert_eq!(reg(&cpu, 4), 0xFFFF_FFFE);
+}
+
+#[test]
+fn given_rdhi_equal_rdlo_when_umlal_executes_then_the_register_is_the_accumulator_of_both_halves_and_hi_remains()
+ {
+    let both = mul_op((1, 0, 1, 0), 4, 4, 2, 1);
+    let cpu = run(SVC, &[(1, 1), (2, 1), (4, 1)], both);
+    assert_eq!(reg(&cpu, 4), 1);
+}
+
+#[test]
+fn given_r15_operands_when_multiply_executes_then_each_reads_the_address_plus_12() {
+    let cases = [
+        mc(
+            "Rm",
+            mul_op((0, 0, 0, 0), 4, 0, 2, 15),
+            &[(2, 1)],
+            &[(4, ADDR + 12)],
+        ),
+        mc(
+            "Rs",
+            mul_op((0, 0, 0, 0), 4, 0, 15, 1),
+            &[(1, 1)],
+            &[(4, ADDR + 12)],
+        ),
+        mc(
+            "Rn",
+            mul_op((0, 0, 1, 0), 4, 15, 2, 1),
+            &[(1, 0), (2, 0)],
+            &[(4, ADDR + 12)],
+        ),
+        mc(
+            "RdLo accumulator",
+            mul_op((1, 0, 1, 0), 4, 15, 2, 1),
+            &[(1, 0), (2, 0), (4, 7)],
+            &[(4, 7)],
+        ),
+    ];
+    assert_eq!(mul_failures(&cases), Vec::<String>::new());
+}
+
+#[test]
+fn given_rd_r15_when_mul_executes_then_r15_is_the_value_plus_8() {
+    let cpu = run(SVC, &[(1, 3), (2, 5)], mul_op((0, 0, 0, 0), 15, 0, 2, 1));
+    assert_eq!(reg(&cpu, 15), 15 + 8);
+}
+
+#[test]
+fn given_rdhi_r15_when_umull_executes_then_r15_is_hi_plus_8_and_lo_is_written() {
+    let cpu = run(
+        SVC,
+        &[(1, 0x1_0000), (2, 0x1_0000), (3, 9)],
+        mul_op((1, 0, 0, 0), 15, 3, 2, 1),
+    );
+    assert_eq!((reg(&cpu, 15), reg(&cpu, 3)), (1 + 8, 0));
+}
+
+#[test]
+fn given_rdlo_r15_when_umull_executes_then_r15_is_lo_plus_8_and_hi_is_written() {
+    let cpu = run(
+        SVC,
+        &[(1, 2), (2, 2), (4, 99)],
+        mul_op((1, 0, 0, 0), 4, 15, 2, 1),
+    );
+    assert_eq!((reg(&cpu, 15), reg(&cpu, 4)), (4 + 8, 0));
+}
+
+#[test]
+fn given_rdlo_r15_accumulator_when_umlal_executes_then_lo_is_the_address_plus_12_plus_the_product()
+{
+    let cpu = run(SVC, &[(1, 0), (2, 0)], mul_op((1, 0, 1, 0), 4, 15, 2, 1));
+    assert_eq!(reg(&cpu, 15), ADDR + 12 + 8);
+}
+
+#[test]
+fn given_plain_multiply_when_executed_then_r15_advances_by_4_from_the_execute_view() {
+    let cpu = run(SVC, &[], MUL);
+    assert_eq!(reg(&cpu, 15), ADDR + 12);
+}
+
+#[test]
+fn given_failed_condition_when_mul_executes_then_registers_and_cpsr_are_kept_and_r15_advances() {
+    let ne = with_cond(MUL, 1);
+    let cpu = run(SVC | Z, &[(1, 6), (2, 7), (4, 55)], ne);
+    assert_eq!(
+        (reg(&cpu, 4), cpu.regs().cpsr(), reg(&cpu, 15)),
+        (55, SVC | Z, ADDR + 12)
+    );
+}
+
+/// CPSR after an instruction run from `SVC | flags` with the listed registers.
+fn cpsr_after(flags: u32, setup: &[(usize, u32)], opcode: u32) -> u32 {
+    run(SVC | flags, setup, opcode).regs().cpsr()
+}
+
+/// Cases of (name, opcode, setup, flags before, flags after) checked on CPSR.
+struct FlagCase {
+    name: &'static str,
+    opcode: u32,
+    setup: &'static [(usize, u32)],
+    before: u32,
+    after: u32,
+}
+
+const fn fc(
+    name: &'static str,
+    opcode: u32,
+    setup: &'static [(usize, u32)],
+    before: u32,
+    after: u32,
+) -> FlagCase {
+    FlagCase {
+        name,
+        opcode,
+        setup,
+        before,
+        after,
+    }
+}
+
+fn flag_failures(cases: &[FlagCase]) -> Vec<String> {
+    cases
+        .iter()
+        .filter_map(|c| {
+            let got = cpsr_after(c.before, c.setup, c.opcode);
+            (got != SVC | c.after)
+                .then(|| format!("{}: got {got:#x}, want {:#x}", c.name, SVC | c.after))
+        })
+        .collect()
+}
+
+#[test]
+fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_and_c_and_v_are_kept() {
+    let cases = [
+        fc(
+            "muls zero",
+            MUL | S_BIT,
+            &[(1, 0), (2, 5)],
+            C | V,
+            Z | C | V,
+        ),
+        fc(
+            "muls negative",
+            MUL | S_BIT,
+            &[(1, 0x8000_0000), (2, 1)],
+            0,
+            N,
+        ),
+        fc(
+            "muls clears n and z",
+            MUL | S_BIT,
+            &[(1, 1), (2, 1)],
+            FLAGS,
+            C | V,
+        ),
+        fc(
+            "mlas zero",
+            MLA | S_BIT,
+            &[(1, 0), (2, 5), (3, 0)],
+            V,
+            Z | V,
+        ),
+        fc(
+            "mlas negative",
+            MLA | S_BIT,
+            &[(1, 1), (2, 1), (3, 0x8000_0000)],
+            C,
+            N | C,
+        ),
+        fc(
+            "umulls n from bit 63",
+            UMULL | S_BIT,
+            &[(1, u32::MAX), (2, u32::MAX)],
+            0,
+            N,
+        ),
+        fc(
+            "umulls bit 31 is not n",
+            UMULL | S_BIT,
+            &[(1, 1), (2, 0x8000_0000)],
+            0,
+            0,
+        ),
+        fc(
+            "umulls lo zero hi nonzero is not z",
+            UMULL | S_BIT,
+            &[(1, 0x1_0000), (2, 0x1_0000)],
+            Z,
+            0,
+        ),
+        fc(
+            "umulls whole zero",
+            UMULL | S_BIT,
+            &[(1, 0), (2, 9)],
+            C | V,
+            Z | C | V,
+        ),
+        fc(
+            "smulls negative",
+            SMULL | S_BIT,
+            &[(1, u32::MAX), (2, 1)],
+            V,
+            N | V,
+        ),
+        fc(
+            "umlals",
+            UMLAL | S_BIT,
+            &[(1, 1), (2, 1), (4, 0), (3, 0)],
+            N | Z,
+            0,
+        ),
+        fc(
+            "smlals zero",
+            SMLAL | S_BIT,
+            &[(1, 1), (2, 1), (4, u32::MAX), (3, u32::MAX)],
+            C,
+            Z | C,
+        ),
+    ];
+    assert_eq!(flag_failures(&cases), Vec::<String>::new());
+}
+
+#[test]
+fn given_multiplies_without_s_when_executed_then_the_cpsr_is_unchanged() {
+    let cases = [
+        fc("mul", MUL, &[(1, 0), (2, 5)], FLAGS, FLAGS),
+        fc("mla", MLA, &[(1, 0x8000_0000), (2, 1), (3, 0)], 0, 0),
+        fc("umull", UMULL, &[(1, 0), (2, 5)], N | C, N | C),
+        fc("smlal", SMLAL, &[(1, u32::MAX), (2, 1)], Z, Z),
+    ];
+    assert_eq!(flag_failures(&cases), Vec::<String>::new());
+}
+
+/// CPSR flags and result of an S multiply run on the ARM9.
+fn arm9_after(setup: &[(usize, u32)], opcode: u32, flags: u32) -> (u32, u32) {
+    let mut cpu = Cpu::<true>::new();
+    cpu.regs_mut().set_cpsr(SVC | flags);
+    setup.iter().for_each(|&(i, v)| cpu.regs_mut().set(i, v));
+    cpu.regs_mut().set(15, ADDR + 8);
+    cpu.step(&mut FixedBus(opcode));
+    (cpu.regs().get(4), cpu.regs().cpsr())
+}
+
+#[test]
+fn given_arm9_and_c_set_when_muls_gives_zero_then_z_is_set_and_c_is_kept() {
+    assert_eq!(
+        arm9_after(&[(1, 0), (2, 5)], MUL | S_BIT, C),
+        (0, SVC | Z | C)
+    );
+}
+
+#[test]
+fn given_arm9_and_c_clear_when_mlas_gives_a_negative_then_n_is_set_and_c_stays_clear() {
+    assert_eq!(
+        arm9_after(&[(1, 1), (2, 1), (3, 0x8000_0000)], MLA | S_BIT, V),
+        (0x8000_0001, SVC | N | V)
+    );
+}
+
+#[test]
+fn given_arm9_when_umulls_executes_then_n_comes_from_bit_63_and_c_is_kept() {
+    assert_eq!(
+        arm9_after(&[(1, u32::MAX), (2, u32::MAX)], UMULL | S_BIT, C),
+        (0xFFFF_FFFE, SVC | N | C)
+    );
+}
+
+#[test]
+fn given_arm9_when_smlal_executes_then_the_result_matches_the_arm7() {
+    assert_eq!(
+        arm9_after(&[(1, 0xFFFF_FFFD), (2, 4), (3, 10)], SMLAL, 0),
+        (u32::MAX, SVC)
+    );
+}
+
+/// R4:R3 after a long multiply of `a` and `b` with accumulator `acc`.
+fn long_result(opcode: u32, a: u32, b: u32, acc: u64) -> u64 {
+    let cpu = run(
+        SVC,
+        &[(1, a), (2, b), (4, (acc >> 32) as u32), (3, acc as u32)],
+        opcode,
+    );
+    u64::from(reg(&cpu, 4)) << 32 | u64::from(reg(&cpu, 3))
+}
+
+proptest! {
+    #[test]
+    fn given_any_operands_when_umull_executes_then_the_result_is_the_u64_product(
+        a in any::<u32>(), b in any::<u32>(),
+    ) {
+        prop_assert_eq!(long_result(UMULL, a, b, 0), u64::from(a) * u64::from(b));
+    }
+
+    #[test]
+    fn given_any_operands_when_smull_executes_then_the_result_is_the_i64_product(
+        a in any::<u32>(), b in any::<u32>(),
+    ) {
+        prop_assert_eq!(
+            long_result(SMULL, a, b, 0),
+            (i64::from(a as i32) * i64::from(b as i32)) as u64
+        );
+    }
+
+    #[test]
+    fn given_any_operands_when_umlal_executes_then_the_result_wraps_at_64_bits(
+        a in any::<u32>(), b in any::<u32>(), acc in any::<u64>(),
+    ) {
+        prop_assert_eq!(
+            long_result(UMLAL, a, b, acc),
+            (u64::from(a) * u64::from(b)).wrapping_add(acc)
+        );
+    }
+
+    #[test]
+    fn given_any_operands_when_smlal_executes_then_the_result_wraps_at_64_bits(
+        a in any::<u32>(), b in any::<u32>(), acc in any::<u64>(),
+    ) {
+        prop_assert_eq!(
+            long_result(SMLAL, a, b, acc),
+            ((i64::from(a as i32) * i64::from(b as i32)) as u64).wrapping_add(acc)
+        );
+    }
+
+    #[test]
+    fn given_any_operands_when_mul_and_mla_execute_then_rd_wraps_at_32_bits(
+        a in any::<u32>(), b in any::<u32>(), n in any::<u32>(),
+    ) {
+        let mul = run(SVC, &[(1, a), (2, b)], MUL);
+        let mla = run(SVC, &[(1, a), (2, b), (3, n)], MLA);
+        prop_assert_eq!(
+            (reg(&mul, 4), reg(&mla, 4)),
+            (a.wrapping_mul(b), a.wrapping_mul(b).wrapping_add(n))
+        );
+    }
+
+    #[test]
+    fn given_any_operands_when_muls_executes_then_n_and_z_follow_the_32_bit_result_and_cv_are_kept(
+        a in any::<u32>(), b in any::<u32>(), f in 0u32..16,
+    ) {
+        let want = a.wrapping_mul(b);
+        prop_assert_eq!(
+            cpsr_after(f << 28, &[(1, a), (2, b)], MUL | S_BIT),
+            SVC | (f << 28 & (C | V)) | want & N | u32::from(want == 0) << 30
+        );
+    }
+}

@@ -17,11 +17,11 @@ use super::{Bus, Cpu};
 const MODE_BIT_4: u32 = 0x10;
 /// How far R15 runs ahead of the executing ARM instruction (`docs/hw/arm-branch-pipeline.md`,
 /// "The prefetch pipeline"): the two words the pipeline holds.
-const ARM_PC_AHEAD: u32 = 8;
+pub(super) const ARM_PC_AHEAD: u32 = 8;
 /// A Thumb instruction's R15 runs this far ahead of it.
 pub(super) const THUMB_PC_AHEAD: u32 = 4;
 /// Size of an ARM instruction, and of the step from one refill fetch to the next.
-const ARM_WORD: u32 = 4;
+pub(super) const ARM_WORD: u32 = 4;
 /// Size of a Thumb instruction.
 pub(super) const THUMB_HALFWORD: u32 = 2;
 /// An R15 read after the prefetch has advanced the PC once more reads this far ahead again
@@ -35,7 +35,14 @@ const BRANCH_OFFSET_SHIFT: u32 = 2;
 /// The branch offset field is 24 bits; moving it to the top and back sign-extends it.
 const BRANCH_FIELD_TO_TOP: u32 = 8;
 /// R14, which BL writes.
-const LR: usize = 14;
+pub(super) const LR: usize = 14;
+
+/// The branch offset field of B, BL and BLX (immediate), sign-extended and multiplied by 4.
+pub(super) fn branch_offset(word: u32) -> u32 {
+    // Moving the field to the top and shifting back arithmetically sign-extends it; the casts
+    // are the signed reading.
+    (((word << BRANCH_FIELD_TO_TOP) as i32) >> (BRANCH_FIELD_TO_TOP - BRANCH_OFFSET_SHIFT)) as u32
+}
 
 impl<const ARM9: bool> Cpu<ARM9> {
     /// Executes the ARM instruction at the head of the pipeline
@@ -48,8 +55,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
         // The fetch comes before the instruction does anything, so a data access follows it.
         let fetched = bus.fetch32(self.regs.get(15));
         self.pipeline = [self.pipeline[1], fetched];
-        let wrote_pc = condition_holds(word >> 28, self.regs.cpsr())
-            && match decode(word) {
+        // On the ARM9 condition 1111 selects the unconditional space, whose words always run.
+        let runs = (ARM9 && word >> 28 == 0xF) || condition_holds(word >> 28, self.regs.cpsr());
+        let wrote_pc = runs
+            && match decode::<ARM9>(word) {
                 Kind::DataImmediate | Kind::DataImmediateShift | Kind::DataRegisterShift => {
                     self.data_processing(word)
                 }
@@ -65,6 +74,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 Kind::BlockTransfer => self.block_transfer(bus, word),
                 Kind::Branch => self.branch(word),
                 Kind::BranchExchange => self.branch_exchange(word),
+                Kind::BranchLinkExchange => self.branch_link_exchange(word),
+                Kind::BranchLinkExchangeImmediate => self.branch_link_exchange_immediate(word),
                 Kind::Swi => self.enter(Exception::SoftwareInterrupt),
                 Kind::Undefined => self.enter(Exception::Undefined),
                 Kind::Coprocessor => self.coprocessor(word),
@@ -137,10 +148,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// PC.
     fn branch(&mut self, word: u32) -> bool {
         let r15 = self.regs.get(15);
-        // Moving the field to the top and shifting back arithmetically sign-extends it; the
-        // casts are the signed reading.
-        let offset = (((word << BRANCH_FIELD_TO_TOP) as i32)
-            >> (BRANCH_FIELD_TO_TOP - BRANCH_OFFSET_SHIFT)) as u32;
+        let offset = branch_offset(word);
         // Bit 24 is L.
         if word >> 24 & 1 == 1 {
             self.regs.set(LR, r15.wrapping_sub(ARM_PC_AHEAD - ARM_WORD));

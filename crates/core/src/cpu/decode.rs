@@ -10,8 +10,6 @@ pub(crate) enum Kind {
     /// Not (yet) executed: the step only advances the PC.
     // TODO(hw-unverified): only the 011/bit 4 space traps as undefined; GBATEK says other unused
     // opcodes need not (`docs/hw/arm-exceptions-modes.md`, "Unverified").
-    // TODO(phase1): the ARMv5TE encodings (CLZ, BLX, saturating arithmetic, BKPT, LDRD and STRD,
-    // which share the halfword-transfer space, and PLD) arrive in #14.
     Unhandled,
     /// Data processing, rotated-immediate operand.
     DataImmediate,
@@ -43,6 +41,10 @@ pub(crate) enum Kind {
     Branch,
     /// BX.
     BranchExchange,
+    /// BLX with a register (ARM9; `docs/hw/armv5te.md`, "BLX").
+    BranchLinkExchange,
+    /// BLX with an immediate, in the unconditional space (ARM9; `docs/hw/armv5te.md`, "BLX").
+    BranchLinkExchangeImmediate,
     /// SWI (`docs/hw/arm-exceptions-modes.md`).
     Swi,
     /// The undefined-instruction space: bits 27–25 = 011 with bit 4 = 1.
@@ -54,7 +56,11 @@ pub(crate) enum Kind {
 
 const TABLE_SIZE: usize = 1 << 12;
 
-const TABLE: [Kind; TABLE_SIZE] = build_table();
+/// The ARM7's table (ARMv4T) and the ARM9's (ARMv5TE), and the ARM9's table for the words whose
+/// condition field is 1111 (`docs/hw/armv5te.md`, "Unconditional space").
+const TABLE_V4: [Kind; TABLE_SIZE] = build_table(false);
+const TABLE_V5: [Kind; TABLE_SIZE] = build_table(true);
+const TABLE_UNCONDITIONAL: [Kind; TABLE_SIZE] = build_unconditional_table();
 
 /// The table index of an instruction word: bits 27–20, then bits 7–4.
 const fn index(word: u32) -> usize {
@@ -62,7 +68,7 @@ const fn index(word: u32) -> usize {
 }
 
 /// Classifies the encoding space of one table index.
-const fn classify(index: usize) -> Kind {
+const fn classify(index: usize, arm9: bool) -> Kind {
     let high = index >> 4; // bits 27–20
     let low = index & 0xF; // bits 7–4
     let opcode = (high >> 1) & 0xF;
@@ -100,6 +106,7 @@ const fn classify(index: usize) -> Kind {
             // still runs as BX (`docs/hw/arm-branch-pipeline.md`, "Unverified").
             (true, _, _) => match (low, opcode & 1) {
                 (1, 1) if high == 0x12 => Kind::BranchExchange,
+                (3, 1) if arm9 && high == 0x12 => Kind::BranchLinkExchange,
                 (0, 0) => Kind::Mrs,
                 (0, _) => Kind::MsrRegister,
                 _ => Kind::Unhandled,
@@ -130,26 +137,51 @@ const fn multiply_space_kind(high: usize, low: usize) -> Kind {
             (_, true, _) => Kind::Swap,
             _ => Kind::Unhandled,
         },
-        // A store with SH = 10 or 11 is LDRD or STRD (#14).
+        // A store with SH = 10 or 11 is LDRD or STRD (ARM9 only).
         (_, 1) => Kind::HalfwordTransfer,
         (_, 2 | 3) if load => Kind::HalfwordTransfer,
         _ => Kind::Unhandled,
     }
 }
 
-const fn build_table() -> [Kind; TABLE_SIZE] {
+const fn build_table(arm9: bool) -> [Kind; TABLE_SIZE] {
     let mut table = [Kind::Unhandled; TABLE_SIZE];
     let mut i = 0;
     while i < TABLE_SIZE {
-        table[i] = classify(i);
+        table[i] = classify(i, arm9);
         i += 1;
     }
     table
 }
 
-/// The handler kind of an ARM instruction word.
-pub(crate) fn decode(word: u32) -> Kind {
-    TABLE[index(word)]
+/// Classifies the encoding space of one table index for a word with condition 1111, which the
+/// ARM9 does not treat as "never" (`docs/hw/armv5te.md`, "Unconditional space").
+const fn unconditional_kind(index: usize) -> Kind {
+    let high = index >> 4; // bits 27–20
+    match high >> 5 {
+        // bits 27–25 = 101: BLX with an immediate
+        5 => Kind::BranchLinkExchangeImmediate,
+        _ => Kind::Unhandled,
+    }
+}
+
+const fn build_unconditional_table() -> [Kind; TABLE_SIZE] {
+    let mut table = [Kind::Unhandled; TABLE_SIZE];
+    let mut i = 0;
+    while i < TABLE_SIZE {
+        table[i] = unconditional_kind(i);
+        i += 1;
+    }
+    table
+}
+
+/// The handler kind of an ARM instruction word on the ARM9 (`ARM9`) or the ARM7.
+pub(crate) fn decode<const ARM9: bool>(word: u32) -> Kind {
+    match (ARM9, word >> 28 == 0xF) {
+        (true, true) => TABLE_UNCONDITIONAL[index(word)],
+        (true, false) => TABLE_V5[index(word)],
+        (false, _) => TABLE_V4[index(word)],
+    }
 }
 
 #[cfg(test)]
@@ -177,8 +209,8 @@ mod tests {
         (0xE010_00F0, Kind::HalfwordTransfer),        // LDRSH
         (0xE180_0090, Kind::Unhandled),               // bits 27-24 = 0001, not SWP
         (0xE200_0090, Kind::DataImmediate),           // bits 27-24 = 0010 is data processing
-        (0xE1C0_00D0, Kind::Unhandled),               // LDRD: L = 0 with SH = 10 (#14)
-        (0xE1C0_00F0, Kind::Unhandled),               // STRD: L = 0 with SH = 11 (#14)
+        (0xE1C0_00D0, Kind::Unhandled),               // LDRD: L = 0 with SH = 10 (ARM9 only)
+        (0xE1C0_00F0, Kind::Unhandled),               // STRD: L = 0 with SH = 11 (ARM9 only)
         (0xE890_0003, Kind::BlockTransfer),           // LDMIA
         (0xE880_0003, Kind::BlockTransfer),           // STMIA
         (0xE590_1004, Kind::SingleTransferImmediate), // LDR with an immediate offset
@@ -196,8 +228,8 @@ mod tests {
         (0x0A00_0000, Kind::Branch),         // BEQ
         (0xE12F_FF11, Kind::BranchExchange), // BX R1
         (0xE12F_FF10, Kind::BranchExchange), // BX R0 with bits 3-0 = 0 (Rn = R0)
-        (0xE12F_FF31, Kind::Unhandled),      // BLX register (#14), not BX
-        (0xE16F_0F11, Kind::Unhandled),      // CLZ (#14), not BX
+        (0xE12F_FF31, Kind::Unhandled),      // BLX register is the ARM9's, not BX
+        (0xE16F_0F11, Kind::Unhandled),      // CLZ is the ARM9's, not BX
         // Exceptions (`docs/hw/arm-exceptions-modes.md`): SWI is bits 27-24 = 1111; the
         // undefined space is bits 27-25 = 011 with bit 4 = 1; the coprocessor instructions are
         // bits 27-25 = 110 and bits 27-24 = 1110.
@@ -219,7 +251,7 @@ mod tests {
     fn classification_failures() -> Vec<(u32, Kind, Kind)> {
         CASES
             .iter()
-            .map(|&(word, want)| (word, want, decode(word)))
+            .map(|&(word, want)| (word, want, decode::<false>(word)))
             .filter(|(_, want, got)| want != got)
             .collect()
     }

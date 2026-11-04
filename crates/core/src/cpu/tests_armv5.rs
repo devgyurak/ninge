@@ -248,3 +248,146 @@ fn given_an_arm7_thumb_pop_pc_when_the_popped_bit_0_is_clear_then_the_core_stays
     let r = thumb::<false>(&[(13, 0x100)], &[(0x100, 0x4000)], POP_PC);
     assert!(r.thumb());
 }
+
+// ---------------------------------------------------------------- BLX
+
+/// R14.
+const LR: usize = 14;
+/// BLX R1 in ARM state, with condition AL and with condition NE.
+const BLX_R1: u32 = 0xE12F_FF31;
+const BLX_R1_NE: u32 = 0x112F_FF31;
+const BLX_LR: u32 = 0xE12F_FF3E;
+/// Thumb BLX R1 (`0100 0111 1 Rm 000`).
+const THUMB_BLX_R1: u16 = 0x4788;
+/// BLX immediate: condition field 1111, bits 27–25 = 101, H in bit 24.
+const BLX_PLUS_0: u32 = 0xFA00_0000;
+const BLX_PLUS_0_H: u32 = 0xFB00_0000;
+const BLX_MINUS_8: u32 = 0xFAFF_FFFE;
+/// Thumb BLX suffix (`11101 offset11`) with offset 4 and with offset 2.
+const THUMB_BLX_SUFFIX_4: u16 = 0xE804;
+const THUMB_BLX_SUFFIX_2: u16 = 0xE802;
+/// Thumb BL/BLX prefix with offset 1 (LR = R15 + 0x1000).
+const THUMB_PREFIX_1: u16 = 0xF001;
+
+#[test]
+fn given_an_arm9_blx_immediate_when_executed_then_it_links_enters_thumb_and_jumps_to_r15_plus_the_offset()
+ {
+    let r = arm::<true>(&[], &[], BLX_PLUS_0);
+    assert_eq!(
+        (r.thumb(), r.r(LR), r.r(15), r.cpu.pipeline()),
+        (true, ADDR + 4, 0x100C, [0x1008, 0x100A])
+    );
+}
+
+#[test]
+fn given_an_arm9_blx_immediate_when_h_is_set_then_the_target_is_a_halfword_further() {
+    let r = arm::<true>(&[], &[], BLX_PLUS_0_H);
+    assert_eq!((r.r(15), r.cpu.pipeline()), (0x100E, [0x100A, 0x100C]));
+}
+
+#[test]
+fn given_an_arm9_blx_immediate_when_the_offset_is_negative_then_the_target_is_before_r15() {
+    let r = arm::<true>(&[], &[], BLX_MINUS_8);
+    assert_eq!((r.thumb(), r.cpu.pipeline()), (true, [0x1000, 0x1002]));
+}
+
+#[test]
+fn given_an_arm9_blx_immediate_when_every_flag_is_set_then_it_still_executes() {
+    let r = run::<true>(SVC | NZCV, &[], &[], BLX_PLUS_0);
+    assert_eq!((r.thumb(), r.r(LR)), (true, ADDR + 4));
+}
+
+#[test]
+fn given_an_arm7_word_with_condition_1111_when_executed_then_nothing_happens_but_the_advance() {
+    let r = arm::<false>(&[(LR, 0x77)], &[], BLX_PLUS_0);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (false, 0x77, 0x100C));
+}
+
+#[test]
+fn given_an_arm9_blx_register_when_bit_0_is_set_then_it_links_and_enters_thumb() {
+    let r = arm::<true>(&[(1, 0x2001)], &[], BLX_R1);
+    assert_eq!(
+        (r.thumb(), r.r(LR), r.r(15), r.cpu.pipeline()),
+        (true, ADDR + 4, 0x2004, [0x2000, 0x2002])
+    );
+}
+
+#[test]
+fn given_an_arm9_blx_register_when_bit_0_is_clear_then_it_links_and_stays_in_arm_state() {
+    let r = arm::<true>(&[(1, 0x2000)], &[], BLX_R1);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (false, ADDR + 4, 0x2008));
+}
+
+#[test]
+fn given_an_arm9_blx_lr_when_executed_then_the_old_lr_is_the_target() {
+    let r = arm::<true>(&[(LR, 0x2001)], &[], BLX_LR);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (true, ADDR + 4, 0x2004));
+}
+
+#[test]
+fn given_an_arm9_blx_register_when_its_condition_fails_then_nothing_happens_but_the_advance() {
+    let r = run::<true>(SVC | Z, &[(1, 0x2001), (LR, 0x77)], &[], BLX_R1_NE);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (false, 0x77, 0x100C));
+}
+
+#[test]
+fn given_an_arm7_blx_register_word_when_executed_then_nothing_happens_but_the_advance() {
+    let r = arm::<false>(&[(1, 0x2001), (LR, 0x77)], &[], BLX_R1);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (false, 0x77, 0x100C));
+}
+
+#[test]
+fn given_an_arm9_thumb_blx_register_when_bit_0_is_clear_then_it_links_with_bit_0_set_and_enters_arm_state()
+ {
+    let r = thumb::<true>(&[(1, 0x2000)], &[], THUMB_BLX_R1);
+    assert_eq!(
+        (r.thumb(), r.r(LR), r.r(15), r.cpu.pipeline()),
+        (false, ADDR + 3, 0x2008, [0x2000, 0x2004])
+    );
+}
+
+#[test]
+fn given_an_arm9_thumb_blx_register_when_bit_0_is_set_then_it_links_and_stays_in_thumb() {
+    let r = thumb::<true>(&[(1, 0x2001)], &[], THUMB_BLX_R1);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (true, ADDR + 3, 0x2004));
+}
+
+#[test]
+fn given_an_arm7_thumb_bx_with_h1_set_when_executed_then_it_branches_without_linking() {
+    let r = thumb::<false>(&[(1, 0x2001), (LR, 0x77)], &[], THUMB_BLX_R1);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (true, 0x77, 0x2004));
+}
+
+#[test]
+fn given_an_arm9_thumb_blx_suffix_when_executed_then_it_jumps_word_aligned_in_arm_state() {
+    let r = thumb::<true>(&[(LR, 0x2002)], &[], THUMB_BLX_SUFFIX_4);
+    assert_eq!(
+        (r.thumb(), r.r(LR), r.r(15), r.cpu.pipeline()),
+        (false, ADDR + 3, 0x2010, [0x2008, 0x200C])
+    );
+}
+
+#[test]
+fn given_an_arm9_thumb_prefix_and_blx_suffix_when_both_execute_then_lr_returns_past_the_pair() {
+    let mut cpu = Cpu::<true>::new();
+    cpu.regs_mut().set_cpsr(SVC | T_BIT);
+    cpu.regs_mut().set(15, ADDR + 4);
+    cpu.set_pipeline([u32::from(THUMB_PREFIX_1), u32::from(THUMB_BLX_SUFFIX_2)]);
+    let mut bus = Mem::new(&[]);
+    cpu.step(&mut bus);
+    cpu.step(&mut bus);
+    assert_eq!(
+        (
+            cpu.regs().cpsr() & T_BIT,
+            cpu.regs().get(LR),
+            cpu.regs().get(15)
+        ),
+        (0, ADDR + 5, 0x2010)
+    );
+}
+
+#[test]
+fn given_an_arm7_thumb_blx_suffix_when_executed_then_nothing_happens_but_the_advance() {
+    let r = thumb::<false>(&[(LR, 0x2002)], &[], THUMB_BLX_SUFFIX_4);
+    assert_eq!((r.thumb(), r.r(LR), r.r(15)), (true, 0x2002, ADDR + 6));
+}

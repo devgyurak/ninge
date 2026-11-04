@@ -73,6 +73,8 @@ const ARM_SH: u32 = 5;
 /// The register-list bits of LR (PUSH) and PC (POP).
 const LIST_LR: u32 = 14;
 const LIST_PC: u32 = 15;
+/// The BLX suffix clears the low two bits of its target.
+const BLX_WORD_ALIGN: u32 = !3;
 /// Format 6 and 12 use the PC with bit 1 cleared.
 const PC_WORD_ALIGN: u32 = !2;
 
@@ -88,13 +90,14 @@ impl<const ARM9: bool> Cpu<ARM9> {
         let word = u32::from(halfword);
         let fetched = bus.fetch16(self.regs.get(15));
         self.pipeline = [self.pipeline[1], u32::from(fetched)];
-        let wrote_pc = match decode(halfword) {
+        let wrote_pc = match decode::<ARM9>(halfword) {
             ThumbKind::ShiftImmediate => self.shift_by_immediate(word),
             ThumbKind::AddSub => self.add_sub(word),
             ThumbKind::Immediate => self.immediate(word),
             ThumbKind::Alu => self.alu_register(word),
             ThumbKind::HiRegister => self.hi_register(word),
             ThumbKind::BranchExchange => self.branch_exchange_thumb(word),
+            ThumbKind::BranchLinkExchange => self.branch_link_exchange_thumb(word),
             ThumbKind::LoadPc => self.load_pc(bus, word),
             ThumbKind::TransferRegister => {
                 let arm = ARM_SINGLE_REGISTER
@@ -170,6 +173,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
             ThumbKind::Branch => self.branch_thumb(word),
             ThumbKind::LongBranchPrefix => self.long_branch_prefix(word),
             ThumbKind::LongBranchSuffix => self.long_branch_suffix(word),
+            ThumbKind::LongBranchExchangeSuffix => self.long_branch_exchange_suffix(word),
             ThumbKind::Unhandled => false,
         };
         // A write to the PC flushes the pipeline; everything else steps to the next instruction.
@@ -352,8 +356,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // wants Rd bits zero, but the suite shows R15 keeping bit 1 and non-zero Rd bits running as
     // BX (1,607 cases with the alignment tried). We follow the suite
     // (`docs/hw/thumb.md`, "Unverified").
-    // TODO(hw-unverified): H1 = 1 runs as BX here although it is BLX on ARMv5; the suite shows
-    // it on ARMv4T (`docs/hw/thumb.md`, "Unverified").
+    // TODO(hw-unverified): H1 = 1 runs as BX here on the ARM7; the suite shows it on ARMv4T
+    // (`docs/hw/thumb.md`, "Unverified"). The ARM9 decodes it as BLX.
     fn branch_exchange_thumb(&mut self, word: u32) -> bool {
         let target = self.operand(word >> 3 & 0xF, 0);
         self.exchange_to(target)
@@ -437,6 +441,22 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.regs.set(LR, next | 1);
         self.write_pc(target);
         true
+    }
+
+    /// Format 19, second halfword of BLX (ARM9; `docs/hw/armv5te.md`, "BLX"): like the BL suffix,
+    /// but the target is word aligned and the core enters ARM state.
+    // TODO(hw-unverified): offset bit 0 set is dropped by the alignment
+    // (`docs/hw/armv5te.md`, "Unverified").
+    fn long_branch_exchange_suffix(&mut self, word: u32) -> bool {
+        let next = self.regs.get(15).wrapping_sub(THUMB_HALFWORD);
+        let target = self
+            .regs
+            .get(LR)
+            .wrapping_add((word & 0x7FF) << HALFWORD_SHIFT)
+            & BLX_WORD_ALIGN;
+        self.regs.set(LR, next | 1);
+        // Bit 0 of the aligned target is 0, which selects ARM state.
+        self.exchange_to(target)
     }
 }
 

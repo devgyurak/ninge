@@ -39,7 +39,8 @@ pub(crate) fn condition_holds(cond: u32, cpsr: u32) -> bool {
         12 => !z && n == v,
         13 => z || n != v,
         14 => true,
-        // TODO(phase1): condition 0xF is reserved; ARMv5TE gives it meaning for BLX (#14).
+        // Condition 0xF never holds. The ARM9 does not ask: it decodes such a word in the
+        // unconditional space (`decode.rs`; `docs/hw/armv5te.md`).
         _ => false,
     }
 }

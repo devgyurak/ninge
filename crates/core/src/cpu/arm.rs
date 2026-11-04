@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! ARM-state execution: data processing and PSR transfer (#8), multiply (#9). Notes:
+//! ARM-state execution: data processing and PSR transfer (#8), multiply (#9); loads and stores
+//! are in `arm_transfer.rs` (#10). Notes:
 //! `docs/hw/arm-data-processing.md`, `docs/hw/arm-barrel-shifter.md`,
 //! `docs/hw/arm-multiply.md`.
 
@@ -20,6 +21,9 @@ const PC_READ_OFFSET: u32 = 8;
 const REGISTER_SHIFT_EXTRA: u32 = 4;
 /// A multiply's R15 operand reads this far ahead again (the suite: address + 12).
 const MULTIPLY_OPERAND_EXTRA: u32 = 4;
+/// A store reads R15 this far ahead again when it is the stored register (the suite: address +
+/// 12, as GBATEK says).
+const STORE_OPERAND_EXTRA: u32 = 4;
 /// Size of an ARM instruction.
 const ARM_WORD: u32 = 4;
 
@@ -37,6 +41,12 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 Kind::MsrImmediate | Kind::MsrRegister => self.msr(word),
                 Kind::Multiply => self.multiply(word),
                 Kind::MultiplyLong => self.multiply_long(word),
+                Kind::SingleTransferImmediate | Kind::SingleTransferRegister => {
+                    self.single_transfer(bus, word)
+                }
+                Kind::HalfwordTransfer => self.halfword_transfer(bus, word),
+                Kind::Swap => self.swap(bus, word),
+                Kind::BlockTransfer => self.block_transfer(bus, word),
                 Kind::Unhandled => false,
             };
         // A write to the PC already moved it; everything else, including a failed condition,
@@ -50,9 +60,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
     //
     // The JSON suite's convention: while an instruction executes R15 is its address + 8, a
     // step that does not write the PC ends with R15 + 4, and an ALU result written to R15 ends
-    // as the value + 8. Everything that depends on it is in this section and in the four
+    // as the value + 8. Everything that depends on it is in this section and in the five
     // constants above the `impl` (`PC_READ_OFFSET`, `REGISTER_SHIFT_EXTRA`,
-    // `MULTIPLY_OPERAND_EXTRA`, `ARM_WORD`);
+    // `MULTIPLY_OPERAND_EXTRA`, `STORE_OPERAND_EXTRA`, `ARM_WORD`);
     // #11 replaces the section and `operand` with the real pipeline.
 
     /// The address `step_arm` fetches from: R15 less the interim read-ahead.
@@ -69,7 +79,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// low bits stay as written.
     // TODO(hw-unverified): the low two bits of an ALU result in R15 are kept unaligned because
     // the suite does (`docs/hw/arm-data-processing.md`, "Unverified").
-    fn write_pc(&mut self, value: u32) {
+    pub(super) fn write_pc(&mut self, value: u32) {
         self.regs.set(15, value.wrapping_add(PC_READ_OFFSET));
     }
 
@@ -83,12 +93,17 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// A register as an instruction reads it. R15 holds the executing address + 8 under the
     /// interim convention, and reads `extra` further ahead (the register-shift form).
-    fn operand(&self, index: u32, extra: u32) -> u32 {
+    pub(super) fn operand(&self, index: u32, extra: u32) -> u32 {
         let value = self.regs.get(index as usize);
         match index {
             15 => value.wrapping_add(extra),
             _ => value,
         }
+    }
+
+    /// A register as a store writes it: R15 reads `STORE_OPERAND_EXTRA` further ahead.
+    pub(super) fn store_operand(&self, index: u32) -> u32 {
+        self.operand(index, STORE_OPERAND_EXTRA)
     }
 
     // ---- End of the interim PC convention ----------------------------------------------

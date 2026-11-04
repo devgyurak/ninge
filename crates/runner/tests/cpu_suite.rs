@@ -692,3 +692,783 @@ fn given_long_multiplies_with_rdhi_equal_rdlo_when_comparing_then_the_register_h
 {
     assert_eq!(long_multiply_equal_halves_problems(), Vec::<String>::new());
 }
+
+// ---- #10 loads and stores: facts measured on the pinned suite (MIT) ------------------------
+//
+// Each pins one fact `docs/hw/arm-load-store.md` cites as "measured". The cases are the ones
+// whose condition passes and that run in User/System mode, so `r` is the visible register file.
+
+/// Cases of `file` that execute, run in User/System mode, and satisfy `keep`.
+fn executed_cases(file: &str, keep: impl Fn(&Case) -> bool) -> Vec<Case> {
+    cases_of(file)
+        .into_iter()
+        .filter(|c| condition_passes(c) && is_user_or_system(c) && keep(c))
+        .collect()
+}
+
+/// The data transactions of a case as (kind, size, address, data): kind 1 read, 2 write.
+fn data_transactions(case: &Case) -> Vec<(u32, u32, u32, u32)> {
+    case.transactions
+        .iter()
+        .filter(|t| t.kind != 0)
+        .map(|t| (t.kind, t.size, t.addr, t.data))
+        .collect()
+}
+
+/// A guard so a fact cannot pass by matching no case: at least `least` cases were checked.
+fn too_few(label: &str, checked: usize, least: usize) -> Option<String> {
+    (checked < least).then(|| format!("{label}: only {checked} cases, want {least}"))
+}
+
+/// The effective address of a single or halfword transfer with an immediate or register
+/// offset (Rm < 15); `None` for forms this helper does not model.
+fn transfer_address(case: &Case, halfword: bool) -> Option<u32> {
+    let o = case.opcode;
+    let base = case.initial.r[(o >> 16 & 0xF) as usize];
+    let offset = match (halfword, o >> 22 & 1 == 1, o >> 25 & 1 == 1) {
+        (false, _, false) => o & 0xFFF,
+        (true, true, _) => (o >> 4 & 0xF0) | (o & 0xF),
+        (true, false, _) if o & 0xF < 15 => case.initial.r[(o & 0xF) as usize],
+        _ => return None,
+    };
+    let moved = match o >> 23 & 1 {
+        1 => base.wrapping_add(offset),
+        _ => base.wrapping_sub(offset),
+    };
+    Some(match o >> 24 & 1 {
+        1 => moved,
+        _ => base, // post-indexed: the access uses the unmodified base
+    })
+}
+
+/// Problems with "the transaction address is the raw effective address, low bits included".
+fn raw_address_problems(file: &str, halfword: bool, unaligned_size: u32) -> Vec<String> {
+    let cases = executed_cases(file, |c| c.opcode >> 16 & 0xF != 15);
+    let mut problems = Vec::new();
+    let mut unaligned = 0;
+    for case in &cases {
+        let (Some(ea), Some(&(_, size, addr, _))) = (
+            transfer_address(case, halfword),
+            data_transactions(case).first(),
+        ) else {
+            continue;
+        };
+        unaligned += usize::from(size == unaligned_size && ea % size != 0);
+        if addr != ea {
+            problems.push(format!(
+                "{file} {:#010x}: {addr:#x} is not {ea:#x}",
+                case.opcode
+            ));
+        }
+    }
+    problems.extend(too_few(file, unaligned, 20));
+    problems
+}
+
+#[test]
+fn given_unaligned_ldr_and_str_when_comparing_then_the_transaction_address_is_the_raw_address() {
+    assert_eq!(
+        raw_address_problems("arm_ldr_str_immediate_offset.json.bin", false, 4),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn given_unaligned_ldrh_and_strh_when_comparing_then_the_transaction_address_is_the_raw_address() {
+    assert_eq!(
+        raw_address_problems("arm_ldrh_strh.json.bin", true, 2),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn given_unaligned_ldrsh_when_comparing_then_the_transaction_address_is_the_raw_address() {
+    assert_eq!(
+        raw_address_problems("arm_ldrsb_ldrsh.json.bin", true, 2),
+        Vec::<String>::new()
+    );
+}
+
+/// Rd after a load, for a case that is not a load into its own written-back base.
+fn loaded_register(case: &Case) -> u32 {
+    case.expected.r[(case.opcode >> 12 & 0xF) as usize]
+}
+
+/// A load whose Rd is neither R15 nor a base that the same instruction writes back.
+fn plain_load(c: &Case) -> bool {
+    let o = c.opcode;
+    let (rn, rd) = (o >> 16 & 0xF, o >> 12 & 0xF);
+    o >> 20 & 1 == 1 && rn != 15 && rd < 15 && !(rn == rd && (o >> 21 & 1 == 1 || o >> 24 & 1 == 0))
+}
+
+/// Problems with "Rd = the read data rotated right by 8 × (address & 3)" for LDR (and zero
+/// extended for LDRB), where the recorded read is at the raw address.
+fn ldr_rotation_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldr_str_immediate_offset.json.bin", |c| {
+        plain_load(c) && c.opcode >> 25 & 1 == 0
+    });
+    let mut problems = Vec::new();
+    let mut rotated = 0;
+    for case in &cases {
+        let (Some(ea), Some(&(_, size, _, data))) = (
+            transfer_address(case, false),
+            data_transactions(case).first(),
+        ) else {
+            continue;
+        };
+        let want = match size {
+            4 => data.rotate_right(8 * (ea & 3)),
+            _ => data,
+        };
+        rotated += usize::from(size == 4 && ea & 3 != 0);
+        if loaded_register(case) != want {
+            problems.push(format!("{:#010x}: Rd is not {want:#x}", case.opcode));
+        }
+    }
+    problems.extend(too_few("LDR rotation", rotated, 20));
+    problems
+}
+
+/// Problems with "LDRH from an odd address gives the halfword rotated right by 8; LDRSH from an
+/// odd address gives the sign-extended byte at that address (the high byte of the halfword)".
+fn halfword_load_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldrsb_ldrsh.json.bin", plain_load)
+        .into_iter()
+        .chain(executed_cases("arm_ldrh_strh.json.bin", plain_load));
+    let mut problems = Vec::new();
+    let mut odd = [0usize; 2];
+    for case in cases {
+        let (Some(ea), Some(&(_, size, _, data))) = (
+            transfer_address(&case, true),
+            data_transactions(&case).first(),
+        ) else {
+            continue;
+        };
+        let (kind, odd_address) = (case.opcode >> 5 & 3, ea & 1 == 1);
+        let want = match (kind, size, odd_address) {
+            (1, _, false) => data,
+            (1, _, true) => data.rotate_right(8),
+            (2, _, _) => i32::from(data as u8 as i8) as u32,
+            (3, _, false) => i32::from(data as u16 as i16) as u32,
+            _ => i32::from((data >> 8) as u8 as i8) as u32,
+        };
+        odd[0] += usize::from(kind == 1 && odd_address);
+        odd[1] += usize::from(kind == 3 && odd_address);
+        if loaded_register(&case) != want {
+            problems.push(format!("{:#010x}: Rd is not {want:#x}", case.opcode));
+        }
+    }
+    problems.extend(too_few("LDRH odd", odd[0], 20));
+    problems.extend(too_few("LDRSH odd", odd[1], 20));
+    problems
+}
+
+#[test]
+fn given_unaligned_ldr_when_comparing_then_rd_is_the_read_data_rotated_right_by_8_times_the_low_bits()
+ {
+    assert_eq!(ldr_rotation_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_odd_address_ldrh_and_ldrsh_when_comparing_then_rd_is_the_rotated_halfword_and_the_sign_extended_byte()
+ {
+    assert_eq!(halfword_load_problems(), Vec::<String>::new());
+}
+
+/// Problems with "a store writes Rd unrotated": the word, the low halfword, or the low byte.
+fn store_data_problems() -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut unaligned = 0;
+    for (file, halfword) in [
+        ("arm_ldr_str_immediate_offset.json.bin", false),
+        ("arm_ldrh_strh.json.bin", true),
+    ] {
+        let cases = executed_cases(file, |c| {
+            let o = c.opcode;
+            o >> 20 & 1 == 0 && o >> 16 & 0xF != 15 && o >> 12 & 0xF != 15
+        });
+        for case in &cases {
+            let (Some(ea), Some(&(_, size, _, data))) = (
+                transfer_address(case, halfword),
+                data_transactions(case).first(),
+            ) else {
+                continue;
+            };
+            let rd = case.initial.r[(case.opcode >> 12 & 0xF) as usize];
+            let want = match size {
+                1 => rd & 0xFF,
+                2 => rd & 0xFFFF,
+                _ => rd,
+            };
+            unaligned += usize::from(size > 1 && ea % size != 0);
+            if data != want {
+                problems.push(format!(
+                    "{file} {:#010x}: wrote {data:#x}, not {want:#x}",
+                    case.opcode
+                ));
+            }
+        }
+    }
+    problems.extend(too_few("unaligned stores", unaligned, 40));
+    problems
+}
+
+#[test]
+fn given_unaligned_str_and_strh_when_comparing_then_the_written_data_is_rd_unrotated() {
+    assert_eq!(store_data_problems(), Vec::<String>::new());
+}
+
+/// The first address of an LDM/STM run for base `base` and `n` registers (P and U from the opcode).
+fn block_start(opcode: u32, base: u32, n: u32) -> u32 {
+    match (opcode >> 24 & 1, opcode >> 23 & 1) {
+        (0, 1) => base,
+        (1, 1) => base.wrapping_add(4),
+        (0, _) => base.wrapping_sub(4 * n).wrapping_add(4),
+        _ => base.wrapping_sub(4 * n),
+    }
+}
+
+/// Problems with "block transfers use raw addresses: register i is at start + 4i with the low
+/// bits of the base kept, and writeback adds or subtracts 4n to the raw base".
+fn block_address_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let rn = (c.opcode >> 16 & 0xF) as usize;
+        c.opcode & 0xFFFF != 0 && rn != 15 && c.opcode >> 15 & 1 == 0
+    });
+    let mut problems = Vec::new();
+    let (mut unaligned, mut written_back) = (0, 0);
+    for case in &cases {
+        let o = case.opcode;
+        let (rn, n) = ((o >> 16 & 0xF) as usize, (o & 0xFFFF).count_ones());
+        let base = case.initial.r[rn];
+        let start = block_start(o, base, n);
+        let addresses: Vec<u32> = data_transactions(case).iter().map(|t| t.2).collect();
+        let want: Vec<u32> = (0..n).map(|i| start.wrapping_add(4 * i)).collect();
+        unaligned += usize::from(base & 3 != 0);
+        if addresses != want {
+            problems.push(format!(
+                "{o:#010x}: addresses {addresses:x?}, not {want:x?}"
+            ));
+        }
+        let moved = match o >> 23 & 1 {
+            1 => base.wrapping_add(4 * n),
+            _ => base.wrapping_sub(4 * n),
+        };
+        let in_list = o >> rn & 1 == 1;
+        written_back += usize::from(o >> 21 & 1 == 1 && !in_list);
+        if o >> 21 & 1 == 1 && !in_list && case.expected.r[rn] != moved {
+            problems.push(format!("{o:#010x}: base is not {moved:#x}"));
+        }
+    }
+    problems.extend(too_few("block unaligned base", unaligned, 100));
+    problems.extend(too_few("block writeback", written_back, 100));
+    problems
+}
+
+#[test]
+fn given_ldm_and_stm_with_an_unaligned_base_when_comparing_then_every_address_and_the_writeback_are_raw()
+ {
+    assert_eq!(block_address_problems(), Vec::<String>::new());
+}
+
+/// Problems with "SWP reads the raw address, rotates the word, and writes Rm unrotated (the
+/// low byte for SWPB) to the same raw address".
+fn swap_problems() -> Vec<String> {
+    let cases = executed_cases("arm_swp.json.bin", |c| {
+        let o = c.opcode;
+        o >> 16 & 0xF != 15 && o >> 12 & 0xF != 15 && o & 0xF != 15
+    });
+    let mut problems = Vec::new();
+    let mut unaligned = 0;
+    for case in &cases {
+        let o = case.opcode;
+        let ea = case.initial.r[(o >> 16 & 0xF) as usize];
+        let transactions = data_transactions(case);
+        let ((_, _, read_at, read), (_, _, write_at, written)) = (transactions[0], transactions[1]);
+        let byte = o >> 22 & 1 == 1;
+        let rm = case.initial.r[(o & 0xF) as usize];
+        let (want_rd, want_write) = match byte {
+            true => (read, rm & 0xFF),
+            false => (read.rotate_right(8 * (ea & 3)), rm),
+        };
+        unaligned += usize::from(!byte && ea & 3 != 0);
+        let ok = transactions.len() == 2
+            && (read_at, write_at) == (ea, ea)
+            && written == want_write
+            && loaded_register(case) == want_rd;
+        if !ok {
+            problems.push(format!(
+                "{o:#010x}: not (raw address, rotated read, unrotated write)"
+            ));
+        }
+    }
+    problems.extend(too_few("SWP unaligned", unaligned, 100));
+    problems
+}
+
+#[test]
+fn given_swp_with_an_unaligned_address_when_comparing_then_both_accesses_are_raw_and_only_the_read_is_rotated()
+ {
+    assert_eq!(swap_problems(), Vec::<String>::new());
+}
+
+/// Problems with "R15 as a base reads address + 8, as a stored value reads address + 12, and a
+/// load into R15 ends with R15 = value + 8 (the low bits kept)".
+fn single_r15_problems() -> Vec<String> {
+    let file = "arm_ldr_str_immediate_offset.json.bin";
+    let mut problems = Vec::new();
+    let as_base = executed_cases(file, |c| {
+        c.opcode >> 16 & 0xF == 15 && c.opcode >> 25 & 1 == 0
+    });
+    let stored = executed_cases(file, |c| {
+        c.opcode >> 20 & 1 == 0 && c.opcode >> 12 & 0xF == 15 && c.opcode >> 16 & 0xF != 15
+    });
+    let loaded = executed_cases(file, |c| {
+        c.opcode >> 20 & 1 == 1
+            && c.opcode >> 22 & 1 == 0
+            && c.opcode >> 12 & 0xF == 15
+            && c.opcode >> 16 & 0xF != 15
+            && c.opcode >> 25 & 1 == 0
+            && c.opcode >> 24 & 1 == 1
+            && c.opcode >> 21 & 1 == 0
+    });
+    for case in &as_base {
+        let o = case.opcode;
+        let base = case.base_addr.wrapping_add(8);
+        let off = o & 0xFFF;
+        let moved = match o >> 23 & 1 {
+            1 => base.wrapping_add(off),
+            _ => base.wrapping_sub(off),
+        };
+        let want = match o >> 24 & 1 {
+            1 => moved,
+            _ => base,
+        };
+        let got = data_transactions(case)[0].2;
+        if got != want {
+            problems.push(format!("{o:#010x}: base access at {got:#x}, not {want:#x}"));
+        }
+    }
+    for case in &stored {
+        let got = data_transactions(case)[0].3;
+        let want = case.base_addr.wrapping_add(12);
+        let want = match case.opcode >> 22 & 1 {
+            1 => want & 0xFF,
+            _ => want,
+        };
+        if got != want {
+            problems.push(format!(
+                "{:#010x}: stored {got:#x}, not {want:#x}",
+                case.opcode
+            ));
+        }
+    }
+    for case in &loaded {
+        let o = case.opcode;
+        let ea = transfer_address(case, false).expect("immediate form");
+        let value = data_transactions(case)[0].3.rotate_right(8 * (ea & 3));
+        if case.expected.r[15] != value.wrapping_add(8) {
+            problems.push(format!("{o:#010x}: R15 is not {value:#x} + 8"));
+        }
+    }
+    problems.extend(too_few("R15 base", as_base.len(), 100));
+    problems.extend(too_few("R15 stored", stored.len(), 100));
+    problems.extend(too_few("R15 loaded", loaded.len(), 20));
+    problems
+}
+
+#[test]
+fn given_single_transfers_with_r15_when_comparing_then_base_reads_plus_8_store_reads_plus_12_and_a_load_ends_at_value_plus_8()
+ {
+    assert_eq!(single_r15_problems(), Vec::<String>::new());
+}
+
+/// Problems with "a load into its own written-back base keeps the loaded value".
+fn load_into_base_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldr_str_immediate_offset.json.bin", |c| {
+        let o = c.opcode;
+        let rn = o >> 16 & 0xF;
+        o >> 20 & 1 == 1
+            && o >> 22 & 1 == 0
+            && o >> 25 & 1 == 0
+            && rn == o >> 12 & 0xF
+            && rn < 15
+            && (o >> 21 & 1 == 1 || o >> 24 & 1 == 0)
+    });
+    let problems: Vec<String> = cases
+        .iter()
+        .filter(|c| {
+            let ea = transfer_address(c, false).expect("immediate form");
+            let value = data_transactions(c)[0].3.rotate_right(8 * (ea & 3));
+            loaded_register(c) != value
+        })
+        .map(|c| format!("{:#010x}: Rd = Rn did not keep the loaded value", c.opcode))
+        .collect();
+    problems
+        .into_iter()
+        .chain(too_few("load into base", cases.len(), 50))
+        .collect()
+}
+
+#[test]
+fn given_ldr_with_rd_equal_to_a_written_back_rn_when_comparing_then_the_loaded_value_wins() {
+    assert_eq!(load_into_base_problems(), Vec::<String>::new());
+}
+
+/// Problems with the base register in the list: LDM writes back nothing (the loaded value
+/// stays); STM stores the old base when it is the first register and the new base otherwise.
+fn base_in_list_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let o = c.opcode;
+        let rn = (o >> 16 & 0xF) as usize;
+        rn < 15 && o >> 21 & 1 == 1 && o >> 22 & 1 == 0 && o >> rn & 1 == 1 && o >> 15 & 1 == 0
+    });
+    let mut problems = Vec::new();
+    let (mut loads, mut first, mut later) = (0, 0, 0);
+    for case in &cases {
+        let o = case.opcode;
+        let rn = (o >> 16 & 0xF) as usize;
+        let n = (o & 0xFFFF).count_ones();
+        let base = case.initial.r[rn];
+        let moved = match o >> 23 & 1 {
+            1 => base.wrapping_add(4 * n),
+            _ => base.wrapping_sub(4 * n),
+        };
+        let index = (o & ((1 << rn) - 1)).count_ones() as usize;
+        let transaction = data_transactions(case)[index];
+        match o >> 20 & 1 {
+            1 => {
+                loads += 1;
+                if case.expected.r[rn] != transaction.3 {
+                    problems.push(format!("{o:#010x}: LDM base is not the loaded value"));
+                }
+            }
+            _ => {
+                let is_first = index == 0;
+                first += usize::from(is_first);
+                later += usize::from(!is_first);
+                let want = if is_first { base } else { moved };
+                if transaction.3 != want || case.expected.r[rn] != moved {
+                    problems.push(format!(
+                        "{o:#010x}: STM stored {:#x}, not {want:#x}",
+                        transaction.3
+                    ));
+                }
+            }
+        }
+    }
+    problems.extend(too_few("LDM base in list", loads, 100));
+    problems.extend(too_few("STM base first", first, 20));
+    problems.extend(too_few("STM base later", later, 100));
+    problems
+}
+
+#[test]
+fn given_ldm_and_stm_with_the_base_in_the_list_when_comparing_then_ldm_keeps_the_loaded_value_and_stm_stores_old_only_when_first()
+ {
+    assert_eq!(base_in_list_problems(), Vec::<String>::new());
+}
+
+/// Problems with "STM and LDM with R15 in the list: R15 is stored as address + 12, and an LDM
+/// that loads it ends with R15 = value + 8 (the low bits kept)".
+fn block_r15_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let o = c.opcode;
+        o >> 15 & 1 == 1 && o >> 16 & 0xF != 15
+    });
+    let mut problems = Vec::new();
+    let (mut stores, mut loads) = (0, 0);
+    for case in &cases {
+        let o = case.opcode;
+        let n = (o & 0xFFFF).count_ones() as usize;
+        let last = data_transactions(case)[n - 1];
+        match o >> 20 & 1 {
+            0 => {
+                stores += 1;
+                if last.3 != case.base_addr.wrapping_add(12) {
+                    problems.push(format!("{o:#010x}: stored R15 {:#x}", last.3));
+                }
+            }
+            _ => {
+                loads += 1;
+                if case.expected.r[15] != last.3.wrapping_add(8) {
+                    problems.push(format!("{o:#010x}: R15 is not the loaded value + 8"));
+                }
+            }
+        }
+    }
+    problems.extend(too_few("STM R15", stores, 100));
+    problems.extend(too_few("LDM R15", loads, 100));
+    problems
+}
+
+#[test]
+fn given_block_transfers_with_r15_in_the_list_when_comparing_then_stm_stores_plus_12_and_ldm_ends_at_value_plus_8()
+ {
+    assert_eq!(block_r15_problems(), Vec::<String>::new());
+}
+
+/// Problems with "STRH with Rd = R15 stores address + 12 (the low halfword)".
+fn strh_r15_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldrh_strh.json.bin", |c| {
+        let o = c.opcode;
+        o >> 20 & 1 == 0 && o >> 5 & 3 == 1 && o >> 12 & 0xF == 15 && o >> 16 & 0xF != 15
+    });
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| data_transactions(c)[0].3 != c.base_addr.wrapping_add(12) & 0xFFFF)
+        .map(|c| format!("{:#010x}: STRH R15 did not store address + 12", c.opcode))
+        .collect();
+    problems.extend(too_few("STRH R15", cases.len(), 100));
+    problems
+}
+
+#[test]
+fn given_strh_with_rd_r15_when_comparing_then_the_stored_halfword_is_the_address_plus_12() {
+    assert_eq!(strh_r15_problems(), Vec::<String>::new());
+}
+
+/// Problems with "a post-indexed halfword transfer with bit 21 set (W) writes back like any
+/// post-indexed form": Rn ends as the base plus or minus the immediate.
+fn halfword_post_index_w_problems() -> Vec<String> {
+    let mut problems = Vec::new();
+    for file in ["arm_ldrh_strh.json.bin", "arm_ldrsb_ldrsh.json.bin"] {
+        let cases = executed_cases(file, |c| {
+            let o = c.opcode;
+            let (rn, rd) = (o >> 16 & 0xF, o >> 12 & 0xF);
+            o >> 24 & 1 == 0 && o >> 21 & 1 == 1 && o >> 22 & 1 == 1 && rn < 15 && rd != rn
+        });
+        problems.extend(
+            cases
+                .iter()
+                .filter(|c| {
+                    let o = c.opcode;
+                    let rn = (o >> 16 & 0xF) as usize;
+                    let offset = (o >> 4 & 0xF0) | (o & 0xF);
+                    let moved = match o >> 23 & 1 {
+                        1 => c.initial.r[rn].wrapping_add(offset),
+                        _ => c.initial.r[rn].wrapping_sub(offset),
+                    };
+                    c.expected.r[rn] != moved
+                })
+                .map(|c| format!("{file} {:#010x}: P = 0, W = 1 did not write back", c.opcode)),
+        );
+        problems.extend(too_few(file, cases.len(), 100));
+    }
+    problems
+}
+
+#[test]
+fn given_halfword_transfers_with_p_0_and_w_1_when_comparing_then_rn_is_written_back_as_post_indexing_does()
+ {
+    assert_eq!(halfword_post_index_w_problems(), Vec::<String>::new());
+}
+
+/// Problems with "SWP reads an R15 Rn as address + 12 and stores an R15 Rm as address + 12".
+fn swap_r15_problems() -> Vec<String> {
+    let file = "arm_swp.json.bin";
+    let as_base = executed_cases(file, |c| {
+        c.opcode >> 16 & 0xF == 15 && c.opcode >> 12 & 0xF != 15 && c.opcode & 0xF != 15
+    });
+    let as_source = executed_cases(file, |c| {
+        c.opcode & 0xF == 15 && c.opcode >> 16 & 0xF != 15 && c.opcode >> 12 & 0xF != 15
+    });
+    let mut problems: Vec<String> = as_base
+        .iter()
+        .filter(|c| data_transactions(c)[0].2 != c.base_addr.wrapping_add(12))
+        .map(|c| format!("{:#010x}: Rn = R15 did not read address + 12", c.opcode))
+        .collect();
+    problems.extend(
+        as_source
+            .iter()
+            .filter(|c| {
+                let want = c.base_addr.wrapping_add(12);
+                let want = match c.opcode >> 22 & 1 {
+                    1 => want & 0xFF,
+                    _ => want,
+                };
+                data_transactions(c)[1].3 != want
+            })
+            .map(|c| format!("{:#010x}: Rm = R15 did not store address + 12", c.opcode)),
+    );
+    problems.extend(too_few("SWP Rn = R15", as_base.len(), 100));
+    problems.extend(too_few("SWP Rm = R15", as_source.len(), 100));
+    problems
+}
+
+#[test]
+fn given_swp_with_r15_operands_when_comparing_then_both_read_as_the_address_plus_12() {
+    assert_eq!(swap_r15_problems(), Vec::<String>::new());
+}
+
+/// Problems with "writeback to R15: a single transfer ends at the moved address + 12, a block
+/// transfer at the moved address + 8 (the base reads address + 8 in both)".
+fn r15_writeback_problems() -> Vec<String> {
+    let single = executed_cases("arm_ldr_str_immediate_offset.json.bin", |c| {
+        let o = c.opcode;
+        o >> 25 & 1 == 0
+            && o >> 16 & 0xF == 15
+            && o >> 12 & 0xF != 15
+            && (o >> 21 & 1 == 1 || o >> 24 & 1 == 0)
+    });
+    let block = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let o = c.opcode;
+        o >> 16 & 0xF == 15 && o >> 21 & 1 == 1 && o & 0xFFFF != 0 && o >> 15 & 1 == 0
+    });
+    let moved = |base: u32, up: bool, bytes: u32| match up {
+        true => base.wrapping_add(bytes),
+        false => base.wrapping_sub(bytes),
+    };
+    let mut problems: Vec<String> = single
+        .iter()
+        .filter(|c| {
+            let base = c.base_addr.wrapping_add(8);
+            let target = moved(base, c.opcode >> 23 & 1 == 1, c.opcode & 0xFFF);
+            c.expected.r[15] != target.wrapping_add(12)
+        })
+        .map(|c| format!("{:#010x}: single writeback to R15", c.opcode))
+        .collect();
+    problems.extend(
+        block
+            .iter()
+            .filter(|c| {
+                let base = c.base_addr.wrapping_add(8);
+                let bytes = 4 * (c.opcode & 0xFFFF).count_ones();
+                let target = moved(base, c.opcode >> 23 & 1 == 1, bytes);
+                c.expected.r[15] != target.wrapping_add(8)
+            })
+            .map(|c| format!("{:#010x}: block writeback to R15", c.opcode)),
+    );
+    problems.extend(too_few("single writeback to R15", single.len(), 100));
+    problems.extend(too_few("block writeback to R15", block.len(), 100));
+    problems
+}
+
+#[test]
+fn given_transfers_whose_written_back_rn_is_r15_when_comparing_then_single_ends_at_plus_12_and_block_at_plus_8()
+ {
+    assert_eq!(r15_writeback_problems(), Vec::<String>::new());
+}
+
+/// The base register `rn` (13 or 14, banked in every exception mode) as `state` sees it in the
+/// exception mode its CPSR names.
+fn exception_bank_register(state: &State, rn: usize) -> u32 {
+    match state.cpsr & 0x1F {
+        0x11 => state.r_fiq[rn - 8],
+        0x12 => state.r_irq[rn - 13],
+        0x13 => state.r_svc[rn - 13],
+        0x17 => state.r_abt[rn - 13],
+        _ => state.r_und[rn - 13],
+    }
+}
+
+/// Problems with "STM with S and W in an exception mode reads the base from the current mode's
+/// register and writes the moved base to the User-bank register".
+fn user_bank_writeback_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_ldm_stm.json.bin")
+        .into_iter()
+        .filter(|c| {
+            let o = c.opcode;
+            let rn = o >> 16 & 0xF;
+            condition_passes(c)
+                && matches!(c.initial.cpsr & 0x1F, 0x11 | 0x12 | 0x13 | 0x17 | 0x1B)
+                && o >> 20 & 1 == 0
+                && o >> 22 & 1 == 1
+                && o >> 21 & 1 == 1
+                && (13..15).contains(&rn)
+                && o >> 15 & 1 == 0
+                && o & 0xFFFF != 0
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| {
+            let o = c.opcode;
+            let rn = (o >> 16 & 0xF) as usize;
+            let bytes = 4 * (o & 0xFFFF).count_ones();
+            let base = exception_bank_register(&c.initial, rn);
+            let moved = match o >> 23 & 1 {
+                1 => base.wrapping_add(bytes),
+                _ => base.wrapping_sub(bytes),
+            };
+            c.expected.r[rn] != moved || exception_bank_register(&c.expected, rn) != base
+        })
+        .map(|c| format!("{:#010x}: S + W did not write the User-bank Rn", c.opcode))
+        .collect();
+    problems.extend(too_few("STM S + W", cases.len(), 100));
+    problems
+}
+
+#[test]
+fn given_stm_with_s_and_w_in_an_exception_mode_when_comparing_then_the_user_bank_rn_gets_the_moved_base()
+ {
+    assert_eq!(user_bank_writeback_problems(), Vec::<String>::new());
+}
+
+/// Problems with "LDM with R15 and S in User/System (no SPSR) loads R15 and leaves the CPSR".
+fn ldm_pc_without_spsr_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let o = c.opcode;
+        o >> 20 & 1 == 1 && o >> 22 & 1 == 1 && o >> 15 & 1 == 1 && o >> 16 & 0xF != 15
+    });
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.cpsr != c.initial.cpsr)
+        .map(|c| format!("{:#010x}: the CPSR changed", c.opcode))
+        .collect();
+    problems.extend(too_few("LDM^ {PC} in User/System", cases.len(), 100));
+    problems
+}
+
+#[test]
+fn given_ldm_with_r15_and_s_in_user_or_system_when_comparing_then_the_cpsr_is_unchanged() {
+    assert_eq!(ldm_pc_without_spsr_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_arm_ldr_str_immediate_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_ldr_str_immediate_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_ldr_str_register_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_ldr_str_register_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_ldrh_strh_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_ldrh_strh.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_ldrsb_ldrsh_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_ldrsb_ldrsh.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_ldm_stm_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_ldm_stm.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_swp_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_swp.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}

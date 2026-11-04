@@ -4,6 +4,7 @@
 
 mod alu;
 mod arm;
+mod arm_transfer;
 mod bus;
 mod decode;
 mod psr;
@@ -58,3 +59,6 @@ mod tests;
 
 #[cfg(test)]
 mod tests_arm;
+
+#[cfg(test)]
+mod tests_transfer;

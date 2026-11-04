@@ -10,6 +10,7 @@ mod bus;
 mod cp15;
 mod decode;
 mod disasm;
+mod disasm_thumb;
 mod exception;
 mod psr;
 mod regs;
@@ -20,6 +21,7 @@ mod thumb_decode;
 pub use bus::Bus;
 pub use cp15::{Cp15, Tcm};
 pub use disasm::{ArmDisassembly, disassemble_arm};
+pub use disasm_thumb::{ThumbDisassembly, disassemble_thumb};
 pub use regs::{Bank, Mode, Registers};
 
 use psr::FLAG_T;
@@ -121,3 +123,6 @@ mod tests_cp15;
 
 #[cfg(test)]
 mod tests_disasm;
+
+#[cfg(test)]
+mod tests_disasm_thumb;

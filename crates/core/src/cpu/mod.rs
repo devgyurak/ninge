@@ -5,6 +5,7 @@
 mod alu;
 mod arm;
 mod arm_transfer;
+mod armv5;
 mod bus;
 mod decode;
 mod exception;
@@ -103,3 +104,6 @@ mod tests_exception;
 
 #[cfg(test)]
 mod tests_thumb;
+
+#[cfg(test)]
+mod tests_armv5;

@@ -12,8 +12,8 @@ are not re-read for this note.
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm_transfer.rs`,
 `crates/core/src/cpu/bus.rs`   Phase: 1 (#10)
 
-Out of scope here, deferred with a marker at the code site: LDRD, STRD and PLD, and the ARMv5
-switch to Thumb state on a load into R15 (#14); data aborts and cycle timing. Registers and
+Out of scope here: LDRD, STRD and PLD, and the ARMv5 switch to Thumb state on a load into R15
+(`armv5te.md`); data aborts and cycle timing. Registers and
 modes are in `cpu-registers.md`; the PC reads and the refill after an R15 write are in
 `arm-branch-pipeline.md`.
 
@@ -55,8 +55,8 @@ forms always write the new address back; the T form applies only to them.
 | 7, 4 | both 1 |
 | 6-5 SH | 01 = halfword, 10 = signed byte, 11 = signed halfword; 00 is SWP |
 
-With L = 0, SH = 01 is STRH; SH = 10 and 11 are LDRD and STRD (ARMv5TE, #14), which stay
-unhandled. L = 1 with SH = 00 is the multiply or SWP space (`arm-multiply.md`). The signed forms
+With L = 0, SH = 01 is STRH; SH = 10 and 11 are LDRD and STRD (ARMv5TE, `armv5te.md`); the ARM7 does not
+execute them. L = 1 with SH = 00 is the multiply or SWP space (`arm-multiply.md`). The signed forms
 exist for loads only.
 
 ### Block data transfer (LDM, STM)
@@ -140,7 +140,7 @@ Also measured on the suite, though GBATEK does not allow R15 in these fields:
 - A halfword transfer with P = 0 and bit 21 set writes back like any post-indexed form, although
   GBATEK says that bit must be zero.
 
-The ARMv5TE switch to Thumb on a loaded bit 0 is #14; until then ARM9 behaves as ARMv4T here.
+The ARMv5TE switch to Thumb on a loaded bit 0 is in `armv5te.md`.
 
 ### Block transfers: S bit, base in the list, empty list
 
@@ -166,13 +166,13 @@ The ARMv5TE switch to Thumb on a loaded bit 0 is #14; until then ARM9 behaves as
 
 | Behavior | ARMv4T (ARM7) | ARMv5TE (ARM9) |
 |---|---|---|
-| LDR/LDM into R15 | T unchanged | bit 0 sets T (#14, not yet) |
+| LDR/LDM into R15 | T unchanged | bit 0 sets T (`armv5te.md`) |
 | Odd-address LDRH | rotated right 8 | aligned, not rotated |
 | Odd-address LDRSH | sign-extended byte | sign-extended aligned halfword |
 | STM, base in list, writeback | old base only when first | always old |
 | LDM, base in list, writeback | none | unless the base is last (and not alone) |
 | Empty list | R15 transfer and base ± 0x40 | base ± 0x40 |
-| LDRD, STRD, PLD | absent | present (#14, not yet) |
+| LDRD, STRD, PLD | absent | present (`armv5te.md`) |
 
 ## Edge cases
 

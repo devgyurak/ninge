@@ -13,7 +13,7 @@ Used by: `crates/core/src/cpu/thumb_decode.rs`, `crates/core/src/cpu/thumb.rs`
 (`step_thumb`), `crates/core/src/cpu/mod.rs` (`Cpu::step`)   Phase: 1 (#13)
 
 Out of scope here: the ARMv5 Thumb forms (the two BLX encodings, `POP {PC}` switching state on
-the ARM9, #14); cycle timing; the disassembler (#16). Registers and modes are in
+the ARM9, BKPT; `armv5te.md`); cycle timing; the disassembler (#16). Registers and modes are in
 `cpu-registers.md`; the pipeline, B/BX and the refill are in `arm-branch-pipeline.md`;
 exception entry is in `arm-exceptions-modes.md`.
 
@@ -96,7 +96,7 @@ as an unconditional branch (see "Unverified"). `off8` and `off11` are signed, si
   word-aligned address only; bits 2-0 of the instruction (Rd) must be zero. We read R15 as
   address + 4 without aligning it and ignore the Rd bits, because the suite expects exactly
   that (see "Unverified").
-- With H1 = 1 and op 3 the encoding is BLX (register) on ARMv5, which is #14's. On ARMv4T the
+- With H1 = 1 and op 3 the encoding is BLX (register) on ARMv5, which is in `armv5te.md`. On ARMv4T the
   suite shows it running as a plain BX (see "Unverified").
 
 ### PC-relative forms
@@ -128,7 +128,7 @@ SP = SP + imm7 x 4 (S = 0) or SP - imm7 x 4 (S = 1). No flags.
 - POP loads the listed registers (and PC if R is set) from ascending addresses starting at SP,
   then SP increases by 4 x the number of registers. PC, if listed, is the highest.
 - A POP that loads PC flushes the pipeline. On ARMv4T the loaded value's bit 0 is ignored and
-  the state stays Thumb; the ARM9's state switch is #14's.
+  the state stays Thumb; the ARM9's state switch is in `armv5te.md`.
 - An empty list with R = 0 follows the multiple load/store rule below.
 
 ### LDMIA and STMIA (format 15)
@@ -167,7 +167,7 @@ BL is two halfwords that must run in order, each executed as its own instruction
    instruction with bit 0 set, so a later `BX LR` returns in Thumb state.
 
 The pair reaches +-4 MiB. A suffix on its own uses whatever LR holds. `11101 off11` is the
-ARMv5 BLX suffix and is #14's.
+ARMv5 BLX suffix (`armv5te.md`).
 
 ### SWI and the undefined encoding
 
@@ -199,7 +199,7 @@ reference emulator.
   `thumb.rs`.
 - **Format 5 BX with H1 = 1.** The suite shows BX with H1 = 1 and op 3 running as BX on the
   register `H2 : Rs`, H1 ignored (128 halfwords, 25,102 cases). That encoding is BLX (register)
-  on ARMv5; the ARM9 differs (#14). — `thumb_decode.rs`, `branch_exchange_thumb`.
+  on ARMv5; the ARM9 differs (`armv5te.md`). — `thumb_decode.rs`, `branch_exchange_thumb`.
 - **BX R15 and BX with non-zero Rd bits.** GBATEK says the PC is aligned as
   `(address + 4) AND NOT 2` and that BX R15 should be issued from a word-aligned address only.
   The suite contradicts the alignment: with it, 1,607 `thumb_bx` cases fail, all BX R15 run

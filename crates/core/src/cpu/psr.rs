@@ -6,6 +6,9 @@ pub(crate) const FLAG_N: u32 = 1 << 31;
 pub(crate) const FLAG_Z: u32 = 1 << 30;
 pub(crate) const FLAG_C: u32 = 1 << 29;
 pub(crate) const FLAG_V: u32 = 1 << 28;
+/// CPSR bit 27, Q: the ARM9's sticky saturation flag (`docs/hw/armv5te.md`, "The Q flag").
+/// TODO(hw-unverified): the ARM7 stores an MSR write of this bit (`docs/hw/armv5te.md`).
+pub(crate) const FLAG_Q: u32 = 1 << 27;
 /// CPSR bits 7 and 6, I and F: 1 = IRQ or FIQ disabled (`docs/hw/cpu-registers.md`).
 pub(crate) const FLAG_I: u32 = 1 << 7;
 pub(crate) const FLAG_F: u32 = 1 << 6;
@@ -39,7 +42,8 @@ pub(crate) fn condition_holds(cond: u32, cpsr: u32) -> bool {
         12 => !z && n == v,
         13 => z || n != v,
         14 => true,
-        // TODO(phase1): condition 0xF is reserved; ARMv5TE gives it meaning for BLX (#14).
+        // Condition 0xF never holds. The ARM9 does not ask: it decodes such a word in the
+        // unconditional space (`decode.rs`; `docs/hw/armv5te.md`).
         _ => false,
     }
 }

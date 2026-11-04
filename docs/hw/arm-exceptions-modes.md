@@ -125,14 +125,14 @@ ARMv5TE). The coprocessor number is bits 11–8.
   #15. Until then an MCR or MRC to coprocessor 15 does nothing and the CPU steps to the next
   instruction. Every other coprocessor instruction (CDP, LDC and STC to any coprocessor,
   MCR/MRC to any other coprocessor) enters Undefined mode, as on ARM7. MCRR/MRRC are ARMv5TE
-  instructions and stay unhandled until #14.
+  instructions and are stepped past on the ARM9 (as on the ARM7 they trap).
 
 ### Prefetch and data aborts
 
 The entry is as described above (vector +0Ch and +10h, Abort mode). The DS has no MMU, the
-protection unit is not modeled yet (#15), and BKPT, which raises a prefetch abort on ARMv5, is
-#14, so nothing in the CPU raises an abort today. The entry exists and is tested; a caller
-raises it while the aborting instruction is executing.
+protection unit is not modeled yet (#15). BKPT raises a prefetch abort on the ARM9
+(`armv5te.md`, "BKPT"); the protection unit's aborts are the only ones nothing raises yet. A
+caller raises one while the aborting instruction is executing.
 
 ### IRQ and FIQ
 
@@ -188,8 +188,8 @@ and the vector-base flag. What a reset does to the CP15 control register is unkn
   `Exception::link_offset` and `Cpu::reset` in `crates/core/src/cpu/exception.rs`, which carry
   `TODO(hw-unverified)` — verify by a test ROM on real hardware.
 - **Only the `011`/bit 4 space is undefined.** The other encodings that ARMv4T leaves
-  unallocated, and the ARMv5TE encodings (CLZ, BLX, saturating arithmetic, LDRD and STRD, PLD,
-  BKPT, MCRR/MRRC, and the `1111` condition) are not trapped; they stay unhandled until #14.
+  unallocated, and the ARMv5TE encodings that `armv5te.md` does not define (MCRR/MRRC, the `1111`
+  condition other than BLX and PLD) are not trapped; they stay unhandled.
   GBATEK itself says not every unused opcode necessarily raises the exception. —
   `Kind::Unhandled` in `crates/core/src/cpu/decode.rs`, which carries `TODO(phase1)` and
   `TODO(hw-unverified)`.

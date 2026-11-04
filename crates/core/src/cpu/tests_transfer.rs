@@ -626,14 +626,14 @@ fn single_r15_cases() -> Vec<Case> {
         )
         .pc(0x3008),
         case(
-            "LDR R15 keeps the low bits of the loaded value",
+            "LDR R15 keeps bit 1 of the loaded value (bit 0 is the ARM9's state switch)",
             sdt(0, 1, 1, 0, 0, 1, 0, 15, 0),
             &[(0, 0x2000)],
-            &[(0x2000, 0x0000_3001)],
+            &[(0x2000, 0x0000_3002)],
             &[],
-            &[rd(4, 0x2000, 0x3001)],
+            &[rd(4, 0x2000, 0x3002)],
         )
-        .pc(0x3009),
+        .pc(0x300A),
     ]
 }
 
@@ -1047,14 +1047,14 @@ fn block_edge_cases() -> Vec<Case> {
             &[rd(4, 0x1008, 0xC0DE_C0DE)],
         ),
         case(
-            "LDMIA {R1, R15} ends R15 as the loaded value + 8 with the low bit kept",
+            "LDMIA {R1, R15} ends R15 as the loaded value + 8 with bit 1 kept",
             blk(0, 1, 0, 0, 1, 0, 0x8002),
             &[(0, 0x2000)],
-            &[(0x2000, 0xA1A1_A1A1), (0x2004, 0x0000_6001)],
+            &[(0x2000, 0xA1A1_A1A1), (0x2004, 0x0000_6002)],
             &[(1, 0xA1A1_A1A1)],
-            &[rd(4, 0x2000, 0xA1A1_A1A1), rd(4, 0x2004, 0x6001)],
+            &[rd(4, 0x2000, 0xA1A1_A1A1), rd(4, 0x2004, 0x6002)],
         )
-        .pc(0x6009),
+        .pc(0x600A),
         case(
             "LDMIA R0,{R15} with a single register",
             blk(0, 1, 0, 0, 1, 0, 0x8000),

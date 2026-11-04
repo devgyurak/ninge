@@ -13,7 +13,6 @@ pub(crate) enum ThumbKind {
     /// and the unused part of the `1011` space.
     // TODO(hw-unverified): what ARMv4T hardware does with these is not stated; a plain step is
     // a guess (`docs/hw/thumb.md`, "Unverified").
-    // TODO(phase1): the ARMv5 forms (BLX register and immediate, BKPT) arrive in #14.
     Unhandled,
     /// Format 1: LSL, LSR, ASR by an immediate.
     ShiftImmediate,
@@ -26,8 +25,10 @@ pub(crate) enum ThumbKind {
     /// Format 5: ADD, CMP, MOV on the high registers.
     HiRegister,
     /// Format 5: BX.
-    // TODO(phase1): with H1 = 1 this is BLX (register) on the ARM9 (#14); ARMv4T runs it as BX.
+    // With H1 = 1 the ARM9 decodes this as `BranchLinkExchange`; ARMv4T runs it as BX.
     BranchExchange,
+    /// Format 5: BLX with a register (ARM9; `docs/hw/armv5te.md`, "BLX").
+    BranchLinkExchange,
     /// Format 6: LDR Rd, [PC, #imm].
     LoadPc,
     /// Format 7: STR, STRB, LDR, LDRB with a register offset.
@@ -58,11 +59,17 @@ pub(crate) enum ThumbKind {
     LongBranchPrefix,
     /// Format 19: the second halfword of BL.
     LongBranchSuffix,
+    /// BKPT (ARM9; `docs/hw/armv5te.md`, "BKPT"): a prefetch abort.
+    Breakpoint,
+    /// The second halfword of BLX (ARM9; `docs/hw/armv5te.md`, "BLX").
+    LongBranchExchangeSuffix,
 }
 
 const TABLE_SIZE: usize = 1 << 10;
 
-const TABLE: [ThumbKind; TABLE_SIZE] = build_table();
+/// The ARM7's table (ARMv4T) and the ARM9's (ARMv5TE).
+const TABLE_V4: [ThumbKind; TABLE_SIZE] = build_table(false);
+const TABLE_V5: [ThumbKind; TABLE_SIZE] = build_table(true);
 
 /// The table index of a halfword: its bits 15–6.
 const fn index(halfword: u16) -> usize {
@@ -71,7 +78,7 @@ const fn index(halfword: u16) -> usize {
 
 /// Classifies the encoding space of one table index (bit `k` of the index is bit `k + 6` of the
 /// halfword).
-const fn classify(index: usize) -> ThumbKind {
+const fn classify(index: usize, arm9: bool) -> ThumbKind {
     let top5 = index >> 5; // bits 15–11
     let bit10 = index >> 4 & 1;
     let bit9 = index >> 3 & 1;
@@ -86,6 +93,7 @@ const fn classify(index: usize) -> ThumbKind {
             // Op 3 is BX.
             // TODO(hw-unverified): with H1 = 1 ARMv4T still runs it as BX, which only the suite
             // shows (`docs/hw/thumb.md`, "Unverified").
+            (_, 3, 1) if arm9 => ThumbKind::BranchLinkExchange,
             (_, 3, _) => ThumbKind::BranchExchange,
             _ => ThumbKind::HiRegister,
         },
@@ -103,6 +111,8 @@ const fn classify(index: usize) -> ThumbKind {
         // PUSH and POP
         0b10110 | 0b10111 => match (index >> 2 == 0b1011_0000, bit10, bit9) {
             (true, _, _) => ThumbKind::AdjustSp,
+            // bits 15–8 = 10111110 is BKPT on the ARM9
+            _ if arm9 && index >> 2 == 0b1011_1110 => ThumbKind::Breakpoint,
             (_, 1, 0) => ThumbKind::PushPop,
             _ => ThumbKind::Unhandled,
         },
@@ -116,26 +126,30 @@ const fn classify(index: usize) -> ThumbKind {
             _ => ThumbKind::ConditionalBranch,
         },
         0b11100 => ThumbKind::Branch,
-        // bits 15–11 = 11101 is the BLX suffix on ARMv5 (#14)
+        // bits 15–11 = 11101 is the BLX suffix on ARMv5
+        0b11101 if arm9 => ThumbKind::LongBranchExchangeSuffix,
         0b11101 => ThumbKind::Unhandled,
         0b11110 => ThumbKind::LongBranchPrefix,
         _ => ThumbKind::LongBranchSuffix,
     }
 }
 
-const fn build_table() -> [ThumbKind; TABLE_SIZE] {
+const fn build_table(arm9: bool) -> [ThumbKind; TABLE_SIZE] {
     let mut table = [ThumbKind::Unhandled; TABLE_SIZE];
     let mut i = 0;
     while i < TABLE_SIZE {
-        table[i] = classify(i);
+        table[i] = classify(i, arm9);
         i += 1;
     }
     table
 }
 
-/// The handler kind of a Thumb halfword.
-pub(crate) fn decode(halfword: u16) -> ThumbKind {
-    TABLE[index(halfword)]
+/// The handler kind of a Thumb halfword on the ARM9 (`ARM9`) or the ARM7.
+pub(crate) fn decode<const ARM9: bool>(halfword: u16) -> ThumbKind {
+    match ARM9 {
+        true => TABLE_V5[index(halfword)],
+        false => TABLE_V4[index(halfword)],
+    }
 }
 
 #[cfg(test)]
@@ -161,7 +175,7 @@ mod tests {
         (0x4608, ThumbKind::HiRegister),        // MOV r0, r1
         (0x4708, ThumbKind::BranchExchange),    // BX r1
         (0x4740, ThumbKind::BranchExchange),    // BX r8
-        (0x4788, ThumbKind::BranchExchange),    // BX with H1 = 1: BLX on ARMv5 (#14)
+        (0x4788, ThumbKind::BranchExchange),    // BX with H1 = 1: BLX on the ARM9
         (0x4800, ThumbKind::LoadPc),            // LDR r0, [PC, #0]
         (0x5088, ThumbKind::TransferRegister),  // STR r0, [r1, r2]
         (0x5C88, ThumbKind::TransferRegister),  // LDRB r0, [r1, r2]
@@ -183,7 +197,7 @@ mod tests {
         (0xBC01, ThumbKind::PushPop),           // POP {r0}
         (0xBD00, ThumbKind::PushPop),           // POP {PC}
         (0xB100, ThumbKind::Unhandled),         // the unused part of the 1011 space
-        (0xBE00, ThumbKind::Unhandled),         // BKPT (ARMv5, #14)
+        (0xBE00, ThumbKind::Unhandled),         // BKPT is the ARM9's
         (0xC001, ThumbKind::BlockTransfer),     // STMIA r0!, {r0}
         (0xC801, ThumbKind::BlockTransfer),     // LDMIA r0!, {r0}
         (0xD000, ThumbKind::ConditionalBranch), // BEQ
@@ -193,7 +207,7 @@ mod tests {
         (0xDF00, ThumbKind::Swi),               // SWI 0
         (0xDFFF, ThumbKind::Swi),               // SWI 255
         (0xE000, ThumbKind::Branch),            // B
-        (0xE800, ThumbKind::Unhandled),         // the BLX suffix (ARMv5, #14)
+        (0xE800, ThumbKind::Unhandled),         // the BLX suffix is the ARM9's
         (0xF000, ThumbKind::LongBranchPrefix),  // BL prefix
         (0xF7FF, ThumbKind::LongBranchPrefix),  // BL prefix, the last one
     ];
@@ -201,7 +215,7 @@ mod tests {
     fn classification_failures() -> Vec<(u16, ThumbKind, ThumbKind)> {
         CASES
             .iter()
-            .map(|&(halfword, want)| (halfword, want, decode(halfword)))
+            .map(|&(halfword, want)| (halfword, want, decode::<false>(halfword)))
             .filter(|(_, want, got)| want != got)
             .collect()
     }
@@ -214,7 +228,7 @@ mod tests {
     #[test]
     fn given_the_bl_suffix_range_when_decoded_then_every_halfword_is_a_suffix() {
         let wrong: Vec<u16> = (0xF800..=0xFFFF)
-            .filter(|&h| decode(h) != ThumbKind::LongBranchSuffix)
+            .filter(|&h| decode::<false>(h) != ThumbKind::LongBranchSuffix)
             .collect();
         assert_eq!(wrong, Vec::<u16>::new());
     }

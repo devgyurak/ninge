@@ -34,10 +34,10 @@
 //! of these and that no byte is left over; the three markers are constant in all 2,250,000
 //! cases of the pinned suite.
 //!
-//! The harness compares R0–R15, every register bank, CPSR, the five SPSRs, and the data
-//! transactions (kind, size, address, data, order). It does not compare `cycle` (the suite
-//! marks it experimental), `pipeline`, fetch transactions, or `access`: those depend on how the
-//! CPU models its prefetch pipeline, which is decided in #11. Decided in #76.
+//! The harness loads the case's `pipeline` and compares R0–R15, every register bank, CPSR, the
+//! five SPSRs, the final `pipeline`, and every transaction in order (kind, size, address,
+//! data), fetches included. It does not compare `cycle` (the suite marks it experimental) or
+//! `access`. Decided in #76 (registers) and #NN (the pipeline and the fetch comparison).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -69,6 +69,8 @@ const CASE_SIZE_BYTES: usize = 4;
 /// Bytes of the file header: the magic and the case count.
 const FILE_HEADER_BYTES: usize = 8;
 
+/// Transaction kind of a code fetch.
+const KIND_FETCH: u32 = 0;
 /// Transaction kind of a data read.
 const KIND_READ: u32 = 1;
 /// Transaction kind of a data write.
@@ -133,7 +135,7 @@ pub struct State {
     pub cpsr: u32,
     /// SPSR of FIQ, Supervisor, Abort, IRQ, Undefined, in that order.
     pub spsr: [u32; 5],
-    /// The two prefetched opcodes. Not compared; see the module docs.
+    /// The two prefetched opcodes: `[0]` executes next (`docs/hw/arm-branch-pipeline.md`).
     pub pipeline: [u32; 2],
     /// Access flags. Not compared.
     pub access: u32,
@@ -350,7 +352,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Case>, SuiteError> {
     Ok(cases)
 }
 
-/// One data access the CPU made, in the order it made it.
+/// One bus access the CPU made, in the order it made it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Access {
     kind: u32,
@@ -361,8 +363,8 @@ struct Access {
 
 /// The bus [`run_case_with`] hands to its step closure; it carries no public state.
 ///
-/// It replays one case: reads come from the case's recorded reads, fetches from its opcode,
-/// and every data access is logged for comparison.
+/// It replays one case: reads come from the case's recorded reads, fetches from its opcode, and
+/// every access, fetches included, is logged for comparison.
 pub struct ReplayBus {
     opcode: u32,
     base_addr: u32,
@@ -417,21 +419,33 @@ impl ReplayBus {
     }
 
     /// The opcode at its own address; any other address yields the address itself, as the
-    /// suite's README prescribes.
-    fn fetch(&self, addr: u32) -> u32 {
-        match addr == self.base_addr {
+    /// suite's README prescribes. The fetch is logged with its width.
+    fn fetch(&mut self, addr: u32, size: u32) -> u32 {
+        let data = match addr == self.base_addr {
             true => self.opcode,
             false => addr,
-        }
+        };
+        // A halfword fetch carries the low halfword of that word.
+        let data = match size {
+            2 => data & 0xFFFF,
+            _ => data,
+        };
+        self.log.push(Access {
+            kind: KIND_FETCH,
+            size,
+            addr,
+            data,
+        });
+        data
     }
 }
 
 impl Bus for ReplayBus {
     fn fetch32(&mut self, addr: u32) -> u32 {
-        self.fetch(addr)
+        self.fetch(addr, 4)
     }
     fn fetch16(&mut self, addr: u32) -> u16 {
-        self.fetch(addr) as u16 // truncation intended: a Thumb opcode is the low halfword
+        self.fetch(addr, 2) as u16 // truncation intended: a Thumb opcode is the low halfword
     }
     fn read8(&mut self, addr: u32) -> u8 {
         self.read(addr, 1) as u8 // truncation intended: the transaction holds a byte
@@ -499,6 +513,7 @@ fn bank_values(state: &State, bank: Bank) -> &[u32] {
 
 /// Puts the CPU into `state` (see the register convention in the module docs).
 fn load<const ARM9: bool>(cpu: &mut Cpu<ARM9>, state: &State) {
+    cpu.set_pipeline(state.pipeline);
     let regs = cpu.regs_mut();
     // The mode first, so the banks are switched before any of them is written.
     regs.set_cpsr(state.cpsr);
@@ -564,6 +579,9 @@ fn register_diffs<const ARM9: bool>(cpu: &Cpu<ARM9>, want: &State) -> Vec<FieldD
         }
     }
     push_if_different(&mut out, "CPSR".to_string(), want.cpsr, regs.cpsr());
+    for (i, (&expected, actual)) in want.pipeline.iter().zip(cpu.pipeline()).enumerate() {
+        push_if_different(&mut out, format!("pipeline[{i}]"), expected, actual);
+    }
     for (i, (bank, &value)) in [
         Bank::Fiq,
         Bank::Supervisor,
@@ -587,6 +605,7 @@ fn register_diffs<const ARM9: bool>(cpu: &Cpu<ARM9>, want: &State) -> Vec<FieldD
 
 fn describe(a: &Access) -> String {
     let kind = match a.kind {
+        KIND_FETCH => "fetch",
         KIND_READ => "read",
         _ => "write",
     };
@@ -598,12 +617,11 @@ fn describe(a: &Access) -> String {
     )
 }
 
-/// Lists how the data accesses the CPU made differ from the case's data transactions.
+/// Lists how the accesses the CPU made, fetches included, differ from the case's transactions.
 fn transaction_diffs(case: &Case, log: &[Access]) -> Vec<FieldDiff> {
     let want: Vec<Access> = case
         .transactions
         .iter()
-        .filter(|t| t.kind == KIND_READ || t.kind == KIND_WRITE)
         .map(|t| Access {
             kind: t.kind,
             size: t.size,

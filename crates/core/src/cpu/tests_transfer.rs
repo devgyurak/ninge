@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! ARM loads and stores through `Cpu::step`. Expected values come from `docs/hw/arm-load-store.md`.
 //!
-//! Interim R15 convention (`docs/hw/arm-data-processing.md`): while an instruction executes R15
-//! is its address + 8; afterwards R15 is +4 more if the instruction did not write it, or the
-//! written value + 8 if it did. The bus receives the raw effective address, low bits included.
+//! Pipeline model (`docs/hw/arm-branch-pipeline.md`): the instruction under test is
+//! `pipeline[0]` and R15 is its address + 8 while it executes; afterwards R15 is +4 more if the
+//! instruction did not write it, or the written value + 8 if it did. The bus receives the raw
+//! effective address, low bits included; code fetches (the prefetch) return a harmless zero.
 
 use super::arm_transfer::{block_start, halfword_value, rotate_word};
 use super::*;
@@ -49,15 +50,13 @@ fn pattern(addr: u32) -> u32 {
 
 /// A memory-backed bus keyed by raw address; it logs every data access and never rotates.
 struct LogBus {
-    opcode: u32,
     mem: BTreeMap<u32, u32>,
     log: Vec<Access>,
 }
 
 impl LogBus {
-    fn new(opcode: u32, mem: &[(u32, u32)]) -> Self {
+    fn new(mem: &[(u32, u32)]) -> Self {
         Self {
-            opcode,
             mem: mem.iter().copied().collect(),
             log: Vec::new(),
         }
@@ -73,7 +72,8 @@ impl LogBus {
 
 impl Bus for LogBus {
     fn fetch32(&mut self, _addr: u32) -> u32 {
-        self.opcode
+        // The instruction comes from the pipeline; the prefetch value is not looked at.
+        0
     }
     fn fetch16(&mut self, _addr: u32) -> u16 {
         0
@@ -211,7 +211,8 @@ fn run<const A: bool>(
     cpu.regs_mut().set_cpsr(cpsr);
     setup.iter().for_each(|&(i, v)| cpu.regs_mut().set(i, v));
     cpu.regs_mut().set(15, PC_READ);
-    let mut bus = LogBus::new(opcode, mem);
+    cpu.set_pipeline([opcode, 0]);
+    let mut bus = LogBus::new(mem);
     cpu.step(&mut bus);
     (cpu, bus.log)
 }
@@ -1081,7 +1082,8 @@ fn stm_user_r13<const A: bool>() -> (Vec<Access>, u32) {
     cpu.regs_mut().set(13, 0x2222_0000);
     cpu.regs_mut().set(0, 0x2000);
     cpu.regs_mut().set(15, PC_READ);
-    let mut bus = LogBus::new(blk(0, 1, 1, 0, 0, 0, 1 << 13), &[]);
+    cpu.set_pipeline([blk(0, 1, 1, 0, 0, 0, 1 << 13), 0]);
+    let mut bus = LogBus::new(&[]);
     cpu.step(&mut bus);
     (bus.log, cpu.regs().get(13))
 }
@@ -1103,7 +1105,8 @@ fn ldm_user_r13<const A: bool>() -> (u32, u32) {
     cpu.regs_mut().set(13, 0x2222_0000);
     cpu.regs_mut().set(0, 0x2000);
     cpu.regs_mut().set(15, PC_READ);
-    let mut bus = LogBus::new(blk(0, 1, 1, 0, 1, 0, 1 << 13), &[(0x2000, 0xAAAA_0001)]);
+    cpu.set_pipeline([blk(0, 1, 1, 0, 1, 0, 1 << 13), 0]);
+    let mut bus = LogBus::new(&[(0x2000, 0xAAAA_0001)]);
     cpu.step(&mut bus);
     (cpu.regs().banked(Bank::UserSystem, 13), cpu.regs().get(13))
 }
@@ -1125,7 +1128,8 @@ fn stm_user_r8<const A: bool>() -> Vec<Access> {
     cpu.regs_mut().set(8, 0x0000_0099);
     cpu.regs_mut().set(0, 0x2000);
     cpu.regs_mut().set(15, PC_READ);
-    let mut bus = LogBus::new(blk(0, 1, 1, 0, 0, 0, 1 << 8), &[]);
+    cpu.set_pipeline([blk(0, 1, 1, 0, 0, 0, 1 << 8), 0]);
+    let mut bus = LogBus::new(&[]);
     cpu.step(&mut bus);
     bus.log
 }
@@ -1146,7 +1150,8 @@ fn ldm_pc_with_s<const A: bool>() -> (u32, u32, Bank) {
     cpu.regs_mut().set_spsr(Bank::Irq, N | SVC);
     cpu.regs_mut().set(0, 0x2000);
     cpu.regs_mut().set(15, PC_READ);
-    let mut bus = LogBus::new(blk(0, 1, 1, 0, 1, 0, 0x8000), &[(0x2000, 0x0000_4000)]);
+    cpu.set_pipeline([blk(0, 1, 1, 0, 1, 0, 0x8000), 0]);
+    let mut bus = LogBus::new(&[(0x2000, 0x0000_4000)]);
     cpu.step(&mut bus);
     (cpu.regs().cpsr(), cpu.regs().get(15), cpu.regs().bank())
 }

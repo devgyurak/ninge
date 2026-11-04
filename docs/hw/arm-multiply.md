@@ -89,9 +89,9 @@ taken from GBATEK. They are oracle evidence, not hardware evidence.
   RdHi or RdLo = Rm (the plain arithmetic result, computed from the operands as read before
   any write).
 - An R15 operand (Rm, Rs, Rn, or RdHi/RdLo read as the accumulator) reads as the instruction
-  address + 12, not + 8. This is the suite's interim convention; the real pipeline is #11.
-- Rd = R15 (MUL, MLA), or RdHi or RdLo = R15 (long), ends with R15 = the value written + 8,
-  the same as an ALU result written to R15. In a long multiply the other half is written
+  address + 12, not + 8: a late R15 read (`arm-branch-pipeline.md`, "Late R15 reads").
+- Rd = R15 (MUL, MLA), or RdHi or RdLo = R15 (long), flushes the pipeline: R15 ends as the
+  value written + 8, the same as an ALU result written to R15. In a long multiply the other half is written
   normally.
 - RdHi = RdLo: the Hi half is what remains in the register.
 - N and Z come from the full result; V never changes; without S the CPSR never changes.
@@ -145,7 +145,7 @@ Code sites are the handlers the implementation adds to `crates/core/src/cpu/arm.
   Site: `multiply_long`. Verify by suite and hardware.
 - **R15 operands** (Rm, Rs, Rn, RdHi, RdLo = R15): GBATEK and the ARM ARM say unpredictable.
   The suite reads the instruction address + 12 and writes the value + 8. Site: both
-  handlers. Verify by hardware after the pipeline (#11) lands.
+  handlers. Verify by hardware (the pipeline model is `arm-branch-pipeline.md`).
 - **RdHi = RdLo**: the Hi half remains (suite). Site: `multiply_long`. Verify by hardware.
 - **Rd = Rm on ARMv4** (and RdHi/RdLo = Rm): GBATEK says not allowed; the suite gives the plain
   result. Site: both handlers. Verify by hardware.

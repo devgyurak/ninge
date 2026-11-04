@@ -52,7 +52,7 @@ valid encoding (S = 0 there is the PSR-transfer space, below).
 
 An instruction reads R15 as its own address + 8 in ARM state. If the second operand is a
 register shifted **by a register**, the extra internal cycle makes every R15 read (Rn or Rm)
-give address + 12.
+give address + 12. The pipeline behind both numbers is in `arm-branch-pipeline.md`.
 
 ## Writing R15 with S
 
@@ -86,7 +86,7 @@ Unselected bytes keep their value.
 - A failed condition makes the instruction a no-op that still advances the PC.
 - ADC/SBC/RSC use the C flag as it is before the instruction.
 - `MOV R15, …` without S is a plain branch; the low bits of the value are not aligned by the
-  data-processing instruction itself (the state change belongs to BX, #11).
+  data-processing instruction itself (the state change belongs to BX, `arm-branch-pipeline.md`).
 
 ## Unverified
 
@@ -94,8 +94,8 @@ Each item is backed by the JSON suite as *oracle evidence* (a program that model
 chip), not by hardware.
 
 - Low two bits of a value written to R15 by an ALU result, and how R15 reads after that —
-  the suite keeps them as written. The pipeline is #11. — `write_pc` in
-  `crates/core/src/cpu/arm.rs` — carries `TODO(hw-unverified)`; verify by a test ROM on
+  the suite keeps them as written: R15 ends as the value + 8 after the pipeline refill
+  (`arm-branch-pipeline.md`). — `refill` in `crates/core/src/cpu/arm.rs` — carries `TODO(hw-unverified)`; verify by a test ROM on
   real hardware.
 - TST/TEQ/CMP/CMN with S = 1 and Rd = R15 in a mode with an SPSR — GBATEK limits the
   `{P}` forms (TSTP, TEQP, CMPP, CMNP) to ARMv2 and below, yet the suite restores

@@ -1908,3 +1908,190 @@ fn given_arm_bx_when_run_on_arm7_then_no_case_differs() {
         Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
     );
 }
+
+// ---- Exceptions (#12, `docs/hw/arm-exceptions-modes.md`) -----------------------------------
+//
+// Oracle evidence for the ARM7, not hardware evidence: SWI enters Supervisor mode through vector
+// 08h, and every coprocessor instruction (CDP, MCR/MRC, LDC/STC, any coprocessor number) enters
+// Undefined mode through vector 04h. Gap in GBATEK for the coprocessors: it does not say what an
+// absent coprocessor does. Minimum case counts are about 80% of what the pinned suite supplies.
+
+/// An exception suite file with the SPSR index and mode bits of the mode it enters, and its
+/// vector offset.
+type ExceptionFile = (&'static str, usize, u32, u32);
+
+const SWI_FILE: ExceptionFile = ("arm_swi.json.bin", 1, 0x13, 0x08);
+const COPROCESSOR_FILES: [ExceptionFile; 3] = [
+    ("arm_cdp.json.bin", 4, 0x1B, 0x04),
+    ("arm_mcr_mrc.json.bin", 4, 0x1B, 0x04),
+    ("arm_stc_ldc.json.bin", 4, 0x1B, 0x04),
+];
+
+fn labeled(file: &str) -> Vec<(String, Case)> {
+    cases_of(file)
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (format!("{file}[{i}]"), c))
+        .collect()
+}
+
+/// R14 of the entered mode: the suite lists R14 as the second element of a two-register bank.
+fn entered_r14(state: &State, mode: u32) -> u32 {
+    match mode {
+        0x13 => state.r_svc[1],
+        _ => state.r_und[1],
+    }
+}
+
+/// The CPSR an entry into `mode` leaves: bits 31–8 kept, T cleared, I set, F kept.
+fn entered_cpsr(initial: u32, mode: u32) -> u32 {
+    (initial & !0xFF) | 0x80 | (initial & 0x40) | mode
+}
+
+/// Whether the entry left alone every User/System register (R0–R14), every bank but the
+/// entered one, the entered bank's R13, and the SPSRs of the other modes. `spsr` is the index of
+/// the entered mode's SPSR.
+fn rest_untouched(c: &Case, mode: u32, spsr: usize) -> bool {
+    let (i, e) = (&c.initial, &c.expected);
+    e.r[..15] == i.r[..15]
+        && e.r_fiq == i.r_fiq
+        && e.r_irq == i.r_irq
+        && e.r_abt == i.r_abt
+        && match mode {
+            0x13 => e.r_und == i.r_und && e.r_svc[0] == i.r_svc[0],
+            _ => e.r_svc == i.r_svc && e.r_und[0] == i.r_und[0],
+        }
+        && (0..5).all(|k| k == spsr || e.spsr[k] == i.spsr[k])
+}
+
+/// The facts every entering case of `file` shows: the CPSR, R14 and the SPSR of the entered
+/// mode, the three fetches, the refilled pipeline and R15, and the registers left alone.
+fn entry_problems(
+    label: &str,
+    (file, spsr, mode, vector): ExceptionFile,
+    least: usize,
+) -> Vec<String> {
+    fact_problems(
+        label,
+        &labeled(file),
+        condition_passes,
+        |c| {
+            let f = fetches(c);
+            c.expected.cpsr == entered_cpsr(c.initial.cpsr, mode)
+                && entered_r14(&c.expected, mode) == c.base_addr.wrapping_add(4)
+                && c.expected.spsr[spsr] == c.initial.cpsr
+                && f.len() == 3
+                && f.iter().all(|t| t.size == 4)
+                && f[0].addr == c.base_addr.wrapping_add(8)
+                && f[1].addr == vector
+                && f[2].addr == vector + 4
+                && c.expected.pipeline == [f[1].data, f[2].data]
+                && c.expected.r[15] == vector + 8
+                && rest_untouched(c, mode, spsr)
+        },
+        least,
+    )
+}
+
+fn swi_entry_problems() -> Vec<String> {
+    entry_problems("SWI entry", SWI_FILE, 20_000)
+}
+
+#[test]
+fn given_swi_cases_with_a_true_condition_when_comparing_then_svc_is_entered_through_vector_08() {
+    assert_eq!(swi_entry_problems(), Vec::<String>::new());
+}
+
+fn coprocessor_entry_problems() -> Vec<String> {
+    COPROCESSOR_FILES
+        .iter()
+        .flat_map(|&file| entry_problems(file.0, file, 20_000))
+        .collect()
+}
+
+#[test]
+fn given_coprocessor_cases_with_a_true_condition_when_comparing_then_undefined_is_entered_through_vector_04()
+ {
+    assert_eq!(coprocessor_entry_problems(), Vec::<String>::new());
+}
+
+/// Every coprocessor number, CP14 and CP15 included, traps: each (file, number) pair has
+/// entering cases and none of them is a plain step.
+fn coprocessor_number_problems() -> Vec<String> {
+    COPROCESSOR_FILES
+        .iter()
+        .flat_map(|&(file, _, _, _)| {
+            let cases = labeled(file);
+            (0..16u32).flat_map(move |cp| {
+                fact_problems(
+                    &format!("{file} cp{cp}"),
+                    &cases,
+                    |c| condition_passes(c) && c.opcode >> 8 & 0xF == cp,
+                    |c| {
+                        c.expected.cpsr & 0x1F == 0x1B
+                            && fetches(c).get(1).is_some_and(|f| f.addr == 4)
+                    },
+                    1_000,
+                )
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn given_coprocessor_numbers_0_to_15_when_comparing_then_every_one_enters_undefined() {
+    assert_eq!(coprocessor_number_problems(), Vec::<String>::new());
+}
+
+/// A failed condition is a plain step: no exception, the CPSR as it was.
+fn failed_condition_problems() -> Vec<String> {
+    std::iter::once(SWI_FILE)
+        .chain(COPROCESSOR_FILES)
+        .flat_map(|(file, _, _, _)| {
+            fact_problems(
+                &format!("{file} failed condition"),
+                &labeled(file),
+                |c| !condition_passes(c),
+                |c| plain_step(c) && c.expected.cpsr == c.initial.cpsr,
+                20_000,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn given_exception_cases_with_a_false_condition_when_comparing_then_the_step_is_plain() {
+    assert_eq!(failed_condition_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_arm_swi_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_swi.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_cdp_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_cdp.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_mcr_mrc_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_mcr_mrc.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_stc_ldc_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_stc_ldc.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}

@@ -159,6 +159,7 @@ impl Cp15 {
     /// MRC: the value of the register CRn, CRm and opc2 select (opc1 = 0).
     // TODO(hw-unverified): a read of the write-only C7 and of an unmapped register returns 0
     // (`docs/hw/cp15.md`, "Unverified").
+    // TODO(phase8): the BIST registers at C15 read 0 (`docs/hw/cp15.md`, "Not modeled").
     pub(super) fn read(&self, crn: u32, crm: u32, opc2: u32) -> u32 {
         match (crn, crm, opc2) {
             (0, 0, 1) => CACHE_TYPE,
@@ -182,6 +183,7 @@ impl Cp15 {
     /// MCR: writes the register CRn, CRm and opc2 select (opc1 = 0).
     // TODO(hw-unverified): a write to an ID register, the FCSE process ID or an unmapped register
     // is ignored (`docs/hw/cp15.md`, "Unverified").
+    // TODO(phase8): the BIST registers at C15 ignore writes (`docs/hw/cp15.md`, "Not modeled").
     // TODO(phase3): C7,C0,4 and C7,C8,2 are wait-for-interrupt, which halts the core until an
     // interrupt is pending.
     // TODO(phase8): the protection unit registers are held, but no access is checked against

@@ -739,7 +739,9 @@ fn preloaded() -> Cpu<true> {
     cpu
 }
 
-/// Combinations the note's table does not list (or lists with another opc1).
+/// Combinations the note's table does not list (or lists with another opc1), the BIST registers
+/// (not modeled), and three C7 commands the ARM9 does not list, which the note's C7 row accepts
+/// like the others and which behave like an unmapped register.
 const UNMAPPED: [Reg; 38] = [
     // The BIST registers (opc1 0, 1 and 2) and three C7 commands the ARM9 does not list.
     (0, 15, 0, 1),

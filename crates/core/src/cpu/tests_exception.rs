@@ -8,6 +8,7 @@
 //! show which address each entry came from.
 
 use super::exception::Exception;
+use super::tests_cp15::{arm9_with_high_vectors, write_control};
 use super::*;
 use proptest::prelude::*;
 
@@ -430,9 +431,8 @@ fn given_i_set_when_an_irq_is_offered_then_nothing_changes() {
 // ------------------------------------------------------------- vector base
 
 #[test]
-fn given_the_high_vector_flag_when_an_arm9_takes_a_swi_then_it_enters_at_ffff0008() {
-    let mut cpu = Cpu::<true>::new();
-    cpu.set_high_vectors(true);
+fn given_control_bit_13_set_by_mcr_when_an_arm9_takes_a_swi_then_it_enters_at_ffff0008() {
+    let mut cpu = arm9_with_high_vectors();
     cpu.regs_mut().set(15, ARM_PC);
     cpu.set_pipeline([SWI, NEXT]);
     let mut bus = RecBus::new();
@@ -448,9 +448,9 @@ fn given_the_high_vector_flag_when_an_arm9_takes_a_swi_then_it_enters_at_ffff000
 }
 
 #[test]
-fn given_the_high_vector_flag_when_an_arm7_takes_a_swi_then_it_still_enters_at_8() {
+fn given_control_bit_13_in_an_arm7s_cp15_when_it_takes_a_swi_then_it_still_enters_at_8() {
     let mut cpu = Cpu::<false>::new();
-    cpu.set_high_vectors(true);
+    cpu.cp15.write(1, 0, 0, 1 << 13);
     cpu.regs_mut().set(15, ARM_PC);
     cpu.set_pipeline([SWI, NEXT]);
     cpu.step(&mut RecBus::new());
@@ -469,19 +469,17 @@ fn given_power_on_state_when_reading_the_vector_base_then_both_cores_use_the_low
 }
 
 #[test]
-fn given_the_high_vector_flag_when_reading_the_vector_base_then_only_the_arm9_moves() {
+fn given_control_bit_13_set_when_reading_the_vector_base_then_only_the_arm9_moves() {
     let mut arm7 = Cpu::<false>::new();
-    let mut arm9 = Cpu::<true>::new();
-    arm7.set_high_vectors(true);
-    arm9.set_high_vectors(true);
+    let arm9 = arm9_with_high_vectors();
+    arm7.cp15.write(1, 0, 0, 1 << 13);
     assert_eq!((arm7.vector_base(), arm9.vector_base()), (0, HIGH_BASE));
 }
 
 #[test]
-fn given_the_high_vector_flag_set_and_cleared_when_an_arm9_reads_the_base_then_it_is_low_again() {
-    let mut arm9 = Cpu::<true>::new();
-    arm9.set_high_vectors(true);
-    arm9.set_high_vectors(false);
+fn given_control_bit_13_set_and_cleared_by_mcr_when_an_arm9_reads_the_base_then_it_is_low_again() {
+    let mut arm9 = arm9_with_high_vectors();
+    write_control(&mut arm9, 0);
     assert_eq!(arm9.vector_base(), 0);
 }
 
@@ -538,8 +536,9 @@ fn arm9_outcome(word: u32) -> (bool, bool) {
 }
 
 fn arm9_coprocessor_problems() -> Vec<String> {
-    // MCR p15 and MRC p15 step on (the CP15 arrives in #15); MCRR/MRRC are ARMv5TE and stay
-    // unhandled; everything else traps.
+    // MCR p15 and MRC p15 (of the read-only Main ID at C0,C0,0) reach CP15 and step on;
+    // MCRR/MRRC are ARMv5TE and stay unhandled; everything else traps (`docs/hw/cp15.md`,
+    // "Access").
     let cases: Vec<(u32, (bool, bool))> = (0..16)
         .flat_map(|cp| {
             coprocessor_words(cp)

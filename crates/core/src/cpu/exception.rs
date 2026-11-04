@@ -2,6 +2,7 @@
 //! Exception entry (#12): SWI, the undefined-instruction space, coprocessor instructions, the
 //! abort and interrupt entries, and the vector base. Note: `docs/hw/arm-exceptions-modes.md`.
 
+use super::cp15::UNMAPPED_READ;
 use super::psr::{FLAG_F, FLAG_I, FLAG_T};
 use super::regs::Mode;
 use super::{Bus, Cpu};
@@ -16,6 +17,11 @@ const LR: usize = 14;
 const PC: usize = 15;
 /// The coprocessor number of the CP15 system control coprocessor.
 const CP15: u32 = 15;
+/// CPSR bits 31–28, N Z C V: what an MRC to R15 loads (`docs/hw/cp15.md`, "Access").
+const CPSR_FLAGS: u32 = 0xF000_0000;
+/// An MCR with R15 hands the coprocessor the instruction address + 12; R15 reads + 8 while the
+/// instruction executes (`docs/hw/cp15.md`, "Access").
+const MCR_PC_EXTRA: u32 = 4;
 
 /// The exceptions a core takes (`docs/hw/arm-exceptions-modes.md`, "Vector table").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,19 +86,14 @@ impl Exception {
 
 impl<const ARM9: bool> Cpu<ARM9> {
     /// Where the exception vectors start: 0 on the ARM7, and on the ARM9 0 or `FFFF0000h`
-    /// according to the high-vector flag (`docs/hw/arm-exceptions-modes.md`, "Vector base").
+    /// according to bit 13 of the CP15 control register (`docs/hw/arm-exceptions-modes.md`,
+    /// "Vector base"; `docs/hw/cp15.md`, "C1,C0,0 — control register").
     // The debugger's CPU panel (#56) will show it.
     pub fn vector_base(&self) -> u32 {
-        match ARM9 && self.high_vectors {
+        match ARM9 && self.cp15.high_vectors() {
             true => HIGH_VECTOR_BASE,
             false => 0,
         }
-    }
-
-    /// Selects the ARM9's high vectors (`FFFF0000h`); the ARM7 ignores the flag.
-    // TODO(phase1): #15 replaces this setter with bit 13 of the CP15 control register.
-    pub fn set_high_vectors(&mut self, high: bool) {
-        self.high_vectors = high;
     }
 
     /// Enters `exception` without refilling the pipeline: R14 and the SPSR of the entered mode
@@ -131,17 +132,63 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(hw-unverified): every coprocessor instruction traps on the ARM7, whatever the number,
     // which only the suite shows; on the ARM9 that CDP, LDC and STC to CP15 and everything sent to
     // another coprocessor trap is inferred from it (`docs/hw/arm-exceptions-modes.md`, "Unverified").
-    // TODO(phase1): the ARM9's MCR and MRC to CP15 do nothing until #15 gives it a control
-    // register; MCRR and MRRC (ARMv5TE) are stepped past on the ARM9.
+    // MCRR and MRRC (ARMv5TE) are stepped past on the ARM9.
     pub(super) fn coprocessor(&mut self, word: u32) -> bool {
         let number = (word >> 8) & 0xF;
         // Bits 27–24 = 1110 with bit 4 set is MCR or MRC; bits 27–21 = 1100010 is MCRR or MRRC.
         let register_transfer = word >> 24 & 0xF == 0xE && word >> 4 & 1 == 1;
         let double_transfer = word >> 21 & 0x7F == 0x62;
-        let ignored = ARM9 && ((register_transfer && number == CP15) || double_transfer);
-        match ignored {
-            true => false,
-            false => self.enter(Exception::Undefined),
+        match (
+            ARM9 && register_transfer && number == CP15,
+            ARM9 && double_transfer,
+        ) {
+            (true, _) => {
+                self.cp15_transfer(word);
+                false
+            }
+            (false, true) => false,
+            (false, false) => self.enter(Exception::Undefined),
+        }
+    }
+
+    /// An MCR or MRC to CP15 on the ARM9 (`docs/hw/cp15.md`, "Access"). Opc1 other than 0 selects
+    /// no register.
+    // TODO(hw-unverified): an opc1 other than 0 reads 0 and ignores the write, like any unmapped
+    // register (`docs/hw/cp15.md`, "Unverified").
+    fn cp15_transfer(&mut self, word: u32) {
+        let opc1 = (word >> 21) & 0x7;
+        let load = word >> 20 & 1 == 1;
+        let crn = (word >> 16) & 0xF;
+        let rd = ((word >> 12) & 0xF) as usize;
+        let opc2 = (word >> 5) & 0x7;
+        let crm = word & 0xF;
+        match (load, opc1) {
+            (true, 0) => {
+                let value = self.cp15.read(crn, crm, opc2);
+                self.write_transfer_target(rd, value);
+            }
+            (true, _) => self.write_transfer_target(rd, UNMAPPED_READ),
+            (false, 0) => {
+                let extra = match rd == PC {
+                    true => MCR_PC_EXTRA,
+                    false => 0,
+                };
+                let value = self.regs.get(rd).wrapping_add(extra);
+                self.cp15.write(crn, crm, opc2, value);
+            }
+            (false, _) => {}
+        }
+    }
+
+    /// Delivers an MRC's value: to the register, or for R15 only its top four bits, to the flags.
+    fn write_transfer_target(&mut self, rd: usize, value: u32) {
+        match rd == PC {
+            true => {
+                let cpsr = self.regs.cpsr();
+                self.regs
+                    .set_cpsr((cpsr & !CPSR_FLAGS) | (value & CPSR_FLAGS));
+            }
+            false => self.regs.set(rd, value),
         }
     }
 
@@ -163,10 +210,13 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Takes a prefetch abort for the instruction that is executing (R15 = its address + 8).
-    // TODO(phase1): the protection unit (#15) will raise it; BKPT enters the abort itself.
+    // TODO(phase8): the protection unit will raise it; BKPT enters the abort itself.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "nothing calls it until the protection unit (#15)")
+        expect(
+            dead_code,
+            reason = "nothing calls it until the protection unit checks accesses (phase 8)"
+        )
     )]
     pub(crate) fn prefetch_abort<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::PrefetchAbort);
@@ -174,10 +224,13 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Takes a data abort for the instruction that is executing (R15 = its address + 8).
-    // TODO(phase1): nothing raises it yet: the protection unit is #15.
+    // TODO(phase8): nothing raises it yet: the protection unit does not check accesses.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "nothing calls it until the protection unit (#15)")
+        expect(
+            dead_code,
+            reason = "nothing calls it until the protection unit checks accesses (phase 8)"
+        )
     )]
     pub(crate) fn data_abort<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::DataAbort);
@@ -186,8 +239,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// Resets the core: Supervisor mode, I and F set, ARM state, and the pipeline refilled from
     /// the reset vector. R14, the SPSR and the other registers are left as they were.
-    // TODO(hw-unverified): see `Exception::link_offset`; the high-vector flag is left alone, as
-    // GBATEK says nothing about a reset changing it.
+    // TODO(hw-unverified): see `Exception::link_offset`; CP15, the vector base included, is left
+    // alone, as GBATEK says nothing about a reset changing it (`docs/hw/cp15.md`, "Unverified").
     pub fn reset<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::Reset);
         self.refill(bus);

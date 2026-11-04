@@ -7,6 +7,7 @@ mod arm;
 mod arm_transfer;
 mod armv5;
 mod bus;
+mod cp15;
 mod decode;
 mod exception;
 mod psr;
@@ -16,6 +17,7 @@ mod thumb;
 mod thumb_decode;
 
 pub use bus::Bus;
+pub use cp15::{Cp15, Tcm};
 pub use regs::{Bank, Mode, Registers};
 
 use psr::FLAG_T;
@@ -30,12 +32,10 @@ pub struct Cpu<const ARM9: bool> {
     /// The two opcodes fetched ahead of execution: `[0]` runs next
     /// (`docs/hw/arm-branch-pipeline.md`).
     pipeline: [u32; 2],
-    /// The exception vectors sit at `FFFF0000h` instead of 0 (`docs/hw/arm-exceptions-modes.md`,
-    /// "Vector base"). Only the ARM9 honors it; see [`Cpu::vector_base`].
-    // TODO(phase1): #15 replaces this flag with bit 13 of the CP15 control register.
-    // TODO(hw-unverified): the flag starts at 0; GBATEK gives no reset value for that bit
-    // (`docs/hw/arm-exceptions-modes.md`, "Unverified").
-    high_vectors: bool,
+    /// The system control coprocessor. The ARM7 has none: it traps before reaching this
+    /// (`docs/hw/arm-exceptions-modes.md`, "Coprocessor instructions"), so the field stays at
+    /// its power-on value there.
+    cp15: Cp15,
 }
 
 impl<const ARM9: bool> Cpu<ARM9> {
@@ -44,7 +44,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
         Self {
             regs: Registers::new(),
             pipeline: [0; 2],
-            high_vectors: false,
+            cp15: Cp15::new(),
         }
     }
 
@@ -56,6 +56,12 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// The register file, for the host and the test harness to set up state.
     pub fn regs_mut(&mut self) -> &mut Registers {
         &mut self.regs
+    }
+
+    /// The system control coprocessor's state.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn cp15(&self) -> &Cp15 {
+        &self.cp15
     }
 
     /// The prefetch pipeline: the opcode that executes next, then the one after it
@@ -107,3 +113,6 @@ mod tests_thumb;
 
 #[cfg(test)]
 mod tests_armv5;
+
+#[cfg(test)]
+mod tests_cp15;

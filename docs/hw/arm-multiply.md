@@ -3,8 +3,8 @@
 Sources: GBATEK "ARM Opcodes: Multiply and Multiply-Accumulate (MUL, MLA)" (the same
 section covers the long forms) is the primary source for the behavior; ARM ARM (ARMv5TE) "MUL",
 "MLA", "UMULL", "UMLAL", "SMULL", "SMLAL" and ARM7TDMI TRM "Multiply instructions" are listed as
-background; not re-read for this note. For the ARM7TDMI carry only: US 5,583,804 and
-US 5,528,529 (see "ARM7TDMI multiply carry"). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
+background; not re-read for this note. For the ARM7TDMI carry only: US 5,583,804, US 5,528,529 and
+US 5,557,563 (see "ARM7TDMI multiply carry"). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
 `multiply_long`)   Phase: 1 (#9)
 
@@ -63,7 +63,7 @@ RdLo holds the low 32 bits of the 64-bit result, RdHi the high 32 bits.
 | N | bit 31 of the 32-bit result, or bit 63 of the 64-bit result |
 | Z | the whole result (32 or 64 bits) is zero |
 | V | not affected (see Unverified for the ARMv4 long forms: GBATEK marks it "destroyed???") |
-| C | **ARM9 (ARMv5TE): not affected.** **ARM7 (ARMv4T): destroyed**: a fixed function of the operands that this feature does not yet compute (it leaves C unchanged; see "ARM7TDMI multiply carry") |
+| C | **ARM9 (ARMv5TE): not affected.** **ARM7 (ARMv4T): destroyed**: a fixed function of the operands, computed by the carry-save model in "ARM7TDMI multiply carry" |
 
 Without S the CPSR is not changed. A failed condition makes the instruction a no-op that still
 advances the PC.
@@ -95,15 +95,15 @@ taken from GBATEK. They are oracle evidence, not hardware evidence.
 - RdHi = RdLo: the Hi half is what remains in the register.
 - N and Z come from the full result; V never changes; without S the CPSR never changes.
 - With S, C changes in about half the cases (MUL, MLA: 6,443 of 12,715; long: 6,257 of
-  12,637). The suite therefore models the ARM7TDMI multiplier carry, not "unchanged"; this feature
-  does not reproduce it yet.
+  12,637). The suite therefore models the ARM7TDMI multiplier carry, not "unchanged"; the
+  model in "ARM7TDMI multiply carry" reproduces it.
 
 ## ARM7TDMI multiply carry
 
 ARMv4 documents C after a flag-setting multiply as meaningless, but the suite shows it is a
-fixed function of the operands (see "Measured on the pinned suite"). An earlier revision of
-this note pointed at one public article for the cause (recorded in #80). #81 forbids reusing it:
-nothing below comes from it, and the session that wrote this section did not open it.
+fixed function of the operands (see "Measured on the pinned suite"). Nothing below comes from
+the public article an earlier revision of this note pointed at (recorded in #80; #81 forbids
+reusing it), and the sessions that wrote this section did not open it.
 
 ### Sources read for #81
 
@@ -166,36 +166,99 @@ per-cycle table that follows it; P2 the same table) computes multiplier x multip
   are known, with the accumulate value initialised to its low 32 bits. That is a stop by
   result width, a different thing from the data-dependent early termination below.
 
-### What the sources do not settle
+### How the datapath is read (P1/P2 table, P3 examples)
 
-The step this issue needs, which adder carry-out becomes CPSR.C, is in no passage read.
-P1 says only that the set-condition-code flag (40) decides whether the CPSR flags are
-updated and that the CPSR holds "carries and the like"; it never says which signal feeds C.
-`COUT` above is an internal adder signal. The nearest passage is the refinement "avoiding the
-need for the final adder ... by using another adder which may be present on the datapath
-anyway, e.g. as part of an ALU" (P1 and P2 refinement list); it does not say where C comes
-from either. Also not settled:
+The five-cycle table in P1 and P2 is off by one bit as printed: its row equations add the
+first Booth digit at the same weight as the initialiser vectors. P1's text says the
+initialisation takes a low bit before the first multiple is added ("Li = 2i - 1" before the
+i-th multiple), and P3 Table 2 selects 8m + 1 low save bits after m iterations. Both mean the
+initialiser's bit 0 sits in the low region before row 1. With that reading the datapath
+reproduces the four worked examples in P3 (below) exactly, and it keeps the identity
+`save + carry + R[0] = plain result`. The model therefore does this:
 
-- That this embodiment is the multiplier of the ARM7TDMI. The patents name no core; they
-  name the ARM6 only as prior art with one addition per clock.
-- Early termination, by case. This note's `m` (above, "Cycle count") applies to all six forms.
-  (a) Long forms with `m` = 4 run the full five-cycle sequence above, so the datapath is
-  settled there and only the link to C is missing. (b) MUL and MLA with `m` = 4 are only
-  known to stop once the low 32 bits are determined. (c) `m` < 4 is data-dependent early
-  termination. P1 and P2 name its trigger, "detecting when all the remaining multiplicand
-  multiples will be zero", and call the refinement "not illustrated", needing "some rather
-  messy rearrangement of the bits in the 'low', 'active' and 'high' regions". The trigger
-  points the same way as the `m` rule, but that they agree is not established (Unverified).
-  What is missing is the rearrangement that produces the final additions, so no
-  cycle-by-cycle carry model for (c) can be derived from these sources.
-- Which cycle's adder (and so which `COUT`) is last when the multiply stops early.
+- Low region (bit 0 only at the start): `SL[0] = SI[0]`, `CL[0] = CI[0]`. The active region
+  is absolute bits 33 down to 1 of the initial vectors (33 bits). The initial carry is the
+  inverse of the multiplicand taken over 34 bits after sign extension (`D[33] = D[32]`), or 0
+  when `R[0]` is 0. The accumulate value is sign-extended when SIGNED, so
+  `ACCHI = acc_ext >> 34`.
+- Row k (0-based, k = 0 to 4m - 1) uses the digit from `R[2k+2:2k]`, takes `AH = ACCHI[2k+1:2k]`,
+  applies P1's row equations, and places the two dropped bits at absolute bits `1+2k` and
+  `2+2k` of the low latches.
+- After m iterations the low latches hold `lb = 8m + 1` bits. Together: save = low save +
+  (active save << lb) + the accumulate bits from `lb + 33` up; carry = low carry + (the active
+  carry, sign-extended from its bit 32, << lb); both modulo 2^64.
 
-No model is implemented. Writing one now would mean choosing the missing link by trial against
-the suite, which #80 and #81 forbid.
+P1 and P2 both print `SL2` where `SL1` is meant in the cycle-2 low-latch row. P3's example
+titles ("100x100" and so on) are a typo: the printed bus values only work with the multiplier
+as the variable operand and the multiplicand as 1 (P3 examples 1 to 4: multiplier 0x1, 0x100,
+0x10000, 0x1000000, multiplicand 1; one, two, three and four iterations).
 
-**What this feature implements.** On the ARM7 an S multiply updates N and Z only and leaves
-C as it was. That is a documented gap against the suite, not hardware behavior. On the ARM9
-this is the documented behavior (C not affected).
+### The early-terminated core and the final cycles (P3, TRM)
+
+**US 5,557,563** ("Data processing method and apparatus including iterative multiplier", ARM,
+**P3**) describes the same kind of core inside a processor with a general-purpose barrel
+shifter and ALU. Read in full (abstract, tables, examples):
+
+- The core can stop after one, two, three or four iterations. After it stops, the result passes
+  through the barrel shifter, an "early terminate shift mechanism", and the ALU into the
+  register bank in a WL cycle (always, low word) and a WH cycle (only when the instruction
+  writes the high word).
+- Table 1 gives the barrel shifter's operation on the core's carry value in each of those
+  eight cases: WL rotates right by 22, 14, 6, 30 bits for 1 to 4 iterations; WH shifts
+  arithmetically right by 22, 14, 6 for 1 to 3 iterations and rotates right by 30 for 4.
+- Table 2 gives which save-vector bits feed the ALU's other input: low word `suma[8:0]` with
+  the top of `sumb` (1), `suma[16:0]` (2), `suma[24:0]` (3), `suma[31:0]` (4); the high word
+  from the upper save bits. This is consistent with `8m + 1` low save bits.
+- The four worked examples print, for WL, the shifter output `ShiftOut` = 0x4, 0x480, 0x48000,
+  0x4800000, the save low bits `suma` = 0x1FC, 0x1FC80, 0x1FC8000, 0x1FC800000 and the active
+  save `sumb` = 0xFFFFFFFF. The model reproduces all of them (a unit test pins them).
+
+The ARM7TDMI TRM (DDI 0029G) block diagram shows a 32 x 8 multiplier next to the barrel
+shifter and ALU, and its `m` rule (the "Cycle count" section above) counts all-ones as terminal
+for MUL and MLA. That rule is only valid for a signed multiplier, so MUL, MLA and Thumb MUL are
+modelled with SIGNED = 1 (an inference, see Unverified).
+
+### The C rule
+
+None of P1, P2, P3 or the TRM says which signal feeds CPSR.C. Two candidates defined by the
+sources were fixed in writing before any comparison with the suite:
+
+- the ALU carry-out of the last WL or WH pass, and
+- the barrel shifter's carry-out in that cycle (for a rotate right by n, bit 31 of the shifter
+  output; for an arithmetic shift right, the last bit shifted out).
+
+Compared once with the pinned suite, the ALU candidate matched about 63% of the cases and was
+rejected. The shifter candidate matched all 23,049 evaluable cases: MUL and MLA with m = 3 and 4,
+long forms with m = 3 and 4, and Thumb MUL with m = 3 and 4. The suite has no case with m = 1
+or 2, because its operands are random. So the rule is:
+
+- **MUL, MLA, Thumb MUL, and long forms with m < 4: C = bit 31 of the multiplier's carry-save
+  carry vector** (the vector after the m iterations, defined above). For a rotate right of the
+  WL word that is bit 31 of the rotated value, and for the m < 4 WH arithmetic shift it is the
+  same bit.
+- **Long forms with m = 4: C = bit 63 of the carry vector** (WH rotates right by 30, so the
+  last bit of the high word is bit 63).
+- N and Z come from the result as before; V is unchanged; ARM9 leaves C alone.
+
+For a long form with m < 4 the WH bus slice that makes the shift amounts of Table 1 work is
+`carry_active[32:1]` (contiguous); the model assumes that slice because no source states it. Its
+shifter carry-out is then carry bit 31, the same as WL. This is inferred from Table 1's shift
+amounts, not read.
+
+**Evidence level.** The match is oracle evidence only: the pinned suite, not hardware, and the
+link from shifter to flag is not in any source. The decision to adopt this model on that
+evidence is recorded in #80. A research session ran the comparison before this feature; it knew
+from #80's text that the article attributes C to a shifter stage, but both candidates were
+fixed symmetrically beforehand, so that knowledge cannot have changed the counts. The first
+attempt stopped at a datapath self-check (the off-by-one above) and was rerun with the datapath
+as read here; the only amendment before comparing was the sign extension of the multiplicand's
+inverse.
+
+**What this feature implements.** On the ARM7 an S multiply sets N and Z from the result and C by
+the rule above; V stays. This covers MUL, MLA, UMULL, UMLAL, SMULL, SMLAL and the Thumb MUL
+(`thumb.md`; its multiplier operand is Rd, the incoming value, per GBATEK THUMB.4 "m ...
+depending on MSBs of incoming Rd", and its multiplicand is Rs). On the ARM9 C is unchanged
+(documented, no suite). The model is `crates/core/src/cpu/multiply_carry.rs`.
 
 ## Edge cases
 
@@ -216,18 +279,18 @@ Each item is backed (if at all) by the JSON suite as oracle evidence, not by har
 Code sites are the handlers the implementation adds to `crates/core/src/cpu/arm.rs`
 (`multiply`, `multiply_long`); each carries `TODO(hw-unverified)`.
 
-- **ARM7 C after an S multiply** is not implemented: the handlers leave C unchanged. The suite
-  differs from that in about half of the S cases. Site: both handlers. #81 read two ARM
-  patents (see "Sources read for #81"); they give the carry-save datapath but not the link from
-  an adder carry-out to CPSR.C, nor the early-terminated form (including which cycle's adder
-  is last when a multiply stops early, and whether the patents' stop trigger equals the `m`
-  rule). Remaining routes: further
-  clean-room sources a maintainer can supply (a textbook summary of the ARM7TDMI multiplier),
-  and/or measuring C on real ARM7TDMI hardware with a test ROM of our own. If those fail,
-  whether the single bit becomes a documented Phase 1 DoD exception is decided in #80.
-- **The origin of the ARM7 C** (which stage's carry-out reaches CPSR.C, and whether the
-  patents' embodiment is the ARM7TDMI's multiplier) is not in GBATEK, the ARM ARM, the patents
-  read, or the suite. Site: both handlers (a comment only).
+- **ARM7 C after an S multiply** follows the shifter-carry rule above; the rule is not in any
+  source and rests on the pinned suite (oracle evidence). Site: both handlers, Thumb MUL and
+  `multiply_carry.rs`. Verify by a test ROM measuring C on real ARM7TDMI hardware, or a
+  clean-room summary of the multiplier from a maintainer.
+- **m = 1 and m = 2** are untested: the suite has no such case. For long forms with m < 4 the
+  WH bus slice is inferred from P3 Table 1's shift amounts. Site: `multiply_carry.rs`.
+- **SIGNED = 1 for MUL, MLA and Thumb MUL** is inferred from the TRM `m` rule, which counts
+  all-ones as terminal. Site: `multiply_carry.rs` callers.
+- **That P1/P2's embodiment is the ARM7TDMI's multiplier** is an inference: the patents name no
+  core, and P3 describes a core of the same kind with early termination.
+- **The off-by-one reading** of P1/P2's table is fixed by P3's examples and P1's text, not
+  stated outright.
 - **C on ARM9 is unchanged.** GBATEK says so for ARMv5 and up; there is no suite for ARM9.
   Site: both handlers (the `ARM9` const generic). Verify by a test ROM on real ARM9
   hardware; the self-written unit test pins the documented behavior.

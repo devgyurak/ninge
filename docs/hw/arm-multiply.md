@@ -126,44 +126,65 @@ per-cycle table that follows it; P2 the same table) computes multiplier x multip
 + accumulate as follows. It is a description of one embodiment, not of a named ARM core.
 
 - **Recoding.** Radix-4 modified Booth. The multiplier is extended to 33 bits, with a copy of
-  its sign bit when signed and 0 when unsigned (P1: `R[32] = SIGNED AND MPLIER[31]`). Each
+  its sign bit when signed and 0 when unsigned (P1: `R[32] = SIGNED AND MPLIER[31]`); the
+  multiplicand gets the same 33rd bit (P1: `D[32] = SIGNED AND MCAND[31]`). Each
   digit reads three overlapping multiplier bits, `BoothEnc(R[2:0])`, `BoothEnc(R[4:2])`, and so on.
 - **Rate.** Four multiplier rows work per cycle and each retires two result bits, so eight
   multiplier bits are consumed per cycle: Booth digits for `R[8:0]` in cycle 1 up to
   `R[32:24]` in cycle 4 (P1 table, "Booth encoders"). A 32 x 32 multiply takes five cycles; cycles
   1 to 4 consume the multiplier and cycle 5 finishes the sum.
-- **Start.** The save vector starts as the accumulate value (zero without accumulate) and the
-  carry vector as the bitwise inverse of the multiplicand when `R[0]` is 1, else zero (P1,
-  "Carry-save initialiser"). That inversion is a negation whose +1 is deferred, which is why
-  the first final-adder pass takes carry-in `R[0]` (P1, "Multiplexer C"). A negative multiple
+- **Start.** The save vector starts as the low 33 bits of the accumulate value (zero without
+  accumulate) and the carry vector as the bitwise inverse of the multiplicand when `R[0]` is 1,
+  else zero (P1, "Carry-save initialiser", `SI[i] = ACCUM AND ACCVAL[i]` for i = 0 to 32).
+  That inversion is a negation whose +1 is deferred, which is why the first final-adder pass
+  takes carry-in `R[0]` (P1, "Multiplexer C"; P2's body text states this consistently, while
+  P1's body text has one slip, so P2 is the safer source for it). A negative multiple
   inside a row carries its own +1 as the row's `XC` bit into the carry vector (P1, "Multiplier
   rows" table); that one is not deferred.
+- **Upper accumulate bits.** Accumulate bits 63 down to 33 do not enter at the start. They wait
+  in the "accumulate value high latches" and each row takes two of them per cycle (P1 table,
+  "Accumulate value high latches", `AH1` to `AH5`; the technique is claimed in P2 claims 1 to 3).
 - **Each row.** Adds one multiple of the multiplicand into the carry-save pair without a
   carry chain, shifts the active region two bits up, and drops the two now-final low bits of
-  save and carry into the low latches (P1, "Multiplier rows 1, 2, 4 and 5" equations).
+  save and carry into the low latches (P1, "Multiplier rows 1, 2, 4 and 5" equations). The top
+  two bits of a row are not plain carry-save: they sum the row's two incoming accumulate bits
+  with the complemented top carry and complemented top multiple bit, and the top carry bit
+  becomes the complement of the second accumulate bit (P1: `(S(k+1)[32], S(k+1)[31])` and
+  `C(k+1)[32]` in the same equations).
 - **Final addition.** One 32-bit adder produces `(COUT, SUM[31:0])` from the save and carry
-  inputs and a carry-in, used twice. Cycle 4 adds the low latches with carry-in `R[0]`,
+  inputs and a carry-in. It evaluates every cycle, but only two outputs are used: cycle 4 and
+  cycle 5 (P1, "Final adder": "On all cycles"). Cycle 4 adds the low latches with carry-in `R[0]`,
   keeps `COUT` in a carry latch, and writes `SUM` to `RESULT[31:0]`. Cycle 5 adds the last
   row's save and carry with the latched carry-out as carry-in and writes `SUM` to
   `RESULT[63:32]` (P1, "Multiplexer C", "Carry Latch", "Final adder", "Result latches"; the text
   says the double-width sum is "two uses of a single width adder" with the first carry-out
   feeding the second).
 - **32-bit results.** P1 says 32 x 32 -> 32 forms come from stopping once the lowest 32 bits
-  are known, with the accumulate value initialised to its low 32 bits.
+  are known, with the accumulate value initialised to its low 32 bits. That is a stop by
+  result width, a different thing from the data-dependent early termination below.
 
 ### What the sources do not settle
 
 The step this issue needs, which adder carry-out becomes CPSR.C, is in no passage read.
 P1 says only that the set-condition-code flag (40) decides whether the CPSR flags are
 updated and that the CPSR holds "carries and the like"; it never says which signal feeds C.
-`COUT` above is an internal adder signal. Also not settled:
+`COUT` above is an internal adder signal. The nearest passage is the refinement "avoiding the
+need for the final adder ... by using another adder which may be present on the datapath
+anyway, e.g. as part of an ALU" (P1 and P2 refinement list); it does not say where C comes
+from either. Also not settled:
 
 - That this embodiment is the multiplier of the ARM7TDMI. The patents name no core; they
   name the ARM6 only as prior art with one addition per clock.
-- Early termination. P1 and P2 list it as a refinement "not illustrated", needing "some
-  rather messy rearrangement of the bits in the 'low', 'active' and 'high' regions", and give
-  no rule. The MUL, MLA and signed forms of this note's `m` (1 to 4 cycles) live exactly there,
-  so no cycle-by-cycle carry model for them can be derived from these sources.
+- Early termination, by case. This note's `m` (above, "Cycle count") applies to all six forms.
+  (a) Long forms with `m` = 4 run the full five-cycle sequence above, so the datapath is
+  settled there and only the link to C is missing. (b) MUL and MLA with `m` = 4 are only
+  known to stop once the low 32 bits are determined. (c) `m` < 4 is data-dependent early
+  termination. P1 and P2 name its trigger, "detecting when all the remaining multiplicand
+  multiples will be zero", and call the refinement "not illustrated", needing "some rather
+  messy rearrangement of the bits in the 'low', 'active' and 'high' regions". The trigger
+  points the same way as the `m` rule, but that they agree is not established (Unverified).
+  What is missing is the rearrangement that produces the final additions, so no
+  cycle-by-cycle carry model for (c) can be derived from these sources.
 - Which cycle's adder (and so which `COUT`) is last when the multiply stops early.
 
 No model is implemented. Writing one now would mean choosing the missing link by trial against
@@ -196,7 +217,8 @@ Code sites are the handlers the implementation adds to `crates/core/src/cpu/arm.
   differs from that in about half of the S cases. Site: both handlers. #81 read two ARM
   patents (see "Sources read for #81"); they give the carry-save datapath but not the link from
   an adder carry-out to CPSR.C, nor the early-terminated form (including which cycle's adder
-  is last when a multiply stops early). Remaining routes: further
+  is last when a multiply stops early, and whether the patents' stop trigger equals the `m`
+  rule). Remaining routes: further
   clean-room sources a maintainer can supply (a textbook summary of the ARM7TDMI multiplier),
   and/or measuring C on real ARM7TDMI hardware with a test ROM of our own. If those fail,
   whether the single bit becomes a documented Phase 1 DoD exception is decided in #80.

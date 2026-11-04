@@ -22,9 +22,10 @@ const LR: u32 = 14;
 impl<const ARM9: bool> Cpu<ARM9> {
     /// LDR, STR, LDRB, STRB and the T forms; true if it wrote the PC.
     // On the ARM9 a word load into R15 switches state on bit 0 (`docs/hw/armv5te.md`, "Switching
-    // to Thumb on a load into R15"). TODO(hw-unverified): the T forms (LDRT, STRT) run as the plain forms
-    // because the bus has no privilege (revisit with CP15 protection); Rn = R15 with writeback
-    // is not allowed by GBATEK and follows the suite (`docs/hw/arm-load-store.md`, "Unverified").
+    // to Thumb on a load into R15"). TODO(hw-unverified): the T forms (LDRT, STRT) run as the
+    // plain forms because the bus has no privilege (revisit with CP15 protection); Rn = R15
+    // with writeback is not allowed by GBATEK and follows the suite
+    // (`docs/hw/arm-load-store.md`, "Unverified").
     pub(super) fn single_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
         let (rn, rd) = ((word >> 16) & 0xF, (word >> 12) & 0xF);
         // Bit 25 is I: a register offset shifted by an immediate; otherwise a 12-bit immediate.
@@ -51,7 +52,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 };
                 let flushed = self.write_back_single(writeback, rn, moved);
                 // Only a word load interworks.
-                // TODO(hw-unverified): a loaded target with low bits `10` keeps bit 1 in R15
+                // TODO(hw-unverified): a loaded target with low bits `10` keeps bit 1 in R15, and
+                // an LDR into R15 from an address that is not word aligned (the ARM ARM calls it
+                // unpredictable) switches state on the rotated word
                 // (`docs/hw/armv5te.md`, "Unverified").
                 match (ARM9, byte, rd) {
                     (true, false, PC) => self.exchange_to(value) || flushed,
@@ -101,9 +104,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// LDRD and STRD (`docs/hw/armv5te.md`, "LDRD and STRD"): the halfword form's addressing, two
     /// words at the address and the address + 4 to or from Rd and Rd + 1. Bit 5 distinguishes
     /// the store (SH = 11) from the load (SH = 10). True if it wrote the PC.
-    // TODO(hw-unverified): R15 as Rn or Rm is used like any register; an odd Rd or R14 is not executed, a doubleword address that is not
-    // 8-byte aligned reaches the bus as given, and with writeback to Rd or Rd + 1 the loaded
-    // value wins (`docs/hw/armv5te.md`, "Unverified").
+    // TODO(hw-unverified): R15 as Rm is used like any register (Rn = R15 reads the +8 view and
+    // is allowed); an odd Rd or R14 is not executed, a doubleword address that is not 8-byte
+    // aligned reaches the bus as given, and with writeback to Rd or Rd + 1 the loaded value
+    // wins (`docs/hw/armv5te.md`, "Unverified").
     pub(super) fn double_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
         let (rn, rd) = ((word >> 16) & 0xF, (word >> 12) & 0xF);
         // Bit 22 is I: the split immediate, or Rm.
@@ -160,10 +164,11 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// LDM and STM; true if it wrote the PC.
-    // On the ARM9 an LDM of R15 without S switches state on bit 0 (`docs/hw/armv5te.md`, "Switching
-    // to Thumb on a load into R15"). TODO(hw-unverified): the ARM9 rules for the base in the list and for the empty list come
-    // from GBATEK's prose and no suite case checks them; the empty list's transfer address is
-    // measured only for STMDB, and its base adjustment without writeback is taken as none;
+    // On the ARM9 an LDM of R15 without S switches state on bit 0 (`docs/hw/armv5te.md`,
+    // "Switching to Thumb on a load into R15"). TODO(hw-unverified): the ARM9 rules for the base
+    // in the list and for the empty list come from GBATEK's prose and no suite case checks
+    // them; the empty list's transfer address is measured only for STMDB, and its base
+    // adjustment without writeback is taken as none;
     // S together with writeback and an LDM with R15 and S in User/System (no SPSR, so the CPSR
     // stays) follow the suite (`docs/hw/arm-load-store.md`, "Unverified").
     pub(super) fn block_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {

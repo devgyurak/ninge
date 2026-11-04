@@ -5,10 +5,10 @@ Sources: GBATEK "ARM Opcodes: Branch with Link and Exchange (BLX)", "Count Leadi
 SMLALxy, SMULxy)", "Memory: Halfword, Doubleword, Signed Transfer (LDRD, STRD)", "PLD",
 "Software Breakpoint (BKPT)", "THUMB Opcodes: Register Operations (BLX)" and "Long Branch with
 Link (BLX)", and the CPSR bit table; ARM ARM (ARMv5TE) for the instruction descriptions;
-ARM946E-S TRM for the core-specific notes (PLD, the Q flag). Written from memory of those
-sources, not re-read line by line while writing, so a human should check the claims outside
-"Unverified" (Q-setting rules, the W multiplies, the PLD encoding, the BLX link values) against
-GBATEK; every claim that rests on inference is under "Unverified".
+ARM946E-S TRM for the core-specific notes (PLD, the Q flag). The claims outside "Unverified"
+(Q-setting rules, the W multiplies, the PLD encoding, the BLX link values) were checked
+against GBATEK in review; the ARM ARM statements were not re-read. Every claim that rests on
+inference is under "Unverified".
 Used by: `crates/core/src/cpu/decode.rs`, `thumb_decode.rs`, `armv5.rs`, `arm.rs`,
 `arm_transfer.rs`, `thumb.rs`, `exception.rs`   Phase: 1
 
@@ -53,15 +53,17 @@ and does the same, so it can switch Thumb to ARM when the popped bit 0 is 0.
   T then comes from the SPSR and the loaded bit 0 is not used.
 - The other loads that can name R15 as the destination (LDRB, LDRH, LDRSB, LDRSH, SWP, data
   processing, MOV) do not switch state, on either core.
-- A loaded ARM target with bit 1 set and bit 0 clear (low bits `10`) is Unverified.
+- A loaded ARM target with bit 1 set and bit 0 clear (low bits `10`) is Unverified, and so is
+  an LDR into R15 from an address that is not word aligned (the ARM ARM calls it
+  unpredictable; we switch state on the rotated word).
 
 ## BLX
 
 | Form | Encoding | Effect |
 |---|---|---|
 | ARM, immediate | `1111 101H offset24` | LR = address of the next instruction; T = 1; PC = R15 + signExtend(offset24) × 4 + H × 2 |
-| ARM, register | `cond 0001 0010 1111 1111 1111 0011 Rm` | target = Rm read first; LR = address of the next instruction; T = Rm bit 0; PC = Rm |
-| Thumb, register | `0100 0111 1 Rm(4) 000` (BX with H1 = 1) | target = Rm read first; LR = address of the next instruction + 1; T = Rm bit 0; PC = Rm |
+| ARM, register | `cond 0001 0010 1111 1111 1111 0011 Rm` | target = Rm read first; LR = address of the next instruction; T = Rm bit 0; PC = Rm with bit 0 cleared |
+| Thumb, register | `0100 0111 1 Rm(4) 000` (BX with H1 = 1) | target = Rm read first; LR = address of the next instruction + 1; T = Rm bit 0; PC = Rm with bit 0 cleared |
 | Thumb, immediate | prefix `11110 offset11`, suffix `11101 offset11` | prefix as for BL (LR = R15 + offset × 4096); suffix: target = (LR + offset × 2) with bits 1–0 cleared; LR = address of the next instruction + 1; T = 0 |
 
 - R15 is the executing address + 8 in ARM state and + 4 in Thumb state, as for every
@@ -128,7 +130,9 @@ under the same rules as `arm-load-store.md`.
   into Rd and the word at the address + 4 into Rd + 1; STRD stores them the same way.
 - The accesses are two word accesses at the raw address and address + 4.
 - A pre-indexed address is Rn ± offset; a post-indexed one is Rn, with Rn ± offset written back.
-- Rn and Rm must not be R15, and with writeback Rn must not be Rd or Rd + 1.
+- Rn may be R15 (it reads as the executing address + 8, so a PC-relative LDRD works without
+  writeback); Rm must not be R15. With writeback Rn must not be Rd or Rd + 1, and for STRD
+  Rm should not be Rd or Rd + 1.
 
 ## PLD
 
@@ -164,6 +168,8 @@ immediate is ignored by the core. On the ARM7 neither encoding is executed.
   `crates/core/src/cpu/armv5.rs`, `branch_link_exchange` — verify by a test ROM.
 - A loaded ARM target whose low two bits are `10` for LDR/LDM into R15 — `arm_transfer.rs`,
   `single_transfer`, `block_transfer` — verify by a test ROM on hardware.
+- LDR into R15 from an address that is not word aligned: the rotated word decides T and the
+  target — `arm_transfer.rs`, `single_transfer` — verify by a test ROM on hardware.
 - LDM with R15 and S in User/System mode (no SPSR): the loaded bit 0 switches state —
   `arm_transfer.rs`, `block_transfer` — verify by a test ROM.
 - The words of the `1111` condition space other than BLX and PLD are not executed (stepped
@@ -173,7 +179,7 @@ immediate is ignored by the core. On the ARM7 neither encoding is executed.
   `unconditional_kind`.
 - MSR of bit 27 on the ARM7 is stored; whether the ARM7TDMI keeps the bit is not stated —
   `crates/core/src/cpu/psr.rs`, `FLAG_Q`.
-- LDRD and STRD with R15 as Rn or Rm, and the should-be-one fields (bits 19–8) of BLX register,
+- LDRD and STRD with R15 as Rm, and the should-be-one fields (bits 19–8) of BLX register,
   CLZ and BKPT's non-immediate bits, are not checked; R15 reads as for any instruction —
   `arm_transfer.rs`, `double_transfer`; `decode.rs` — verify by a test ROM.
 - BKPT with a condition field other than AL runs conditionally here; the ARM ARM states it

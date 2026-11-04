@@ -1948,17 +1948,20 @@ fn entered_cpsr(initial: u32, mode: u32) -> u32 {
     (initial & !0xFF) | 0x80 | (initial & 0x40) | mode
 }
 
-/// Whether the entry left R0–R7 and every register bank but the entered one alone.
-fn rest_untouched(c: &Case, mode: u32) -> bool {
+/// Whether the entry left alone every User/System register (R0–R14), every bank but the
+/// entered one, the entered bank's R13, and the SPSRs of the other modes. `spsr` is the index of
+/// the entered mode's SPSR.
+fn rest_untouched(c: &Case, mode: u32, spsr: usize) -> bool {
     let (i, e) = (&c.initial, &c.expected);
-    e.r[..8] == i.r[..8]
+    e.r[..15] == i.r[..15]
         && e.r_fiq == i.r_fiq
         && e.r_irq == i.r_irq
         && e.r_abt == i.r_abt
         && match mode {
-            0x13 => e.r_und == i.r_und,
-            _ => e.r_svc == i.r_svc,
+            0x13 => e.r_und == i.r_und && e.r_svc[0] == i.r_svc[0],
+            _ => e.r_svc == i.r_svc && e.r_und[0] == i.r_und[0],
         }
+        && (0..5).all(|k| k == spsr || e.spsr[k] == i.spsr[k])
 }
 
 /// The facts every entering case of `file` shows: the CPSR, R14 and the SPSR of the entered
@@ -1984,7 +1987,7 @@ fn entry_problems(
                 && f[2].addr == vector + 4
                 && c.expected.pipeline == [f[1].data, f[2].data]
                 && c.expected.r[15] == vector + 8
-                && rest_untouched(c, mode)
+                && rest_untouched(c, mode, spsr)
         },
         least,
     )
@@ -2024,7 +2027,10 @@ fn coprocessor_number_problems() -> Vec<String> {
                     &format!("{file} cp{cp}"),
                     &cases,
                     |c| condition_passes(c) && c.opcode >> 8 & 0xF == cp,
-                    |c| c.expected.cpsr & 0x1F == 0x1B && fetches(c)[1].addr == 4,
+                    |c| {
+                        c.expected.cpsr & 0x1F == 0x1B
+                            && fetches(c).get(1).is_some_and(|f| f.addr == 4)
+                    },
                     1_000,
                 )
             })

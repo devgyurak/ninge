@@ -85,8 +85,12 @@ address + 8. In terms of that R15 value, R14 is:
 | Data abort | R15 | R15 + 4 |
 | IRQ, FIQ | R15 − 4 | R15 |
 
-GBATEK says the same return instructions serve both states. The Thumb column is that
-statement worked out for each row; it is not stated per row (see "Unverified"). FIQ has no
+GBATEK says the return address is always saved in an ARM-style form, so the same return
+instruction serves both states, and that a Thumb SWI handler finds the opcode at R14 − 2 (the
+instruction's own address + 2 is the Thumb SWI's R14). The Thumb column is derived from the
+return instructions, not from GBATEK's wording that an identical ARM-style offset is generated,
+which reads as if the added amount were the same in both states; it is not, because R15 itself
+differs by 4. The derivation is not stated per row (see "Unverified"). FIQ has no
 return instruction in GBATEK; it is given the IRQ value.
 
 ### SWI
@@ -138,9 +142,12 @@ two instructions. The interrupt controller that raises the lines (IE, IF, IME) i
 
 ### Reset
 
-Reset enters Supervisor mode with I = 1, F = 1 and T = 0, and jumps to vector +00h. GBATEK does
-not say what R14 and the SPSR hold afterwards, nor the other registers; they are left as they
-were here.
+Reset enters Supervisor mode with I = 1, F = 1 and T = 0, and jumps to vector +00h. GBATEK's
+list of entry actions (R14 and the SPSR of the new mode receive the return address and the old
+CPSR) is written for all the vectors and does not exclude Reset, but it gives no value for Reset's
+return address, so R14 and the SPSR are left as they were here, and so are the other registers
+and the vector-base flag (real hardware presumably resets the CP15 control register too; that
+arrives with #15).
 
 ### Vector base
 
@@ -168,7 +175,7 @@ were here.
   every instruction to another coprocessor (CP14 included), enter Undefined is inferred from
   the ARM7 evidence. — `Cpu::coprocessor` — verify by a test ROM on real hardware.
 - **Reset value of the ARM9 vector-base bit.** GBATEK does not give it. The flag starts at 0
-  (low vectors). — `Cpu::new` in `crates/core/src/cpu/mod.rs` — verify by a test ROM on real
+  (low vectors). — the `high_vectors` field in `crates/core/src/cpu/mod.rs` — verify by a test ROM on real
   hardware.
 - **Thumb-state return values** in the table above are worked out from GBATEK's statement that
   one return sequence serves both states, not read from it. Thumb execution is #13. —
@@ -181,8 +188,10 @@ were here.
   `TODO(hw-unverified)` — verify by a test ROM on real hardware.
 - **Only the `011`/bit 4 space is undefined.** The other encodings that ARMv4T leaves
   unallocated, and the ARMv5TE encodings (CLZ, BLX, saturating arithmetic, LDRD and STRD, PLD,
-  BKPT, MCRR/MRRC, and the `1111` condition) are not trapped; they stay unhandled until #14. —
-  `Kind::Unhandled` in `crates/core/src/cpu/decode.rs` carries `TODO(phase1)`.
+  BKPT, MCRR/MRRC, and the `1111` condition) are not trapped; they stay unhandled until #14.
+  GBATEK itself says not every unused opcode necessarily raises the exception. —
+  `Kind::Unhandled` in `crates/core/src/cpu/decode.rs`, which carries `TODO(phase1)` and
+  `TODO(hw-unverified)`.
 - **Suite-measured ARM7 facts.** For SWI and the undefined entry that the coprocessor files trigger, every case with a true
   condition shows: R14 of the entered mode = instruction address + 4, SPSR = the starting
   CPSR, T = 0, I = 1, F unchanged, vector fetches at the vector and the vector + 4 after the

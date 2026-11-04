@@ -164,14 +164,22 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// Takes a prefetch abort for the instruction that is executing (R15 = its address + 8).
     // TODO(phase1): nothing raises it yet: the protection unit is #15 and BKPT is #14.
-    pub fn prefetch_abort<B: Bus>(&mut self, bus: &mut B) {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "nothing raises an abort until #14 and #15")
+    )]
+    pub(crate) fn prefetch_abort<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::PrefetchAbort);
         self.refill(bus);
     }
 
     /// Takes a data abort for the instruction that is executing (R15 = its address + 8).
     // TODO(phase1): nothing raises it yet: the protection unit is #15.
-    pub fn data_abort<B: Bus>(&mut self, bus: &mut B) {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "nothing raises an abort until #14 and #15")
+    )]
+    pub(crate) fn data_abort<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::DataAbort);
         self.refill(bus);
     }

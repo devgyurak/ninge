@@ -181,6 +181,7 @@ fn entry_problems(trigger: Trigger, cpsr: u32) -> Vec<String> {
         cpu.regs_mut()
             .set_banked(m.bank(), 14, 0xB000 + mode_bits(*m));
     });
+    let r14_before = r14_of_each_mode(&cpu);
     let old_lr = cpu.regs().banked(want.mode.bank(), 14);
     let old_spsr = cpu.regs().spsr(want.mode.bank());
     let mut bus = RecBus::new();
@@ -197,6 +198,10 @@ fn entry_problems(trigger: Trigger, cpsr: u32) -> Vec<String> {
             "spsr",
             cpu.regs().spsr(want.mode.bank()) == want.lr.map(|_| cpsr).or(old_spsr),
         ),
+        (
+            "other banks",
+            other_banks_untouched(&cpu, &r14_before, want.mode),
+        ),
         ("r15", cpu.regs().get(15) == want.vector + 8),
         ("pipeline", cpu.pipeline() == [want.vector, want.vector + 4]),
     ];
@@ -205,6 +210,23 @@ fn entry_problems(trigger: Trigger, cpsr: u32) -> Vec<String> {
         .filter(|(_, ok)| !ok)
         .map(|(what, _)| format!("vector {:#x} from {cpsr:#x}: {what}", want.vector))
         .collect()
+}
+
+/// The R14 of every mode's bank, in `MODES` order.
+fn r14_of_each_mode(cpu: &Cpu<false>) -> Vec<u32> {
+    MODES
+        .iter()
+        .map(|m| cpu.regs().banked(m.bank(), 14))
+        .collect()
+}
+
+/// Whether every mode outside the entered bank has the R14 it had in `before`.
+fn other_banks_untouched(cpu: &Cpu<false>, before: &[u32], entered: Mode) -> bool {
+    MODES
+        .iter()
+        .zip(r14_of_each_mode(cpu).iter().zip(before))
+        .filter(|(m, _)| m.bank() != entered.bank())
+        .all(|(_, (now, then))| now == then)
 }
 
 /// Every start mode, with and without the flags, I and F set.
@@ -597,6 +619,25 @@ fn given_a_data_abort_when_the_handler_runs_subs_pc_lr_8_then_execution_resumes_
     assert_eq!(
         round_trip(Trigger::Data, start, 0xE25E_F008, 0),
         (ADDR + 8, start, [ADDR, ADDR + 4])
+    );
+}
+
+#[test]
+fn given_a_thumb_swi_when_the_handler_runs_movs_pc_lr_then_t_is_restored_and_a_16_bit_refill_follows()
+ {
+    let start = 0x10 | T_BIT;
+    let mut cpu = cpu_in(start, THUMB_PC, 0);
+    cpu.take_exception(Exception::SoftwareInterrupt);
+    cpu.set_pipeline([MOVS_PC_LR, 0]);
+    let mut bus = RecBus::new();
+    cpu.step(&mut bus);
+    assert_eq!(
+        (cpu.regs().cpsr(), cpu.regs().get(15), bus.fetches),
+        (
+            start,
+            ADDR + 2 + 4,
+            vec![(32, 8), (16, ADDR + 2), (16, ADDR + 4)]
+        )
     );
 }
 

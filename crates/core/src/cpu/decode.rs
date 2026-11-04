@@ -8,6 +8,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// Not (yet) executed: the step only advances the PC.
+    // TODO(hw-unverified): only the 011/bit 4 space traps as undefined; GBATEK says other unused
+    // opcodes need not (`docs/hw/arm-exceptions-modes.md`, "Unverified").
     // TODO(phase1): Thumb state arrives in #13; the ARMv5TE encodings (CLZ, BLX, saturating
     // arithmetic, BKPT, LDRD and STRD, which share the halfword-transfer space, and PLD) in #14.
     Unhandled,

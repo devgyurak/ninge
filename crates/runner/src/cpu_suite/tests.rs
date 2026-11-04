@@ -129,9 +129,17 @@ fn case() -> Case {
     Case {
         initial: state(),
         expected: state(),
-        transactions: vec![txn(0, 4, 0x100, 0xE1A0_1234)],
+        transactions: vec![],
         opcode: 0xE1A0_1234,
         base_addr: 0x100,
+    }
+}
+
+/// [`case`] with the one transaction the layout constants above assume.
+fn file_case() -> Case {
+    Case {
+        transactions: vec![txn(0, 4, 0x100, 0xE1A0_1234)],
+        ..case()
     }
 }
 
@@ -275,8 +283,8 @@ fn modes_that_do_not_round_trip() -> Vec<u32> {
 
 #[test]
 fn given_an_encoded_case_when_decoding_then_every_field_round_trips() {
-    let bytes = encode_file(&[case()]);
-    assert_eq!(decode(&bytes).unwrap(), vec![case()]);
+    let bytes = encode_file(&[file_case()]);
+    assert_eq!(decode(&bytes).unwrap(), vec![file_case()]);
 }
 
 #[test]
@@ -312,7 +320,7 @@ fn given_a_case_with_three_transactions_when_decoding_then_all_come_back_in_orde
 
 #[test]
 fn given_a_wrong_magic_when_decoding_then_the_error_names_byte_zero() {
-    let bytes = with_word(encode_file(&[case()]), 0, 0);
+    let bytes = with_word(encode_file(&[file_case()]), 0, 0);
     let error = decode(&bytes).unwrap_err();
     assert_eq!(
         error.to_string(),
@@ -328,7 +336,7 @@ fn given_every_truncation_of_a_file_when_decoding_then_none_is_accepted() {
 
 #[test]
 fn given_a_wrong_transactions_magic_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), TRANSACTIONS_AT + 4, 9);
+    let bytes = with_word(encode_file(&[file_case()]), TRANSACTIONS_AT + 4, 9);
     assert!(
         decode_error(&bytes).contains("wrong magic"),
         "{}",
@@ -338,7 +346,7 @@ fn given_a_wrong_transactions_magic_when_decoding_then_the_file_is_refused() {
 
 #[test]
 fn given_a_state_block_of_the_wrong_size_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), INITIAL_AT, 172);
+    let bytes = with_word(encode_file(&[file_case()]), INITIAL_AT, 172);
     assert!(
         decode_error(&bytes).contains("not 168 bytes"),
         "{}",
@@ -348,7 +356,7 @@ fn given_a_state_block_of_the_wrong_size_when_decoding_then_the_file_is_refused(
 
 #[test]
 fn given_a_state_block_smaller_than_its_fixed_part_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), FINAL_AT, 4);
+    let bytes = with_word(encode_file(&[file_case()]), FINAL_AT, 4);
     assert!(
         decode_error(&bytes).contains("not 168 bytes"),
         "{}",
@@ -358,7 +366,7 @@ fn given_a_state_block_smaller_than_its_fixed_part_when_decoding_then_the_file_i
 
 #[test]
 fn given_a_wrong_marker_in_the_initial_state_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), INITIAL_AT + 4, FINAL_MARKER);
+    let bytes = with_word(encode_file(&[file_case()]), INITIAL_AT + 4, FINAL_MARKER);
     assert!(
         decode_error(&bytes).contains("wrong marker"),
         "{}",
@@ -368,7 +376,7 @@ fn given_a_wrong_marker_in_the_initial_state_when_decoding_then_the_file_is_refu
 
 #[test]
 fn given_a_wrong_marker_in_the_final_state_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), FINAL_AT + 4, INITIAL_MARKER);
+    let bytes = with_word(encode_file(&[file_case()]), FINAL_AT + 4, INITIAL_MARKER);
     assert!(
         decode_error(&bytes).contains("wrong marker"),
         "{}",
@@ -379,7 +387,7 @@ fn given_a_wrong_marker_in_the_final_state_when_decoding_then_the_file_is_refuse
 #[test]
 fn given_a_transactions_size_that_disagrees_with_its_count_when_decoding_then_the_file_is_refused()
 {
-    let bytes = with_word(encode_file(&[case()]), TRANSACTIONS_AT, 12 + 24 * 2);
+    let bytes = with_word(encode_file(&[file_case()]), TRANSACTIONS_AT, 12 + 24 * 2);
     assert!(
         decode_error(&bytes).contains("does not match its count"),
         "{}",
@@ -389,7 +397,7 @@ fn given_a_transactions_size_that_disagrees_with_its_count_when_decoding_then_th
 
 #[test]
 fn given_a_transaction_count_beyond_the_data_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), TRANSACTIONS_AT + 8, 1000);
+    let bytes = with_word(encode_file(&[file_case()]), TRANSACTIONS_AT + 8, 1000);
     assert!(
         decode_error(&bytes).contains("does not match its count"),
         "{}",
@@ -399,7 +407,7 @@ fn given_a_transaction_count_beyond_the_data_when_decoding_then_the_file_is_refu
 
 #[test]
 fn given_a_transaction_count_that_overflows_its_size_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), TRANSACTIONS_AT + 8, u32::MAX);
+    let bytes = with_word(encode_file(&[file_case()]), TRANSACTIONS_AT + 8, u32::MAX);
     assert!(
         decode_error(&bytes).contains("does not match its count"),
         "{}",
@@ -409,7 +417,7 @@ fn given_a_transaction_count_that_overflows_its_size_when_decoding_then_the_file
 
 #[test]
 fn given_an_opcode_block_of_the_wrong_size_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), OPCODE_AT, 20);
+    let bytes = with_word(encode_file(&[file_case()]), OPCODE_AT, 20);
     assert!(
         decode_error(&bytes).contains("not 16 bytes"),
         "{}",
@@ -419,7 +427,7 @@ fn given_an_opcode_block_of_the_wrong_size_when_decoding_then_the_file_is_refuse
 
 #[test]
 fn given_a_wrong_opcode_marker_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), OPCODE_AT + 4, 0);
+    let bytes = with_word(encode_file(&[file_case()]), OPCODE_AT + 4, 0);
     assert!(
         decode_error(&bytes).contains("wrong marker"),
         "{}",
@@ -429,7 +437,7 @@ fn given_a_wrong_opcode_marker_when_decoding_then_the_file_is_refused() {
 
 #[test]
 fn given_a_case_size_larger_than_its_blocks_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), CASE_AT, 392 + 4);
+    let bytes = with_word(encode_file(&[file_case()]), CASE_AT, 392 + 4);
     assert!(
         decode_error(&bytes).contains("does not match its blocks"),
         "{}",
@@ -439,7 +447,7 @@ fn given_a_case_size_larger_than_its_blocks_when_decoding_then_the_file_is_refus
 
 #[test]
 fn given_a_case_size_smaller_than_its_blocks_when_decoding_then_the_file_is_refused() {
-    let bytes = with_word(encode_file(&[case()]), CASE_AT, 392 - 4);
+    let bytes = with_word(encode_file(&[file_case()]), CASE_AT, 392 - 4);
     assert!(
         decode_error(&bytes).contains("does not match its blocks"),
         "{}",
@@ -449,7 +457,7 @@ fn given_a_case_size_smaller_than_its_blocks_when_decoding_then_the_file_is_refu
 
 #[test]
 fn given_a_byte_after_the_last_case_when_decoding_then_the_file_is_refused() {
-    let mut bytes = encode_file(&[case()]);
+    let mut bytes = encode_file(&[file_case()]);
     bytes.push(0);
     assert_eq!(
         decode_error(&bytes),
@@ -675,11 +683,40 @@ fn given_a_difference_in_the_user_bank_registers_when_running_a_noop_step_then_t
 }
 
 #[test]
-fn given_pipeline_and_access_values_that_differ_when_running_then_they_are_not_compared() {
+fn given_access_values_that_differ_when_running_then_they_are_not_compared() {
     let mut c = case();
-    c.expected.pipeline = [1, 2];
     c.expected.access = 99;
     assert_eq!(run_noop(&c), vec![]);
+}
+
+#[test]
+fn given_a_final_pipeline_that_differs_when_running_then_each_word_is_reported() {
+    let mut c = case();
+    c.expected.pipeline = [1, 0xBBBB];
+    c.expected.pipeline[1] ^= 4;
+    let diffs = run_noop(&c);
+    assert_eq!(
+        diffs,
+        vec![
+            FieldDiff {
+                name: "pipeline[0]".to_string(),
+                expected: "0x00000001".to_string(),
+                actual: "0x0000aaaa".to_string(),
+            },
+            FieldDiff {
+                name: "pipeline[1]".to_string(),
+                expected: "0x0000bbbf".to_string(),
+                actual: "0x0000bbbb".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn given_an_initial_pipeline_when_the_step_runs_then_the_cpu_holds_it() {
+    let c = case();
+    let diffs = run_case_with::<false>(&c, |cpu, _| assert_eq!(cpu.pipeline(), [0xAAAA, 0xBBBB]));
+    assert_eq!(diffs, vec![]);
 }
 
 #[test]
@@ -761,10 +798,42 @@ fn given_a_data_read_the_step_never_made_when_running_then_the_read_is_described
 }
 
 #[test]
-fn given_a_fetch_transaction_only_when_running_then_it_is_not_a_data_diff() {
+fn given_a_step_that_fetches_the_expected_words_when_running_then_the_fetches_match() {
     let mut c = case();
-    c.transactions = vec![txn(0, 4, 0x100, 1), txn(0, 4, 0x104, 2)];
-    assert_eq!(run_noop(&c), vec![]);
+    c.transactions = vec![txn(0, 4, 0x108, 0x108), txn(0, 2, 0x10C, 0x10C)];
+    let diffs = run_case_with::<false>(&c, |_, bus| {
+        bus.fetch32(0x108);
+        bus.fetch16(0x10C);
+    });
+    assert_eq!(diffs, vec![]);
+}
+
+#[test]
+fn given_a_fetch_the_step_never_made_when_running_then_it_is_reported_missing() {
+    let mut c = case();
+    c.transactions = vec![txn(0, 4, 0x108, 0x108)];
+    assert_eq!(
+        run_noop(&c),
+        vec![FieldDiff {
+            name: "transaction[0]".to_string(),
+            expected: "fetch size=4 addr=0x00000108 data=0x00000108".to_string(),
+            actual: "none".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn given_a_fetch_before_a_read_when_the_step_reads_first_then_the_order_is_reported() {
+    let mut c = case();
+    c.transactions = vec![txn(0, 4, 0x108, 0x108), txn(1, 4, 0x20, 0)];
+    let diffs = run_case_with::<false>(&c, |_, bus| {
+        bus.read32(0x20);
+        bus.fetch32(0x108);
+    });
+    assert_eq!(
+        diffs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        vec!["transaction[0]", "transaction[1]"]
+    );
 }
 
 #[test]

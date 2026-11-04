@@ -22,6 +22,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cpu<const ARM9: bool> {
     regs: Registers,
+    /// The two opcodes fetched ahead of execution: `[0]` runs next
+    /// (`docs/hw/arm-branch-pipeline.md`).
+    pipeline: [u32; 2],
 }
 
 impl<const ARM9: bool> Cpu<ARM9> {
@@ -29,6 +32,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     pub fn new() -> Self {
         Self {
             regs: Registers::new(),
+            pipeline: [0; 2],
         }
     }
 
@@ -40,6 +44,19 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// The register file, for the host and the test harness to set up state.
     pub fn regs_mut(&mut self) -> &mut Registers {
         &mut self.regs
+    }
+
+    /// The prefetch pipeline: the opcode that executes next, then the one after it
+    /// (`docs/hw/arm-branch-pipeline.md`).
+    // The debugger's CPU panel (#56) will show it.
+    pub fn pipeline(&self) -> [u32; 2] {
+        self.pipeline
+    }
+
+    /// Sets the prefetch pipeline, for the host and the test harness to set up state.
+    // TODO(phase2): direct boot (#17) fills the pipeline from the entry point.
+    pub fn set_pipeline(&mut self, pipeline: [u32; 2]) {
+        self.pipeline = pipeline;
     }
 
     /// Executes one instruction.

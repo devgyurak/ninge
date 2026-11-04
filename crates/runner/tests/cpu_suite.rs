@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ninge_runner::cpu_suite::{Case, State, decode, run_json_suite};
+use ninge_runner::cpu_suite::{Case, State, Transaction, decode, run_json_suite};
 
 /// Modes that bank registers, with the first banked register and the offset of the bank in
 /// the suite's `R_*` order: FIQ banks R8–R14, the others R13–R14.
@@ -1469,6 +1469,401 @@ fn given_arm_ldm_stm_when_run_on_arm7_then_no_case_differs() {
 fn given_arm_swp_when_run_on_arm7_then_no_case_differs() {
     assert_eq!(
         arm7_diffs("arm_swp.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+// ---- The prefetch pipeline (#11, `docs/hw/arm-branch-pipeline.md`) -------------------------
+//
+// Oracle evidence, not hardware evidence: each fact below is what the suite shows and is listed
+// under "Unverified" in the note where GBATEK is silent.
+
+/// The ARM files the CPU executes: the data-processing, PSR, multiply, transfer, swap, branch
+/// and BX groups.
+const PIPELINE_FILES: [&str; 16] = [
+    "arm_data_proc_immediate.json.bin",
+    "arm_data_proc_immediate_shift.json.bin",
+    "arm_data_proc_register_shift.json.bin",
+    "arm_mrs.json.bin",
+    "arm_msr_imm.json.bin",
+    "arm_msr_reg.json.bin",
+    "arm_mul_mla.json.bin",
+    "arm_mull_mlal.json.bin",
+    "arm_ldr_str_immediate_offset.json.bin",
+    "arm_ldr_str_register_offset.json.bin",
+    "arm_ldrh_strh.json.bin",
+    "arm_ldrsb_ldrsh.json.bin",
+    "arm_ldm_stm.json.bin",
+    "arm_swp.json.bin",
+    "arm_b_bl.json.bin",
+    "arm_bx.json.bin",
+];
+
+/// The code fetches of a case, in order.
+fn fetches(case: &Case) -> Vec<Transaction> {
+    case.transactions
+        .iter()
+        .copied()
+        .filter(|t| t.kind == 0)
+        .collect()
+}
+
+/// Every case of `PIPELINE_FILES`, labeled `file[index]`.
+fn pipeline_cases() -> Vec<(String, Case)> {
+    PIPELINE_FILES
+        .iter()
+        .flat_map(|file| {
+            cases_of(file)
+                .into_iter()
+                .enumerate()
+                .map(move |(i, c)| (format!("{file}[{i}]"), c))
+        })
+        .collect()
+}
+
+/// Labels of the cases that `keep` selects and `holds` rejects, plus a guard that enough cases
+/// were checked.
+fn fact_problems(
+    label: &str,
+    cases: &[(String, Case)],
+    keep: impl Fn(&Case) -> bool,
+    holds: impl Fn(&Case) -> bool,
+    least: usize,
+) -> Vec<String> {
+    let kept: Vec<&(String, Case)> = cases.iter().filter(|(_, c)| keep(c)).collect();
+    let mut problems: Vec<String> = kept
+        .iter()
+        .filter(|(_, c)| !holds(c))
+        .map(|(name, _)| format!("{label}: {name}"))
+        .collect();
+    problems.extend(too_few(label, kept.len(), least));
+    problems
+}
+
+/// Whether the fetch pair after the first is `t & !3` and `(t & !3) + 4` and the final state is
+/// the pipeline those two fetches fill, with R15 = t + 8 for the `t` whose low bits R15 keeps.
+fn refilled_as_arm(c: &Case) -> bool {
+    let f = fetches(c);
+    let r15 = c.expected.r[15];
+    f.len() == 3
+        && f[1].size == 4
+        && f[2].size == 4
+        && f[1].addr & 3 == 0
+        && f[2].addr == f[1].addr.wrapping_add(4)
+        && c.expected.pipeline == [f[1].data, f[2].data]
+        && r15.wrapping_sub(f[1].addr) >> 2 == 2
+}
+
+fn plain_step(c: &Case) -> bool {
+    let f = fetches(c);
+    f.len() == 1
+        && c.expected.pipeline == [c.initial.pipeline[1], f[0].data]
+        && c.expected.r[15] == c.initial.r[15].wrapping_add(4)
+}
+
+/// Fact 1: `pipeline[0]` is the opcode and R15 is the base + 8, in every case.
+fn start_state_problems() -> Vec<String> {
+    fact_problems(
+        "start",
+        &pipeline_cases(),
+        |_| true,
+        |c| c.initial.pipeline[0] == c.opcode && c.initial.r[15] == c.base_addr.wrapping_add(8),
+        800_000,
+    )
+}
+
+#[test]
+fn given_every_executed_arm_file_when_reading_start_states_then_pipeline_0_is_the_opcode_and_r15_is_base_plus_8()
+ {
+    assert_eq!(start_state_problems(), Vec::<String>::new());
+}
+
+/// Fact 2: the first transaction is a word fetch at R15 (base + 8); after the data accesses
+/// only the two refill fetches can follow.
+fn fetch_order_problems() -> Vec<String> {
+    let shape = |c: &Case| {
+        let kinds: Vec<u32> = c.transactions.iter().map(|t| t.kind).collect();
+        let data_end = kinds.iter().rposition(|&k| k != 0).map_or(1, |i| i + 1);
+        let tail = &kinds[data_end..];
+        let head_is_fetch = kinds[0] == 0 && kinds[1..data_end].iter().all(|&k| k != 0);
+        head_is_fetch && (tail.is_empty() || tail == [0, 0])
+    };
+    fact_problems(
+        "fetch order",
+        &pipeline_cases(),
+        |_| true,
+        |c| {
+            let first = c.transactions[0];
+            shape(c) && first.size == 4 && first.addr == c.base_addr.wrapping_add(8)
+        },
+        800_000,
+    )
+}
+
+#[test]
+fn given_every_executed_arm_file_when_listing_transactions_then_a_fetch_at_base_plus_8_comes_before_any_data_access()
+ {
+    assert_eq!(fetch_order_problems(), Vec::<String>::new());
+}
+
+/// Fact 3: a failed condition, and an ALU result not written to R15, shift the pipeline by one
+/// fetched word and advance R15 by 4.
+fn plain_advance_problems() -> Vec<String> {
+    let mut problems = fact_problems(
+        "failed condition",
+        &pipeline_cases(),
+        |c| !condition_passes(c),
+        |c| plain_step(c) && c.transactions.len() == 1,
+        100_000,
+    );
+    let alu: Vec<(String, Case)> = pipeline_cases()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("arm_data_proc"))
+        .collect();
+    problems.extend(fact_problems(
+        "ALU, Rd not R15",
+        &alu,
+        |c| condition_passes(c) && c.opcode >> 12 & 0xF != 15,
+        plain_step,
+        50_000,
+    ));
+    problems
+}
+
+#[test]
+fn given_failed_conditions_and_alu_results_outside_r15_when_comparing_then_the_pipeline_shifts_and_r15_advances_by_4()
+ {
+    assert_eq!(plain_advance_problems(), Vec::<String>::new());
+}
+
+/// Fact 4: a write to the PC fetches twice more, at `target & !3` and `+ 4`; the pipeline holds
+/// those two words and R15 is target + 8 with the low bits kept (R15 − first fetch is 8..=11).
+/// The cases: ALU Rd = 15 (not a compare), LDR into the PC, LDM with R15 in the list, multiply
+/// Rd = 15, SWP Rd = 15, B and BL. Cases that end in Thumb state are left to fact 5.
+fn pc_write_problems() -> Vec<String> {
+    let flushes = |c: &Case| condition_passes(c) && c.expected.cpsr >> 5 & 1 == 0;
+    let groups: [(&str, &str, fn(&Case) -> bool); 6] = [
+        ("ALU", "arm_data_proc", |c| {
+            c.opcode >> 12 & 0xF == 15 && !(8..=11).contains(&(c.opcode >> 21 & 0xF))
+        }),
+        ("LDR PC", "arm_ldr_str", |c| {
+            c.opcode >> 20 & 1 == 1 && c.opcode >> 12 & 0xF == 15
+        }),
+        ("LDM PC", "arm_ldm_stm", |c| {
+            c.opcode >> 20 & 1 == 1 && c.opcode >> 15 & 1 == 1
+        }),
+        ("MUL PC", "arm_mul_mla", |c| c.opcode >> 16 & 0xF == 15),
+        ("SWP PC", "arm_swp", |c| c.opcode >> 12 & 0xF == 15),
+        ("B, BL", "arm_b_bl", |_| true),
+    ];
+    groups
+        .iter()
+        .flat_map(|&(label, prefix, select)| {
+            let cases: Vec<(String, Case)> = pipeline_cases()
+                .into_iter()
+                .filter(|(name, _)| name.starts_with(prefix))
+                .collect();
+            fact_problems(
+                label,
+                &cases,
+                |c| flushes(c) && select(c),
+                |c| {
+                    let f = fetches(c);
+                    refilled_as_arm(c) && f[0].addr == c.base_addr.wrapping_add(8)
+                },
+                100,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn given_pc_writes_when_comparing_then_two_more_fetches_follow_at_the_aligned_target_and_r15_is_target_plus_8()
+ {
+    assert_eq!(pc_write_problems(), Vec::<String>::new());
+}
+
+/// B and BL land exactly on R15 (base + 8) + the sign-extended word offset; BL's LR is base + 4.
+fn branch_target_problems() -> Vec<String> {
+    let cases: Vec<(String, Case)> = pipeline_cases()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("arm_b_bl"))
+        .collect();
+    let target = |c: &Case| {
+        let offset = (((c.opcode & 0x00FF_FFFF) << 8) as i32 >> 6) as u32; // sign-extend, then << 2
+        c.base_addr.wrapping_add(8).wrapping_add(offset)
+    };
+    let mut problems = fact_problems(
+        "branch target",
+        &cases,
+        condition_passes,
+        |c| c.expected.r[15] == target(c).wrapping_add(8) && fetches(c)[1].addr == target(c),
+        10_000,
+    );
+    problems.extend(fact_problems(
+        "BL link",
+        &cases,
+        |c| condition_passes(c) && c.opcode >> 24 & 1 == 1 && c.initial.cpsr & 0x1F == 0x1F,
+        |c| c.expected.r[14] == c.base_addr.wrapping_add(4),
+        1_000,
+    ));
+    problems
+}
+
+#[test]
+fn given_b_and_bl_when_comparing_then_the_target_is_r15_plus_the_word_offset_and_bl_links_the_next_instruction()
+ {
+    assert_eq!(branch_target_problems(), Vec::<String>::new());
+}
+
+/// Fact 5: BX with bit 0 set fetches a word, then two halfwords at `t & !1` and `+ 2`; T is
+/// set and R15 is `(t & !1) + 4`. The halfword is the low half of the address' word.
+fn bx_thumb_problems() -> Vec<String> {
+    let cases = cases_of_prefixed("arm_bx");
+    fact_problems(
+        "BX to Thumb",
+        &cases,
+        |c| condition_passes(c) && c.expected.cpsr >> 5 & 1 == 1,
+        |c| {
+            let f = fetches(c);
+            f.len() == 3
+                && (f[1].size, f[2].size) == (2, 2)
+                && f[1].addr & 1 == 0
+                && f[2].addr == f[1].addr.wrapping_add(2)
+                && c.expected.r[15] == f[1].addr.wrapping_add(4)
+                && c.expected.pipeline == [f[1].data, f[2].data]
+                && f[1].data == f[1].addr & 0xFFFF
+        },
+        1_000,
+    )
+}
+
+fn cases_of_prefixed(prefix: &str) -> Vec<(String, Case)> {
+    pipeline_cases()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(prefix))
+        .collect()
+}
+
+#[test]
+fn given_bx_to_thumb_when_comparing_then_it_fetches_32_16_16_sets_t_and_r15_is_the_halfword_target_plus_4()
+ {
+    assert_eq!(bx_thumb_problems(), Vec::<String>::new());
+}
+
+/// Fact 6: BX to ARM with bit 1 set fetches word-aligned but R15 = target + 8 stays unaligned
+/// (R15 − first fetch = 10). Rn is restricted to R0–R7, which are the same in every mode.
+fn bx_arm_bit_1_problems() -> Vec<String> {
+    let target = |c: &Case| c.initial.r[(c.opcode & 0xF) as usize];
+    fact_problems(
+        "BX to ARM with bit 1",
+        &cases_of_prefixed("arm_bx"),
+        |c| condition_passes(c) && c.opcode & 0xF < 8 && target(c) & 3 == 2,
+        |c| {
+            let f = fetches(c);
+            refilled_as_arm(c)
+                && c.expected.r[15] == target(c).wrapping_add(8)
+                && f[1].addr == target(c) & !3
+        },
+        1_000,
+    )
+}
+
+#[test]
+fn given_bx_to_arm_with_bit_1_set_when_comparing_then_fetches_are_word_aligned_and_r15_keeps_the_target_plus_8()
+ {
+    assert_eq!(bx_arm_bit_1_problems(), Vec::<String>::new());
+}
+
+/// Fact 7: MRS with Rd = R15 is not a flush: one fetch, the pipeline shifts, R15 advances by 4
+/// from the value written.
+fn mrs_no_flush_problems() -> Vec<String> {
+    fact_problems(
+        "MRS Rd = R15",
+        &cases_of_prefixed("arm_mrs"),
+        |c| condition_passes(c) && c.opcode >> 12 & 0xF == 15,
+        |c| {
+            let f = fetches(c);
+            f.len() == 1
+                && c.transactions.len() == 1
+                && c.expected.pipeline == [c.initial.pipeline[1], f[0].data]
+        },
+        1_000,
+    )
+}
+
+#[test]
+fn given_mrs_with_rd_r15_when_comparing_then_nothing_flushes_and_one_fetch_is_made() {
+    assert_eq!(mrs_no_flush_problems(), Vec::<String>::new());
+}
+
+/// Fact 8: a single or halfword transfer that writes back to Rn = R15 (no PC load) flushes to
+/// the moved address + 4 (so R15 = moved + 12); a block transfer flushes to the moved address
+/// (R15 = moved + 8).
+fn r15_writeback_flush_problems() -> Vec<String> {
+    let moved = |base: u32, up: bool, bytes: u32| match up {
+        true => base.wrapping_add(bytes),
+        false => base.wrapping_sub(bytes),
+    };
+    let single = |c: &Case| {
+        let o = c.opcode;
+        o >> 25 & 1 == 0
+            && o >> 16 & 0xF == 15
+            && o >> 12 & 0xF != 15
+            && (o >> 21 & 1 == 1 || o >> 24 & 1 == 0)
+    };
+    let block = |c: &Case| {
+        let o = c.opcode;
+        o >> 16 & 0xF == 15 && o >> 21 & 1 == 1 && o & 0xFFFF != 0 && o >> 15 & 1 == 0
+    };
+    let mut problems = fact_problems(
+        "single writeback to R15",
+        &cases_of_prefixed("arm_ldr_str_immediate_offset"),
+        |c| condition_passes(c) && is_user_or_system(c) && single(c),
+        |c| {
+            let target = moved(
+                c.base_addr.wrapping_add(8),
+                c.opcode >> 23 & 1 == 1,
+                c.opcode & 0xFFF,
+            );
+            let f = fetches(c);
+            f.len() == 3 && f[1].addr == target.wrapping_add(4) & !3 && refilled_as_arm(c)
+        },
+        100,
+    );
+    problems.extend(fact_problems(
+        "block writeback to R15",
+        &cases_of_prefixed("arm_ldm_stm"),
+        |c| condition_passes(c) && is_user_or_system(c) && block(c),
+        |c| {
+            let bytes = 4 * (c.opcode & 0xFFFF).count_ones();
+            let target = moved(c.base_addr.wrapping_add(8), c.opcode >> 23 & 1 == 1, bytes);
+            let f = fetches(c);
+            f.len() == 3 && f[1].addr == target & !3 && refilled_as_arm(c)
+        },
+        100,
+    ));
+    problems
+}
+
+#[test]
+fn given_transfers_writing_back_to_r15_when_comparing_then_single_flushes_to_moved_plus_4_and_block_to_moved()
+ {
+    assert_eq!(r15_writeback_flush_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_arm_b_bl_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_b_bl.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_arm_bx_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("arm_bx.json.bin"),
         Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
     );
 }

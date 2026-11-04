@@ -1169,3 +1169,34 @@ fn given_an_arm7_bkpt_words_when_executed_then_nothing_happens_but_the_advance()
         (SVC, 0x77, 0x100C, SVC | T_BIT, ADDR + 6)
     );
 }
+
+// ---------------------------------------------------------------- the Q flag through MSR / MRS
+
+/// `MSR CPSR_f, R0`.
+const MSR_F_R0: u32 = 0xE128_F000;
+/// `MRS R1, CPSR`.
+const MRS_R1: u32 = 0xE10F_1000;
+
+#[test]
+fn given_an_arm9_with_q_set_when_msr_writes_the_flags_byte_with_q_clear_then_q_is_cleared() {
+    let r = run::<true>(SVC | Q, &[(0, 0)], &[], MSR_F_R0);
+    assert_eq!(r.cpsr(), SVC);
+}
+
+#[test]
+fn given_an_arm9_with_q_clear_when_msr_writes_the_flags_byte_with_q_set_then_q_is_set() {
+    let r = arm::<true>(&[(0, Q)], &[], MSR_F_R0);
+    assert_eq!(r.cpsr(), SVC | Q);
+}
+
+#[test]
+fn given_an_arm9_with_q_set_when_mrs_reads_the_cpsr_then_the_result_includes_q() {
+    let r = run::<true>(SVC | Q, &[], &[], MRS_R1);
+    assert_eq!(r.r(1), SVC | Q);
+}
+
+#[test]
+fn given_an_arm7_when_msr_writes_bit_27_then_the_bit_is_stored() {
+    let r = arm::<false>(&[(0, Q)], &[], MSR_F_R0);
+    assert_eq!(r.cpsr(), SVC | Q);
+}

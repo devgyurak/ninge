@@ -394,7 +394,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// With S (bit 20): N and Z from the result, V stays. C stays on the ARM9; on the ARM7 it is
-    /// `arm7_carry()`, the multiplier carry model (`multiply_carry.rs`), run only when S is set.
+    /// the `arm7_carry` closure, the multiplier carry model (`multiply_carry.rs`), run only when S is set.
     // TODO(hw-unverified): see `multiply` and `multiply_long` for C and V.
     fn set_multiply_flags(
         &mut self,

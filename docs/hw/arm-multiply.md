@@ -3,7 +3,8 @@
 Sources: GBATEK "ARM Opcodes: Multiply and Multiply-Accumulate (MUL, MLA)" (the same
 section covers the long forms) is the primary source for the behavior; ARM ARM (ARMv5TE) "MUL",
 "MLA", "UMULL", "UMLAL", "SMULL", "SMLAL" and ARM7TDMI TRM "Multiply instructions" are listed as
-background; not re-read for this note. For the ARM7TDMI carry only: US 5,583,804, US 5,528,529 and
+background; not re-read for this note (the carry section uses the TRM's `m` rule and block
+diagram, as quoted in "Cycle count" above). For the ARM7TDMI carry only: US 5,583,804, US 5,528,529 and
 US 5,557,563 (see "ARM7TDMI multiply carry"). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
 `multiply_long`)   Phase: 1 (#9)
@@ -107,7 +108,7 @@ reusing it), and the sessions that wrote this section did not open it.
 
 ### Sources read for #81
 
-Both are ARM patents with largely the same specification text, filed in the mid-1990s; read in full
+P1 and P2 are ARM patents with largely the same specification text, filed in the mid-1990s; read in full
 on patents.google.com (specification and example tables, not the abstract):
 
 - **US 5,583,804**, "Data processing using multiply-accumulate instructions" (Advanced RISC
@@ -115,6 +116,8 @@ on patents.google.com (specification and example tables, not the abstract):
 - **US 5,528,529**, "Electronic multiplying and adding apparatus and method" (Advanced RISC
   Machines Ltd). Called **P2**. It repeats P1's example multiplier (its own five-cycle table
   and early-termination remark), and its claims cover the carry-save accumulate-bit technique.
+- **US 5,557,563**, called **P3**, is described below ("The early-terminated core and the
+  final cycles").
 
 Searches for a patent that states how a multiply sets a CPSR flag, or that describes the
 early-terminated form, found none (only other assignees' patents, which are not used).
@@ -228,9 +231,11 @@ sources were fixed in writing before any comparison with the suite:
   output; for an arithmetic shift right, the last bit shifted out).
 
 Compared once with the pinned suite, the ALU candidate matched about 63% of the cases and was
-rejected. The shifter candidate matched all 23,049 evaluable cases: MUL and MLA with m = 3 and 4,
-long forms with m = 3 and 4, and Thumb MUL with m = 3 and 4. The suite has no case with m = 1
-or 2, because its operands are random. So the rule is:
+rejected. "Evaluable" there means S cases whose condition passes, with no R15 operand and a
+defined mode, and m = 3 or 4: 9,623 + 70 + 10,129 + 71 + 29 + 3,127 = 23,049 cases (long m = 4
+and 3, MUL/MLA m = 4 and 3, Thumb MUL m = 4 and 3). The shifter candidate matched all of them.
+The suite has no case with m = 1 or 2, because its operands are random. The implemented model
+then also matches every case of the three suite files, R15 operands included. So the rule is:
 
 - **MUL, MLA, Thumb MUL, and long forms with m < 4: C = bit 31 of the multiplier's carry-save
   carry vector** (the vector after the m iterations, defined above). For a rotate right of the
@@ -247,9 +252,11 @@ amounts, not read.
 
 **Evidence level.** The match is oracle evidence only: the pinned suite, not hardware, and the
 link from shifter to flag is not in any source. The decision to adopt this model on that
-evidence is recorded in #80. A research session ran the comparison before this feature; it knew
-from #80's text that the article attributes C to a shifter stage, but both candidates were
-fixed symmetrically beforehand, so that knowledge cannot have changed the counts. The first
+evidence is recorded in #80. A research session ran the comparison before this feature. It knew
+from #80's text that the article attributes C to a shifter stage, so the choice of candidates
+was informed by that: only the datapath (from the patents) is independent of it. Both
+candidates were fixed in writing before any count was seen, which keeps the counts themselves
+honest, but the shifter idea cannot be claimed to come from the permitted sources. The first
 attempt stopped at a datapath self-check (the off-by-one above) and was rerun with the datapath
 as read here; the only amendment before comparing was the sign extension of the multiplicand's
 inverse.
@@ -288,9 +295,10 @@ Code sites are the handlers the implementation adds to `crates/core/src/cpu/arm.
 - **SIGNED = 1 for MUL, MLA and Thumb MUL** is inferred from the TRM `m` rule, which counts
   all-ones as terminal. Site: `multiply_carry.rs` callers.
 - **That P1/P2's embodiment is the ARM7TDMI's multiplier** is an inference: the patents name no
-  core, and P3 describes a core of the same kind with early termination.
+  core, and P3 describes a core of the same kind with early termination. Site:
+  `multiply_carry.rs` (module comment).
 - **The off-by-one reading** of P1/P2's table is fixed by P3's examples and P1's text, not
-  stated outright.
+  stated outright. Site: `multiply_carry.rs` (module comment).
 - **C on ARM9 is unchanged.** GBATEK says so for ARMv5 and up; there is no suite for ARM9.
   Site: both handlers (the `ARM9` const generic). Verify by a test ROM on real ARM9
   hardware; the self-written unit test pins the documented behavior.

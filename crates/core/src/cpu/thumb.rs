@@ -280,9 +280,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Format 4: the sixteen register ALU operations; N and Z always update.
-    // TODO(hw-unverified): MUL leaves C and V unchanged. C after MUL is meaningless on ARMv4T
-    // per GBATEK and the suite shows it changing (#81, the same gap as the ARM multiply); V is
-    // unchanged (`docs/hw/thumb.md`, "Unverified").
+    // TODO(hw-unverified): MUL's V is unchanged; its C is the multiplier carry model (see the
+    // `OP_MUL` arm; `docs/hw/thumb.md`, "Unverified").
     fn alu_register(&mut self, word: u32) -> bool {
         let (carry, overflow) = self.carry_and_overflow();
         let op = word >> 6 & 0xF;

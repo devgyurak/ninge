@@ -7,6 +7,10 @@ use super::arm::{ARM_PC_AHEAD, ARM_WORD, LR, THUMB_HALFWORD, branch_offset};
 
 /// BLX (immediate) adds H, bit 24, as a halfword to the word-scaled offset.
 const BLX_H_SHIFT: u32 = 1;
+/// Rd's position in CLZ and the saturating adds (bits 15–12).
+const RD_SHIFT: u32 = 12;
+/// R15's index.
+const PC: u32 = 15;
 /// Bit 0 of a link value written from Thumb state, so that a return by BX stays in Thumb.
 const THUMB_LINK_BIT: u32 = 1;
 
@@ -42,5 +46,22 @@ impl<const ARM9: bool> Cpu<ARM9> {
         let next = self.regs.get(15).wrapping_sub(THUMB_HALFWORD);
         self.regs.set(LR, next | THUMB_LINK_BIT);
         self.exchange_to(target)
+    }
+
+    /// CLZ (`docs/hw/armv5te.md`, "CLZ"): Rd = the leading zero bits of Rm, 32 for 0. No flags.
+    pub(super) fn count_leading_zeros(&mut self, word: u32) -> bool {
+        let value = self.operand(word & 0xF, 0);
+        self.write_destination(word >> RD_SHIFT & 0xF, value.leading_zeros())
+    }
+
+    /// Writes a result to Rd; R15 takes the value and the step refills from it. True if R15.
+    // TODO(hw-unverified): R15 is not allowed as the destination of these instructions; it is
+    // written like a data-processing result (`docs/hw/armv5te.md`, "Unverified").
+    fn write_destination(&mut self, rd: u32, value: u32) -> bool {
+        match rd {
+            PC => self.write_pc(value),
+            _ => self.regs.set(rd as usize, value),
+        }
+        rd == PC
     }
 }

@@ -391,3 +391,65 @@ fn given_an_arm7_thumb_blx_suffix_when_executed_then_nothing_happens_but_the_adv
     let r = thumb::<false>(&[(LR, 0x2002)], &[], THUMB_BLX_SUFFIX_4);
     assert_eq!((r.thumb(), r.r(LR), r.r(15)), (true, 0x2002, ADDR + 6));
 }
+
+// ---------------------------------------------------------------- CLZ
+
+/// CLZ R2, R1.
+const CLZ_R2_R1: u32 = 0xE16F_2F11;
+
+/// Inputs and their leading-zero counts, from `docs/hw/armv5te.md`, "CLZ".
+const CLZ_CASES: [(u32, u32); 8] = [
+    (0, 32),
+    (1, 31),
+    (0x8000_0000, 0),
+    (0xFFFF_FFFF, 0),
+    (0x0001_0000, 15),
+    (0x0000_FFFF, 16),
+    (0x0000_0100, 23),
+    (0x4000_0000, 1),
+];
+
+/// The cases where the ARM9's R2 differs from the count.
+fn clz_failures() -> Vec<(u32, u32, u32)> {
+    CLZ_CASES
+        .iter()
+        .map(|&(x, want)| {
+            (
+                x,
+                want,
+                arm::<true>(&[(1, x), (2, 0x77)], &[], CLZ_R2_R1).r(2),
+            )
+        })
+        .filter(|(_, want, got)| want != got)
+        .collect()
+}
+
+/// Counts leading zeros bit by bit from the top, independently of `leading_zeros`.
+fn model_clz(x: u32) -> u32 {
+    (0..32).take_while(|bit| x >> (31 - bit) & 1 == 0).count() as u32
+}
+
+#[test]
+fn given_an_arm9_clz_when_executed_on_the_edge_values_then_rd_is_the_leading_zero_count() {
+    assert_eq!(clz_failures(), vec![]);
+}
+
+#[test]
+fn given_an_arm9_clz_when_executed_with_every_flag_set_then_the_cpsr_is_unchanged() {
+    let r = run::<true>(SVC | NZCV, &[(1, 0)], &[], CLZ_R2_R1);
+    assert_eq!(r.cpsr(), SVC | NZCV);
+}
+
+#[test]
+fn given_an_arm7_clz_word_when_executed_then_rd_is_kept_and_only_r15_advances() {
+    let r = arm::<false>(&[(1, 0), (2, 0x77)], &[], CLZ_R2_R1);
+    assert_eq!((r.r(2), r.r(15)), (0x77, 0x100C));
+}
+
+proptest::proptest! {
+    #[test]
+    fn given_any_rm_when_an_arm9_clz_executes_then_rd_matches_a_bitwise_count(x in proptest::prelude::any::<u32>()) {
+        let r = arm::<true>(&[(1, x)], &[], CLZ_R2_R1);
+        proptest::prop_assert_eq!(r.r(2), model_clz(x));
+    }
+}

@@ -41,6 +41,8 @@ pub(crate) enum Kind {
     Branch,
     /// BX.
     BranchExchange,
+    /// CLZ (ARM9; `docs/hw/armv5te.md`, "CLZ").
+    CountLeadingZeros,
     /// BLX with a register (ARM9; `docs/hw/armv5te.md`, "BLX").
     BranchLinkExchange,
     /// BLX with an immediate, in the unconditional space (ARM9; `docs/hw/armv5te.md`, "BLX").
@@ -107,6 +109,7 @@ const fn classify(index: usize, arm9: bool) -> Kind {
             (true, _, _) => match (low, opcode & 1) {
                 (1, 1) if high == 0x12 => Kind::BranchExchange,
                 (3, 1) if arm9 && high == 0x12 => Kind::BranchLinkExchange,
+                (1, 1) if arm9 && high == 0x16 => Kind::CountLeadingZeros,
                 (0, 0) => Kind::Mrs,
                 (0, _) => Kind::MsrRegister,
                 _ => Kind::Unhandled,

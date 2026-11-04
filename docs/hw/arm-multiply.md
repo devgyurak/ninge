@@ -9,7 +9,7 @@ of ARM7TDMI Multiply Carry Flag" (details and licence in "ARM7TDMI multiply carr
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
 `multiply_long`)   Phase: 1 (#9)
 
-The v5TE DSP multiplies (SMULxy and friends, #14) are a different encoding space and are not
+The v5TE DSP multiplies (SMULxy and friends, `armv5te.md`) are a different encoding space and are not
 covered here. Registers and modes are in `cpu-registers.md`; the data-processing sibling is
 `arm-data-processing.md`.
 

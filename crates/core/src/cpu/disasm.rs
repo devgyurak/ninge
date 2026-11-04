@@ -256,6 +256,8 @@ pub struct ArmDisassembly {
     word: u32,
     address: u32,
     kind: Kind,
+    /// Whether the ARM9 decoded the word: MCRR and MRRC exist only there.
+    arm9: bool,
 }
 
 /// Disassembles `word`, which sits at `address`, as the ARM9 (`ARM9`) or the ARM7 decodes it
@@ -265,6 +267,7 @@ pub fn disassemble_arm<const ARM9: bool>(word: u32, address: u32) -> ArmDisassem
         word,
         address,
         kind: decode::<ARM9>(word),
+        arm9: ARM9,
     }
 }
 
@@ -540,8 +543,9 @@ impl ArmDisassembly {
         let c_d = bits(word, 15, 12);
         let load = flag(word, BIT_L);
         match (bits(word, 27, 20), bits(word, 27, 25), flag(word, 4)) {
-            // MCRR and MRRC take the words LDC and STC would otherwise have.
-            (0xC4 | 0xC5, ..) => {
+            // MCRR and MRRC take the words LDC and STC would otherwise have, on the ARM9 only
+            // (`docs/hw/disassembly.md`, "Notes on the forms").
+            (0xC4 | 0xC5, ..) if self.arm9 => {
                 let name = match load {
                     true => "mrrc",
                     false => "mcrr",
@@ -565,8 +569,9 @@ impl ArmDisassembly {
                     letter(flag(word, BIT_B), "l")
                 )?;
                 match (flag(word, BIT_P), flag(word, BIT_U), flag(word, BIT_W)) {
-                    // The unindexed form hands the coprocessor an 8-bit option.
-                    (false, true, false) => write!(f, "[{}], {{{}}}", rn(word), bits(word, 7, 0)),
+                    // The unindexed form hands the coprocessor an 8-bit option. Post-indexed
+                    // needs W, so P = 0 with W = 0 is written the same way whatever U is.
+                    (false, _, false) => write!(f, "[{}], {{{}}}", rn(word), bits(word, 7, 0)),
                     _ => coprocessor_address(word).write(f),
                 }
             }

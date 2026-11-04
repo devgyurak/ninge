@@ -149,9 +149,60 @@ fn mnemonic_matches_kind(kind: ThumbKind, text: &str) -> bool {
 }
 
 /// The text printed on `ARM9` for the halfword matches the decoder's kind for that processor.
-fn class_matches_decoder(halfword: u16, next: Option<u16>, address: u32, arm9: bool) -> bool {
+fn class_failure(halfword: u16, next: Option<u16>, address: u32, arm9: bool) -> Option<String> {
     let text = render(halfword, next, address, arm9);
-    mnemonic_matches_kind(kind_of(halfword, arm9), &text)
+    let kind = kind_of(halfword, arm9);
+    if mnemonic_matches_kind(kind, &text) {
+        None
+    } else {
+        Some(format!("{halfword:#06x} {kind:?}: {text:?}"))
+    }
+}
+
+/// The exact first token the note gives `halfword`, for the formats where one bit field picks
+/// the mnemonic, unpacked here from the bits and not from the implementation.
+fn expected_token(halfword: u16, arm9: bool) -> Option<&'static str> {
+    const SHIFTS: [&str; 3] = ["lsl", "lsr", "asr"];
+    const IMMEDIATES: [&str; 4] = ["mov", "cmp", "add", "sub"];
+    const ALU: [&str; 16] = [
+        "and", "eor", "lsl", "lsr", "asr", "adc", "sbc", "ror", "tst", "neg", "cmp", "cmn", "orr",
+        "mul", "bic", "mvn",
+    ];
+    const HI: [&str; 3] = ["add", "cmp", "mov"];
+    const REGISTER: [&str; 4] = ["str", "strb", "ldr", "ldrb"];
+    const SIGNED: [&str; 4] = ["strh", "ldsb", "ldrh", "ldsh"];
+    let h = usize::from(halfword);
+    let bit = |n: usize| h >> n & 1 == 1;
+    match kind_of(halfword, arm9) {
+        ThumbKind::ShiftImmediate => Some(SHIFTS[h >> 11 & 3]),
+        ThumbKind::AddSub => Some(if bit(9) { "sub" } else { "add" }),
+        ThumbKind::Immediate => Some(IMMEDIATES[h >> 11 & 3]),
+        ThumbKind::Alu => Some(ALU[h >> 6 & 0xF]),
+        ThumbKind::HiRegister => Some(HI[h >> 8 & 3]),
+        ThumbKind::TransferRegister => Some(REGISTER[h >> 10 & 3]),
+        ThumbKind::TransferSigned => Some(SIGNED[h >> 10 & 3]),
+        ThumbKind::TransferImmediate => Some(REGISTER[(h >> 11 & 1) << 1 | h >> 12 & 1]),
+        ThumbKind::TransferHalfword => Some(if bit(11) { "ldrh" } else { "strh" }),
+        ThumbKind::TransferSp => Some(if bit(11) { "ldr" } else { "str" }),
+        ThumbKind::PushPop => Some(if bit(11) { "pop" } else { "push" }),
+        ThumbKind::BlockTransfer => Some(if bit(11) { "ldmia" } else { "stmia" }),
+        ThumbKind::AdjustSp => Some(if bit(7) { "sub" } else { "add" }),
+        _ => None,
+    }
+}
+
+/// Why the first token of the text differs from `expected_token`, if it does.
+fn exact_token_failure(halfword: u16, address: u32, arm9: bool) -> Option<String> {
+    let expected = expected_token(halfword, arm9)?;
+    let text = render(halfword, None, address, arm9);
+    let token = text.split(' ').next().unwrap_or("");
+    if token == expected {
+        None
+    } else {
+        Some(format!(
+            "{halfword:#06x}: expected {expected:?}, got {text:?}"
+        ))
+    }
 }
 
 /// Text on the ARM7 and the ARM9 is the same whenever both decode the halfword alike and the
@@ -1008,7 +1059,7 @@ proptest::proptest! {
         next in any::<Option<u16>>(),
         address in any::<u32>(),
     ) {
-        prop_assert!(class_matches_decoder(halfword, next, address, false));
+        prop_assert_eq!(class_failure(halfword, next, address, false), None);
     }
 
     #[test]
@@ -1017,7 +1068,16 @@ proptest::proptest! {
         next in any::<Option<u16>>(),
         address in any::<u32>(),
     ) {
-        prop_assert!(class_matches_decoder(halfword, next, address, true));
+        prop_assert_eq!(class_failure(halfword, next, address, true), None);
+    }
+
+    #[test]
+    fn given_any_halfword_when_disassembled_then_the_first_token_is_the_one_its_bits_name(
+        halfword in any::<u16>(),
+        address in any::<u32>(),
+    ) {
+        prop_assert_eq!(exact_token_failure(halfword, address, false), None);
+        prop_assert_eq!(exact_token_failure(halfword, address, true), None);
     }
 
     #[test]

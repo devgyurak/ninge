@@ -232,6 +232,70 @@ fn mnemonic_failure<const ARM9: bool>(word: u32, address: u32) -> Option<String>
     }
 }
 
+/// The condition names by field value (AL is not written).
+const COND_BY_FIELD: [&str; 16] = [
+    "eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "", "nv",
+];
+
+/// The exact first token the note gives `word`, for the kinds where one bit field picks the
+/// mnemonic, unpacked here from the bits and not from the implementation; `None` for the others.
+fn expected_token<const ARM9: bool>(word: u32) -> Option<String> {
+    let cond = COND_BY_FIELD[(word >> 28) as usize];
+    let bit = |n: u32| word >> n & 1 == 1;
+    let load = bit(20);
+    let ldr_str = if load { "ldr" } else { "str" };
+    match decode::<ARM9>(word) {
+        Kind::DataImmediate | Kind::DataImmediateShift | Kind::DataRegisterShift => {
+            let opcode = (word >> 21 & 0xF) as usize;
+            // The compare instructions imply S.
+            let s = if bit(20) && !(8..=11).contains(&opcode) {
+                "s"
+            } else {
+                ""
+            };
+            Some(format!("{}{cond}{s}", DATA_OPS[opcode]))
+        }
+        Kind::Multiply => {
+            let base = if bit(21) { "mla" } else { "mul" };
+            Some(format!("{base}{cond}{}", if bit(20) { "s" } else { "" }))
+        }
+        Kind::SingleTransferImmediate | Kind::SingleTransferRegister => {
+            let b = if bit(22) { "b" } else { "" };
+            let t = if !bit(24) && bit(21) { "t" } else { "" };
+            Some(format!("{ldr_str}{cond}{b}{t}"))
+        }
+        Kind::HalfwordTransfer => {
+            let size = match (load, word >> 5 & 3) {
+                (true, 2) => "sb",
+                (true, 3) => "sh",
+                _ => "h",
+            };
+            Some(format!("{ldr_str}{cond}{size}"))
+        }
+        Kind::Coprocessor if word >> 24 & 0xF == 0xE => {
+            let base = match (bit(4), load) {
+                (false, _) => "cdp",
+                (true, true) => "mrc",
+                (true, false) => "mcr",
+            };
+            Some(format!("{base}{cond}"))
+        }
+        _ => None,
+    }
+}
+
+/// Why the first token of `word`'s text differs from `expected_token`, if it does.
+fn exact_token_failure<const ARM9: bool>(word: u32, address: u32) -> Option<String> {
+    let expected = expected_token::<ARM9>(word)?;
+    let text = disassemble_arm::<ARM9>(word, address).to_string();
+    let token = text.split_whitespace().next().unwrap_or("");
+    if token == expected {
+        None
+    } else {
+        Some(format!("{word:#010x}: expected {expected:?}, got {text:?}"))
+    }
+}
+
 /// Why `branch_target()` is wrong for `word`, if it is. The expected value is computed here from
 /// the offset field, independently of the implementation.
 fn branch_target_failure<const ARM9: bool>(word: u32, address: u32) -> Option<String> {
@@ -1069,7 +1133,7 @@ const MCRR: &[Row] = &[
 
 #[test]
 fn given_mcrr_words_when_disassembled_then_they_are_not_read_as_stc() {
-    let failures = run_both(Kind::Coprocessor, MCRR);
+    let failures = run_arm9(Kind::Coprocessor, MCRR);
     assert_eq!(failures, Vec::<String>::new());
 }
 
@@ -1081,7 +1145,49 @@ const MRRC: &[Row] = &[
 
 #[test]
 fn given_mrrc_words_when_disassembled_then_they_are_not_read_as_ldc() {
-    let failures = run_both(Kind::Coprocessor, MRRC);
+    let failures = run_arm9(Kind::Coprocessor, MRRC);
+    assert_eq!(failures, Vec::<String>::new());
+}
+
+/// MCRR and MRRC exist on the ARM9 only; the ARM7 reads the same words as STC and LDC, whose
+/// P = 0, W = 0 form is the unindexed one whatever U is.
+const MCRR_ON_ARM7: &[PairRow] = &[
+    (
+        0xEC42_1F03,
+        "mcrr p15, 0, r1, r2, c3",
+        "stcl p15, c1, [r2], {3}",
+    ),
+    (
+        0xEC41_00FF,
+        "mcrr p0, 15, r0, r1, c15",
+        "stcl p0, c0, [r1], {255}",
+    ),
+    (
+        0xEC54_3F56,
+        "mrrc p15, 5, r3, r4, c6",
+        "ldcl p15, c3, [r4], {86}",
+    ),
+    (
+        0xEC51_00FF,
+        "mrrc p0, 15, r0, r1, c15",
+        "ldcl p0, c0, [r1], {255}",
+    ),
+];
+
+#[test]
+fn given_mcrr_and_mrrc_words_when_disassembled_on_both_cores_then_the_arm7_reads_stc_and_ldc() {
+    let failures = run_pairs(MCRR_ON_ARM7);
+    assert_eq!(failures, Vec::<String>::new());
+}
+
+const LDC_UNINDEXED_WITHOUT_U: &[Row] = &[
+    (0xEC12_1F02, "ldc p15, c1, [r2], {2}"),
+    (0xEC02_1F02, "stc p15, c1, [r2], {2}"),
+];
+
+#[test]
+fn given_ldc_and_stc_with_p_and_w_clear_when_u_is_clear_then_they_print_the_unindexed_form() {
+    let failures = run_both(Kind::Coprocessor, LDC_UNINDEXED_WITHOUT_U);
     assert_eq!(failures, Vec::<String>::new());
 }
 
@@ -1345,6 +1451,22 @@ proptest::proptest! {
         address in proptest::prelude::any::<u32>(),
     ) {
         proptest::prop_assert_eq!(mnemonic_failure::<false>(word, address), Option::<String>::None);
+    }
+
+    #[test]
+    fn given_any_word_and_address_when_disassembled_on_the_arm9_then_the_first_token_is_the_one_its_bits_name(
+        word in proptest::prelude::any::<u32>(),
+        address in proptest::prelude::any::<u32>(),
+    ) {
+        proptest::prop_assert_eq!(exact_token_failure::<true>(word, address), Option::<String>::None);
+    }
+
+    #[test]
+    fn given_any_word_and_address_when_disassembled_on_the_arm7_then_the_first_token_is_the_one_its_bits_name(
+        word in proptest::prelude::any::<u32>(),
+        address in proptest::prelude::any::<u32>(),
+    ) {
+        proptest::prop_assert_eq!(exact_token_failure::<false>(word, address), Option::<String>::None);
     }
 
     #[test]

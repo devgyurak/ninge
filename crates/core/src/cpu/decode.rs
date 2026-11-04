@@ -33,6 +33,8 @@ pub(crate) enum Kind {
     SingleTransferRegister,
     /// LDRH, STRH, LDRSB and LDRSH.
     HalfwordTransfer,
+    /// LDRD and STRD (ARM9; `docs/hw/armv5te.md`, "LDRD and STRD").
+    DoubleTransfer,
     /// SWP and SWPB.
     Swap,
     /// LDM and STM.
@@ -104,7 +106,7 @@ const fn classify(index: usize, arm9: bool) -> Kind {
         // bits 27–25 = 000
         0 => match (psr_space, multiply_space, reg_form) {
             // SWP and the halfword transfers sit inside the PSR space, so this comes first.
-            (_, true, _) => multiply_space_kind(high, low),
+            (_, true, _) => multiply_space_kind(high, low, arm9),
             (false, false, true) => Kind::DataImmediateShift,
             (false, false, false) => Kind::DataRegisterShift,
             // BX is bits 27–20 = 0x12 with bits 7–4 = 0001, a TEQ-shaped word in the PSR space
@@ -138,7 +140,7 @@ const fn classify(index: usize, arm9: bool) -> Kind {
 /// bits 27–24 = 0000 with bits 7–4 = 1001 (`docs/hw/arm-multiply.md`, "Encoding"); SWP is
 /// bits 27–23 = 00010 and 21–20 = 00 with bits 7–4 = 1001; a halfword transfer has bits 6–5
 /// not 00 (`docs/hw/arm-load-store.md`, "Encodings").
-const fn multiply_space_kind(high: usize, low: usize) -> Kind {
+const fn multiply_space_kind(high: usize, low: usize, arm9: bool) -> Kind {
     let sh = (low >> 1) & 0b11; // bits 6–5
     let load = high & 1 == 1; // bit 20
     match (low, sh) {
@@ -149,9 +151,10 @@ const fn multiply_space_kind(high: usize, low: usize) -> Kind {
             (_, true, _) => Kind::Swap,
             _ => Kind::Unhandled,
         },
-        // A store with SH = 10 or 11 is LDRD or STRD (ARM9 only).
         (_, 1) => Kind::HalfwordTransfer,
         (_, 2 | 3) if load => Kind::HalfwordTransfer,
+        // A store with SH = 10 or 11 is LDRD or STRD (ARM9 only).
+        (_, 2 | 3) if arm9 => Kind::DoubleTransfer,
         _ => Kind::Unhandled,
     }
 }

@@ -16,6 +16,8 @@ const WORD: u32 = 4;
 const EMPTY_LIST_WORDS: u32 = 16;
 /// R15's index and its bit in a register list.
 const PC: u32 = 15;
+/// R14, which LDRD and STRD cannot use as Rd (its pair would include R15).
+const LR: u32 = 14;
 
 impl<const ARM9: bool> Cpu<ARM9> {
     /// LDR, STR, LDRB, STRB and the T forms; true if it wrote the PC.
@@ -90,6 +92,43 @@ impl<const ARM9: bool> Cpu<ARM9> {
             _ => {
                 bus.write16(address, self.store_operand(rd) as u16); // truncation: a halfword store
                 self.write_back_single(writeback, rn, moved)
+            }
+        }
+    }
+
+    /// LDRD and STRD (`docs/hw/armv5te.md`, "LDRD and STRD"): the halfword form's addressing, two
+    /// words at the address and the address + 4 to or from Rd and Rd + 1. Bit 5 distinguishes
+    /// the store (SH = 11) from the load (SH = 10). True if it wrote the PC.
+    // TODO(hw-unverified): an odd Rd or R14 is not executed, a doubleword address that is not
+    // 8-byte aligned reaches the bus as given, and with writeback to Rd or Rd + 1 the loaded
+    // value wins (`docs/hw/armv5te.md`, "Unverified").
+    pub(super) fn double_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
+        let (rn, rd) = ((word >> 16) & 0xF, (word >> 12) & 0xF);
+        // Bit 22 is I: the split immediate, or Rm.
+        let offset = match word >> 22 & 1 {
+            1 => ((word >> 4) & 0xF0) | (word & 0xF),
+            _ => self.operand(word & 0xF, 0),
+        };
+        match (rd & 1, rd) {
+            (1, _) | (_, LR) => false,
+            _ => {
+                let (address, moved, writeback) = self.transfer_address(word, rn, offset);
+                let second = rd as usize + 1;
+                match word >> 5 & 1 {
+                    0 => {
+                        let first_value = bus.read32(address);
+                        let second_value = bus.read32(address.wrapping_add(WORD));
+                        let flushed = self.write_back_single(writeback, rn, moved);
+                        self.regs.set(rd as usize, first_value);
+                        self.regs.set(second, second_value);
+                        flushed
+                    }
+                    _ => {
+                        bus.write32(address, self.regs.get(rd as usize));
+                        bus.write32(address.wrapping_add(WORD), self.regs.get(second));
+                        self.write_back_single(writeback, rn, moved)
+                    }
+                }
             }
         }
     }

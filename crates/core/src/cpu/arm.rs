@@ -70,6 +70,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
                     self.single_transfer(bus, word)
                 }
                 Kind::HalfwordTransfer => self.halfword_transfer(bus, word),
+                Kind::DoubleTransfer => self.double_transfer(bus, word),
                 Kind::Swap => self.swap(bus, word),
                 Kind::BlockTransfer => self.block_transfer(bus, word),
                 Kind::Branch => self.branch(word),

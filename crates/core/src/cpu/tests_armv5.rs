@@ -936,3 +936,141 @@ proptest::proptest! {
         );
     }
 }
+
+// ---------------------------------------------------------------- LDRD and STRD
+
+/// LDRD R2, [R0, #8] and STRD R2, [R0, #8]: P = 1, U = 1, immediate, no writeback.
+const LDRD_R2_R0_8: u32 = 0xE1C0_20D8;
+const STRD_R2_R0_8: u32 = 0xE1C0_20F8;
+/// The same with U = 0 (offset −8), with writeback, and post-indexed (P = 0).
+const LDRD_R2_R0_MINUS_8: u32 = 0xE140_20D8;
+const LDRD_R2_R0_8_WRITEBACK: u32 = 0xE1E0_20D8;
+const STRD_R2_R0_8_WRITEBACK: u32 = 0xE1E0_20F8;
+const LDRD_R2_R0_POST_8: u32 = 0xE0C0_20D8;
+/// LDRD R2, [R0, R1] (register offset).
+const LDRD_R2_R0_R1: u32 = 0xE180_20D1;
+/// LDRD R2, [R3], #8: the base is the second register of the pair.
+const LDRD_R2_R3_POST_8: u32 = 0xE0C3_20D8;
+/// LDRD R2, [R2], #8: the base is the first register of the pair.
+const LDRD_R2_R2_POST_8: u32 = 0xE0C2_20D8;
+/// LDRD R3, [R0, #8] (odd Rd) and LDRD R14, [R0, #8].
+const LDRD_R3_R0_8: u32 = 0xE1C0_30D8;
+const LDRD_R14_R0_8: u32 = 0xE1C0_E0D8;
+/// LDRDNE R2, [R0, #8].
+const LDRD_NE: u32 = 0x11C0_20D8;
+
+#[test]
+fn given_an_arm9_ldrd_when_executed_then_it_loads_the_pair_from_consecutive_words() {
+    let r = arm::<true>(
+        &[(0, 0x100)],
+        &[(0x108, 0xAAAA_0001), (0x10C, 0xBBBB_0002)],
+        LDRD_R2_R0_8,
+    );
+    assert_eq!(
+        (r.r(2), r.r(3), r.r(0), r.bus.reads.clone()),
+        (0xAAAA_0001, 0xBBBB_0002, 0x100, vec![0x108, 0x10C])
+    );
+}
+
+#[test]
+fn given_an_arm9_strd_when_executed_then_it_stores_the_pair_to_consecutive_words() {
+    let r = arm::<true>(&[(0, 0x100), (2, 0x11), (3, 0x22)], &[], STRD_R2_R0_8);
+    assert_eq!(
+        (r.bus.writes.clone(), r.r(0)),
+        (vec![(0x108, 0x11), (0x10C, 0x22)], 0x100)
+    );
+}
+
+#[test]
+fn given_an_arm9_ldrd_with_a_negative_offset_when_executed_then_the_address_is_below_the_base() {
+    let r = arm::<true>(&[(0, 0x100)], &[], LDRD_R2_R0_MINUS_8);
+    assert_eq!(r.bus.reads, vec![0xF8, 0xFC]);
+}
+
+#[test]
+fn given_an_arm9_ldrd_with_a_register_offset_when_executed_then_the_address_is_base_plus_rm() {
+    let r = arm::<true>(&[(0, 0x100), (1, 0x10)], &[], LDRD_R2_R0_R1);
+    assert_eq!(r.bus.reads, vec![0x110, 0x114]);
+}
+
+#[test]
+fn given_an_arm9_post_indexed_ldrd_when_executed_then_it_reads_the_base_and_writes_back_base_plus_offset()
+ {
+    let r = arm::<true>(&[(0, 0x100)], &[], LDRD_R2_R0_POST_8);
+    assert_eq!((r.bus.reads.clone(), r.r(0)), (vec![0x100, 0x104], 0x108));
+}
+
+#[test]
+fn given_an_arm9_pre_indexed_ldrd_with_writeback_when_executed_then_the_base_becomes_the_address() {
+    let r = arm::<true>(&[(0, 0x100)], &[], LDRD_R2_R0_8_WRITEBACK);
+    assert_eq!((r.bus.reads.clone(), r.r(0)), (vec![0x108, 0x10C], 0x108));
+}
+
+#[test]
+fn given_an_arm9_pre_indexed_strd_with_writeback_when_executed_then_the_base_becomes_the_address() {
+    let r = arm::<true>(
+        &[(0, 0x100), (2, 0x11), (3, 0x22)],
+        &[],
+        STRD_R2_R0_8_WRITEBACK,
+    );
+    assert_eq!(
+        (r.bus.writes.clone(), r.r(0)),
+        (vec![(0x108, 0x11), (0x10C, 0x22)], 0x108)
+    );
+}
+
+#[test]
+fn given_an_arm9_ldrd_whose_base_is_the_second_register_when_it_writes_back_then_the_loaded_value_wins()
+ {
+    let r = arm::<true>(
+        &[(3, 0x200)],
+        &[(0x200, 0x55), (0x204, 0x66)],
+        LDRD_R2_R3_POST_8,
+    );
+    assert_eq!((r.r(2), r.r(3)), (0x55, 0x66));
+}
+
+#[test]
+fn given_an_arm9_ldrd_whose_base_is_the_first_register_when_it_writes_back_then_the_loaded_value_wins()
+ {
+    let r = arm::<true>(
+        &[(2, 0x200)],
+        &[(0x200, 0x55), (0x204, 0x66)],
+        LDRD_R2_R2_POST_8,
+    );
+    assert_eq!((r.r(2), r.r(3)), (0x55, 0x66));
+}
+
+#[test]
+fn given_an_arm9_ldrd_when_its_condition_fails_then_nothing_is_read_or_written() {
+    let r = run::<true>(SVC | Z, &[(0, 0x100), (2, 0x77)], &[], LDRD_NE);
+    assert_eq!((r.r(2), r.bus.reads.clone()), (0x77, vec![]));
+}
+
+#[test]
+fn given_an_arm9_ldrd_with_an_odd_rd_when_executed_then_nothing_is_read_and_only_r15_advances() {
+    let r = arm::<true>(&[(0, 0x100), (3, 0x77)], &[], LDRD_R3_R0_8);
+    assert_eq!(
+        (r.r(3), r.bus.reads.clone(), r.r(15)),
+        (0x77, vec![], 0x100C)
+    );
+}
+
+#[test]
+fn given_an_arm9_ldrd_with_rd_r14_when_executed_then_nothing_is_read_and_only_r15_advances() {
+    let r = arm::<true>(&[(0, 0x100), (LR, 0x77)], &[], LDRD_R14_R0_8);
+    assert_eq!(
+        (r.r(LR), r.bus.reads.clone(), r.r(15)),
+        (0x77, vec![], 0x100C)
+    );
+}
+
+#[test]
+fn given_an_arm7_ldrd_and_strd_words_when_executed_then_nothing_is_accessed() {
+    let load = arm::<false>(&[(0, 0x100), (2, 0x77)], &[], LDRD_R2_R0_8);
+    let store = arm::<false>(&[(0, 0x100), (2, 0x77)], &[], STRD_R2_R0_8);
+    assert_eq!(
+        (load.r(2), load.bus.reads.clone(), store.bus.writes.clone()),
+        (0x77, vec![], vec![])
+    );
+}

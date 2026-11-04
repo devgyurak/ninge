@@ -6,6 +6,8 @@ pub(crate) const FLAG_N: u32 = 1 << 31;
 pub(crate) const FLAG_Z: u32 = 1 << 30;
 pub(crate) const FLAG_C: u32 = 1 << 29;
 pub(crate) const FLAG_V: u32 = 1 << 28;
+/// CPSR bit 5, T: 1 = Thumb state (`docs/hw/cpu-registers.md`).
+pub(crate) const FLAG_T: u32 = 1 << 5;
 /// The flags byte of a PSR, the `f` field of an MSR mask.
 pub(crate) const FLAGS_BYTE: u32 = 0xFF00_0000;
 /// Mode bits M4–M0 of User mode.

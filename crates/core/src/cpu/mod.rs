@@ -79,3 +79,6 @@ mod tests_arm;
 
 #[cfg(test)]
 mod tests_transfer;
+
+#[cfg(test)]
+mod tests_branch;

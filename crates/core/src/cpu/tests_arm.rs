@@ -3,8 +3,10 @@
 //! Expected values come from `docs/hw/arm-data-processing.md`,
 //! `docs/hw/arm-barrel-shifter.md` and `docs/hw/cpu-registers.md`.
 //!
-//! Interim R15 convention: while an instruction executes R15 is its address + 8; afterwards
-//! R15 is +4 more if the instruction did not write it, or the written value + 8 if it did.
+//! Pipeline model (`docs/hw/arm-branch-pipeline.md`): the instruction under test is
+//! `pipeline[0]` and R15 is its address + 8 while it executes; afterwards R15 is +4 more if
+//! the instruction did not write it, or the written value + 8 if it did. The bus is only asked
+//! for the prefetch, whose value these tests do not look at.
 
 use super::*;
 use proptest::prelude::*;
@@ -28,7 +30,7 @@ const LSR: u32 = 1;
 const ASR: u32 = 2;
 const ROR: u32 = 3;
 
-/// A bus that serves one opcode for every code fetch.
+/// A bus that serves one value for every code fetch (the prefetch).
 struct FixedBus(u32);
 
 impl Bus for FixedBus {
@@ -102,7 +104,8 @@ fn cpu_in(cpsr: u32) -> Cpu<false> {
 /// Runs `opcode` as the instruction at `ADDR`.
 fn step_op(cpu: &mut Cpu<false>, opcode: u32) {
     cpu.regs_mut().set(15, ADDR + 8);
-    cpu.step(&mut FixedBus(opcode));
+    cpu.set_pipeline([opcode, 0]);
+    cpu.step(&mut FixedBus(0));
 }
 
 /// Sets the listed visible registers, then runs `opcode`.
@@ -1117,7 +1120,8 @@ fn arm9_after(setup: &[(usize, u32)], opcode: u32, flags: u32) -> (u32, u32) {
     cpu.regs_mut().set_cpsr(SVC | flags);
     setup.iter().for_each(|&(i, v)| cpu.regs_mut().set(i, v));
     cpu.regs_mut().set(15, ADDR + 8);
-    cpu.step(&mut FixedBus(opcode));
+    cpu.set_pipeline([opcode, 0]);
+    cpu.step(&mut FixedBus(0));
     (cpu.regs().get(4), cpu.regs().cpsr())
 }
 

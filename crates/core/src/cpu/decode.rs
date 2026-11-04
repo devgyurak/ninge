@@ -8,7 +8,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// Not (yet) executed: the step only advances the PC.
-    // TODO(phase1): the remaining groups arrive in #11–#13; LDRD and STRD, which share the
+    // TODO(phase1): the remaining groups arrive in #12–#13; LDRD and STRD, which share the
     // halfword-transfer space, and PLD arrive in #14.
     Unhandled,
     /// Data processing, rotated-immediate operand.
@@ -37,6 +37,10 @@ pub(crate) enum Kind {
     Swap,
     /// LDM and STM.
     BlockTransfer,
+    /// B and BL (`docs/hw/arm-branch-pipeline.md`).
+    Branch,
+    /// BX.
+    BranchExchange,
 }
 
 const TABLE_SIZE: usize = 1 << 12;
@@ -65,6 +69,8 @@ const fn classify(index: usize) -> Kind {
         3 if reg_form => Kind::SingleTransferRegister,
         // bits 27–25 = 100
         4 => Kind::BlockTransfer,
+        // bits 27–25 = 101
+        5 => Kind::Branch,
         // bits 27–25 = 001
         1 => match (psr_space, opcode & 1) {
             (false, _) => Kind::DataImmediate,
@@ -77,7 +83,10 @@ const fn classify(index: usize) -> Kind {
             (_, true, _) => multiply_space_kind(high, low),
             (false, false, true) => Kind::DataImmediateShift,
             (false, false, false) => Kind::DataRegisterShift,
+            // BX is bits 27–20 = 0x12 with bits 7–4 = 0001, a TEQ-shaped word in the PSR space
+            // (`docs/hw/arm-branch-pipeline.md`, "Encodings").
             (true, _, _) => match (low, opcode & 1) {
+                (1, 1) if high == 0x12 => Kind::BranchExchange,
                 (0, 0) => Kind::Mrs,
                 (0, _) => Kind::MsrRegister,
                 _ => Kind::Unhandled,
@@ -130,7 +139,7 @@ mod tests {
 
     /// Words and the kind each must decode to (`docs/hw/arm-multiply.md`, "Encoding";
     /// `docs/hw/arm-load-store.md`, "Encodings").
-    const CASES: [(u32, Kind); 30] = [
+    const CASES: [(u32, Kind); 35] = [
         (0xE000_0090, Kind::Multiply),                // MUL
         (0xE010_0090, Kind::Multiply),                // MULS
         (0xE020_0090, Kind::Multiply),                // MLA
@@ -162,6 +171,13 @@ mod tests {
         (0xE100_00B0, Kind::HalfwordTransfer), // STRH, P = 1, U = 0, no writeback
         (0xE10F_0000, Kind::Mrs),              // MRS
         (0xE129_F000, Kind::MsrRegister),      // MSR CPSR_fc, R0
+        // Branches (`docs/hw/arm-branch-pipeline.md`, "Encodings"): bits 27-25 = 101, and BX
+        // is bits 27-20 = 0x12 with bits 7-4 = 0001, inside the PSR-transfer space.
+        (0xEA00_0000, Kind::Branch),         // B
+        (0xEB00_0000, Kind::Branch),         // BL
+        (0x0A00_0000, Kind::Branch),         // BEQ
+        (0xE12F_FF11, Kind::BranchExchange), // BX R1
+        (0xE12F_FF10, Kind::BranchExchange), // BX R0 with bits 3-0 = 0 (Rn = R0)
     ];
 
     fn classification_failures() -> Vec<(u32, Kind, Kind)> {

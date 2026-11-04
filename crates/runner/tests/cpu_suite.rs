@@ -1636,13 +1636,16 @@ fn given_failed_conditions_and_alu_results_outside_r15_when_comparing_then_the_p
     assert_eq!(plain_advance_problems(), Vec::<String>::new());
 }
 
+/// A PC-write group: its label, the file-name prefix, and which cases belong.
+type PcWriteGroup = (&'static str, &'static str, fn(&Case) -> bool);
+
 /// Fact 4: a write to the PC fetches twice more, at `target & !3` and `+ 4`; the pipeline holds
 /// those two words and R15 is target + 8 with the low bits kept (R15 − first fetch is 8..=11).
 /// The cases: ALU Rd = 15 (not a compare), LDR into the PC, LDM with R15 in the list, multiply
 /// Rd = 15, SWP Rd = 15, B and BL. Cases that end in Thumb state are left to fact 5.
 fn pc_write_problems() -> Vec<String> {
     let flushes = |c: &Case| condition_passes(c) && c.expected.cpsr >> 5 & 1 == 0;
-    let groups: [(&str, &str, fn(&Case) -> bool); 6] = [
+    let groups: [PcWriteGroup; 6] = [
         ("ALU", "arm_data_proc", |c| {
             c.opcode >> 12 & 0xF == 15 && !(8..=11).contains(&(c.opcode >> 21 & 0xF))
         }),

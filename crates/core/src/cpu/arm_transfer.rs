@@ -47,8 +47,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
                     true => u32::from(bus.read8(address)),
                     false => rotate_word(bus.read32(address), address),
                 };
-                self.write_back(writeback, rn, moved, false);
-                self.write_loaded(rd, value)
+                let flushed = self.write_back_single(writeback, rn, moved);
+                self.write_loaded(rd, value) || flushed
             }
             _ => {
                 let value = self.store_operand(rd);
@@ -56,8 +56,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
                     true => bus.write8(address, value as u8), // truncation: a byte store
                     false => bus.write32(address, value),
                 }
-                self.write_back(writeback, rn, moved, false);
-                false
+                self.write_back_single(writeback, rn, moved)
             }
         }
     }
@@ -81,13 +80,12 @@ impl<const ARM9: bool> Cpu<ARM9> {
                     2 => i32::from(bus.read8(address) as i8) as u32, // sign extension
                     kind => halfword_value(ARM9, kind == 3, address, bus.read16(address)),
                 };
-                self.write_back(writeback, rn, moved, false);
-                self.write_loaded(rd, value)
+                let flushed = self.write_back_single(writeback, rn, moved);
+                self.write_loaded(rd, value) || flushed
             }
             _ => {
                 bus.write16(address, self.store_operand(rd) as u16); // truncation: a halfword store
-                self.write_back(writeback, rn, moved, false);
-                false
+                self.write_back_single(writeback, rn, moved)
             }
         }
     }
@@ -188,8 +186,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
         // the last register of a list longer than one.
         let skip = load && in_list && (!ARM9 || (last && list.count_ones() > 1));
         self.write_back(writeback && !skip, rn, moved, user_bank);
-        // TODO(hw-unverified): unlike a single transfer, a block transfer whose written-back Rn is
-        // R15 ends as the value + 8 with no further advance (suite).
+        // TODO(hw-unverified): a block transfer whose written-back Rn is R15 flushes to the moved
+        // address, so R15 ends as the value + 8 (suite; `docs/hw/arm-branch-pipeline.md`).
         let wrote_base_pc = writeback && !skip && rn == PC;
         match pc_value {
             Some(value) => {
@@ -221,10 +219,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// Writes the moved base back to Rn when the form asks for it. `user_bank` is the S bit of a
     /// block transfer: the suite writes the User-bank Rn then, not the current mode's.
-    // TODO(hw-unverified): a writeback to R15 ends as the value + 8 and the step still advances
-    // the PC (suite; GBATEK does not allow R15 as a base with writeback), and the S-bit
-    // writeback into the User bank is the suite's behavior where GBATEK says not to use it
-    // (`docs/hw/arm-load-store.md`, "Unverified").
+    // TODO(hw-unverified): a block writeback to R15 flushes to the moved address (suite; GBATEK
+    // does not allow R15 as a base with writeback), and the S-bit writeback into the User bank
+    // is the suite's behavior where GBATEK says not to use it (`docs/hw/arm-load-store.md`,
+    // "Unverified"; `docs/hw/arm-branch-pipeline.md`).
     fn write_back(&mut self, writeback: bool, rn: u32, moved: u32, user_bank: bool) {
         match (writeback, rn, user_bank) {
             (false, _, _) => {}
@@ -234,7 +232,27 @@ impl<const ARM9: bool> Cpu<ARM9> {
         }
     }
 
-    /// Writes a loaded value to Rd; R15 ends as the value + 8 (interim, #11). True if R15.
+    /// The writeback of a single or halfword transfer. Unlike a block transfer, a written-back R15
+    /// flushes to the moved address + 4, so R15 ends as the moved address + 12. True if it wrote
+    /// the PC.
+    // TODO(hw-unverified): the suite's flush target for this form; GBATEK does not allow R15 as a
+    // base with writeback (`docs/hw/arm-branch-pipeline.md`, "Unverified"). Decided in #NN.
+    fn write_back_single(&mut self, writeback: bool, rn: u32, moved: u32) -> bool {
+        match (writeback, rn) {
+            (false, _) => false,
+            (true, PC) => {
+                self.write_pc(moved.wrapping_add(WORD));
+                true
+            }
+            (true, _) => {
+                self.regs.set(rn as usize, moved);
+                false
+            }
+        }
+    }
+
+    /// Writes a loaded value to Rd; R15 takes the value and the step refills from it. True if
+    /// R15.
     fn write_loaded(&mut self, rd: u32, value: u32) -> bool {
         match rd {
             PC => self.write_pc(value),

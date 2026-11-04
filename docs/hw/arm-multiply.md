@@ -142,17 +142,18 @@ per-cycle table that follows it; P2 the same table) computes multiplier x multip
   `R[0]`; that is a slip in P1, and `R[0]` is used here. A negative multiple
   inside a row carries its own +1 as the row's `XC` bit into the carry vector (P1, "Multiplier
   rows" table); that one is not deferred.
-- **Upper accumulate bits.** Accumulate bits 63 down to 33 do not enter at the start. They wait
-  in the "accumulate value high latches" (bit 63 is sign-extended when signed, P1:
-  `ACCHI[31] = SIGNED AND ACCUM AND ACCVAL[63]`) and each row takes two of them per cycle (P1 table,
-  "Accumulate value high latches", `AH1`, `AH2`, `AH4`, `AH5`; the technique is claimed in P2 claims 1 to 3).
+- **Upper accumulate bits.** Accumulate bits 63 down to 33 do not enter at the start. They
+  wait in the "accumulate value high latches", which hold one bit more than that range: a
+  copy of bit 63 when signed, 0 when unsigned (P1: `ACCHI[31] = SIGNED AND ACCUM AND
+  ACCVAL[63]`). Each row takes two of them per cycle (P1 table, "Accumulate value high
+  latches", `AH1`, `AH2`, `AH4`, `AH5`; the technique is claimed in P2 claims 1 to 3).
 - **Each row.** Adds one multiple of the multiplicand into the carry-save pair without a
   carry chain, shifts the active region two bits up, and drops the two now-final low bits of
   save and carry into the low latches (P1, "Multiplier rows 1, 2, 4 and 5" equations). The top
   two bits of a row are not plain carry-save: they sum the row's first incoming accumulate bit
   with the complemented top carry and the complemented top multiple bit, and the top carry bit
-  becomes the complement of the second accumulate bit (which does not enter that sum) (P1: `(S(k+1)[32], S(k+1)[31])` and
-  `C(k+1)[32]` in the same equations).
+  becomes the complement of the second accumulate bit (which does not enter that sum).
+  P1 gives these as `(S(k+1)[32], S(k+1)[31])` and `C(k+1)[32]` in the same equations.
 - **Final addition.** One 32-bit adder produces `(COUT, SUM[31:0])` from the save and carry
   inputs and a carry-in. It evaluates every cycle, but only two outputs are used: cycle 4 and
   cycle 5 (P1, "Final adder": "On all cycles"). Cycle 4 adds the low latches with carry-in `R[0]`,

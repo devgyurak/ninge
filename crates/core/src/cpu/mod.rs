@@ -11,10 +11,13 @@ mod exception;
 mod psr;
 mod regs;
 mod shifter;
+mod thumb;
+mod thumb_decode;
 
 pub use bus::Bus;
 pub use regs::{Bank, Mode, Registers};
 
+use psr::FLAG_T;
 use serde::{Deserialize, Serialize};
 
 /// One ARM core. `ARM9` selects the ARMv5TE behavior over ARMv4T at compile time.
@@ -67,9 +70,13 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.pipeline = pipeline;
     }
 
-    /// Executes one instruction.
+    /// Executes one instruction, in the state the CPSR's T bit selects (ARM when clear, Thumb
+    /// when set).
     pub fn step<B: Bus>(&mut self, bus: &mut B) {
-        self.step_arm(bus);
+        match self.regs.cpsr() & FLAG_T != 0 {
+            true => self.step_thumb(bus),
+            false => self.step_arm(bus),
+        }
     }
 }
 
@@ -93,3 +100,6 @@ mod tests_branch;
 
 #[cfg(test)]
 mod tests_exception;
+
+#[cfg(test)]
+mod tests_thumb;

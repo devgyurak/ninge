@@ -7,7 +7,7 @@ SingleStepTests/ARM7TDMI suite (MIT), as oracle evidence, not hardware evidence.
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (`step_arm`, `branch`,
 `branch_exchange`, `refill`), `crates/core/src/cpu/mod.rs` (`pipeline`)   Phase: 1 (#11)
 
-Out of scope here: Thumb execution (#13); BLX and the ARMv5 interworking loads (`LDR PC`,
+Out of scope here: Thumb execution (`thumb.md`); BLX and the ARMv5 interworking loads (`LDR PC`,
 `POP {PC}`, #14); exceptions (#12); cycle timing; filling the pipeline at direct boot (#17,
 Phase 2). Registers and modes are in `cpu-registers.md`.
 

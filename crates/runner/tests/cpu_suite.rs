@@ -2095,3 +2095,250 @@ fn given_arm_stc_ldc_when_run_on_arm7_then_no_case_differs() {
         Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
     );
 }
+
+// ---- Thumb (#13, `docs/hw/thumb.md`) ----------------------------------------------------
+
+/// The mask and value of a Thumb MUL (format 4, op 1101): halfword bits 15–6 = 0100001101.
+const THUMB_MUL_MASK: u32 = 0xFFC0;
+const THUMB_MUL: u32 = 0x4340;
+
+/// Whether `diff` is exactly the known ARM7 multiply-carry gap on a Thumb MUL: the only
+/// difference is the CPSR, in bit 29 alone.
+fn is_thumb_mul_c_gap(diff: &ninge_runner::cpu_suite::CaseDiff) -> bool {
+    let cpsr_bits = |text: &str| u32::from_str_radix(text.trim_start_matches("0x"), 16);
+    match diff.fields.as_slice() {
+        [field] => {
+            field.name == "CPSR"
+                && cpsr_bits(&field.expected)
+                    .ok()
+                    .zip(cpsr_bits(&field.actual).ok())
+                    .is_some_and(|(want, got)| want ^ got == 1 << 29)
+                && diff.opcode & THUMB_MUL_MASK == THUMB_MUL
+        }
+        _ => false,
+    }
+}
+
+/// Problems with `thumb_data_proc` run on the ARM7: every diff that is not the C-only gap of a
+/// MUL, and a C-only count that does not equal the number of MUL cases whose C the suite changes
+/// (a Thumb instruction has no condition, so every MUL executes).
+fn thumb_multiply_gap_problems() -> Vec<String> {
+    let file = "thumb_data_proc.json.bin";
+    let cases = cases_of(file);
+    let diffs = arm7_diffs(file);
+    let others: Vec<String> = diffs
+        .iter()
+        .filter(|d| !is_thumb_mul_c_gap(d))
+        .map(|d| format!("{file}[{}] {:#06x}: {:?}", d.index, d.opcode, d.fields))
+        .collect();
+    let c_only = diffs.len() - others.len();
+    let want = cases
+        .iter()
+        .filter(|c| c.opcode & THUMB_MUL_MASK == THUMB_MUL)
+        .filter(|c| (c.initial.cpsr ^ c.expected.cpsr) >> 29 & 1 == 1)
+        .count();
+    others
+        .into_iter()
+        .chain((c_only != want).then(|| format!("{file}: {c_only} C-only diffs, {want} expected")))
+        .collect()
+}
+
+/// The ARM7 C after a Thumb MUL is the gap of #81, as for the ARM multiply: the CPU leaves C
+/// unchanged and the suite changes it in about half of the MUL cases. When #81 closes, this
+/// becomes `given_thumb_data_proc_when_run_on_arm7_then_no_case_differs`.
+#[test]
+fn given_thumb_data_proc_when_run_on_arm7_then_only_the_c_bit_of_mul_cases_differs() {
+    assert_eq!(thumb_multiply_gap_problems(), Vec::<String>::new());
+}
+
+#[test]
+fn given_thumb_add_cmp_mov_hi_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_add_cmp_mov_hi.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_add_sp_or_pc_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_add_sp_or_pc.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_add_sub_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_add_sub.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_add_sub_sp_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_add_sub_sp.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_b_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_b.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_bcc_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_bcc.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_bl_blx_prefix_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_bl_blx_prefix.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_bl_suffix_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_bl_suffix.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_bx_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_bx.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldm_stm_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldm_stm.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldr_pc_rel_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldr_pc_rel.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldr_str_imm_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldr_str_imm_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldr_str_reg_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldr_str_reg_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldr_str_sp_rel_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldr_str_sp_rel.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldrb_strb_imm_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldrb_strb_imm_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldrh_strh_imm_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldrh_strh_imm_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldrh_strh_reg_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldrh_strh_reg_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldrsb_strb_reg_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldrsb_strb_reg_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_ldrsh_ldrsb_reg_offset_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_ldrsh_ldrsb_reg_offset.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_lsl_lsr_asr_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_lsl_lsr_asr.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_mov_cmp_add_sub_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_mov_cmp_add_sub.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_push_pop_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_push_pop.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_swi_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_swi.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}
+
+#[test]
+fn given_thumb_undefined_bcc_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_undefined_bcc.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
+}

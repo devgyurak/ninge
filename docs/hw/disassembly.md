@@ -99,8 +99,8 @@ Notes on the forms:
   the unindexed form (P = 0, U = 1, W = 0) is `[rn], {option}` with the option in decimal.
 - **The T form of the halfword transfers does not exist**; a halfword word with P = 0 and W = 1
   is written as an ordinary post-indexed access, the W bit not shown (it should be zero).
-- **Coprocessor numbers** are the word's bits 11-8; no coprocessor is looked up. On the ARM9,
-  MCRR/MRRC (bits 27-20 = 0xC4 / 0xC5) take precedence over the LDC/STC words that share them;
+- **Coprocessor numbers** are the word's bits 11–8; no coprocessor is looked up. On the ARM9,
+  MCRR/MRRC (bits 27–20 = 0xC4 / 0xC5) take precedence over the LDC/STC words that share them;
   they are ARMv5TE additions, so the ARM7 reads those words as STC/LDC.
 - **LDC/STC with P = 0 and W = 0** have no defined addressing mode except the unindexed one
   (U = 1); the form is written as unindexed, `[rn], {option}`, whatever U is. A post-indexed

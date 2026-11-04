@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The ARMv5TE instructions the ARM9 adds to ARM and Thumb state (#14). Note:
+//! The ARMv5TE instructions the ARM9 adds to ARM and Thumb state. Note:
 //! `docs/hw/armv5te.md`. The switch to Thumb on a load into R15 is in `arm_transfer.rs`.
 
 use super::Cpu;

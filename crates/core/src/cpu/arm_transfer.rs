@@ -51,6 +51,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 };
                 let flushed = self.write_back_single(writeback, rn, moved);
                 // Only a word load interworks.
+                // TODO(hw-unverified): a loaded target with low bits `10` keeps bit 1 in R15
+                // (`docs/hw/armv5te.md`, "Unverified").
                 match (ARM9, byte, rd) {
                     (true, false, PC) => self.exchange_to(value) || flushed,
                     _ => self.write_loaded(rd, value) || flushed,

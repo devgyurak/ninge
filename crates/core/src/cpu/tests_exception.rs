@@ -539,7 +539,7 @@ fn arm9_outcome(word: u32) -> (bool, bool) {
 
 fn arm9_coprocessor_problems() -> Vec<String> {
     // MCR p15 and MRC p15 step on (the CP15 arrives in #15); MCRR/MRRC are ARMv5TE and stay
-    // unhandled (#14); everything else traps.
+    // unhandled; everything else traps.
     let cases: Vec<(u32, (bool, bool))> = (0..16)
         .flat_map(|cp| {
             coprocessor_words(cp)

@@ -170,6 +170,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
             }
             ThumbKind::ConditionalBranch => self.conditional_branch(word),
             ThumbKind::Swi => self.enter(Exception::SoftwareInterrupt),
+            ThumbKind::Breakpoint => self.enter(Exception::PrefetchAbort),
             ThumbKind::Branch => self.branch_thumb(word),
             ThumbKind::LongBranchPrefix => self.long_branch_prefix(word),
             ThumbKind::LongBranchSuffix => self.long_branch_suffix(word),

@@ -54,6 +54,10 @@ pub(crate) enum Kind {
     BranchLinkExchange,
     /// BLX with an immediate, in the unconditional space (ARM9; `docs/hw/armv5te.md`, "BLX").
     BranchLinkExchangeImmediate,
+    /// BKPT (ARM9; `docs/hw/armv5te.md`, "BKPT"): a prefetch abort.
+    // TODO(hw-unverified): a condition other than AL makes it conditional here
+    // (`docs/hw/armv5te.md`, "Unverified").
+    Breakpoint,
     /// PLD, a cache hint that does nothing (ARM9; `docs/hw/armv5te.md`, "PLD").
     Preload,
     /// SWI (`docs/hw/arm-exceptions-modes.md`).
@@ -118,6 +122,7 @@ const fn classify(index: usize, arm9: bool) -> Kind {
             (true, _, _) => match (low, opcode & 1) {
                 (1, 1) if high == 0x12 => Kind::BranchExchange,
                 (3, 1) if arm9 && high == 0x12 => Kind::BranchLinkExchange,
+                (7, 1) if arm9 && high == 0x12 => Kind::Breakpoint,
                 (1, 1) if arm9 && high == 0x16 => Kind::CountLeadingZeros,
                 // bit 7 set and bit 4 clear in the PSR space
                 (_, _) if arm9 && low & 0b1001 == 0b1000 => Kind::SignedHalfwordMultiply,
@@ -275,7 +280,7 @@ mod tests {
     ];
 
     /// Words and the kind each must decode to on the ARM9 (`docs/hw/armv5te.md`).
-    const ARM9_CASES: [(u32, Kind); 28] = [
+    const ARM9_CASES: [(u32, Kind); 30] = [
         (0xE12F_FF31, Kind::BranchLinkExchange),          // BLX R1
         (0xE12F_FF11, Kind::BranchExchange),              // BX R1 is unchanged
         (0xE16F_2F11, Kind::CountLeadingZeros),           // CLZ R2, R1
@@ -304,6 +309,8 @@ mod tests {
         (0xF000_0000, Kind::Unhandled),                   // another word in the 1111 space
         (0xE000_0090, Kind::Multiply),                    // MUL is unchanged
         (0xE12F_FF1E, Kind::BranchExchange),              // BX LR is unchanged
+        (0xE120_0070, Kind::Breakpoint),                  // BKPT #0
+        (0xE12F_FF7F, Kind::Breakpoint),                  // BKPT with every immediate bit set
     ];
 
     fn arm9_classification_failures() -> Vec<(u32, Kind, Kind)> {

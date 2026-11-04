@@ -8,7 +8,7 @@ Link (BLX)", and the CPSR bit table; ARM ARM (ARMv5TE) for the instruction descr
 ARM946E-S TRM for the core-specific notes (PLD, the Q flag). Written from memory of those
 sources, not re-read line by line while writing; every claim that rests on inference is under
 "Unverified".
-Used by: `crates/core/src/cpu/decode.rs`, `thumb_decode.rs`, `arm_dsp.rs`, `arm.rs`,
+Used by: `crates/core/src/cpu/decode.rs`, `thumb_decode.rs`, `armv5.rs`, `arm.rs`,
 `arm_transfer.rs`, `thumb.rs`, `exception.rs`   Phase: 1
 
 These instructions exist on the ARM9 (ARMv5TE) only. The ARM7 (ARMv4T) keeps the behavior of
@@ -160,9 +160,9 @@ immediate is ignored by the core. On the ARM7 neither encoding is executed.
   written-back base, as for a single load — `arm_transfer.rs`, `double_transfer` — verify by
   a test ROM on hardware.
 - BLX register with Rm = R15 (ARM: not allowed; Thumb: the H2 form reads R15 as usual) —
-  `crates/core/src/cpu/arm_dsp.rs`, `branch_link_exchange` — verify by a test ROM.
+  `crates/core/src/cpu/armv5.rs`, `branch_link_exchange` — verify by a test ROM.
 - A loaded ARM target whose low two bits are `10` for LDR/LDM into R15 — `arm_transfer.rs`,
-  `write_loaded` — verify by a test ROM on hardware.
+  `single_transfer`, `block_transfer` — verify by a test ROM on hardware.
 - LDM with R15 and S in User/System mode (no SPSR): the loaded bit 0 switches state —
   `arm_transfer.rs`, `block_transfer` — verify by a test ROM.
 - The words of the `1111` condition space other than BLX and PLD are not executed (stepped
@@ -173,8 +173,8 @@ immediate is ignored by the core. On the ARM7 neither encoding is executed.
 - MSR of bit 27 on the ARM7 is stored; whether the ARM7TDMI keeps the bit is not stated —
   `crates/core/src/cpu/psr.rs`, `FLAG_Q`.
 - BKPT with a condition field other than AL runs conditionally here; the ARM ARM states it
-  is unconditional — `arm_dsp.rs`, `breakpoint`.
+  is unconditional — `decode.rs`, `Kind::Breakpoint`.
 - Destination R15 for CLZ, the saturating adds and the halfword multiplies (not allowed): the
-  result is written to R15 and the pipeline refills — `arm_dsp.rs`.
+  result is written to R15 and the pipeline refills — `armv5.rs`.
 - Thumb BLX suffix with offset bit 0 set (ARM ARM: should be zero): the target is word
   aligned, so the bit is dropped — `crates/core/src/cpu/thumb.rs`, `long_branch_exchange_suffix`.

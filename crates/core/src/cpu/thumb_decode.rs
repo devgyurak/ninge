@@ -59,6 +59,8 @@ pub(crate) enum ThumbKind {
     LongBranchPrefix,
     /// Format 19: the second halfword of BL.
     LongBranchSuffix,
+    /// BKPT (ARM9; `docs/hw/armv5te.md`, "BKPT"): a prefetch abort.
+    Breakpoint,
     /// The second halfword of BLX (ARM9; `docs/hw/armv5te.md`, "BLX").
     LongBranchExchangeSuffix,
 }
@@ -109,6 +111,8 @@ const fn classify(index: usize, arm9: bool) -> ThumbKind {
         // PUSH and POP
         0b10110 | 0b10111 => match (index >> 2 == 0b1011_0000, bit10, bit9) {
             (true, _, _) => ThumbKind::AdjustSp,
+            // bits 15–8 = 10111110 is BKPT on the ARM9
+            _ if arm9 && index >> 2 == 0b1011_1110 => ThumbKind::Breakpoint,
             (_, 1, 0) => ThumbKind::PushPop,
             _ => ThumbKind::Unhandled,
         },

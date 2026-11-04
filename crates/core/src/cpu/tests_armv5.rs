@@ -581,25 +581,23 @@ struct HCase {
     want: (u32, u32, bool),
 }
 
+/// `halves` is (x, y), `sources` is (Rm, Rs) and `accumulator` is (R2, R3).
 const fn h(
     op: u32,
-    x: u32,
-    y: u32,
-    rm: u32,
-    rs: u32,
-    r2: u32,
-    r3: u32,
+    halves: (u32, u32),
+    sources: (u32, u32),
+    accumulator: (u32, u32),
     q_in: bool,
     want: (u32, u32, bool),
 ) -> HCase {
     HCase {
         op,
-        x,
-        y,
-        rm,
-        rs,
-        r2,
-        r3,
+        x: halves.0,
+        y: halves.1,
+        rm: sources.0,
+        rs: sources.1,
+        r2: accumulator.0,
+        r3: accumulator.1,
         q_in,
         want,
     }
@@ -614,237 +612,174 @@ const RS_5_7: u32 = 0x0005_0007;
 const H_CASES: [HCase; 21] = [
     h(
         OP_SMUL,
-        0,
-        0,
-        RM_2_3,
-        RS_5_7,
-        0x77,
-        0x88,
+        (0, 0),
+        (RM_2_3, RS_5_7),
+        (0x77, 0x88),
         false,
         (21, 0x77, false),
     ),
     h(
         OP_SMUL,
-        1,
-        0,
-        RM_2_3,
-        RS_5_7,
-        0x77,
-        0x88,
+        (1, 0),
+        (RM_2_3, RS_5_7),
+        (0x77, 0x88),
         false,
         (14, 0x77, false),
     ),
     h(
         OP_SMUL,
-        0,
-        1,
-        RM_2_3,
-        RS_5_7,
-        0x77,
-        0x88,
+        (0, 1),
+        (RM_2_3, RS_5_7),
+        (0x77, 0x88),
         false,
         (15, 0x77, false),
     ),
     h(
         OP_SMUL,
-        1,
-        1,
-        RM_2_3,
-        RS_5_7,
-        0x77,
-        0x88,
+        (1, 1),
+        (RM_2_3, RS_5_7),
+        (0x77, 0x88),
         false,
         (10, 0x77, false),
     ),
     h(
         OP_SMUL,
-        0,
-        0,
-        0xFFFF,
-        7,
-        0x77,
-        0x88,
+        (0, 0),
+        (0xFFFF, 7),
+        (0x77, 0x88),
         false,
         (0xFFFF_FFF9, 0x77, false),
     ),
     // (-32768) × (-32768) = 2^30; SMUL never sets Q.
     h(
         OP_SMUL,
-        0,
-        0,
-        0x8000,
-        0x8000,
-        0x77,
-        0x88,
+        (0, 0),
+        (0x8000, 0x8000),
+        (0x77, 0x88),
         false,
         (0x4000_0000, 0x77, false),
     ),
     h(
         OP_SMLA,
-        0,
-        0,
-        RM_2_3,
-        RS_5_7,
-        100,
-        0x88,
+        (0, 0),
+        (RM_2_3, RS_5_7),
+        (100, 0x88),
         false,
         (121, 100, false),
     ),
     h(
         OP_SMLA,
-        1,
-        1,
-        RM_2_3,
-        RS_5_7,
-        100,
-        0x88,
+        (1, 1),
+        (RM_2_3, RS_5_7),
+        (100, 0x88),
         false,
         (110, 100, false),
     ),
     // 2^30 + 2^30 overflows to -2^31: Rd wraps and Q is set.
     h(
         OP_SMLA,
-        0,
-        0,
-        0x8000,
-        0x8000,
-        0x4000_0000,
-        0x88,
+        (0, 0),
+        (0x8000, 0x8000),
+        (0x4000_0000, 0x88),
         false,
         (0x8000_0000, 0x4000_0000, true),
     ),
     // -2^31 + (-1) overflows to 2^31 - 1.
     h(
         OP_SMLA,
-        0,
-        0,
-        0xFFFF,
-        1,
-        0x8000_0000,
-        0x88,
+        (0, 0),
+        (0xFFFF, 1),
+        (0x8000_0000, 0x88),
         false,
         (0x7FFF_FFFF, 0x8000_0000, true),
     ),
     // An add that does not overflow leaves Q as it was.
     h(
         OP_SMLA,
-        0,
-        0,
-        RM_2_3,
-        RS_5_7,
-        100,
-        0x88,
+        (0, 0),
+        (RM_2_3, RS_5_7),
+        (100, 0x88),
         true,
         (121, 100, true),
     ),
     h(
         OP_SMUL,
-        0,
-        0,
-        0xFFFF,
-        7,
-        0x77,
-        0x88,
+        (0, 0),
+        (0xFFFF, 7),
+        (0x77, 0x88),
         true,
         (0xFFFF_FFF9, 0x77, true),
     ),
     h(
         OP_SMLAW,
-        0,
-        0,
-        0x0001_0000,
-        3,
-        10,
-        0x88,
+        (0, 0),
+        (0x0001_0000, 3),
+        (10, 0x88),
         false,
         (13, 10, false),
     ),
     h(
         OP_SMLAW,
-        0,
-        1,
-        0x0001_0000,
-        RS_5_7,
-        10,
-        0x88,
+        (0, 1),
+        (0x0001_0000, RS_5_7),
+        (10, 0x88),
         false,
         (15, 10, false),
     ),
     h(
         OP_SMLAW,
-        0,
-        0,
-        0x7FFF_FFFF,
-        0x7FFF,
-        0x7FFF_FFFF,
-        0x88,
+        (0, 0),
+        (0x7FFF_FFFF, 0x7FFF),
+        (0x7FFF_FFFF, 0x88),
         false,
         (0xBFFF_7FFE, 0x7FFF_FFFF, true),
     ),
     h(
         OP_SMLAW,
-        1,
-        0,
-        0x0001_0000,
-        3,
-        10,
-        0x88,
+        (1, 0),
+        (0x0001_0000, 3),
+        (10, 0x88),
         false,
         (3, 10, false),
     ),
     h(
         OP_SMLAW,
-        1,
-        0,
-        0x7FFF_FFFF,
-        0x7FFF,
-        0x7FFF_FFFF,
-        0x88,
+        (1, 0),
+        (0x7FFF_FFFF, 0x7FFF),
+        (0x7FFF_FFFF, 0x88),
         false,
         (0x3FFF_7FFF, 0x7FFF_FFFF, false),
     ),
     // -3 >> 16 rounds down to -1, not toward zero.
     h(
         OP_SMLAW,
-        1,
-        0,
-        0xFFFF_FFFF,
-        3,
-        0,
-        0x88,
+        (1, 0),
+        (0xFFFF_FFFF, 3),
+        (0, 0x88),
         false,
         (0xFFFF_FFFF, 0, false),
     ),
     h(
         OP_SMLAL,
-        0,
-        0,
-        RM_2_3,
-        RS_5_7,
-        0xFFFF_FFFF,
-        0,
+        (0, 0),
+        (RM_2_3, RS_5_7),
+        (0xFFFF_FFFF, 0),
         false,
         (1, 0x14, false),
     ),
     h(
         OP_SMLAL,
-        0,
-        0,
-        0xFFFF,
-        7,
-        5,
-        0,
+        (0, 0),
+        (0xFFFF, 7),
+        (5, 0),
         false,
         (0xFFFF_FFFF, 0xFFFF_FFFE, false),
     ),
     h(
         OP_SMLAL,
-        0,
-        0,
-        1,
-        1,
-        0xFFFF_FFFF,
-        0x7FFF_FFFF,
+        (0, 0),
+        (1, 1),
+        (0xFFFF_FFFF, 0x7FFF_FFFF),
         false,
         (0x8000_0000, 0, false),
     ),
@@ -1129,4 +1064,108 @@ fn given_an_arm9_word_in_the_unconditional_space_that_is_not_blx_or_pld_when_exe
  {
     let r = arm::<true>(&[(0, 0x100), (1, 5)], &[], UNCONDITIONAL_OTHER);
     assert_eq!((r.r(0), r.r(1), r.cpsr(), r.r(15)), (0x100, 5, SVC, 0x100C));
+}
+
+// ---------------------------------------------------------------- BKPT
+
+/// BKPT #0 and BKPT #0xFFF4 in ARM state (`1110 0001 0010 imm12 0111 imm4`), and the Thumb forms
+/// (`1011 1110 imm8`).
+const BKPT_0: u32 = 0xE120_0070;
+const BKPT_FFF4: u32 = 0xE12F_FF74;
+const THUMB_BKPT_0: u16 = 0xBE00;
+const THUMB_BKPT_FF: u16 = 0xBEFF;
+/// The Abort-mode CPSR after an entry from Supervisor mode: mode bits 10111 with I set.
+const ABORT_ENTRY: u32 = ABT | IRQ_OFF;
+/// Where the prefetch abort vector (+0Ch) leaves R15: the vector + 8, after the refill.
+const ABORT_PC: u32 = 0x0C + 8;
+
+#[test]
+fn given_an_arm9_arm_bkpt_when_executed_then_it_enters_abort_mode_with_the_next_instruction_as_the_link()
+ {
+    let r = arm::<true>(&[], &[], BKPT_0);
+    assert_eq!(
+        (
+            r.cpsr(),
+            r.r(LR),
+            r.cpu.regs().spsr(Bank::Abort),
+            r.r(15),
+            r.cpu.pipeline()
+        ),
+        (ABORT_ENTRY, ADDR + 4, Some(SVC), ABORT_PC, [0x0C, 0x10])
+    );
+}
+
+#[test]
+fn given_an_arm9_thumb_bkpt_when_executed_then_it_enters_abort_mode_in_arm_state_with_the_link_past_it()
+ {
+    let r = thumb::<true>(&[], &[], THUMB_BKPT_0);
+    assert_eq!(
+        (r.cpsr(), r.r(LR), r.cpu.regs().spsr(Bank::Abort), r.r(15)),
+        (ABORT_ENTRY, ADDR + 4, Some(SVC | T_BIT), ABORT_PC)
+    );
+}
+
+#[test]
+fn given_an_arm9_bkpt_when_it_carries_a_different_immediate_then_the_entry_is_the_same() {
+    let plain = arm::<true>(&[], &[], BKPT_0);
+    let with_immediate = arm::<true>(&[], &[], BKPT_FFF4);
+    assert_eq!(
+        (plain.cpsr(), plain.r(LR), plain.r(15)),
+        (
+            with_immediate.cpsr(),
+            with_immediate.r(LR),
+            with_immediate.r(15)
+        )
+    );
+}
+
+#[test]
+fn given_an_arm9_thumb_bkpt_when_it_carries_a_different_immediate_then_the_entry_is_the_same() {
+    let plain = thumb::<true>(&[], &[], THUMB_BKPT_0);
+    let with_immediate = thumb::<true>(&[], &[], THUMB_BKPT_FF);
+    assert_eq!(
+        (plain.cpsr(), plain.r(LR), plain.r(15)),
+        (
+            with_immediate.cpsr(),
+            with_immediate.r(LR),
+            with_immediate.r(15)
+        )
+    );
+}
+
+#[test]
+fn given_an_arm9_bkpt_when_the_flags_are_set_then_the_abort_cpsr_keeps_them_and_the_spsr_saves_them()
+ {
+    let r = run::<true>(SVC | NZCV, &[], &[], BKPT_0);
+    assert_eq!(
+        (r.cpsr(), r.cpu.regs().spsr(Bank::Abort)),
+        (ABORT_ENTRY | NZCV, Some(SVC | NZCV))
+    );
+}
+
+#[test]
+fn given_an_arm9_bkpt_with_high_vectors_when_executed_then_it_vectors_to_ffff_000c() {
+    let mut cpu = Cpu::<true>::new();
+    cpu.set_high_vectors(true);
+    cpu.regs_mut().set_cpsr(SVC);
+    cpu.regs_mut().set(15, ADDR + 8);
+    cpu.set_pipeline([BKPT_0, NEXT]);
+    cpu.step(&mut Mem::new(&[]));
+    assert_eq!(cpu.pipeline(), [0xFFFF_000C, 0xFFFF_0010]);
+}
+
+#[test]
+fn given_an_arm7_bkpt_words_when_executed_then_nothing_happens_but_the_advance() {
+    let arm_state = arm::<false>(&[(LR, 0x77)], &[], BKPT_0);
+    let thumb_state = thumb::<false>(&[(LR, 0x77)], &[], THUMB_BKPT_0);
+    assert_eq!(
+        (
+            arm_state.cpsr(),
+            arm_state.r(LR),
+            arm_state.r(15),
+            thumb_state.cpsr(),
+            thumb_state.r(15)
+        ),
+        (SVC, 0x77, 0x100C, SVC | T_BIT, ADDR + 6)
+    );
 }

@@ -132,7 +132,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // which only the suite shows; on the ARM9 that CDP, LDC and STC to CP15 and everything sent to
     // another coprocessor trap is inferred from it (`docs/hw/arm-exceptions-modes.md`, "Unverified").
     // TODO(phase1): the ARM9's MCR and MRC to CP15 do nothing until #15 gives it a control
-    // register; MCRR and MRRC (ARMv5TE) stay unhandled until #14.
+    // register; MCRR and MRRC (ARMv5TE) are stepped past on the ARM9.
     pub(super) fn coprocessor(&mut self, word: u32) -> bool {
         let number = (word >> 8) & 0xF;
         // Bits 27–24 = 1110 with bit 4 set is MCR or MRC; bits 27–21 = 1100010 is MCRR or MRRC.
@@ -163,10 +163,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Takes a prefetch abort for the instruction that is executing (R15 = its address + 8).
-    // TODO(phase1): nothing raises it yet: the protection unit is #15 and BKPT is #14.
+    // TODO(phase1): the protection unit (#15) will raise it; BKPT enters the abort itself.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "nothing raises an abort until #14 and #15")
+        expect(dead_code, reason = "nothing calls it until the protection unit (#15)")
     )]
     pub(crate) fn prefetch_abort<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::PrefetchAbort);
@@ -177,7 +177,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(phase1): nothing raises it yet: the protection unit is #15.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "nothing raises an abort until #14 and #15")
+        expect(dead_code, reason = "nothing calls it until the protection unit (#15)")
     )]
     pub(crate) fn data_abort<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::DataAbort);

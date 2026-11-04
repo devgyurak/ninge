@@ -83,6 +83,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 Kind::SignedHalfwordMultiply => self.signed_halfword_multiply(word),
                 Kind::BranchLinkExchangeImmediate => self.branch_link_exchange_immediate(word),
                 Kind::Swi => self.enter(Exception::SoftwareInterrupt),
+                Kind::Breakpoint => self.enter(Exception::PrefetchAbort),
                 Kind::Undefined => self.enter(Exception::Undefined),
                 Kind::Coprocessor => self.coprocessor(word),
                 Kind::Unhandled => false,

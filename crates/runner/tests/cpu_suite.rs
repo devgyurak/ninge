@@ -1640,7 +1640,9 @@ type PcWriteGroup = (&'static str, &'static str, fn(&Case) -> bool, usize);
 /// Fact 4: a write to the PC fetches twice more, at `target & !3` and `+ 4`; the pipeline holds
 /// those two words and R15 is target + 8 with the low bits kept (R15 − first fetch is 8..=11).
 /// The cases: ALU Rd = 15 (not a compare), LDR into the PC, LDM with R15 in the list, multiply
-/// Rd = 15, SWP Rd = 15, B and BL. Cases that end in Thumb state are left to fact 5.
+/// Rd = 15, long multiply RdHi or RdLo = 15, SWP Rd = 15, B and BL. Cases that end in Thumb
+/// state are left to fact 5. Every minimum case count in this section is about 80% of what the
+/// pinned suite supplies, so a selector that goes wrong for part of the cases still fails.
 fn pc_write_problems() -> Vec<String> {
     let flushes = |c: &Case| condition_passes(c) && c.expected.cpsr >> 5 & 1 == 0;
     let groups: [PcWriteGroup; 7] = [
@@ -1824,9 +1826,9 @@ fn given_mrs_with_rd_r15_when_comparing_then_nothing_flushes_and_one_fetch_is_ma
     assert_eq!(mrs_no_flush_problems(), Vec::<String>::new());
 }
 
-/// Fact 8: a single or halfword transfer (immediate offset) that writes back to Rn = R15 (no PC load) flushes to
-/// the moved address + 4 (so R15 = moved + 12); a block transfer flushes to the moved address
-/// (R15 = moved + 8).
+/// Fact 8: a single or halfword transfer (immediate offset) that writes back to Rn = R15 (no PC
+/// load) flushes to the moved address + 4 (so R15 = moved + 12); a block transfer flushes to the
+/// moved address (R15 = moved + 8).
 fn r15_writeback_flush_problems() -> Vec<String> {
     let moved = |base: u32, up: bool, bytes: u32| match up {
         true => base.wrapping_add(bytes),

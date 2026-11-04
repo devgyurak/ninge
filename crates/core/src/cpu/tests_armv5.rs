@@ -891,6 +891,8 @@ const LDRD_R2_R2_POST_8: u32 = 0xE0C2_20D8;
 /// LDRD R3, [R0, #8] (odd Rd) and LDRD R14, [R0, #8].
 const LDRD_R3_R0_8: u32 = 0xE1C0_30D8;
 const LDRD_R14_R0_8: u32 = 0xE1C0_E0D8;
+/// LDRD R2, [PC, #8]: the base reads as the executing address + 8.
+const LDRD_R2_PC_8: u32 = 0xE1CF_20D8;
 /// LDRDNE R2, [R0, #8].
 const LDRD_NE: u32 = 0x11C0_20D8;
 
@@ -904,6 +906,20 @@ fn given_an_arm9_ldrd_when_executed_then_it_loads_the_pair_from_consecutive_word
     assert_eq!(
         (r.r(2), r.r(3), r.r(0), r.bus.reads.clone()),
         (0xAAAA_0001, 0xBBBB_0002, 0x100, vec![0x108, 0x10C])
+    );
+}
+
+#[test]
+fn given_an_arm9_ldrd_with_pc_as_the_base_when_executed_then_the_address_is_pc_plus_8_plus_the_offset()
+ {
+    let r = arm::<true>(
+        &[],
+        &[(0x1010, 0xAAAA_0001), (0x1014, 0xBBBB_0002)],
+        LDRD_R2_PC_8,
+    );
+    assert_eq!(
+        (r.r(2), r.r(3), r.bus.reads.clone()),
+        (0xAAAA_0001, 0xBBBB_0002, vec![0x1010, 0x1014])
     );
 }
 

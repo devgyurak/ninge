@@ -555,71 +555,21 @@ fn given_register_shift_with_rs_r15_when_comparing_then_the_amount_is_the_plus_8
     assert_eq!(rs_pc_problems(), Vec::<String>::new());
 }
 
-/// Whether `diff` is exactly the known ARM7 multiply-carry gap: the only difference is the CPSR,
-/// it is in bit 29 alone, and the case sets flags with a passing condition.
-fn is_c_only_gap(diff: &ninge_runner::cpu_suite::CaseDiff, cases: &[Case]) -> bool {
-    let case = &cases[diff.index];
-    let cpsr_bits = |text: &str| u32::from_str_radix(text.trim_start_matches("0x"), 16);
-    match diff.fields.as_slice() {
-        [field] => {
-            field.name == "CPSR"
-                && cpsr_bits(&field.expected)
-                    .ok()
-                    .zip(cpsr_bits(&field.actual).ok())
-                    .is_some_and(|(want, got)| want ^ got == 1 << 29)
-                && condition_passes(case)
-                && case.opcode >> 20 & 1 == 1
-        }
-        _ => false,
-    }
-}
-
-/// Condition-passing S cases whose expected C differs from their initial C: the most a CPU that
-/// leaves C unchanged can get wrong.
-fn expected_c_changes(cases: &[Case]) -> usize {
-    cases
-        .iter()
-        .filter(|c| condition_passes(c) && c.opcode >> 20 & 1 == 1)
-        .filter(|c| (c.initial.cpsr ^ c.expected.cpsr) >> 29 & 1 == 1)
-        .count()
-}
-
-/// Problems with a multiply file run on the ARM7: every diff that is not the C-only gap, and a
-/// C-only count that does not equal the number of S cases whose C the suite changes.
-fn multiply_gap_problems(file: &str) -> Vec<String> {
-    let cases = cases_of(file);
-    let diffs = arm7_diffs(file);
-    let others: Vec<String> = diffs
-        .iter()
-        .filter(|d| !is_c_only_gap(d, &cases))
-        .map(|d| format!("{file}[{}] {:#010x}: {:?}", d.index, d.opcode, d.fields))
-        .collect();
-    let c_only = diffs.len() - others.len();
-    let want = expected_c_changes(&cases);
-    others
-        .into_iter()
-        .chain((c_only != want).then(|| format!("{file}: {c_only} C-only diffs, {want} expected")))
-        .collect()
-}
-
-/// The ARM7 C after an S multiply is the gap of #81: the CPU leaves C unchanged, the suite
-/// changes it in about half of the cases. When #81 closes, this becomes
-/// `given_arm_mul_mla_when_run_on_arm7_then_no_case_differs`.
+/// The ARM7 C after an S multiply is the carry-save model of #81
+/// (`docs/hw/arm-multiply.md`, "ARM7TDMI multiply carry"); every case matches.
 #[test]
-fn given_arm_mul_mla_when_run_on_arm7_then_only_the_c_bit_of_s_cases_differs() {
+fn given_arm_mul_mla_when_run_on_arm7_then_no_case_differs() {
     assert_eq!(
-        multiply_gap_problems("arm_mul_mla.json.bin"),
-        Vec::<String>::new()
+        arm7_diffs("arm_mul_mla.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
     );
 }
 
-/// The ARM7 C after an S long multiply is the gap of #81 (see above). When it closes, this
-/// becomes `given_arm_mull_mlal_when_run_on_arm7_then_no_case_differs`.
 #[test]
-fn given_arm_mull_mlal_when_run_on_arm7_then_only_the_c_bit_of_s_cases_differs() {
+fn given_arm_mull_mlal_when_run_on_arm7_then_no_case_differs() {
     assert_eq!(
-        multiply_gap_problems("arm_mull_mlal.json.bin"),
-        Vec::<String>::new()
+        arm7_diffs("arm_mull_mlal.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
     );
 }
 
@@ -2098,57 +2048,13 @@ fn given_arm_stc_ldc_when_run_on_arm7_then_no_case_differs() {
 
 // ---- Thumb (#13, `docs/hw/thumb.md`) ----------------------------------------------------
 
-/// The mask and value of a Thumb MUL (format 4, op 1101): halfword bits 15–6 = 0100001101.
-const THUMB_MUL_MASK: u32 = 0xFFC0;
-const THUMB_MUL: u32 = 0x4340;
-
-/// Whether `diff` is exactly the known ARM7 multiply-carry gap on a Thumb MUL: the only
-/// difference is the CPSR, in bit 29 alone.
-fn is_thumb_mul_c_gap(diff: &ninge_runner::cpu_suite::CaseDiff) -> bool {
-    let cpsr_bits = |text: &str| u32::from_str_radix(text.trim_start_matches("0x"), 16);
-    match diff.fields.as_slice() {
-        [field] => {
-            field.name == "CPSR"
-                && cpsr_bits(&field.expected)
-                    .ok()
-                    .zip(cpsr_bits(&field.actual).ok())
-                    .is_some_and(|(want, got)| want ^ got == 1 << 29)
-                && diff.opcode & THUMB_MUL_MASK == THUMB_MUL
-        }
-        _ => false,
-    }
-}
-
-/// Problems with `thumb_data_proc` run on the ARM7: every diff that is not the C-only gap of a
-/// MUL, and a C-only count that does not equal the number of MUL cases whose C the suite changes
-/// (a Thumb instruction has no condition, so every MUL executes).
-fn thumb_multiply_gap_problems() -> Vec<String> {
-    let file = "thumb_data_proc.json.bin";
-    let cases = cases_of(file);
-    let diffs = arm7_diffs(file);
-    let others: Vec<String> = diffs
-        .iter()
-        .filter(|d| !is_thumb_mul_c_gap(d))
-        .map(|d| format!("{file}[{}] {:#06x}: {:?}", d.index, d.opcode, d.fields))
-        .collect();
-    let c_only = diffs.len() - others.len();
-    let want = cases
-        .iter()
-        .filter(|c| c.opcode & THUMB_MUL_MASK == THUMB_MUL)
-        .filter(|c| (c.initial.cpsr ^ c.expected.cpsr) >> 29 & 1 == 1)
-        .count();
-    others
-        .into_iter()
-        .chain((c_only != want).then(|| format!("{file}: {c_only} C-only diffs, {want} expected")))
-        .collect()
-}
-
-/// The ARM7 C after a Thumb MUL is the gap of #81, as for the ARM multiply: the CPU leaves C
-/// unchanged and the suite changes it in about half of the MUL cases. When #81 closes, this
-/// becomes `given_thumb_data_proc_when_run_on_arm7_then_no_case_differs`.
+/// The ARM7 C after a Thumb MUL follows the same model as the ARM multiply (#81).
 #[test]
-fn given_thumb_data_proc_when_run_on_arm7_then_only_the_c_bit_of_mul_cases_differs() {
-    assert_eq!(thumb_multiply_gap_problems(), Vec::<String>::new());
+fn given_thumb_data_proc_when_run_on_arm7_then_no_case_differs() {
+    assert_eq!(
+        arm7_diffs("thumb_data_proc.json.bin"),
+        Vec::<ninge_runner::cpu_suite::CaseDiff>::new()
+    );
 }
 
 #[test]

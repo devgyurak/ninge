@@ -1013,15 +1013,10 @@ fn flag_failures(cases: &[FlagCase]) -> Vec<String> {
 }
 
 #[test]
-fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_and_c_and_v_are_kept() {
+fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_c_the_carry_model_and_v_is_kept()
+{
     let cases = [
-        fc(
-            "muls zero",
-            MUL | S_BIT,
-            &[(1, 0), (2, 5)],
-            C | V,
-            Z | C | V,
-        ),
+        fc("muls zero", MUL | S_BIT, &[(1, 0), (2, 5)], C | V, Z | V),
         fc(
             "muls negative",
             MUL | S_BIT,
@@ -1034,7 +1029,7 @@ fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_and_c_and_v_a
             MUL | S_BIT,
             &[(1, 1), (2, 1)],
             FLAGS,
-            C | V,
+            V,
         ),
         fc(
             "mlas zero",
@@ -1048,14 +1043,14 @@ fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_and_c_and_v_a
             MLA | S_BIT,
             &[(1, 1), (2, 1), (3, 0x8000_0000)],
             C,
-            N | C,
+            N,
         ),
         fc(
             "umulls n from bit 63",
             UMULL | S_BIT,
             &[(1, u32::MAX), (2, u32::MAX)],
             0,
-            N,
+            N | C,
         ),
         fc(
             "umulls bit 31 is not n",
@@ -1076,7 +1071,7 @@ fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_and_c_and_v_a
             UMULL | S_BIT,
             &[(1, 0), (2, 9)],
             C | V,
-            Z | C | V,
+            Z | V,
         ),
         fc(
             "smulls negative",
@@ -1097,7 +1092,7 @@ fn given_s_multiplies_when_executed_then_n_and_z_follow_the_result_and_c_and_v_a
             SMLAL | S_BIT,
             &[(1, 1), (2, 1), (4, u32::MAX), (3, u32::MAX)],
             C,
-            Z | C,
+            Z,
         ),
     ];
     assert_eq!(flag_failures(&cases), Vec::<String>::new());
@@ -1123,6 +1118,15 @@ fn arm9_after(setup: &[(usize, u32)], opcode: u32, flags: u32) -> (u32, u32) {
     cpu.set_pipeline([opcode, 0]);
     cpu.step(&mut FixedBus(0));
     (cpu.regs().get(4), cpu.regs().cpsr())
+}
+
+#[test]
+fn given_arm9_when_umulls_would_give_c_on_the_arm7_then_c_is_kept() {
+    // 0xFFFF_FFFF squared is the "umulls n from bit 63" row above: the ARM7 sets C there.
+    assert_eq!(
+        arm9_after(&[(1, u32::MAX), (2, u32::MAX)], UMULL | S_BIT, 0).1,
+        SVC | N
+    );
 }
 
 #[test]
@@ -1218,13 +1222,14 @@ proptest! {
     }
 
     #[test]
-    fn given_any_operands_when_muls_executes_then_n_and_z_follow_the_32_bit_result_and_cv_are_kept(
+    fn given_any_operands_when_muls_executes_then_n_and_z_follow_the_32_bit_result_and_v_is_kept(
         a in any::<u32>(), b in any::<u32>(), f in 0u32..16,
     ) {
         let want = a.wrapping_mul(b);
+        // C comes from the carry model, which `tests_multiply_carry.rs` pins.
         prop_assert_eq!(
-            cpsr_after(f << 28, &[(1, a), (2, b)], MUL | S_BIT),
-            SVC | (f << 28 & (C | V)) | want & N | u32::from(want == 0) << 30
+            cpsr_after(f << 28, &[(1, a), (2, b)], MUL | S_BIT) & !C,
+            SVC | (f << 28 & V) | want & N | u32::from(want == 0) << 30
         );
     }
 }

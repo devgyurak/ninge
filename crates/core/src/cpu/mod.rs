@@ -12,6 +12,7 @@ mod decode;
 mod disasm;
 mod disasm_thumb;
 mod exception;
+mod multiply_carry;
 mod psr;
 mod regs;
 mod shifter;
@@ -123,6 +124,9 @@ mod tests_cp15;
 
 #[cfg(test)]
 mod tests_disasm;
+
+#[cfg(test)]
+mod tests_multiply_carry;
 
 #[cfg(test)]
 mod tests_disasm_thumb;

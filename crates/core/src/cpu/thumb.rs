@@ -8,6 +8,7 @@
 use super::alu::{self, Alu};
 use super::arm::{THUMB_HALFWORD, THUMB_PC_AHEAD};
 use super::exception::Exception;
+use super::multiply_carry::multiply_carry;
 use super::psr::{FLAG_C, FLAG_V, condition_holds, with_flags};
 use super::shifter::{ShiftKind, shift_immediate, shift_register};
 use super::thumb_decode::{ThumbKind, decode};
@@ -301,9 +302,15 @@ impl<const ARM9: bool> Cpu<ARM9> {
             }
             // NEG is 0 - Rs: a reverse subtract with Rs as the left operand.
             OP_NEG => alu::execute(ARM_RSB, b, 0, carry, carry, overflow),
+            // On the ARM7 C is the multiplier carry model; the multiplier is the incoming Rd
+            // (`docs/hw/thumb.md`, `docs/hw/arm-multiply.md`).
+            // TODO(hw-unverified): oracle evidence only (#81); the ARM9 leaves C alone.
             OP_MUL => Alu {
                 result: a.wrapping_mul(b),
-                carry,
+                carry: match ARM9 {
+                    true => carry,
+                    false => multiply_carry(a, b, 0, true, false),
+                },
                 overflow,
             },
             // The rest are the ARM data-processing opcode of the same number.

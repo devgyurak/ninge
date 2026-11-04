@@ -107,7 +107,7 @@ nothing below comes from it, and the session that wrote this section did not ope
 
 ### Sources read for #81
 
-Both are ARM patents with the same specification text, filed in the mid-1990s; read in full
+Both are ARM patents with largely the same specification text, filed in the mid-1990s; read in full
 on patents.google.com (specification and example tables, not the abstract):
 
 - **US 5,583,804**, "Data processing using multiply-accumulate instructions" (Advanced RISC
@@ -134,8 +134,10 @@ per-cycle table that follows it; P2 the same table) computes multiplier x multip
   1 to 4 consume the multiplier and cycle 5 finishes the sum.
 - **Start.** The save vector starts as the accumulate value (zero without accumulate) and the
   carry vector as the bitwise inverse of the multiplicand when `R[0]` is 1, else zero (P1,
-  "Carry-save initialiser"). A negative multiple is formed by inversion and the missing +1 is
-  deferred; the final adder's carry-in is `R[0]` for that reason (P1, "Multiplexer C").
+  "Carry-save initialiser"). That inversion is a negation whose +1 is deferred, which is why
+  the first final-adder pass takes carry-in `R[0]` (P1, "Multiplexer C"). A negative multiple
+  inside a row carries its own +1 as the row's `XC` bit into the carry vector (P1, "Multiplier
+  rows" table); that one is not deferred.
 - **Each row.** Adds one multiple of the multiplicand into the carry-save pair without a
   carry chain, shifts the active region two bits up, and drops the two now-final low bits of
   save and carry into the low latches (P1, "Multiplier rows 1, 2, 4 and 5" equations).
@@ -193,7 +195,8 @@ Code sites are the handlers the implementation adds to `crates/core/src/cpu/arm.
 - **ARM7 C after an S multiply** is not implemented: the handlers leave C unchanged. The suite
   differs from that in about half of the S cases. Site: both handlers. #81 read two ARM
   patents (see "Sources read for #81"); they give the carry-save datapath but not the link from
-  an adder carry-out to CPSR.C, nor the early-terminated form. Remaining routes: further
+  an adder carry-out to CPSR.C, nor the early-terminated form (including which cycle's adder
+  is last when a multiply stops early). Remaining routes: further
   clean-room sources a maintainer can supply (a textbook summary of the ARM7TDMI multiplier),
   and/or measuring C on real ARM7TDMI hardware with a test ROM of our own. If those fail,
   whether the single bit becomes a documented Phase 1 DoD exception is decided in #80.

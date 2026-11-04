@@ -101,7 +101,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// LDRD and STRD (`docs/hw/armv5te.md`, "LDRD and STRD"): the halfword form's addressing, two
     /// words at the address and the address + 4 to or from Rd and Rd + 1. Bit 5 distinguishes
     /// the store (SH = 11) from the load (SH = 10). True if it wrote the PC.
-    // TODO(hw-unverified): an odd Rd or R14 is not executed, a doubleword address that is not
+    // TODO(hw-unverified): R15 as Rn or Rm is used like any register; an odd Rd or R14 is not executed, a doubleword address that is not
     // 8-byte aligned reaches the bus as given, and with writeback to Rd or Rd + 1 the loaded
     // value wins (`docs/hw/armv5te.md`, "Unverified").
     pub(super) fn double_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
@@ -245,6 +245,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
                         self.regs.set_cpsr(spsr);
                         self.write_pc(value);
                     }
+                    // TODO(hw-unverified): a loaded target with low bits `10` keeps bit 1 in R15
+                    // (`docs/hw/armv5te.md`, "Unverified").
                     None if ARM9 => {
                         self.exchange_to(value);
                     }

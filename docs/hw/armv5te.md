@@ -6,8 +6,9 @@ SMLALxy, SMULxy)", "Memory: Halfword, Doubleword, Signed Transfer (LDRD, STRD)",
 "Software Breakpoint (BKPT)", "THUMB Opcodes: Register Operations (BLX)" and "Long Branch with
 Link (BLX)", and the CPSR bit table; ARM ARM (ARMv5TE) for the instruction descriptions;
 ARM946E-S TRM for the core-specific notes (PLD, the Q flag). Written from memory of those
-sources, not re-read line by line while writing; every claim that rests on inference is under
-"Unverified".
+sources, not re-read line by line while writing, so a human should check the claims outside
+"Unverified" (Q-setting rules, the W multiplies, the PLD encoding, the BLX link values) against
+GBATEK; every claim that rests on inference is under "Unverified".
 Used by: `crates/core/src/cpu/decode.rs`, `thumb_decode.rs`, `armv5.rs`, `arm.rs`,
 `arm_transfer.rs`, `thumb.rs`, `exception.rs`   Phase: 1
 
@@ -172,6 +173,9 @@ immediate is ignored by the core. On the ARM7 neither encoding is executed.
   `unconditional_kind`.
 - MSR of bit 27 on the ARM7 is stored; whether the ARM7TDMI keeps the bit is not stated —
   `crates/core/src/cpu/psr.rs`, `FLAG_Q`.
+- LDRD and STRD with R15 as Rn or Rm, and the should-be-one fields (bits 19–8) of BLX register,
+  CLZ and BKPT's non-immediate bits, are not checked; R15 reads as for any instruction —
+  `arm_transfer.rs`, `double_transfer`; `decode.rs` — verify by a test ROM.
 - BKPT with a condition field other than AL runs conditionally here; the ARM ARM states it
   is unconditional — `decode.rs`, `Kind::Breakpoint`.
 - Destination R15 for CLZ, the saturating adds and the halfword multiplies (not allowed): the

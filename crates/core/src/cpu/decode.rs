@@ -121,6 +121,8 @@ const fn classify(index: usize, arm9: bool) -> Kind {
             // still runs as BX (`docs/hw/arm-branch-pipeline.md`, "Unverified").
             (true, _, _) => match (low, opcode & 1) {
                 (1, 1) if high == 0x12 => Kind::BranchExchange,
+                // TODO(hw-unverified): the should-be-one fields (bits 19–8) of BLX register, CLZ
+                // and BKPT's immediate field are not checked (`docs/hw/armv5te.md`, "Unverified").
                 (3, 1) if arm9 && high == 0x12 => Kind::BranchLinkExchange,
                 (7, 1) if arm9 && high == 0x12 => Kind::Breakpoint,
                 (1, 1) if arm9 && high == 0x16 => Kind::CountLeadingZeros,
@@ -192,6 +194,8 @@ const fn unconditional_kind(index: usize) -> Kind {
         2 if pld_bits => Kind::Preload,
         // bits 27–25 = 011: PLD with a register offset, which has bit 4 clear
         3 if pld_bits && low & 1 == 0 => Kind::Preload,
+        // TODO(hw-unverified): the other words of the 1111 space are stepped past; the real core
+        // may take Undefined (`docs/hw/armv5te.md`, "Unverified").
         _ => Kind::Unhandled,
     }
 }

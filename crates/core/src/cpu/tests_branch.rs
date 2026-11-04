@@ -357,6 +357,67 @@ fn given_mrs_into_r15_when_executed_then_r15_is_value_plus_4_and_there_is_no_ref
     );
 }
 
+#[test]
+fn given_ldr_writeback_to_r15_when_executed_then_it_flushes_to_the_moved_address_plus_4() {
+    // Unverified (suite): LDR R1,[R15,#4]! moves R15 (0x1008) to 0x100C and flushes to + 4.
+    let s = exec(SVC, &[], 0xE5BF_1004);
+    assert_eq!((s.r15(), s.fetches), (0x1018, arm_fetches(0x1010)));
+}
+
+#[test]
+fn given_ldm_writeback_to_r15_when_executed_then_it_flushes_to_the_moved_address() {
+    // Unverified (suite): LDMIA R15!,{R1} moves R15 (0x1008) to 0x100C and flushes there.
+    let s = exec(SVC, &[], 0xE8BF_0002);
+    assert_eq!((s.r15(), s.fetches), (0x1014, arm_fetches(0x100C)));
+}
+
+#[test]
+fn given_mul_into_r15_when_executed_then_it_refills_from_the_product() {
+    // MUL PC, R1, R2 = 3 * 4 = 12.
+    let s = exec(SVC, &[(1, 3), (2, 4)], 0xE00F_0291);
+    assert_eq!((s.r15(), s.fetches), (20, arm_fetches(12)));
+}
+
+#[test]
+fn given_umull_with_rdhi_r15_when_executed_then_it_refills_from_the_high_word() {
+    // UMULL R0, PC, R1, R2 = 0x1000_0000 * 0x10 = 0x1_0000_0000, so RdHi = 1; the low bit is
+    // kept in R15 and dropped for the fetches.
+    let s = exec(SVC, &[(1, 0x1000_0000), (2, 0x10)], 0xE08F_0291);
+    assert_eq!((s.r15(), s.fetches), (9, arm_fetches(1)));
+}
+
+#[test]
+fn given_swp_into_r15_when_executed_then_it_refills_from_the_old_memory_word() {
+    // SWP PC, R1, [R0] with the memory word 0x2000.
+    let s = exec_with(SVC, &[(0, 0x3000), (1, 0x77)], 0x2000, 0xE100_F091);
+    assert_eq!((s.r15(), s.fetches), (0x2008, arm_fetches(0x2000)));
+}
+
+#[test]
+fn given_ldm_pc_with_s_and_a_thumb_spsr_when_executed_then_it_refills_as_thumb() {
+    // LDMIA R0,{PC}^ restores the CPSR from SPSR_svc (User mode, T set), then refills in
+    // Thumb state from 0x2001: halfwords at 0x2000 and 0x2002, R15 = 0x2004.
+    let mut cpu = Cpu::<false>::new();
+    cpu.regs_mut().set_cpsr(SVC);
+    cpu.regs_mut().set_spsr(Bank::Supervisor, 0x10 | T_BIT);
+    cpu.regs_mut().set(0, 0x3000);
+    cpu.regs_mut().set(15, PC_READ);
+    cpu.set_pipeline([0xE8D0_8000, NEXT]);
+    let mut bus = RecBus {
+        fetches: Vec::new(),
+        data: 0x2001,
+    };
+    cpu.step(&mut bus);
+    assert_eq!(
+        (cpu.regs().get(15), cpu.pipeline(), bus.fetches),
+        (
+            0x2004,
+            [0x2000, 0x2002],
+            vec![(32, PC_READ), (16, 0x2000), (16, 0x2002)]
+        )
+    );
+}
+
 proptest! {
     #[test]
     fn given_any_b_offset_when_executed_then_r15_is_address_plus_8_plus_offset_plus_8(

@@ -141,7 +141,7 @@ mod tests {
 
     /// Words and the kind each must decode to (`docs/hw/arm-multiply.md`, "Encoding";
     /// `docs/hw/arm-load-store.md`, "Encodings").
-    const CASES: [(u32, Kind); 35] = [
+    const CASES: [(u32, Kind); 37] = [
         (0xE000_0090, Kind::Multiply),                // MUL
         (0xE010_0090, Kind::Multiply),                // MULS
         (0xE020_0090, Kind::Multiply),                // MLA
@@ -180,6 +180,8 @@ mod tests {
         (0x0A00_0000, Kind::Branch),         // BEQ
         (0xE12F_FF11, Kind::BranchExchange), // BX R1
         (0xE12F_FF10, Kind::BranchExchange), // BX R0 with bits 3-0 = 0 (Rn = R0)
+        (0xE12F_FF31, Kind::Unhandled),      // BLX register (#14), not BX
+        (0xE16F_0F11, Kind::Unhandled),      // CLZ (#14), not BX
     ];
 
     fn classification_failures() -> Vec<(u32, Kind, Kind)> {

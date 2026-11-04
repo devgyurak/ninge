@@ -1616,10 +1616,7 @@ fn plain_advance_problems() -> Vec<String> {
         |c| plain_step(c) && c.transactions.len() == 1,
         100_000,
     );
-    let alu: Vec<(String, Case)> = pipeline_cases()
-        .into_iter()
-        .filter(|(name, _)| name.starts_with("arm_data_proc"))
-        .collect();
+    let alu = cases_of_prefixed("arm_data_proc");
     problems.extend(fact_problems(
         "ALU, Rd not R15",
         &alu,
@@ -1636,8 +1633,9 @@ fn given_failed_conditions_and_alu_results_outside_r15_when_comparing_then_the_p
     assert_eq!(plain_advance_problems(), Vec::<String>::new());
 }
 
-/// A PC-write group: its label, the file-name prefix, and which cases belong.
-type PcWriteGroup = (&'static str, &'static str, fn(&Case) -> bool);
+/// A PC-write group: its label, the file-name prefix, which cases belong, and the fewest cases
+/// the suite must supply (about 80% of what was measured).
+type PcWriteGroup = (&'static str, &'static str, fn(&Case) -> bool, usize);
 
 /// Fact 4: a write to the PC fetches twice more, at `target & !3` and `+ 4`; the pipeline holds
 /// those two words and R15 is target + 8 with the low bits kept (R15 − first fetch is 8..=11).
@@ -1645,27 +1643,44 @@ type PcWriteGroup = (&'static str, &'static str, fn(&Case) -> bool);
 /// Rd = 15, SWP Rd = 15, B and BL. Cases that end in Thumb state are left to fact 5.
 fn pc_write_problems() -> Vec<String> {
     let flushes = |c: &Case| condition_passes(c) && c.expected.cpsr >> 5 & 1 == 0;
-    let groups: [PcWriteGroup; 6] = [
-        ("ALU", "arm_data_proc", |c| {
-            c.opcode >> 12 & 0xF == 15 && !(8..=11).contains(&(c.opcode >> 21 & 0xF))
-        }),
-        ("LDR PC", "arm_ldr_str", |c| {
-            c.opcode >> 20 & 1 == 1 && c.opcode >> 12 & 0xF == 15
-        }),
-        ("LDM PC", "arm_ldm_stm", |c| {
-            c.opcode >> 20 & 1 == 1 && c.opcode >> 15 & 1 == 1
-        }),
-        ("MUL PC", "arm_mul_mla", |c| c.opcode >> 16 & 0xF == 15),
-        ("SWP PC", "arm_swp", |c| c.opcode >> 12 & 0xF == 15),
-        ("B, BL", "arm_b_bl", |_| true),
+    let groups: [PcWriteGroup; 7] = [
+        (
+            "ALU",
+            "arm_data_proc",
+            |c| c.opcode >> 12 & 0xF == 15 && !(8..=11).contains(&(c.opcode >> 21 & 0xF)),
+            2_750,
+        ),
+        (
+            "LDR PC",
+            "arm_ldr_str",
+            |c| c.opcode >> 20 & 1 == 1 && c.opcode >> 12 & 0xF == 15,
+            1_280,
+        ),
+        (
+            "LDM PC",
+            "arm_ldm_stm",
+            |c| c.opcode >> 20 & 1 == 1 && c.opcode >> 15 & 1 == 1,
+            5_000,
+        ),
+        (
+            "MUL PC",
+            "arm_mul_mla",
+            |c| c.opcode >> 16 & 0xF == 15,
+            1_280,
+        ),
+        (
+            "MULL PC",
+            "arm_mull_mlal",
+            |c| c.opcode >> 16 & 0xF == 15 || c.opcode >> 12 & 0xF == 15,
+            2_360,
+        ),
+        ("SWP PC", "arm_swp", |c| c.opcode >> 12 & 0xF == 15, 1_250),
+        ("B, BL", "arm_b_bl", |_| true, 20_000),
     ];
     groups
         .iter()
-        .flat_map(|&(label, prefix, select)| {
-            let cases: Vec<(String, Case)> = pipeline_cases()
-                .into_iter()
-                .filter(|(name, _)| name.starts_with(prefix))
-                .collect();
+        .flat_map(|&(label, prefix, select, least)| {
+            let cases = cases_of_prefixed(prefix);
             fact_problems(
                 label,
                 &cases,
@@ -1674,7 +1689,7 @@ fn pc_write_problems() -> Vec<String> {
                     let f = fetches(c);
                     refilled_as_arm(c) && f[0].addr == c.base_addr.wrapping_add(8)
                 },
-                100,
+                least,
             )
         })
         .collect()
@@ -1688,10 +1703,7 @@ fn given_pc_writes_when_comparing_then_two_more_fetches_follow_at_the_aligned_ta
 
 /// B and BL land exactly on R15 (base + 8) + the sign-extended word offset; BL's LR is base + 4.
 fn branch_target_problems() -> Vec<String> {
-    let cases: Vec<(String, Case)> = pipeline_cases()
-        .into_iter()
-        .filter(|(name, _)| name.starts_with("arm_b_bl"))
-        .collect();
+    let cases = cases_of_prefixed("arm_b_bl");
     let target = |c: &Case| {
         let offset = (((c.opcode & 0x00FF_FFFF) << 8) as i32 >> 6) as u32; // sign-extend, then << 2
         c.base_addr.wrapping_add(8).wrapping_add(offset)
@@ -1700,15 +1712,18 @@ fn branch_target_problems() -> Vec<String> {
         "branch target",
         &cases,
         condition_passes,
-        |c| c.expected.r[15] == target(c).wrapping_add(8) && fetches(c)[1].addr == target(c),
-        10_000,
+        |c| {
+            c.expected.r[15] == target(c).wrapping_add(8)
+                && fetches(c).get(1).map(|t| t.addr) == Some(target(c))
+        },
+        20_000,
     );
     problems.extend(fact_problems(
         "BL link",
         &cases,
         |c| condition_passes(c) && c.opcode >> 24 & 1 == 1 && c.initial.cpsr & 0x1F == 0x1F,
         |c| c.expected.r[14] == c.base_addr.wrapping_add(4),
-        1_000,
+        1_240,
     ));
     problems
 }
@@ -1726,10 +1741,11 @@ fn bx_thumb_problems() -> Vec<String> {
     fact_problems(
         "BX to Thumb",
         &cases,
-        |c| condition_passes(c) && c.expected.cpsr >> 5 & 1 == 1,
+        |c| condition_passes(c) && c.opcode & 0xF < 8 && c.expected.cpsr >> 5 & 1 == 1,
         |c| {
             let f = fetches(c);
             f.len() == 3
+                && f[1].addr == c.initial.r[(c.opcode & 0xF) as usize] & !1
                 && (f[1].size, f[2].size) == (2, 2)
                 && f[1].addr & 1 == 0
                 && f[2].addr == f[1].addr.wrapping_add(2)
@@ -1737,14 +1753,22 @@ fn bx_thumb_problems() -> Vec<String> {
                 && c.expected.pipeline == [f[1].data, f[2].data]
                 && f[1].data == f[1].addr & 0xFFFF
         },
-        1_000,
+        4_900,
     )
 }
 
+/// The labeled cases of the `PIPELINE_FILES` whose names start with `prefix`; only those files
+/// are decoded.
 fn cases_of_prefixed(prefix: &str) -> Vec<(String, Case)> {
-    pipeline_cases()
-        .into_iter()
-        .filter(|(name, _)| name.starts_with(prefix))
+    PIPELINE_FILES
+        .iter()
+        .filter(|file| file.starts_with(prefix))
+        .flat_map(|file| {
+            cases_of(file)
+                .into_iter()
+                .enumerate()
+                .map(move |(i, c)| (format!("{file}[{i}]"), c))
+        })
         .collect()
 }
 
@@ -1768,7 +1792,7 @@ fn bx_arm_bit_1_problems() -> Vec<String> {
                 && c.expected.r[15] == target(c).wrapping_add(8)
                 && f[1].addr == target(c) & !3
         },
-        1_000,
+        2_500,
     )
 }
 
@@ -1791,7 +1815,7 @@ fn mrs_no_flush_problems() -> Vec<String> {
                 && c.transactions.len() == 1
                 && c.expected.pipeline == [c.initial.pipeline[1], f[0].data]
         },
-        1_000,
+        1_260,
     )
 }
 
@@ -1800,7 +1824,7 @@ fn given_mrs_with_rd_r15_when_comparing_then_nothing_flushes_and_one_fetch_is_ma
     assert_eq!(mrs_no_flush_problems(), Vec::<String>::new());
 }
 
-/// Fact 8: a single or halfword transfer that writes back to Rn = R15 (no PC load) flushes to
+/// Fact 8: a single or halfword transfer (immediate offset) that writes back to Rn = R15 (no PC load) flushes to
 /// the moved address + 4 (so R15 = moved + 12); a block transfer flushes to the moved address
 /// (R15 = moved + 8).
 fn r15_writeback_flush_problems() -> Vec<String> {
@@ -1808,12 +1832,23 @@ fn r15_writeback_flush_problems() -> Vec<String> {
         true => base.wrapping_add(bytes),
         false => base.wrapping_sub(bytes),
     };
+    let writes_back = |o: u32| o >> 21 & 1 == 1 || o >> 24 & 1 == 0;
     let single = |c: &Case| {
+        c.opcode >> 16 & 0xF == 15 && c.opcode >> 12 & 0xF != 15 && writes_back(c.opcode)
+    };
+    // The moved base of a single (12-bit offset) or halfword (split 8-bit offset) transfer.
+    let single_moved = |c: &Case, halfword: bool| {
         let o = c.opcode;
-        o >> 25 & 1 == 0
-            && o >> 16 & 0xF == 15
-            && o >> 12 & 0xF != 15
-            && (o >> 21 & 1 == 1 || o >> 24 & 1 == 0)
+        let offset = match halfword {
+            true => (o >> 4 & 0xF0) | (o & 0xF),
+            false => o & 0xFFF,
+        };
+        moved(c.base_addr.wrapping_add(8), o >> 23 & 1 == 1, offset)
+    };
+    let single_holds = |c: &Case, halfword: bool| {
+        let target = single_moved(c, halfword).wrapping_add(4);
+        let f = fetches(c);
+        refilled_as_arm(c) && f[1].addr == target & !3 && c.expected.r[15] == target.wrapping_add(8)
     };
     let block = |c: &Case| {
         let o = c.opcode;
@@ -1822,29 +1857,30 @@ fn r15_writeback_flush_problems() -> Vec<String> {
     let mut problems = fact_problems(
         "single writeback to R15",
         &cases_of_prefixed("arm_ldr_str_immediate_offset"),
-        |c| condition_passes(c) && is_user_or_system(c) && single(c),
-        |c| {
-            let target = moved(
-                c.base_addr.wrapping_add(8),
-                c.opcode >> 23 & 1 == 1,
-                c.opcode & 0xFFF,
-            );
-            let f = fetches(c);
-            f.len() == 3 && f[1].addr == target.wrapping_add(4) & !3 && refilled_as_arm(c)
-        },
-        100,
+        |c| condition_passes(c) && single(c),
+        |c| single_holds(c, false),
+        920,
     );
+    problems.extend(fact_problems(
+        "halfword writeback to R15",
+        &cases_of_prefixed("arm_ldrh_strh"),
+        |c| condition_passes(c) && single(c) && c.opcode >> 22 & 1 == 1,
+        |c| single_holds(c, true),
+        430,
+    ));
     problems.extend(fact_problems(
         "block writeback to R15",
         &cases_of_prefixed("arm_ldm_stm"),
-        |c| condition_passes(c) && is_user_or_system(c) && block(c),
+        |c| condition_passes(c) && block(c),
         |c| {
             let bytes = 4 * (c.opcode & 0xFFFF).count_ones();
             let target = moved(c.base_addr.wrapping_add(8), c.opcode >> 23 & 1 == 1, bytes);
             let f = fetches(c);
-            f.len() == 3 && f[1].addr == target & !3 && refilled_as_arm(c)
+            refilled_as_arm(c)
+                && f[1].addr == target & !3
+                && c.expected.r[15] == target.wrapping_add(8)
         },
-        100,
+        305,
     ));
     problems
 }

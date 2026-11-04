@@ -137,19 +137,21 @@ per-cycle table that follows it; P2 the same table) computes multiplier x multip
   accumulate) and the carry vector as the bitwise inverse of the multiplicand when `R[0]` is 1,
   else zero (P1, "Carry-save initialiser", `SI[i] = ACCUM AND ACCVAL[i]` for i = 0 to 32).
   That inversion is a negation whose +1 is deferred, which is why the first final-adder pass
-  takes carry-in `R[0]` (P1, "Multiplexer C"; P2's body text states this consistently, while
-  P1's body text has one slip, so P2 is the safer source for it). A negative multiple
+  takes carry-in `R[0]` (P1, "Multiplexer C"; P2's body text). P1's paragraph before its second
+  initialisation method says `R[1]` where its next sentence and the Multiplexer C table say
+  `R[0]`; that is a slip in P1, and `R[0]` is used here. A negative multiple
   inside a row carries its own +1 as the row's `XC` bit into the carry vector (P1, "Multiplier
   rows" table); that one is not deferred.
 - **Upper accumulate bits.** Accumulate bits 63 down to 33 do not enter at the start. They wait
-  in the "accumulate value high latches" and each row takes two of them per cycle (P1 table,
-  "Accumulate value high latches", `AH1` to `AH5`; the technique is claimed in P2 claims 1 to 3).
+  in the "accumulate value high latches" (bit 63 is sign-extended when signed, P1:
+  `ACCHI[31] = SIGNED AND ACCUM AND ACCVAL[63]`) and each row takes two of them per cycle (P1 table,
+  "Accumulate value high latches", `AH1`, `AH2`, `AH4`, `AH5`; the technique is claimed in P2 claims 1 to 3).
 - **Each row.** Adds one multiple of the multiplicand into the carry-save pair without a
   carry chain, shifts the active region two bits up, and drops the two now-final low bits of
   save and carry into the low latches (P1, "Multiplier rows 1, 2, 4 and 5" equations). The top
-  two bits of a row are not plain carry-save: they sum the row's two incoming accumulate bits
-  with the complemented top carry and complemented top multiple bit, and the top carry bit
-  becomes the complement of the second accumulate bit (P1: `(S(k+1)[32], S(k+1)[31])` and
+  two bits of a row are not plain carry-save: they sum the row's first incoming accumulate bit
+  with the complemented top carry and the complemented top multiple bit, and the top carry bit
+  becomes the complement of the second accumulate bit (which does not enter that sum) (P1: `(S(k+1)[32], S(k+1)[31])` and
   `C(k+1)[32]` in the same equations).
 - **Final addition.** One 32-bit adder produces `(COUT, SUM[31:0])` from the save and carry
   inputs and a carry-in. It evaluates every cycle, but only two outputs are used: cycle 4 and

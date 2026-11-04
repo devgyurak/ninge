@@ -7,8 +7,8 @@ Used by: `crates/core/src/bus/` (planned, #18)   Phase: 0 (regions the smoke ROM
 
 | Region | Base | Size | Seen by |
 |---|---|---|---|
-| Instruction TCM | 0x0000_0000 | 32 KiB | ARM9 only; not moveable; can mirror up to 0x0100_0000 |
-| Data TCM | 0x0xxx_x000 | 16 KiB | ARM9 only; moveable |
+| Instruction TCM | 0x0000_0000 | 32 KiB | ARM9 only; not moveable; can mirror up to 0x0100_0000; sizes and enable bits in `cp15.md` |
+| Data TCM | 0x0xxx_x000 | 16 KiB | ARM9 only; moveable; base, size and enable bits in `cp15.md` |
 | Main memory | 0x0200_0000 | 4 MiB | ARM9 and ARM7 |
 | Shared WRAM | 0x0300_0000 | 0, 16 or 32 KiB | Allocated to ARM9 or ARM7 |
 | ARM7 WRAM | 0x0380_0000 | 64 KiB | ARM7 only |
@@ -31,8 +31,8 @@ memory.
 
 ## Unverified
 
-- Default Data TCM base — "DS Memory Maps" says only that it is moveable; the value is set by
-  software through CP15 — settle in #15 with the CP15 note.
+- Default Data TCM base — "DS Memory Maps" says only that it is moveable; software sets it
+  through CP15 (`cp15.md`), which gives no power-on value either (`cp15.md`, "Unverified").
 - The ARM7 has no TCM, cache, or CP15 — taken from general knowledge, not cited from the
   section above; cite the source or drop it in #18.
 - The allocated shared WRAM is mirrored across the whole WRAM area, and 16 MiB blocks are

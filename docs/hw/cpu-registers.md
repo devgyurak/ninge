@@ -33,7 +33,8 @@ only the current mode's R14.
   provides.
 - R14 receives the return address on a branch with link and when an exception is taken.
 - R15 is the program counter. Reading it usually gives the instruction address plus an offset
-  because of the pipeline; the offset depends on the instruction and the state (ARM or Thumb).
+  because of the pipeline; the offset depends on the instruction and the state (ARM or Thumb); `arm-branch-pipeline.md`
+  models it.
   In Thumb state only R0–R7 are freely accessible.
 
 ### CPSR bits

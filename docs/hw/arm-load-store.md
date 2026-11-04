@@ -13,9 +13,9 @@ Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm_transfer.rs`,
 `crates/core/src/cpu/bus.rs`   Phase: 1 (#10)
 
 Out of scope here, deferred with a marker at the code site: LDRD, STRD and PLD, and the ARMv5
-switch to Thumb state on a load into R15 (#14); the real pipeline (#11); data aborts and cycle
-timing. Registers and modes are in `cpu-registers.md`; the PC convention is the interim one of
-`arm-data-processing.md`.
+switch to Thumb state on a load into R15 (#14); data aborts and cycle timing. Registers and
+modes are in `cpu-registers.md`; the PC reads and the refill after an R15 write are in
+`arm-branch-pipeline.md`.
 
 ## Encodings
 
@@ -128,13 +128,14 @@ therefore the bus implementation's job (the memory map, Phase 2).
 | R15 as Rn | address + 8 | GBATEK; (suite) |
 | R15 as the stored Rd of STR, STRB, STRH | address + 12 | GBATEK; (suite) |
 | R15 in the list of an STM | address + 12 | (suite) |
-| LDR or LDM loads R15 | R15 ends as the loaded value + 8, low bits kept, T unchanged | (suite), interim convention (#11) |
+| LDR or LDM loads R15 | the pipeline refills from the loaded value: R15 ends as the value + 8, low bits kept, T unchanged | (suite), `arm-branch-pipeline.md` |
 
 Also measured on the suite, though GBATEK does not allow R15 in these fields:
 
-- A single or halfword transfer whose written-back Rn is R15 ends with R15 = the moved address + 8,
-  and the step still advances the PC by 4 (so + 12 in all). A block transfer in the same situation
-  ends with R15 = the moved address + 8 and no further advance.
+- A single or halfword transfer whose written-back Rn is R15 (no PC load) flushes the pipeline
+  to the moved address + 4, so R15 ends as the moved address + 12. A block transfer in the same
+  situation flushes to the moved address, so R15 ends as the moved address + 8
+  (`arm-branch-pipeline.md`).
 - SWP reads an R15 Rn or Rm as address + 12.
 - A halfword transfer with P = 0 and bit 21 set writes back like any post-indexed form, although
   GBATEK says that bit must be zero.

@@ -113,7 +113,10 @@ against the reference emulator.
   unpredictable. — `mrs` in `arm.rs`.
 - **BX with should-be-one fields that are not all ones.** The decoder keys on bits 27-20 and
   7-4 only, so any such word runs as BX; what hardware does with other values in bits 19-8 is
-  unknown. — `decode.rs`.
+  unknown. — `decode.rs` (and `branch_exchange`).
+- **Late R15 reads of multiply operands and SWP registers.** GBATEK gives the register-shift
+  and store cases only; the +12 reads of multiply and SWP operands are the suite's. —
+  `LATE_PC_EXTRA` in `arm.rs` — verify by a test ROM on real hardware.
 - **Fetch transactions.** The suite lists a fetch per refill and per step; the model matches
   its sequence and sizes (step fetch, then two refill fetches; 32/16/16 bits for BX to
   Thumb). Whether real hardware fetches the same way (no extra speculative fetch) is oracle

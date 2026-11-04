@@ -85,6 +85,8 @@ const fn classify(index: usize) -> Kind {
             (false, false, false) => Kind::DataRegisterShift,
             // BX is bits 27–20 = 0x12 with bits 7–4 = 0001, a TEQ-shaped word in the PSR space
             // (`docs/hw/arm-branch-pipeline.md`, "Encodings").
+            // TODO(hw-unverified): bits 19–8 are not checked, so a word with other values there
+            // still runs as BX (`docs/hw/arm-branch-pipeline.md`, "Unverified").
             (true, _, _) => match (low, opcode & 1) {
                 (1, 1) if high == 0x12 => Kind::BranchExchange,
                 (0, 0) => Kind::Mrs,

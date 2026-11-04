@@ -26,6 +26,8 @@ const THUMB_HALFWORD: u32 = 2;
 /// An R15 read after the prefetch has advanced the PC once more reads this far ahead again
 /// (`docs/hw/arm-branch-pipeline.md`, "Late R15 reads"): a register-specified shift's Rn and Rm,
 /// a multiply's operands, the stored register of STR, STRH and STM, and SWP's registers.
+// TODO(hw-unverified): the multiply and SWP late reads are the suite's, oracle evidence only
+// (`docs/hw/arm-branch-pipeline.md`, "Unverified").
 pub(super) const LATE_PC_EXTRA: u32 = 4;
 /// B and BL: the offset is a word offset, so the field is shifted left by 2.
 const BRANCH_OFFSET_SHIFT: u32 = 2;
@@ -38,7 +40,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// Executes the ARM instruction at the head of the pipeline
     /// (`docs/hw/arm-branch-pipeline.md`, "The prefetch pipeline").
     // TODO(phase1): Thumb state (T = 1) arrives in #13; the T bit is ignored until then.
-    // Decided in #NN.
+    // TODO(hw-unverified): the fetch sequence (one fetch at R15 before execution, two on a
+    // refill, 32/16/16 bits for BX to Thumb) is the suite's, oracle evidence only
+    // (`docs/hw/arm-branch-pipeline.md`, "Unverified"). Decided in #NN.
     pub(super) fn step_arm<B: Bus>(&mut self, bus: &mut B) {
         let word = self.pipeline[0];
         // The fetch comes before the instruction does anything, so a data access follows it.
@@ -73,8 +77,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// Refills the pipeline from R15 after a write to it, in the state T selects: R15 becomes
     /// the pipeline's read-ahead past the target.
-    // TODO(hw-unverified): the low two bits of an ARM target are dropped for the fetches but kept
-    // in R15 (`docs/hw/arm-branch-pipeline.md`, "Unverified").
+    // TODO(hw-unverified): the refill's fetches (see `step_arm`), and the low two bits of an ARM
+    // target, dropped for the fetches but kept in R15 (`docs/hw/arm-branch-pipeline.md`, "Unverified").
     fn refill<B: Bus>(&mut self, bus: &mut B) {
         let target = self.regs.get(15);
         match self.regs.cpsr() & FLAG_T != 0 {

@@ -6,6 +6,7 @@
 
 use super::alu;
 use super::decode::{Kind, decode};
+use super::exception::Exception;
 use super::psr::{
     FLAG_C, FLAG_T, FLAG_V, FLAGS_BYTE, condition_holds, field_mask, is_user, with_flags,
 };
@@ -65,6 +66,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 Kind::BlockTransfer => self.block_transfer(bus, word),
                 Kind::Branch => self.branch(word),
                 Kind::BranchExchange => self.branch_exchange(word),
+                Kind::Swi => self.enter(Exception::SoftwareInterrupt),
+                Kind::Undefined => self.enter(Exception::Undefined),
+                Kind::Coprocessor => self.coprocessor(word),
                 Kind::Unhandled => false,
             };
         // A write to the PC flushes the pipeline; everything else, including a failed
@@ -79,7 +83,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// the pipeline's read-ahead past the target.
     // TODO(hw-unverified): the refill's fetches (see `step_arm`), and the low two bits of an ARM
     // target, dropped for the fetches but kept in R15 (`docs/hw/arm-branch-pipeline.md`, "Unverified").
-    fn refill<B: Bus>(&mut self, bus: &mut B) {
+    pub(super) fn refill<B: Bus>(&mut self, bus: &mut B) {
         let target = self.regs.get(15);
         match self.regs.cpsr() & FLAG_T != 0 {
             true => {

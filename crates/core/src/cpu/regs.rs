@@ -47,6 +47,19 @@ impl Mode {
         }
     }
 
+    /// The mode's value in the CPSR's low five bits.
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::User => 0x10,
+            Self::Fiq => 0x11,
+            Self::Irq => 0x12,
+            Self::Supervisor => 0x13,
+            Self::Abort => 0x17,
+            Self::Undefined => 0x1B,
+            Self::System => 0x1F,
+        }
+    }
+
     /// The register bank this mode uses; User and System share one.
     pub fn bank(self) -> Bank {
         match self {

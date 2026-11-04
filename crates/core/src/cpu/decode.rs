@@ -8,8 +8,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// Not (yet) executed: the step only advances the PC.
-    // TODO(phase1): the remaining groups arrive in #12–#13; LDRD and STRD, which share the
-    // halfword-transfer space, and PLD arrive in #14.
+    // TODO(phase1): Thumb state arrives in #13; the ARMv5TE encodings (CLZ, BLX, saturating
+    // arithmetic, BKPT, LDRD and STRD, which share the halfword-transfer space, and PLD) in #14.
     Unhandled,
     /// Data processing, rotated-immediate operand.
     DataImmediate,
@@ -41,6 +41,13 @@ pub(crate) enum Kind {
     Branch,
     /// BX.
     BranchExchange,
+    /// SWI (`docs/hw/arm-exceptions-modes.md`).
+    Swi,
+    /// The undefined-instruction space: bits 27–25 = 011 with bit 4 = 1.
+    Undefined,
+    /// CDP, MCR, MRC, LDC, STC and MCRR/MRRC: what they do depends on the core and on the
+    /// coprocessor number in bits 11–8, which the table does not index.
+    Coprocessor,
 }
 
 const TABLE_SIZE: usize = 1 << 12;
@@ -66,7 +73,9 @@ const fn classify(index: usize) -> Kind {
         // bits 27–25 = 010
         2 => Kind::SingleTransferImmediate,
         // bits 27–25 = 011; bit 4 = 1 is the undefined space
+        // (`docs/hw/arm-exceptions-modes.md`, "Undefined instruction")
         3 if reg_form => Kind::SingleTransferRegister,
+        3 => Kind::Undefined,
         // bits 27–25 = 100
         4 => Kind::BlockTransfer,
         // bits 27–25 = 101
@@ -94,7 +103,13 @@ const fn classify(index: usize) -> Kind {
                 _ => Kind::Unhandled,
             },
         },
-        _ => Kind::Unhandled,
+        // bits 27–25 = 110: LDC, STC, and MCRR/MRRC
+        6 => Kind::Coprocessor,
+        // bits 27–25 = 111: SWI with bit 24 set, CDP, MCR and MRC without
+        _ => match high >> 4 & 1 {
+            1 => Kind::Swi,
+            _ => Kind::Coprocessor,
+        },
     }
 }
 
@@ -141,7 +156,7 @@ mod tests {
 
     /// Words and the kind each must decode to (`docs/hw/arm-multiply.md`, "Encoding";
     /// `docs/hw/arm-load-store.md`, "Encodings").
-    const CASES: [(u32, Kind); 37] = [
+    const CASES: [(u32, Kind); 49] = [
         (0xE000_0090, Kind::Multiply),                // MUL
         (0xE010_0090, Kind::Multiply),                // MULS
         (0xE020_0090, Kind::Multiply),                // MLA
@@ -168,7 +183,6 @@ mod tests {
         (0xE5C0_1004, Kind::SingleTransferImmediate), // STRB with an immediate offset
         (0xE790_1002, Kind::SingleTransferRegister),  // LDR with a register offset
         (0xE780_1102, Kind::SingleTransferRegister),  // STR, register offset shifted by 2
-        (0xE790_1012, Kind::Unhandled), // bits 27-25 = 011 with bit 4 = 1 is undefined
         // Words inside the PSR space that the halfword and MSR/MRS checks must tell apart.
         (0xE100_00B0, Kind::HalfwordTransfer), // STRH, P = 1, U = 0, no writeback
         (0xE10F_0000, Kind::Mrs),              // MRS
@@ -182,6 +196,22 @@ mod tests {
         (0xE12F_FF10, Kind::BranchExchange), // BX R0 with bits 3-0 = 0 (Rn = R0)
         (0xE12F_FF31, Kind::Unhandled),      // BLX register (#14), not BX
         (0xE16F_0F11, Kind::Unhandled),      // CLZ (#14), not BX
+        // Exceptions (`docs/hw/arm-exceptions-modes.md`): SWI is bits 27-24 = 1111; the
+        // undefined space is bits 27-25 = 011 with bit 4 = 1; the coprocessor instructions are
+        // bits 27-25 = 110 and bits 27-24 = 1110.
+        (0xEF00_0000, Kind::Swi),         // SWI 0
+        (0xEFFF_FFFF, Kind::Swi),         // SWI with every comment bit set
+        (0xE790_1012, Kind::Undefined),   // bits 27-25 = 011 with bit 4 = 1
+        (0xE600_0010, Kind::Undefined),   // the lowest word of the space
+        (0xE7F0_00F0, Kind::Undefined),   // the word GBATEK sets aside for user use
+        (0xE7FF_FFFF, Kind::Undefined),   // the highest word of the space
+        (0xEE00_0000, Kind::Coprocessor), // CDP
+        (0xEE00_0010, Kind::Coprocessor), // MCR
+        (0xEE10_0010, Kind::Coprocessor), // MRC
+        (0xED90_0000, Kind::Coprocessor), // LDC
+        (0xED80_0000, Kind::Coprocessor), // STC
+        (0xEC40_0000, Kind::Coprocessor), // MCRR
+        (0xEC50_0000, Kind::Coprocessor), // MRRC
     ];
 
     fn classification_failures() -> Vec<(u32, Kind, Kind)> {

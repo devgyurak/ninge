@@ -6,6 +6,9 @@ pub(crate) const FLAG_N: u32 = 1 << 31;
 pub(crate) const FLAG_Z: u32 = 1 << 30;
 pub(crate) const FLAG_C: u32 = 1 << 29;
 pub(crate) const FLAG_V: u32 = 1 << 28;
+/// CPSR bits 7 and 6, I and F: 1 = IRQ or FIQ disabled (`docs/hw/cpu-registers.md`).
+pub(crate) const FLAG_I: u32 = 1 << 7;
+pub(crate) const FLAG_F: u32 = 1 << 6;
 /// CPSR bit 5, T: 1 = Thumb state (`docs/hw/cpu-registers.md`).
 pub(crate) const FLAG_T: u32 = 1 << 5;
 /// The flags byte of a PSR, the `f` field of an MSR mask.

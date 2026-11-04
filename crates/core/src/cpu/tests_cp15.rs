@@ -654,6 +654,10 @@ fn given_an_arm7_whose_cp15_holds_bit_13_when_the_vector_base_is_read_then_it_is
 
 // ---------------------------------------------------------------- Rd = R15
 
+// Unverified: these tests pin GBATEK's general coprocessor rules for R15 (an MCR sends the address
+// + 12, an MRC loads the flags). GBATEK's CP15 overview says R15 should not be used with CP15, so
+// the behavior is a guess (`docs/hw/cp15.md`, "Unverified").
+
 /// (value held in C13,C0,1, CPSR before, CPSR after an MRC into R15): only bits 31-28 move.
 const MRC_PC_CASES: [(u32, u32, u32); 4] = [
     (0xA000_0000, 0x5000_0093, 0xA000_0093),
@@ -736,7 +740,14 @@ fn preloaded() -> Cpu<true> {
 }
 
 /// Combinations the note's table does not list (or lists with another opc1).
-const UNMAPPED: [Reg; 32] = [
+const UNMAPPED: [Reg; 38] = [
+    // The BIST registers (opc1 0, 1 and 2) and three C7 commands the ARM9 does not list.
+    (0, 15, 0, 1),
+    (1, 15, 0, 1),
+    (2, 15, 0, 1),
+    (0, 7, 7, 0),
+    (0, 7, 10, 4),
+    (0, 7, 15, 2),
     (1, 0, 0, 0),
     (1, 0, 0, 1),
     (1, 1, 0, 0),
@@ -813,19 +824,18 @@ fn given_an_unmapped_register_when_written_then_no_exception_is_taken() {
 // ---------------------------------------------------------------- C7 cache commands and halt
 
 /// (CRm, opc2) of the ARM9 cache commands and both wait-for-interrupt forms.
-const CACHE_COMMANDS: [(u32, u32); 12] = [
+const CACHE_COMMANDS: [(u32, u32); 11] = [
     (0, 4),
     (8, 2),
     (5, 0),
     (5, 1),
     (6, 0),
     (6, 1),
-    (7, 0),
     (10, 1),
-    (10, 4),
+    (10, 2),
     (13, 1),
     (14, 1),
-    (15, 2),
+    (14, 2),
 ];
 
 /// Commands after which the CP15 state changed, the core did not step on, or a following
@@ -906,19 +916,12 @@ fn given_the_trace_process_id_written_at_c13_c1_1_when_read_at_c13_c0_1_then_it_
 fn assert_serde<T: Serialize + DeserializeOwned>() {}
 
 #[test]
-fn given_a_cp15_holding_non_default_values_when_checked_then_it_is_serde_data_that_differs_from_power_on()
- {
-    // TODO(phase2): a byte-level round trip belongs with the savestate encoder (#19); no
-    // serde format crate is a dependency yet, so this pins the bounds and the state equality.
+fn given_a_cp15_holding_non_default_values_when_compared_then_it_differs_from_power_on() {
+    // TODO(phase2): a byte-level serde round trip belongs with the savestate encoder (#19, Phase
+    // 2); no serde format crate is a dependency yet, so the serde bounds are checked at compile
+    // time here.
     assert_serde::<Cp15>();
     assert_serde::<Cpu<true>>();
     assert_serde::<Cpu<false>>();
-    let held = preloaded();
-    assert_eq!(
-        (
-            *held.cp15() == Cp15::new(),
-            *held.cp15() == held.cp15().clone()
-        ),
-        (false, true)
-    );
+    assert_ne!(*preloaded().cp15(), Cp15::new());
 }

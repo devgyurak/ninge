@@ -19,9 +19,6 @@ const PC: usize = 15;
 const CP15: u32 = 15;
 /// CPSR bits 31–28, N Z C V: what an MRC to R15 loads (`docs/hw/cp15.md`, "Access").
 const CPSR_FLAGS: u32 = 0xF000_0000;
-/// An MCR with R15 hands the coprocessor the instruction address + 12; R15 reads + 8 while the
-/// instruction executes (`docs/hw/cp15.md`, "Access").
-const MCR_PC_EXTRA: u32 = 4;
 
 /// The exceptions a core takes (`docs/hw/arm-exceptions-modes.md`, "Vector table").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +129,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(hw-unverified): every coprocessor instruction traps on the ARM7, whatever the number,
     // which only the suite shows; on the ARM9 that CDP, LDC and STC to CP15 and everything sent to
     // another coprocessor trap is inferred from it (`docs/hw/arm-exceptions-modes.md`, "Unverified").
+    // TODO(hw-unverified): MCR and MRC to CP15 run in every mode, User included
+    // (`docs/hw/cp15.md`, "Unverified").
     // MCRR and MRRC (ARMv5TE) are stepped past on the ARM9.
     pub(super) fn coprocessor(&mut self, word: u32) -> bool {
         let number = (word >> 8) & 0xF;
@@ -154,7 +153,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// An MCR or MRC to CP15 on the ARM9 (`docs/hw/cp15.md`, "Access"). Opc1 other than 0 selects
     /// no register.
     // TODO(hw-unverified): an opc1 other than 0 reads 0 and ignores the write, like any unmapped
-    // register (`docs/hw/cp15.md`, "Unverified").
+    // register; and Rd = R15 follows the general coprocessor rules, which GBATEK's CP15 overview
+    // contradicts (`docs/hw/cp15.md`, "Unverified").
     fn cp15_transfer(&mut self, word: u32) {
         let opc1 = (word >> 21) & 0x7;
         let load = word >> 20 & 1 == 1;
@@ -168,12 +168,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 self.write_transfer_target(rd, value);
             }
             (true, _) => self.write_transfer_target(rd, UNMAPPED_READ),
+            // An MCR sends R15 as a store does: the instruction address + 12.
             (false, 0) => {
-                let extra = match rd == PC {
-                    true => MCR_PC_EXTRA,
-                    false => 0,
-                };
-                let value = self.regs.get(rd).wrapping_add(extra);
+                let value = self.store_operand(rd as u32);
                 self.cp15.write(crn, crm, opc2, value);
             }
             (false, _) => {}
@@ -181,6 +178,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Delivers an MRC's value: to the register, or for R15 only its top four bits, to the flags.
+    // TODO(hw-unverified): see `Cpu::cp15_transfer`.
     fn write_transfer_target(&mut self, rd: usize, value: u32) {
         match rd == PC {
             true => {

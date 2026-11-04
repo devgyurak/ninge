@@ -108,7 +108,8 @@ const fn classify(index: usize) -> ThumbKind {
         },
         0b11000 | 0b11001 => ThumbKind::BlockTransfer,
         // bits 15–12 = 1101: the condition is bits 11–8; 1111 is SWI.
-        // TODO(hw-unverified): 1110 is taken as "always", which only the suite shows
+        // TODO(hw-unverified): 1110 is taken as "always", which only the ARMv4T suite shows; the
+        // ARM9 may take the Undefined exception instead
         // (`docs/hw/thumb.md`, "Unverified").
         0b11010 | 0b11011 => match index >> 2 & 0xF {
             0xF => ThumbKind::Swi,

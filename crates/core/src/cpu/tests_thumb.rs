@@ -905,3 +905,40 @@ proptest! {
         prop_assert_eq!(s.bus.fetches, thumb_fetches(target));
     }
 }
+
+/// Runs one Thumb instruction on the ARM9 with `setup` registers and `data` for every read.
+fn exec_arm9(setup: &[(usize, u32)], data: u32, opcode: u16) -> (Cpu<true>, RecBus) {
+    let mut cpu = Cpu::<true>::new();
+    cpu.regs_mut().set_cpsr(SVC | T_BIT);
+    setup.iter().for_each(|&(i, v)| cpu.regs_mut().set(i, v));
+    cpu.regs_mut().set(15, PC_READ);
+    cpu.set_pipeline([u32::from(opcode), NEXT]);
+    let mut bus = RecBus::new(data);
+    cpu.step(&mut bus);
+    (cpu, bus)
+}
+
+#[test]
+fn given_ldmia_with_rb_in_the_list_when_executed_on_the_arm9_then_the_loaded_value_wins_and_there_is_no_writeback()
+ {
+    let (cpu, _) = exec_arm9(&[(0, 0x100)], 0x55, block(1, 0, 0b11));
+    assert_eq!(cpu.regs().get(0), 0x55);
+}
+
+#[test]
+fn given_ldmia_with_rb_as_the_only_register_when_executed_on_the_arm9_then_the_loaded_value_wins() {
+    let (cpu, _) = exec_arm9(&[(0, 0x100)], 0x55, block(1, 0, 0b1));
+    assert_eq!(cpu.regs().get(0), 0x55);
+}
+
+#[test]
+fn given_ldmia_without_rb_in_the_list_when_executed_on_the_arm9_then_rb_is_written_back() {
+    let (cpu, _) = exec_arm9(&[(0, 0x100)], 0x55, block(1, 0, 0b110));
+    assert_eq!(cpu.regs().get(0), 0x108);
+}
+
+#[test]
+fn given_stmia_with_rb_not_first_when_executed_on_the_arm9_then_the_old_base_is_stored() {
+    let (_, bus) = exec_arm9(&[(0, 0xA0), (1, 0x100)], 0, block(0, 1, 0b11));
+    assert_eq!(bus.writes, vec![(32, 0x100, 0xA0), (32, 0x104, 0x100)]);
+}

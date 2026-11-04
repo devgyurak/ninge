@@ -27,8 +27,8 @@ by 2; a write to R15 refills from the written value with its bit 0 dropped.
 Most instructions reach only R0-R7 (the "low" registers). The exceptions are the hi-register
 instructions (format 5, R8-R15), PUSH (adds LR), POP (adds PC), the SP-relative forms (R13),
 the PC-relative forms (R15) and BL (LR). Most Thumb data-processing instructions set the
-flags (the exceptions are listed under "Flags"); none of them has a condition field, only the conditional
-branch does.
+flags (the exceptions are listed under "Flags"); none of them has a condition field, only the
+conditional branch does.
 
 ## Formats
 
@@ -59,7 +59,7 @@ register fields unless stated.
 
 Condition 1111 of format 16 is SWI (format 17). Format 16 uses the same conditions as ARM
 (`cpu-registers.md`, "Condition codes"), including 1110, "always"; the instruction-set
-documentation sets that case aside as undefined, but the ARM7TDMI takes it as an unconditional
+documentation sets that case aside as undefined, but the suite shows the ARM7TDMI taking it as an unconditional
 branch (see "Unverified"). `off8` and `off11` are signed, sign-extended, then doubled.
 
 ## Behavior
@@ -92,6 +92,9 @@ branch (see "Unverified"). `off8` and `off11` are signed, sign-extended, then do
 - BX Rs (op 3): the target is Rs (R15 reads the instruction's address + 4). Bit 0 of the
   target is copied to T: 1 stays in or enters Thumb state, 0 returns to ARM state. The
   refill is in the state BX selected, as in `arm-branch-pipeline.md`.
+- GBATEK: BX R15 auto-aligns the PC as `(address + 4) AND NOT 2` and should be issued from a
+  word-aligned address only; bits 2-0 of the instruction (Rd) must be zero. We read R15 as
+  address + 4 without aligning it and ignore the Rd bits (see "Unverified").
 - With H1 = 1 and op 3 the encoding is BLX (register) on ARMv5, which is #14's. On ARMv4T the
   suite shows it running as a plain BX (see "Unverified").
 
@@ -134,8 +137,9 @@ SP = SP + imm7 x 4 (S = 0) or SP - imm7 x 4 (S = 1). No flags.
 - **Rb in the list, STMIA.** On the ARM7, if Rb is the first register of the list the old base
   is stored; otherwise the new (written-back) base is stored. On the ARM9 the old base is
   always stored.
-- **Rb in the list, LDMIA.** On the ARM7 the loaded value wins and there is no write-back. On
-  the ARM9 the write-back wins unless Rb is the last register of a list longer than one.
+- **Rb in the list, LDMIA.** There is no write-back and the loaded value wins, on the ARM7 and
+  on the ARM9 alike: GBATEK notes that Thumb differs from the ARM form here (where the ARM9
+  writes back unless Rb is the last register of a list longer than one).
 - **Empty list.** The hardware transfers R15 (ARM7; nothing on the ARM9) and moves the base
   by 0x40. A store writes the instruction's address + 6 for R15 (a Thumb instruction's late
   R15 read is one halfword past the usual +4). A load puts the word in R15 and the pipeline
@@ -169,7 +173,7 @@ ARMv5 BLX suffix and is #14's.
 - **SWI (format 17).** Enters Supervisor mode through the vector at 0x08; the CPSR is saved in
   SPSR_svc, T is cleared, I is set; LR_svc = the SWI's address + 2 (the next Thumb instruction,
   so one return sequence serves both states: `arm-exceptions-modes.md`, "Return address").
-- **Condition 1110 of format 16** is documented as undefined, but the ARM7TDMI takes it as a
+- **Condition 1110 of format 16** is documented as undefined, but the suite shows the ARM7TDMI taking it as a
   branch whose condition always holds, so it is format 16 with a true condition (see
   "Unverified"). No Thumb encoding enters the Undefined exception on ARMv4T here.
 
@@ -195,9 +199,13 @@ reference emulator.
 - **Format 5 BX with H1 = 1.** The suite shows BX with H1 = 1 and op 3 running as BX on the
   register `H2 : Rs`, H1 ignored (128 halfwords, 25,102 cases). That encoding is BLX (register)
   on ARMv5; the ARM9 differs (#14). — `thumb_decode.rs`, `branch_exchange_thumb`.
+- **BX R15 and BX with non-zero Rd bits.** The alignment of R15 and the should-be-zero bits are
+  not modeled (GBATEK states the alignment and says to issue it from a word-aligned address).
+  — `branch_exchange_thumb` in `thumb.rs`.
 - **Format 16 with condition 1110.** The suite shows a branch that is always taken, with the
   usual target and no exception (50,000 cases); the documentation calls the encoding
-  undefined. What the ARM9 does is not covered by the suite. — `thumb_decode.rs`.
+  undefined. The suite is ARMv4T only, so the ARM9 may differ (it may take the Undefined
+  exception). — `thumb_decode.rs`.
 - **MUL's C and V.** C after MUL is "meaningless" per GBATEK on ARMv4T and the suite shows it
   changing (the same gap as ARM multiply, #81); V is unchanged. We leave C unchanged. The one
   suite file this affects, `thumb_data_proc`, is pinned by a test that expects only MUL's C bit

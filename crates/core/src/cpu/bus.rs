@@ -6,9 +6,11 @@
 ///
 /// Code fetches and data accesses are separate methods: the ARM9 has separate instruction and
 /// data paths, and the JSON suite harness treats them differently. Every method takes
-/// `&mut self` so a bus can log or step its own state without interior mutability. Addresses
-/// are not checked for alignment here; what the hardware does with an odd address belongs to
-/// the instruction semantics (#8–#13).
+/// `&mut self` so a bus can log or step its own state without interior mutability. An address
+/// is passed as the CPU drives it, low bits included: the CPU rotates or sign-extends what it
+/// reads from the low bits of that same address (`docs/hw/arm-load-store.md`, "Alignment"), and
+/// the bus never rotates. Ignoring the bits below the access width, as the memory system does,
+/// is the bus implementation's job (the memory map, Phase 2).
 ///
 /// Decided in #76.
 pub trait Bus {

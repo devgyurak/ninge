@@ -4,11 +4,14 @@
 
 use super::Cpu;
 use super::arm::{ARM_PC_AHEAD, ARM_WORD, LR, THUMB_HALFWORD, branch_offset};
+use super::psr::FLAG_Q;
 
 /// BLX (immediate) adds H, bit 24, as a halfword to the word-scaled offset.
 const BLX_H_SHIFT: u32 = 1;
 /// Rd's position in CLZ and the saturating adds (bits 15–12).
 const RD_SHIFT: u32 = 12;
+/// Rn's position in the saturating adds (bits 19–16).
+const RN_SHIFT: u32 = 16;
 /// R15's index.
 const PC: u32 = 15;
 /// Bit 0 of a link value written from Thumb state, so that a return by BX stays in Thumb.
@@ -54,6 +57,35 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.write_destination(word >> RD_SHIFT & 0xF, value.leading_zeros())
     }
 
+    /// QADD, QSUB, QDADD and QDSUB (`docs/hw/armv5te.md`, "Saturating arithmetic"): Rd = Rm ± Rn,
+    /// with Rn doubled first by the D forms, each step clamped to the signed 32-bit range. Q is
+    /// set if any step clamped and is never cleared; N, Z, C and V stay.
+    pub(super) fn saturating_arithmetic(&mut self, word: u32) -> bool {
+        // The casts are the signed reading of the registers.
+        let rm = i64::from(self.operand(word & 0xF, 0) as i32);
+        let rn = i64::from(self.operand(word >> RN_SHIFT & 0xF, 0) as i32);
+        // Bit 22 doubles Rn (QDADD, QDSUB); bit 21 subtracts (QSUB, QDSUB).
+        let (rn, doubling_clamped) = match word >> 22 & 1 {
+            1 => saturate(rn * 2),
+            _ => (rn, false),
+        };
+        let (result, clamped) = match word >> 21 & 1 {
+            1 => saturate(rm - rn),
+            _ => saturate(rm + rn),
+        };
+        self.set_saturation(clamped || doubling_clamped);
+        self.write_destination(word >> RD_SHIFT & 0xF, result as u32) // truncation: the clamped value fits 32 bits
+    }
+
+    /// Sets Q when `saturated`; otherwise leaves the CPSR alone.
+    fn set_saturation(&mut self, saturated: bool) {
+        let cpsr = self.regs.cpsr();
+        self.regs.set_cpsr(match saturated {
+            true => cpsr | FLAG_Q,
+            false => cpsr,
+        });
+    }
+
     /// Writes a result to Rd; R15 takes the value and the step refills from it. True if R15.
     // TODO(hw-unverified): R15 is not allowed as the destination of these instructions; it is
     // written like a data-processing result (`docs/hw/armv5te.md`, "Unverified").
@@ -64,4 +96,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
         }
         rd == PC
     }
+}
+
+/// `value` clamped to the signed 32-bit range, and whether it had to be.
+fn saturate(value: i64) -> (i64, bool) {
+    let clamped = value.clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+    (clamped, clamped != value)
 }

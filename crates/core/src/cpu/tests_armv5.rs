@@ -453,3 +453,103 @@ proptest::proptest! {
         proptest::prop_assert_eq!(r.r(2), model_clz(x));
     }
 }
+
+// ---------------------------------------------------------------- QADD, QSUB, QDADD, QDSUB
+
+const OP_QADD: u32 = 0;
+const OP_QSUB: u32 = 1;
+const OP_QDADD: u32 = 2;
+const OP_QDSUB: u32 = 3;
+const MAX: u32 = 0x7FFF_FFFF;
+const MIN: u32 = 0x8000_0000;
+
+/// The word `Q<op> R2, R1, R0`: Rd = R2, Rm = R1, Rn = R0 (`cond 0001 0 op 0 Rn Rd 0000 0101 Rm`).
+fn q_word(op: u32) -> u32 {
+    0xE100_0050 | op << 21 | 2 << 12 | 1
+}
+
+/// One case: the operation, Rm, Rn, whether Q starts set, and the expected Rd and Q.
+type QCase = (u32, u32, u32, bool, u32, bool);
+
+/// Cases worked out from `docs/hw/armv5te.md`, "Saturating arithmetic".
+const Q_CASES: [QCase; 17] = [
+    (OP_QADD, 1, 2, false, 3, false),
+    (OP_QADD, MAX - 1, 1, false, MAX, false),
+    (OP_QADD, MAX, 1, false, MAX, true),
+    (OP_QADD, MIN, 0xFFFF_FFFF, false, MIN, true),
+    (OP_QADD, 1, 2, true, 3, true),
+    (OP_QSUB, 5, 3, false, 2, false),
+    (OP_QSUB, MIN, 1, false, MIN, true),
+    (OP_QSUB, MAX, 0xFFFF_FFFF, false, MAX, true),
+    (OP_QSUB, 0, MIN, false, MAX, true),
+    (OP_QSUB, MIN + 1, 1, false, MIN, false),
+    (OP_QDADD, 1, 3, false, 7, false),
+    (OP_QDADD, 0, 0x4000_0000, false, MAX, true),
+    // The doubling saturates, the add does not: -2^31 + (2^31 - 1) = -1.
+    (OP_QDADD, MIN, 0x4000_0000, false, 0xFFFF_FFFF, true),
+    (OP_QDADD, 0, 0x3FFF_FFFF, false, 0x7FFF_FFFE, false),
+    (OP_QDSUB, 10, 3, false, 4, false),
+    (OP_QDSUB, 0, MIN, false, MAX, true),
+    (OP_QDSUB, MAX, 0xC000_0000, false, MAX, true),
+];
+
+/// The expected Rd and Q for any inputs, computed in 64-bit arithmetic.
+fn model_saturating(op: u32, rm: u32, rn: u32) -> (u32, bool) {
+    let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+    let rn = i64::from(rn as i32);
+    let doubled = clamp(rn * 2);
+    let rn_used = [rn, rn, doubled, doubled][op as usize];
+    let sum = i64::from(rm as i32) + [rn_used, -rn_used][op as usize & 1];
+    let result = clamp(sum);
+    let saturated = result != sum || (op >= 2 && doubled != rn * 2);
+    (result as i32 as u32, saturated)
+}
+
+/// The cases whose Rd or Q differ from the table.
+fn q_failures() -> Vec<(QCase, u32, bool)> {
+    Q_CASES
+        .iter()
+        .map(|&case| {
+            let (op, rm, rn, q_in, _, _) = case;
+            let cpsr = [SVC, SVC | Q][usize::from(q_in)];
+            let r = run::<true>(cpsr, &[(1, rm), (0, rn)], &[], q_word(op));
+            (case, r.r(2), r.cpsr() & Q != 0)
+        })
+        .filter(|&((_, _, _, _, want_rd, want_q), rd, q)| (want_rd, want_q) != (rd, q))
+        .collect()
+}
+
+#[test]
+fn given_the_saturating_adds_when_executed_at_the_edges_then_rd_and_q_follow_the_definitions() {
+    assert_eq!(q_failures(), vec![]);
+}
+
+#[test]
+fn given_a_saturating_add_when_it_saturates_with_every_flag_set_then_only_q_changes_in_the_cpsr() {
+    let r = run::<true>(SVC | NZCV, &[(1, MAX), (0, 1)], &[], q_word(OP_QADD));
+    assert_eq!(r.cpsr(), SVC | NZCV | Q);
+}
+
+#[test]
+fn given_a_saturating_add_when_it_does_not_saturate_with_q_set_then_q_stays_set() {
+    let r = run::<true>(SVC | Q, &[(1, 1), (0, 1)], &[], q_word(OP_QDSUB));
+    assert_eq!(r.cpsr(), SVC | Q);
+}
+
+#[test]
+fn given_an_arm7_qadd_word_when_executed_then_rd_and_the_cpsr_are_kept() {
+    let r = arm::<false>(&[(1, MAX), (0, 1), (2, 0x77)], &[], q_word(OP_QADD));
+    assert_eq!((r.r(2), r.cpsr(), r.r(15)), (0x77, SVC, 0x100C));
+}
+
+proptest::proptest! {
+    #[test]
+    fn given_any_operands_when_an_arm9_saturating_add_executes_then_rd_and_q_match_the_i64_model(
+        op in 0u32..4,
+        rm in proptest::prelude::any::<u32>(),
+        rn in proptest::prelude::any::<u32>(),
+    ) {
+        let r = arm::<true>(&[(1, rm), (0, rn)], &[], q_word(op));
+        proptest::prop_assert_eq!((r.r(2), r.cpsr() & Q != 0), model_saturating(op, rm, rn));
+    }
+}

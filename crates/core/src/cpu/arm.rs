@@ -76,6 +76,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 Kind::BranchExchange => self.branch_exchange(word),
                 Kind::BranchLinkExchange => self.branch_link_exchange(word),
                 Kind::CountLeadingZeros => self.count_leading_zeros(word),
+                Kind::SaturatingArithmetic => self.saturating_arithmetic(word),
                 Kind::BranchLinkExchangeImmediate => self.branch_link_exchange_immediate(word),
                 Kind::Swi => self.enter(Exception::SoftwareInterrupt),
                 Kind::Undefined => self.enter(Exception::Undefined),

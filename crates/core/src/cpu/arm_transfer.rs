@@ -19,8 +19,8 @@ const PC: u32 = 15;
 
 impl<const ARM9: bool> Cpu<ARM9> {
     /// LDR, STR, LDRB, STRB and the T forms; true if it wrote the PC.
-    // TODO(phase1): ARM9 `LDR PC` should switch to Thumb on bit 0 (#14); until then it behaves
-    // as ARMv4T does. TODO(hw-unverified): the T forms (LDRT, STRT) run as the plain forms
+    // On the ARM9 a word load into R15 switches state on bit 0 (`docs/hw/armv5te.md`, "Switching
+    // to Thumb on a load into R15"). TODO(hw-unverified): the T forms (LDRT, STRT) run as the plain forms
     // because the bus has no privilege (revisit with CP15 protection); Rn = R15 with writeback
     // is not allowed by GBATEK and follows the suite (`docs/hw/arm-load-store.md`, "Unverified").
     pub(super) fn single_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
@@ -48,7 +48,11 @@ impl<const ARM9: bool> Cpu<ARM9> {
                     false => rotate_word(bus.read32(address), address),
                 };
                 let flushed = self.write_back_single(writeback, rn, moved);
-                self.write_loaded(rd, value) || flushed
+                // Only a word load interworks.
+                match (ARM9, byte, rd) {
+                    (true, false, PC) => self.exchange_to(value) || flushed,
+                    _ => self.write_loaded(rd, value) || flushed,
+                }
             }
             _ => {
                 let value = self.store_operand(rd);
@@ -115,8 +119,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// LDM and STM; true if it wrote the PC.
-    // TODO(phase1): ARM9 `LDM {.., PC}` should switch to Thumb on bit 0 (#14).
-    // TODO(hw-unverified): the ARM9 rules for the base in the list and for the empty list come
+    // On the ARM9 an LDM of R15 without S switches state on bit 0 (`docs/hw/armv5te.md`, "Switching
+    // to Thumb on a load into R15"). TODO(hw-unverified): the ARM9 rules for the base in the list and for the empty list come
     // from GBATEK's prose and no suite case checks them; the empty list's transfer address is
     // measured only for STMDB, and its base adjustment without writeback is taken as none;
     // S together with writeback and an LDM with R15 and S in User/System (no SPSR, so the CPSR
@@ -191,11 +195,20 @@ impl<const ARM9: bool> Cpu<ARM9> {
         let wrote_base_pc = writeback && !skip && rn == PC;
         match pc_value {
             Some(value) => {
-                // The PSR-restore form: S with R15 in an LDM list, in a mode with an SPSR.
-                if let Some(spsr) = self.regs.spsr(self.regs.bank()).filter(|_| set_s) {
-                    self.regs.set_cpsr(spsr);
+                // The PSR-restore form: S with R15 in an LDM list, in a mode with an SPSR; T then
+                // comes from the SPSR. Otherwise the ARM9 takes T from the loaded bit 0.
+                // TODO(hw-unverified): S in User/System (no SPSR) switches on bit 0 on the ARM9
+                // (`docs/hw/armv5te.md`, "Unverified").
+                match self.regs.spsr(self.regs.bank()).filter(|_| set_s) {
+                    Some(spsr) => {
+                        self.regs.set_cpsr(spsr);
+                        self.write_pc(value);
+                    }
+                    None if ARM9 => {
+                        self.exchange_to(value);
+                    }
+                    None => self.write_pc(value),
                 }
-                self.write_pc(value);
                 true
             }
             None => wrote_base_pc,

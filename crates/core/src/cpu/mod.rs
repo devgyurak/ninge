@@ -103,3 +103,6 @@ mod tests_exception;
 
 #[cfg(test)]
 mod tests_thumb;
+
+#[cfg(test)]
+mod tests_armv5;

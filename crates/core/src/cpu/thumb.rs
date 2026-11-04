@@ -62,10 +62,10 @@ const ARM_STMIA: u32 = 0xE8A0_0000;
 const ARM_LDMIA: u32 = 0xE8B0_0000;
 const ARM_PUSH: u32 = 0xE92D_0000;
 const ARM_POP: u32 = 0xE8BD_0000;
-/// Bits of an ARM word: B at 22, L at 20, Rn at 16, Rd at 12, and the halfword form's SH at 5.
+/// Bits of an ARM word: B at 22, W at 21, L at 20, Rn at 16, Rd at 12, and the halfword form's
+/// SH at 5.
 const ARM_B: u32 = 22;
-/// The write-back bit of an ARM block transfer.
-const ARM_W: u32 = 1 << 21;
+const ARM_W: u32 = 21;
 const ARM_L: u32 = 20;
 const ARM_RN: u32 = 16;
 const ARM_RD: u32 = 12;
@@ -159,7 +159,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 // Thumb LDMIA with Rb in the list never writes back, on the ARM9 too, unlike
                 // the ARM form (`docs/hw/thumb.md`, "LDMIA and STMIA"), so W is left out.
                 let base = match (word >> 11 & 1, in_list) {
-                    (1, true) => ARM_LDMIA & !ARM_W,
+                    (1, true) => ARM_LDMIA & !(1 << ARM_W),
                     (1, false) => ARM_LDMIA,
                     _ => ARM_STMIA,
                 };
@@ -348,9 +348,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// BX Rs (`docs/hw/thumb.md`, "Format 5 and BX").
-    // TODO(hw-unverified): BX R15 and non-zero Rd bits: GBATEK wants the PC word-aligned
-    // ((address + 4) AND NOT 2) and issued from a word-aligned address only; neither is modeled
-    // and Rd bits are ignored (`docs/hw/thumb.md`, "Unverified").
+    // TODO(hw-unverified): GBATEK says BX R15 aligns the PC as ((address + 4) AND NOT 2) and
+    // wants Rd bits zero, but the suite shows R15 keeping bit 1 and non-zero Rd bits running as
+    // BX (1,607 cases with the alignment tried). We follow the suite
+    // (`docs/hw/thumb.md`, "Unverified").
     // TODO(hw-unverified): H1 = 1 runs as BX here although it is BLX on ARMv5; the suite shows
     // it on ARMv4T (`docs/hw/thumb.md`, "Unverified").
     fn branch_exchange_thumb(&mut self, word: u32) -> bool {

@@ -59,8 +59,8 @@ register fields unless stated.
 
 Condition 1111 of format 16 is SWI (format 17). Format 16 uses the same conditions as ARM
 (`cpu-registers.md`, "Condition codes"), including 1110, "always"; the instruction-set
-documentation sets that case aside as undefined, but the suite shows the ARM7TDMI taking it as an unconditional
-branch (see "Unverified"). `off8` and `off11` are signed, sign-extended, then doubled.
+documentation sets that case aside as undefined, but the suite shows the ARM7TDMI taking it
+as an unconditional branch (see "Unverified"). `off8` and `off11` are signed, sign-extended, then doubled.
 
 ## Behavior
 
@@ -94,7 +94,8 @@ branch (see "Unverified"). `off8` and `off11` are signed, sign-extended, then do
   refill is in the state BX selected, as in `arm-branch-pipeline.md`.
 - GBATEK: BX R15 auto-aligns the PC as `(address + 4) AND NOT 2` and should be issued from a
   word-aligned address only; bits 2-0 of the instruction (Rd) must be zero. We read R15 as
-  address + 4 without aligning it and ignore the Rd bits (see "Unverified").
+  address + 4 without aligning it and ignore the Rd bits, because the suite expects exactly
+  that (see "Unverified").
 - With H1 = 1 and op 3 the encoding is BLX (register) on ARMv5, which is #14's. On ARMv4T the
   suite shows it running as a plain BX (see "Unverified").
 
@@ -173,8 +174,8 @@ ARMv5 BLX suffix and is #14's.
 - **SWI (format 17).** Enters Supervisor mode through the vector at 0x08; the CPSR is saved in
   SPSR_svc, T is cleared, I is set; LR_svc = the SWI's address + 2 (the next Thumb instruction,
   so one return sequence serves both states: `arm-exceptions-modes.md`, "Return address").
-- **Condition 1110 of format 16** is documented as undefined, but the suite shows the ARM7TDMI taking it as a
-  branch whose condition always holds, so it is format 16 with a true condition (see
+- **Condition 1110 of format 16** is documented as undefined, but the suite shows the ARM7TDMI
+  taking it as a branch whose condition always holds, so it is format 16 with a true condition (see
   "Unverified"). No Thumb encoding enters the Undefined exception on ARMv4T here.
 
 ## Edge cases
@@ -199,9 +200,13 @@ reference emulator.
 - **Format 5 BX with H1 = 1.** The suite shows BX with H1 = 1 and op 3 running as BX on the
   register `H2 : Rs`, H1 ignored (128 halfwords, 25,102 cases). That encoding is BLX (register)
   on ARMv5; the ARM9 differs (#14). — `thumb_decode.rs`, `branch_exchange_thumb`.
-- **BX R15 and BX with non-zero Rd bits.** The alignment of R15 and the should-be-zero bits are
-  not modeled (GBATEK states the alignment and says to issue it from a word-aligned address).
-  — `branch_exchange_thumb` in `thumb.rs`.
+- **BX R15 and BX with non-zero Rd bits.** GBATEK says the PC is aligned as
+  `(address + 4) AND NOT 2` and that BX R15 should be issued from a word-aligned address only.
+  The suite contradicts the alignment: with it, 1,607 `thumb_bx` cases fail, all BX R15 run
+  from a halfword-aligned address, where the suite expects R15 to keep bit 1. Those cases
+  include opcodes with non-zero Rd bits (such as `47FB` and `477E`), which the suite also
+  runs as plain BX. We follow the suite: no alignment, Rd bits ignored. The suite is
+  ARMv4T only. — `branch_exchange_thumb` in `thumb.rs`.
 - **Format 16 with condition 1110.** The suite shows a branch that is always taken, with the
   usual target and no exception (50,000 cases); the documentation calls the encoding
   undefined. The suite is ARMv4T only, so the ARM9 may differ (it may take the Undefined

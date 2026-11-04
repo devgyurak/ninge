@@ -3,9 +3,8 @@
 Sources: GBATEK "ARM Opcodes: Multiply and Multiply-Accumulate (MUL, MLA)" (the same
 section covers the long forms) is the primary source for the behavior; ARM ARM (ARMv5TE) "MUL",
 "MLA", "UMULL", "UMLAL", "SMULL", "SMLAL" and ARM7TDMI TRM "Multiply instructions" are listed as
-background; not re-read for this note. For the ARM7TDMI carry only: zayd, "Solving the Mystery
-of ARM7TDMI Multiply Carry Flag" (details and licence in "ARM7TDMI multiply carry"; recorded in
-#80). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
+background; not re-read for this note. For the ARM7TDMI carry only: US 5,583,804 and
+US 5,528,529 (see "ARM7TDMI multiply carry"). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
 `multiply_long`)   Phase: 1 (#9)
 
@@ -102,10 +101,71 @@ taken from GBATEK. They are oracle evidence, not hardware evidence.
 ## ARM7TDMI multiply carry
 
 ARMv4 documents C after a flag-setting multiply as meaningless, but the suite shows it is a
-fixed function of the operands. One public article (zayd, "Solving the Mystery of ARM7TDMI
-Multiply Carry Flag", <https://bmchtech.github.io/post/multiply/>, accessed 2026-11-02,
-CC BY-NC-SA 4.0; recorded in #80) attributes it to the multiplier's internal datapath; none of
-that is implemented here, and the gap is #81.
+fixed function of the operands (see "Measured on the pinned suite"). An earlier revision of
+this note pointed at one public article for the cause (recorded in #80). #81 forbids reusing it:
+nothing below comes from it, and the session that wrote this section did not open it.
+
+### Sources read for #81
+
+Both are ARM patents with the same specification text, filed in the mid-1990s; read in full
+on patents.google.com (specification and example tables, not the abstract):
+
+- **US 5,583,804**, "Data processing using multiply-accumulate instructions" (Advanced RISC
+  Machines Ltd). Called **P1** below.
+- **US 5,528,529**, "Electronic multiplying and adding apparatus and method" (Advanced RISC
+  Machines Ltd). Called **P2**. It repeats P1's example multiplier (its own five-cycle table
+  and early-termination remark), and its claims cover the carry-save accumulate-bit technique.
+
+Searches for a patent that states how a multiply sets a CPSR flag, or that describes the
+early-terminated form, found none (only other assignees' patents, which are not used).
+
+### What the sources settle
+
+The example multiplier in P1 and P2 (P1 "An example multiplier will now be described" and the
+per-cycle table that follows it; P2 the same table) computes multiplier x multiplicand
++ accumulate as follows. It is a description of one embodiment, not of a named ARM core.
+
+- **Recoding.** Radix-4 modified Booth. The multiplier is extended to 33 bits, with a copy of
+  its sign bit when signed and 0 when unsigned (P1: `R[32] = SIGNED AND MPLIER[31]`). Each
+  digit reads three overlapping multiplier bits, `BoothEnc(R[2:0])`, `BoothEnc(R[4:2])`, and so on.
+- **Rate.** Four multiplier rows work per cycle and each retires two result bits, so eight
+  multiplier bits are consumed per cycle: Booth digits for `R[8:0]` in cycle 1 up to
+  `R[32:24]` in cycle 4 (P1 table, "Booth encoders"). A 32 x 32 multiply takes five cycles; cycles
+  1 to 4 consume the multiplier and cycle 5 finishes the sum.
+- **Start.** The save vector starts as the accumulate value (zero without accumulate) and the
+  carry vector as the bitwise inverse of the multiplicand when `R[0]` is 1, else zero (P1,
+  "Carry-save initialiser"). A negative multiple is formed by inversion and the missing +1 is
+  deferred; the final adder's carry-in is `R[0]` for that reason (P1, "Multiplexer C").
+- **Each row.** Adds one multiple of the multiplicand into the carry-save pair without a
+  carry chain, shifts the active region two bits up, and drops the two now-final low bits of
+  save and carry into the low latches (P1, "Multiplier rows 1, 2, 4 and 5" equations).
+- **Final addition.** One 32-bit adder produces `(COUT, SUM[31:0])` from the save and carry
+  inputs and a carry-in, used twice. Cycle 4 adds the low latches with carry-in `R[0]`,
+  keeps `COUT` in a carry latch, and writes `SUM` to `RESULT[31:0]`. Cycle 5 adds the last
+  row's save and carry with the latched carry-out as carry-in and writes `SUM` to
+  `RESULT[63:32]` (P1, "Multiplexer C", "Carry Latch", "Final adder", "Result latches"; the text
+  says the double-width sum is "two uses of a single width adder" with the first carry-out
+  feeding the second).
+- **32-bit results.** P1 says 32 x 32 -> 32 forms come from stopping once the lowest 32 bits
+  are known, with the accumulate value initialised to its low 32 bits.
+
+### What the sources do not settle
+
+The step this issue needs, which adder carry-out becomes CPSR.C, is in no passage read.
+P1 says only that the set-condition-code flag (40) decides whether the CPSR flags are
+updated and that the CPSR holds "carries and the like"; it never says which signal feeds C.
+`COUT` above is an internal adder signal. Also not settled:
+
+- That this embodiment is the multiplier of the ARM7TDMI. The patents name no core; they
+  name the ARM6 only as prior art with one addition per clock.
+- Early termination. P1 and P2 list it as a refinement "not illustrated", needing "some
+  rather messy rearrangement of the bits in the 'low', 'active' and 'high' regions", and give
+  no rule. The MUL, MLA and signed forms of this note's `m` (1 to 4 cycles) live exactly there,
+  so no cycle-by-cycle carry model for them can be derived from these sources.
+- Which cycle's adder (and so which `COUT`) is last when the multiply stops early.
+
+No model is implemented. Writing one now would mean choosing the missing link by trial against
+the suite, which #80 and #81 forbid.
 
 **What this feature implements.** On the ARM7 an S multiply updates N and Z only and leaves
 C as it was. That is a documented gap against the suite, not hardware behavior. On the ARM9
@@ -131,13 +191,15 @@ Code sites are the handlers the implementation adds to `crates/core/src/cpu/arm.
 (`multiply`, `multiply_long`); each carries `TODO(hw-unverified)`.
 
 - **ARM7 C after an S multiply** is not implemented: the handlers leave C unchanged. The suite
-  differs from that in about half of the S cases. Site: both handlers. Verify in #81,
-  inside Phase 1, by a clean-room route only: derive the multiplier from public patents or a
-  textbook Booth multiplier and check it against the suite, and/or measure C on real
-  ARM7TDMI hardware with a test ROM of our own. If both fail, whether the single bit becomes a
-  documented Phase 1 DoD exception is decided then (#80).
-- **The origin of the ARM7 C** (the article's reading of the multiplier datapath) is not in
-  GBATEK, the ARM ARM or the suite. Site: both handlers (a comment only). Verify in #81.
+  differs from that in about half of the S cases. Site: both handlers. #81 read two ARM
+  patents (see "Sources read for #81"); they give the carry-save datapath but not the link from
+  an adder carry-out to CPSR.C, nor the early-terminated form. Remaining routes: further
+  clean-room sources a maintainer can supply (a textbook summary of the ARM7TDMI multiplier),
+  and/or measuring C on real ARM7TDMI hardware with a test ROM of our own. If those fail,
+  whether the single bit becomes a documented Phase 1 DoD exception is decided in #80.
+- **The origin of the ARM7 C** (which stage's carry-out reaches CPSR.C, and whether the
+  patents' embodiment is the ARM7TDMI's multiplier) is not in GBATEK, the ARM ARM, the patents
+  read, or the suite. Site: both handlers (a comment only).
 - **C on ARM9 is unchanged.** GBATEK says so for ARMv5 and up; there is no suite for ARM9.
   Site: both handlers (the `ARM9` const generic). Verify by a test ROM on real ARM9
   hardware; the self-written unit test pins the documented behavior.

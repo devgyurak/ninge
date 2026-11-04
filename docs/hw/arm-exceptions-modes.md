@@ -121,17 +121,16 @@ ARMv5TE). The coprocessor number is bits 11–8.
   that every CDP, MCR/MRC and LDC/STC whose condition is true, whatever the coprocessor number
   (0 to 15, CP14 included), enters Undefined mode through vector +04h, with the same R14,
   SPSR and flag effects as any undefined instruction. (suite)
-- **ARM9:** there is a working CP15 (`ARM CP15 System Control Coprocessor`), implemented in
-  #15. Until then an MCR or MRC to coprocessor 15 does nothing and the CPU steps to the next
-  instruction. Every other coprocessor instruction (CDP, LDC and STC to any coprocessor,
+- **ARM9:** MCR and MRC to coprocessor 15 reach the system control coprocessor, which is in
+  `cp15.md`. Every other coprocessor instruction (CDP, LDC and STC to any coprocessor,
   MCR/MRC to any other coprocessor) enters Undefined mode, as on ARM7. MCRR/MRRC are ARMv5TE
   instructions and are stepped past on the ARM9 (as on the ARM7 they trap).
 
 ### Prefetch and data aborts
 
 The entry is as described above (vector +0Ch and +10h, Abort mode). The DS has no MMU, the
-protection unit is not modeled yet (#15). BKPT raises a prefetch abort on the ARM9
-(`armv5te.md`, "BKPT"); the protection unit's aborts are the only ones nothing raises yet. A
+protection unit's registers are held but not consulted (`cp15.md`, "protection unit").
+BKPT raises a prefetch abort on the ARM9 (`armv5te.md`, "BKPT"); the protection unit's aborts are the only ones nothing raises. A
 caller raises one while the aborting instruction is executing.
 
 ### IRQ and FIQ
@@ -146,15 +145,14 @@ Reset enters Supervisor mode with I = 1, F = 1 and T = 0, and jumps to vector +0
 list of entry actions (R14 and the SPSR of the new mode receive the return address and the old
 CPSR) is written for all the vectors and does not exclude Reset, but it gives no value for Reset's
 return address, so R14 and the SPSR are left as they were here, and so are the other registers
-and the vector-base flag. What a reset does to the CP15 control register is unknown here
-(see "Unverified"); it arrives with #15.
+and CP15. What a reset does to the CP15 control register is unknown here
+(`cp15.md`, "Unverified").
 
 ### Vector base
 
 - **ARM7:** the vectors are always at `00000000h`.
 - **ARM9:** bit 13 of the CP15 control register selects the base: 0 = `00000000h`, 1 =
-  `FFFF0000h`; the bit is read/write on the DS ARM9. Until #15 provides the control register,
-  the CPU holds the bit as a plain flag that the host can set.
+  `FFFF0000h`; the bit is read/write on the DS ARM9 (`cp15.md`, "C1,C0,0 — control register").
 
 ## Edge cases
 
@@ -175,8 +173,9 @@ and the vector-base flag. What a reset does to the CP15 control register is unkn
   every instruction to another coprocessor (CP14 included), enter Undefined is inferred from
   the ARM7 evidence. — `Cpu::coprocessor` — verify by a test ROM on real hardware.
 - **Reset value of the ARM9 vector-base bit,** and whether a reset changes it. GBATEK gives
-  neither; the flag starts at 0 (low vectors) and `reset` leaves it alone. — the `high_vectors`
-  field in `crates/core/src/cpu/mod.rs` and `Cpu::reset` in `exception.rs`, which carry
+  neither; it starts at 0 (low vectors) and `reset` leaves CP15 alone. This is the control
+  register's reset value in `cp15.md`, "Unverified" — `Cp15::new` in
+  `crates/core/src/cpu/cp15.rs` and `Cpu::reset` in `exception.rs`, which carry
   `TODO(hw-unverified)` — verify by a test ROM on real hardware.
 - **Thumb-state return values** in the table above are worked out from GBATEK's statement that
   one return sequence serves both states, not read from it. Thumb execution is #13. —

@@ -19,11 +19,11 @@ const MODE_BIT_4: u32 = 0x10;
 /// "The prefetch pipeline"): the two words the pipeline holds.
 const ARM_PC_AHEAD: u32 = 8;
 /// A Thumb instruction's R15 runs this far ahead of it.
-const THUMB_PC_AHEAD: u32 = 4;
+pub(super) const THUMB_PC_AHEAD: u32 = 4;
 /// Size of an ARM instruction, and of the step from one refill fetch to the next.
 const ARM_WORD: u32 = 4;
 /// Size of a Thumb instruction.
-const THUMB_HALFWORD: u32 = 2;
+pub(super) const THUMB_HALFWORD: u32 = 2;
 /// An R15 read after the prefetch has advanced the PC once more reads this far ahead again
 /// (`docs/hw/arm-branch-pipeline.md`, "Late R15 reads"): a register-specified shift's Rn and Rm,
 /// a multiply's operands, the stored register of STR, STRH and STM, and SWP's registers.
@@ -40,7 +40,6 @@ const LR: usize = 14;
 impl<const ARM9: bool> Cpu<ARM9> {
     /// Executes the ARM instruction at the head of the pipeline
     /// (`docs/hw/arm-branch-pipeline.md`, "The prefetch pipeline").
-    // TODO(phase1): Thumb state (T = 1) arrives in #13; the T bit is ignored until then.
     // TODO(hw-unverified): the fetch sequence (one fetch at R15 before execution, two on a
     // refill, 32/16/16 bits for BX to Thumb) is the suite's, oracle evidence only
     // (`docs/hw/arm-branch-pipeline.md`, "Unverified"). Decided in #NN.
@@ -120,9 +119,17 @@ impl<const ARM9: bool> Cpu<ARM9> {
         }
     }
 
-    /// A register as a store writes it: a late R15 read.
+    /// A register as a store writes it: a late R15 read, one instruction width further than
+    /// the usual read. Only a Thumb store of R15 (an empty register list) can tell the widths
+    /// apart.
+    // TODO(hw-unverified): the Thumb width is the suite's, oracle evidence only
+    // (`docs/hw/thumb.md`, "Unverified").
     pub(super) fn store_operand(&self, index: u32) -> u32 {
-        self.operand(index, LATE_PC_EXTRA)
+        let extra = match self.regs.cpsr() & FLAG_T != 0 {
+            true => THUMB_HALFWORD,
+            false => LATE_PC_EXTRA,
+        };
+        self.operand(index, extra)
     }
 
     /// B and BL (`docs/hw/arm-branch-pipeline.md`, "B and BL"): R15 + the sign-extended word
@@ -147,6 +154,12 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // (`docs/hw/arm-branch-pipeline.md`, "Unverified").
     fn branch_exchange(&mut self, word: u32) -> bool {
         let target = self.operand(word & 0xF, 0);
+        self.exchange_to(target)
+    }
+
+    /// Jumps to `target` and copies its bit 0 to T; shared by ARM and Thumb BX
+    /// (`docs/hw/arm-branch-pipeline.md`, "BX"; `docs/hw/thumb.md`, "Format 5 and BX").
+    pub(super) fn exchange_to(&mut self, target: u32) -> bool {
         let cpsr = self.regs.cpsr();
         self.regs.set_cpsr(match target & 1 {
             1 => cpsr | FLAG_T,

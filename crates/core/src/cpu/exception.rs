@@ -186,7 +186,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// Resets the core: Supervisor mode, I and F set, ARM state, and the pipeline refilled from
     /// the reset vector. R14, the SPSR and the other registers are left as they were.
-    // TODO(hw-unverified): see `Exception::link_offset`.
+    // TODO(hw-unverified): see `Exception::link_offset`; the high-vector flag is left alone, as
+    // GBATEK says nothing about a reset changing it.
     pub fn reset<B: Bus>(&mut self, bus: &mut B) {
         self.take_exception(Exception::Reset);
         self.refill(bus);

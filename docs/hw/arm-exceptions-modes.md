@@ -146,8 +146,8 @@ Reset enters Supervisor mode with I = 1, F = 1 and T = 0, and jumps to vector +0
 list of entry actions (R14 and the SPSR of the new mode receive the return address and the old
 CPSR) is written for all the vectors and does not exclude Reset, but it gives no value for Reset's
 return address, so R14 and the SPSR are left as they were here, and so are the other registers
-and the vector-base flag (real hardware presumably resets the CP15 control register too; that
-arrives with #15).
+and the vector-base flag. What a reset does to the CP15 control register is unknown here
+(see "Unverified"); it arrives with #15.
 
 ### Vector base
 
@@ -174,9 +174,10 @@ arrives with #15).
 - **ARM9 coprocessor behavior other than MCR/MRC to CP15:** that CDP, LDC and STC to CP15, and
   every instruction to another coprocessor (CP14 included), enter Undefined is inferred from
   the ARM7 evidence. — `Cpu::coprocessor` — verify by a test ROM on real hardware.
-- **Reset value of the ARM9 vector-base bit.** GBATEK does not give it. The flag starts at 0
-  (low vectors). — the `high_vectors` field in `crates/core/src/cpu/mod.rs` — verify by a test ROM on real
-  hardware.
+- **Reset value of the ARM9 vector-base bit,** and whether a reset changes it. GBATEK gives
+  neither; the flag starts at 0 (low vectors) and `reset` leaves it alone. — the `high_vectors`
+  field in `crates/core/src/cpu/mod.rs` and `Cpu::reset` in `exception.rs`, which carry
+  `TODO(hw-unverified)` — verify by a test ROM on real hardware.
 - **Thumb-state return values** in the table above are worked out from GBATEK's statement that
   one return sequence serves both states, not read from it. Thumb execution is #13. —
   `Exception::link_offset` in `crates/core/src/cpu/exception.rs` — verify by a test ROM on real

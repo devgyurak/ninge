@@ -85,6 +85,8 @@ instructions are conditional.
   R0–R14 and the flags N, Z, C, V are not stated for a reset.
 - Changing the mode swaps which physical registers R8–R14 (FIQ) or R13–R14 (the others) the
   program sees; the values of the mode being left are kept and are visible again on return.
+- The entry procedure for each exception (R14 values, vectors, the vector base) is in
+  `arm-exceptions-modes.md`.
 
 ## Edge cases
 

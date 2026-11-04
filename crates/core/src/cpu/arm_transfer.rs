@@ -21,8 +21,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// LDR, STR, LDRB, STRB and the T forms; true if it wrote the PC.
     // TODO(phase1): ARM9 `LDR PC` should switch to Thumb on bit 0 (#14); until then it behaves
     // as ARMv4T does. TODO(hw-unverified): the T forms (LDRT, STRT) run as the plain forms
-    // because the bus has no privilege (revisit with CP15 protection), and Rn = R15 with
-    // writeback is unpredictable in the sources (`docs/hw/arm-load-store.md`, "Unverified").
+    // because the bus has no privilege (revisit with CP15 protection); Rn = R15 with writeback
+    // is not allowed by GBATEK and follows the suite (`docs/hw/arm-load-store.md`, "Unverified").
     pub(super) fn single_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
         let (rn, rd) = ((word >> 16) & 0xF, (word >> 12) & 0xF);
         // Bit 25 is I: a register offset shifted by an immediate; otherwise a 12-bit immediate.
@@ -63,10 +63,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// LDRH, STRH, LDRSB and LDRSH; true if it wrote the PC.
-    // TODO(hw-unverified): the ARM9 odd-address LDRH and LDRSH (see `halfword_value`); STRH with
-    // Rd = R15 stores address + 12 as GBATEK says for Rd, which the suite checks only for STR,
-    // STRB and STM; a P = 0 form with W = 1 writes back as any post-indexed form does
-    // (`docs/hw/arm-load-store.md`, "Unverified").
+    // TODO(hw-unverified): the ARM9 odd-address LDRH and LDRSH (see `halfword_value`); a P = 0
+    // form with bit 21 set writes back as any post-indexed form does, which the suite shows
+    // although GBATEK says the bit must be zero (`docs/hw/arm-load-store.md`, "Unverified").
     pub(super) fn halfword_transfer<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
         let (rn, rd) = ((word >> 16) & 0xF, (word >> 12) & 0xF);
         // Bit 22 is I: the immediate is split in two nibbles; otherwise Rm is the offset.

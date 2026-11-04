@@ -3,8 +3,9 @@
 Sources: GBATEK, the ARM-opcode sections "Memory: Single Data Transfer (LDR, STR, PLD)",
 "Memory: Halfword, Doubleword, and Signed Data Transfer", "Memory: Block Data Transfer (LDM,
 STM)", "Memory: Single Data Swap (SWP)", and "ARM CPU Memory Alignments". Measured facts come
-from the pinned SingleStepTests/ARM7TDMI suite (MIT); each is pinned by a test in
-`crates/runner/tests/cpu_suite.rs` and is marked **(suite)** below. The ARM ARM and the two TRMs
+from the pinned SingleStepTests/ARM7TDMI suite (MIT) and are marked **(suite)** below; each is
+pinned by a test in `crates/runner/tests/cpu_suite.rs`, except the empty list, whose single case is
+covered only by the whole-file test. The ARM ARM and the two TRMs
 are not re-read for this note.
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm_transfer.rs`,
 `crates/core/src/cpu/bus.rs`   Phase: 1 (#10)
@@ -71,9 +72,10 @@ exist for loads only.
 
 ### Single data swap (SWP, SWPB)
 
-`cond 00010 B 00 Rn Rd 0000 1001 Rm`: Rd = [Rn] and [Rn] = Rm. B = 1 swaps a byte. It works with
-Rm = Rd, Rm = Rn and so on, because Rm is read before the store and the read before the write.
-R15 is not allowed in any field.
+`cond 00010 B 00 Rn Rd 0000 1001 Rm`: Rd = [Rn] and [Rn] = Rm. B = 1 swaps a byte. GBATEK says it
+works when Rm and Rn name the same register; the same holds for the other overlaps because every
+register is read before the memory access and Rd is written last. R15 is not allowed in any
+field by GBATEK.
 
 ## Behavior
 
@@ -121,7 +123,8 @@ therefore the bus implementation's job (the memory map, Phase 2).
 | Use | Value / result | Source |
 |---|---|---|
 | R15 as Rn | address + 8 | GBATEK; (suite) |
-| R15 as the stored Rd of STR/STRB/STM | address + 12 | GBATEK; (suite) for STR, STRB, STM |
+| R15 as the stored Rd of STR, STRB, STRH | address + 12 | GBATEK; (suite) |
+| R15 in the list of an STM | address + 12 | (suite) |
 | LDR or LDM loads R15 | R15 ends as the loaded value + 8, low bits kept, T unchanged | (suite), interim convention (#11) |
 
 Also measured on the suite, though GBATEK does not allow R15 in these fields:
@@ -130,6 +133,8 @@ Also measured on the suite, though GBATEK does not allow R15 in these fields:
   and the step still advances the PC by 4 (so + 12 in all). A block transfer in the same situation
   ends with R15 = the moved address + 8 and no further advance.
 - SWP reads an R15 Rn or Rm as address + 12.
+- A halfword transfer with P = 0 and bit 21 set writes back like any post-indexed form, although
+  GBATEK says that bit must be zero.
 
 The ARMv5TE switch to Thumb on a loaded bit 0 is #14; until then ARM9 behaves as ARMv4T here.
 
@@ -150,8 +155,8 @@ The ARMv5TE switch to Thumb on a loaded bit 0 is #14; until then ARM9 behaves as
 - **Empty list.** ARM7: R15 is stored (STM) or loaded (LDM), and the base moves by 0x40 (down for
   the decrementing modes, up for the incrementing ones). ARM9: the base moves by 0x40 as well;
   GBATEK implies no transfer of R15. STM with R15 stores address + 12 **(suite)**. The
-  one empty-list case the suite holds (STMDB with writeback) stores R15 at the lowest address,
-  Rn - 0x40, and writes Rn - 0x40 back **(suite)**.
+  one empty-list case the suite holds (STMDB with S and writeback, in User mode) stores R15 at the
+  lowest address, Rn - 0x40, and writes Rn - 0x40 back **(suite)**.
 
 ### ARMv4T vs ARMv5TE
 
@@ -167,8 +172,8 @@ The ARMv5TE switch to Thumb on a loaded bit 0 is #14; until then ARM9 behaves as
 
 ## Edge cases
 
-- A post-indexed or writeback form with Rn = R15, and a halfword word with W = 1 and P = 0, are
-  unpredictable in the sources; see Unverified.
+- A writeback form with Rn = R15, and a halfword word with P = 0 and bit 21 set, are not allowed
+  by GBATEK; the suite runs them (see "R15" and Unverified).
 - Rd = R15 for a plain load ends with the PC written, so the step does not also advance it.
 - The T forms (LDRT, STRT) differ only in the privilege of the access; the bus has no privilege
   yet, so they behave like the plain forms until CP15 protection exists.
@@ -179,22 +184,24 @@ Each item has `TODO(hw-unverified)` at the named site in `arm_transfer.rs`.
 
 - ARM9 odd-address LDRH/LDRSH, STM/LDM base-in-list and empty-list rules come from GBATEK's
   prose; the suite is ARMv4T only, so each is checked by a self-written unit test taken from this
-  note, not by a trace — `halfword` and `block` handlers — verify with a test ROM or a trace
+  note, not by a trace — `halfword_value` and `block_transfer` — verify with a test ROM or a trace
   against the reference emulator.
 - ARM9 LDM with the base last in a list longer than one: GBATEK gives when writeback happens but
-  not which value ends in Rn; the loaded value is assumed — `block` handler.
-- ARM9 empty list: no R15 transfer is inferred from "ARMv4: R15 is loaded or stored" — `block`.
-- Whether an empty list adjusts the base when W = 0 (taken as: only with W = 1) — `block`.
+  not which value ends in Rn; the loaded value is assumed — `block_transfer`.
+- ARM9 empty list: no R15 transfer is inferred from "ARMv4: R15 is loaded or stored" — `block_transfer`.
+- ARM7 empty list: the transfer address for IA, IB and DA (taken as the lowest address of a
+  16-word run) and no base move when W = 0 are not measured — `block_transfer`; the unit tests pin
+  the chosen behavior only.
 - S = 1 together with writeback, in a block transfer — `write_back`; GBATEK says not to use it.
-  The User-bank writeback is the suite's behavior; for an LDM that also loads R15 (the CPSR
-  restore form) the suite agrees with it too, and no ARM9 evidence exists.
-- Writeback to R15 and SWP with R15 operands — `write_back`, `block_transfer`, `swap`; GBATEK
-  allows neither, the suite shows both (see "R15").
+  The User-bank writeback is the suite's behavior for STM and for an LDM without R15. An LDM
+  that loads R15 (the CPSR restore form) writes the base back to the current mode's register
+  instead, before the CPSR changes, and the suite agrees (it passes with that rule); no ARM9
+  evidence exists.
+- Writeback to R15, SWP with R15 operands, and a halfword P = 0 form with bit 21 set —
+  `write_back`, `block_transfer`, `swap`, `halfword_transfer`; GBATEK allows none of them, the
+  suite shows all (see "R15").
 - LDM with R15 in the list and S = 1 in User/System, which have no SPSR: the CPSR stays as it is
   and R15 is loaded — `block_transfer`; the suite shows it, GBATEK does not say.
-- R15 as the stored Rd of STRH — `halfword`: GBATEK says address + 12 for Rd; the suite checks
-  it only for STR, STRB and STM here.
-- Rn = R15 with writeback, and a halfword word with P = 0 and W = 1 — `single`, `halfword`.
 - STM with S = 1 and R15 in the list stores the user-bank PC value as for plain STM —
   `block_store_value`.
-- T-form privilege (LDRT, STRT) — `single`; revisit when CP15 protection lands.
+- T-form privilege (LDRT, STRT) — `single_transfer`; revisit when CP15 protection lands.

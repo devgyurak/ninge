@@ -130,7 +130,7 @@ mod tests {
 
     /// Words and the kind each must decode to (`docs/hw/arm-multiply.md`, "Encoding";
     /// `docs/hw/arm-load-store.md`, "Encodings").
-    const CASES: [(u32, Kind); 27] = [
+    const CASES: [(u32, Kind); 30] = [
         (0xE000_0090, Kind::Multiply),                // MUL
         (0xE010_0090, Kind::Multiply),                // MULS
         (0xE020_0090, Kind::Multiply),                // MLA
@@ -158,6 +158,10 @@ mod tests {
         (0xE790_1002, Kind::SingleTransferRegister),  // LDR with a register offset
         (0xE780_1102, Kind::SingleTransferRegister),  // STR, register offset shifted by 2
         (0xE790_1012, Kind::Unhandled), // bits 27-25 = 011 with bit 4 = 1 is undefined
+        // Words inside the PSR space that the halfword and MSR/MRS checks must tell apart.
+        (0xE100_00B0, Kind::HalfwordTransfer), // STRH, P = 1, U = 0, no writeback
+        (0xE10F_0000, Kind::Mrs),              // MRS
+        (0xE129_F000, Kind::MsrRegister),      // MSR CPSR_fc, R0
     ];
 
     fn classification_failures() -> Vec<(u32, Kind, Kind)> {

@@ -1208,6 +1208,223 @@ fn given_block_transfers_with_r15_in_the_list_when_comparing_then_stm_stores_plu
     assert_eq!(block_r15_problems(), Vec::<String>::new());
 }
 
+/// Problems with "STRH with Rd = R15 stores address + 12 (the low halfword)".
+fn strh_r15_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldrh_strh.json.bin", |c| {
+        let o = c.opcode;
+        o >> 20 & 1 == 0 && o >> 5 & 3 == 1 && o >> 12 & 0xF == 15 && o >> 16 & 0xF != 15
+    });
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| data_transactions(c)[0].3 != c.base_addr.wrapping_add(12) & 0xFFFF)
+        .map(|c| format!("{:#010x}: STRH R15 did not store address + 12", c.opcode))
+        .collect();
+    problems.extend(too_few("STRH R15", cases.len(), 100));
+    problems
+}
+
+#[test]
+fn given_strh_with_rd_r15_when_comparing_then_the_stored_halfword_is_the_address_plus_12() {
+    assert_eq!(strh_r15_problems(), Vec::<String>::new());
+}
+
+/// Problems with "a post-indexed halfword transfer with bit 21 set (W) writes back like any
+/// post-indexed form": Rn ends as the base plus or minus the immediate.
+fn halfword_post_index_w_problems() -> Vec<String> {
+    let mut problems = Vec::new();
+    for file in ["arm_ldrh_strh.json.bin", "arm_ldrsb_ldrsh.json.bin"] {
+        let cases = executed_cases(file, |c| {
+            let o = c.opcode;
+            let (rn, rd) = (o >> 16 & 0xF, o >> 12 & 0xF);
+            o >> 24 & 1 == 0 && o >> 21 & 1 == 1 && o >> 22 & 1 == 1 && rn < 15 && rd != rn
+        });
+        problems.extend(
+            cases
+                .iter()
+                .filter(|c| {
+                    let o = c.opcode;
+                    let rn = (o >> 16 & 0xF) as usize;
+                    let offset = (o >> 4 & 0xF0) | (o & 0xF);
+                    let moved = match o >> 23 & 1 {
+                        1 => c.initial.r[rn].wrapping_add(offset),
+                        _ => c.initial.r[rn].wrapping_sub(offset),
+                    };
+                    c.expected.r[rn] != moved
+                })
+                .map(|c| format!("{file} {:#010x}: P = 0, W = 1 did not write back", c.opcode)),
+        );
+        problems.extend(too_few(file, cases.len(), 100));
+    }
+    problems
+}
+
+#[test]
+fn given_halfword_transfers_with_p_0_and_w_1_when_comparing_then_rn_is_written_back_as_post_indexing_does()
+ {
+    assert_eq!(halfword_post_index_w_problems(), Vec::<String>::new());
+}
+
+/// Problems with "SWP reads an R15 Rn as address + 12 and stores an R15 Rm as address + 12".
+fn swap_r15_problems() -> Vec<String> {
+    let file = "arm_swp.json.bin";
+    let as_base = executed_cases(file, |c| {
+        c.opcode >> 16 & 0xF == 15 && c.opcode >> 12 & 0xF != 15 && c.opcode & 0xF != 15
+    });
+    let as_source = executed_cases(file, |c| {
+        c.opcode & 0xF == 15 && c.opcode >> 16 & 0xF != 15 && c.opcode >> 12 & 0xF != 15
+    });
+    let mut problems: Vec<String> = as_base
+        .iter()
+        .filter(|c| data_transactions(c)[0].2 != c.base_addr.wrapping_add(12))
+        .map(|c| format!("{:#010x}: Rn = R15 did not read address + 12", c.opcode))
+        .collect();
+    problems.extend(
+        as_source
+            .iter()
+            .filter(|c| {
+                let want = c.base_addr.wrapping_add(12);
+                let want = match c.opcode >> 22 & 1 {
+                    1 => want & 0xFF,
+                    _ => want,
+                };
+                data_transactions(c)[1].3 != want
+            })
+            .map(|c| format!("{:#010x}: Rm = R15 did not store address + 12", c.opcode)),
+    );
+    problems.extend(too_few("SWP Rn = R15", as_base.len(), 100));
+    problems.extend(too_few("SWP Rm = R15", as_source.len(), 100));
+    problems
+}
+
+#[test]
+fn given_swp_with_r15_operands_when_comparing_then_both_read_as_the_address_plus_12() {
+    assert_eq!(swap_r15_problems(), Vec::<String>::new());
+}
+
+/// Problems with "writeback to R15: a single transfer ends at the moved address + 12, a block
+/// transfer at the moved address + 8 (the base reads address + 8 in both)".
+fn r15_writeback_problems() -> Vec<String> {
+    let single = executed_cases("arm_ldr_str_immediate_offset.json.bin", |c| {
+        let o = c.opcode;
+        o >> 25 & 1 == 0
+            && o >> 16 & 0xF == 15
+            && o >> 12 & 0xF != 15
+            && (o >> 21 & 1 == 1 || o >> 24 & 1 == 0)
+    });
+    let block = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let o = c.opcode;
+        o >> 16 & 0xF == 15 && o >> 21 & 1 == 1 && o & 0xFFFF != 0 && o >> 15 & 1 == 0
+    });
+    let moved = |base: u32, up: bool, bytes: u32| match up {
+        true => base.wrapping_add(bytes),
+        false => base.wrapping_sub(bytes),
+    };
+    let mut problems: Vec<String> = single
+        .iter()
+        .filter(|c| {
+            let base = c.base_addr.wrapping_add(8);
+            let target = moved(base, c.opcode >> 23 & 1 == 1, c.opcode & 0xFFF);
+            c.expected.r[15] != target.wrapping_add(12)
+        })
+        .map(|c| format!("{:#010x}: single writeback to R15", c.opcode))
+        .collect();
+    problems.extend(
+        block
+            .iter()
+            .filter(|c| {
+                let base = c.base_addr.wrapping_add(8);
+                let bytes = 4 * (c.opcode & 0xFFFF).count_ones();
+                let target = moved(base, c.opcode >> 23 & 1 == 1, bytes);
+                c.expected.r[15] != target.wrapping_add(8)
+            })
+            .map(|c| format!("{:#010x}: block writeback to R15", c.opcode)),
+    );
+    problems.extend(too_few("single writeback to R15", single.len(), 100));
+    problems.extend(too_few("block writeback to R15", block.len(), 100));
+    problems
+}
+
+#[test]
+fn given_transfers_whose_written_back_rn_is_r15_when_comparing_then_single_ends_at_plus_12_and_block_at_plus_8()
+ {
+    assert_eq!(r15_writeback_problems(), Vec::<String>::new());
+}
+
+/// The base register `rn` (13 or 14, banked in every exception mode) as `state` sees it in the
+/// exception mode its CPSR names.
+fn exception_bank_register(state: &State, rn: usize) -> u32 {
+    match state.cpsr & 0x1F {
+        0x11 => state.r_fiq[rn - 8],
+        0x12 => state.r_irq[rn - 13],
+        0x13 => state.r_svc[rn - 13],
+        0x17 => state.r_abt[rn - 13],
+        _ => state.r_und[rn - 13],
+    }
+}
+
+/// Problems with "STM with S and W in an exception mode reads the base from the current mode's
+/// register and writes the moved base to the User-bank register".
+fn user_bank_writeback_problems() -> Vec<String> {
+    let cases: Vec<Case> = cases_of("arm_ldm_stm.json.bin")
+        .into_iter()
+        .filter(|c| {
+            let o = c.opcode;
+            let rn = o >> 16 & 0xF;
+            condition_passes(c)
+                && matches!(c.initial.cpsr & 0x1F, 0x11 | 0x12 | 0x13 | 0x17 | 0x1B)
+                && o >> 20 & 1 == 0
+                && o >> 22 & 1 == 1
+                && o >> 21 & 1 == 1
+                && (13..15).contains(&rn)
+                && o >> 15 & 1 == 0
+                && o & 0xFFFF != 0
+        })
+        .collect();
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| {
+            let o = c.opcode;
+            let rn = (o >> 16 & 0xF) as usize;
+            let bytes = 4 * (o & 0xFFFF).count_ones();
+            let base = exception_bank_register(&c.initial, rn);
+            let moved = match o >> 23 & 1 {
+                1 => base.wrapping_add(bytes),
+                _ => base.wrapping_sub(bytes),
+            };
+            c.expected.r[rn] != moved || exception_bank_register(&c.expected, rn) != base
+        })
+        .map(|c| format!("{:#010x}: S + W did not write the User-bank Rn", c.opcode))
+        .collect();
+    problems.extend(too_few("STM S + W", cases.len(), 100));
+    problems
+}
+
+#[test]
+fn given_stm_with_s_and_w_in_an_exception_mode_when_comparing_then_the_user_bank_rn_gets_the_moved_base()
+ {
+    assert_eq!(user_bank_writeback_problems(), Vec::<String>::new());
+}
+
+/// Problems with "LDM with R15 and S in User/System (no SPSR) loads R15 and leaves the CPSR".
+fn ldm_pc_without_spsr_problems() -> Vec<String> {
+    let cases = executed_cases("arm_ldm_stm.json.bin", |c| {
+        let o = c.opcode;
+        o >> 20 & 1 == 1 && o >> 22 & 1 == 1 && o >> 15 & 1 == 1 && o >> 16 & 0xF != 15
+    });
+    let mut problems: Vec<String> = cases
+        .iter()
+        .filter(|c| c.expected.cpsr != c.initial.cpsr)
+        .map(|c| format!("{:#010x}: the CPSR changed", c.opcode))
+        .collect();
+    problems.extend(too_few("LDM^ {PC} in User/System", cases.len(), 100));
+    problems
+}
+
+#[test]
+fn given_ldm_with_r15_and_s_in_user_or_system_when_comparing_then_the_cpsr_is_unchanged() {
+    assert_eq!(ldm_pc_without_spsr_problems(), Vec::<String>::new());
+}
+
 #[test]
 fn given_arm_ldr_str_immediate_offset_when_run_on_arm7_then_no_case_differs() {
     assert_eq!(

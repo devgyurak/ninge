@@ -1256,6 +1256,40 @@ fn given_an_arm7_when_the_register_list_is_empty_then_r15_transfers_and_the_base
             &[rd(4, 0x1FC0, 0x7000)],
         )
         .pc(0x7008),
+        // The transfer address of the other modes and the W = 0 form are not measured on the
+        // suite (`docs/hw/arm-load-store.md`, "Unverified"); these pin the chosen behavior.
+        case(
+            "STMIA R0!,{} stores R15 at the base",
+            blk(0, 1, 0, 1, 0, 0, 0),
+            &[(0, 0x2000)],
+            &[],
+            &[(0, 0x2040)],
+            &[wr(4, 0x2000, PC_STORE)],
+        ),
+        case(
+            "STMIB R0!,{} stores R15 above the base",
+            blk(1, 1, 0, 1, 0, 0, 0),
+            &[(0, 0x2000)],
+            &[],
+            &[(0, 0x2040)],
+            &[wr(4, 0x2004, PC_STORE)],
+        ),
+        case(
+            "STMDA R0!,{} stores R15 at the lowest address",
+            blk(0, 0, 0, 1, 0, 0, 0),
+            &[(0, 0x2000)],
+            &[],
+            &[(0, 0x1FC0)],
+            &[wr(4, 0x1FC4, PC_STORE)],
+        ),
+        case(
+            "STMIA R0,{} without writeback leaves the base",
+            blk(0, 1, 0, 0, 0, 0, 0),
+            &[(0, 0x2000)],
+            &[],
+            &[(0, 0x2000)],
+            &[wr(4, 0x2000, PC_STORE)],
+        ),
     ];
     assert_eq!(table::<false>(&cases), Vec::<String>::new());
 }

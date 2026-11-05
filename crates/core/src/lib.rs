@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! ninge-core: the emulator itself. Pure logic with no IO; inputs in, frames out.
 
+pub mod bus;
 pub mod cpu;
 
+use bus::{Arm9View, Memory, TcmConfig, VramBankState};
+use cpu::Cpu;
 use serde::{Deserialize, Serialize};
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
@@ -51,6 +54,13 @@ pub struct Machine {
     // Frames completed by `run_frame`; plain state, so it is serialized. A savestate
     // without it is refused, never half-loaded (AGENTS.md §2 rule 5).
     frame_count: u64,
+    // The ARM9 and the memory it sees. Plain data. `default` keeps a savestate map that lacks
+    // them loadable by the existing map tests.
+    // TODO(phase2): the savestate encoder (#19) decides whether a state without them is refused.
+    #[serde(default)]
+    arm9: Cpu<true>,
+    #[serde(default)]
+    memory: Memory,
 }
 
 /// A black screen of exactly `SCREEN_WIDTH * SCREEN_HEIGHT` pixels.
@@ -68,6 +78,8 @@ impl Machine {
             bottom: blank_screen(),
             rom: Vec::new(),
             frame_count: 0,
+            arm9: Cpu::new(),
+            memory: Memory::new(),
         }
     }
 
@@ -99,6 +111,56 @@ impl Machine {
     /// Returns how many frames [`Machine::run_frame`] has completed.
     pub fn frame_count(&self) -> u64 {
         self.frame_count
+    }
+
+    /// The ARM9 core.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn arm9(&self) -> &Cpu<true> {
+        &self.arm9
+    }
+
+    /// The ARM9-visible memory.
+    // The debugger's memory viewer (#57) will show it.
+    pub fn memory(&self) -> &Memory {
+        &self.memory
+    }
+
+    /// VRAMCNT_A as decoded.
+    // The debugger's VRAM bank map (#58) will show it.
+    pub fn vram_a(&self) -> VramBankState {
+        self.memory.vram_a()
+    }
+
+    /// Steps the ARM9 by one instruction.
+    ///
+    /// The TCM registers are copied into the memory view first, so a CP15 write takes effect
+    /// from the next instruction (`docs/hw/arm9-memory-map.md`).
+    // TODO(hw-unverified): opcodes already in the pipeline keep the mapping they were fetched
+    // under (`docs/hw/arm9-memory-map.md`, "Unverified").
+    pub fn step_arm9(&mut self) {
+        let mut view = Arm9View::new(&mut self.memory, TcmConfig::from_cp15(self.arm9.cp15()));
+        self.arm9.step(&mut view);
+    }
+
+    /// Reads a byte as the ARM9 data bus would, without side effects.
+    // The debugger's memory viewer (#57) and the runner's memory-dump test (#17) use it.
+    pub fn arm9_peek8(&self, addr: u32) -> u8 {
+        self.memory
+            .read8(&TcmConfig::from_cp15(self.arm9.cp15()), addr)
+    }
+
+    /// Reads a halfword as the ARM9 data bus would, without side effects.
+    // The debugger's memory viewer (#57) and the runner's memory-dump test (#17) use it.
+    pub fn arm9_peek16(&self, addr: u32) -> u16 {
+        self.memory
+            .read16(&TcmConfig::from_cp15(self.arm9.cp15()), addr)
+    }
+
+    /// Reads a word as the ARM9 data bus would, without side effects.
+    // The debugger's memory viewer (#57) and the runner's memory-dump test (#17) use it.
+    pub fn arm9_peek32(&self, addr: u32) -> u32 {
+        self.memory
+            .read32(&TcmConfig::from_cp15(self.arm9.cp15()), addr)
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.
@@ -224,3 +286,6 @@ mod tests {
         assert_eq!(machine.frame_count(), 0);
     }
 }
+
+#[cfg(test)]
+mod tests_arm9;

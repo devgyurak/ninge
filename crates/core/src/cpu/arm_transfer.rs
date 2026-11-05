@@ -140,6 +140,9 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// SWP and SWPB; true if it wrote the PC.
+    // TODO(phase8): TCM load mode does not apply to SWP and SWPB (`docs/hw/arm9-memory-map.md`,
+    // "Not modeled"); the `Bus` trait carries no access kind (#76), so they see it like a load
+    // and a store.
     // TODO(hw-unverified): R15 is not allowed in any field; Rd = R15 is written like a load.
     pub(super) fn swap<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
         let (rn, rd, rm) = ((word >> 16) & 0xF, (word >> 12) & 0xF, word & 0xF);

@@ -1,7 +1,7 @@
 # Memory map
 
 Sources: GBATEK "DS Memory Maps".
-Used by: `crates/core/src/bus/` (planned, #18)   Phase: 0 (regions the smoke ROM loads into); #18 extends it
+Used by: `crates/core/src/bus/`   Phase: 0 (regions the smoke ROM loads into); #18 (Phase 2) adds the ARM9 view
 
 ## Regions (Phase 0 subset)
 
@@ -26,18 +26,18 @@ memory, so neither depends on the WRAMCNT allocation. Nothing in Phase 0 impleme
 
 ## Edge cases
 
-Deferred to #18: mirroring, open bus, WRAMCNT and VRAM bank moves, TCM overlap with main
-memory.
+The ARM9 view (main RAM mirroring, TCM placement and priority, unmapped addresses) is in
+`arm9-memory-map.md`; VRAM bank A as LCDC is in `vram-banks.md`. WRAMCNT, the ARM7 view and
+the other VRAM banks are deferred (#22, #35).
 
 ## Unverified
 
-- Default Data TCM base — "DS Memory Maps" says only that it is moveable; software sets it
-  through CP15 (`cp15.md`), which gives no power-on value either (`cp15.md`, "Unverified").
-- The ARM7 has no TCM, cache, or CP15 — taken from general knowledge, not cited from the
-  section above; cite the source or drop it in #18.
-- The allocated shared WRAM is mirrored across the whole WRAM area, and 16 MiB blocks are
-  usually mirrored through their unused upper part (TCM and BIOS excluded) — cite the WRAM
-  control section in #18.
-- Default shared WRAM ownership at reset — not stated in the section read; settle in #18.
-- Whether main memory mirrors above 4 MiB inside its 16 MiB block — GBATEK's general rule
-  says "usually", not confirmed here; settle in #18.
+- Default Data TCM base — moved to `arm9-memory-map.md`, "Unverified": GBATEK names `027C0000h`
+  as the default but not whether it is a reset value; CP15 starts at zero (`cp15.md`).
+- The ARM7 has no TCM, cache, or CP15 — GBATEK "DS Memory Control - Cache and TCM" says so ("The
+  NDS7 doesn't have any TCM, Cache, or CP15"); verified.
+- Shared WRAM mirroring and default ownership at reset — deferred to #22 (WRAMCNT, Phase 3);
+  GBATEK's "DS Memory Control - WRAM" is read there.
+- Whether main memory mirrors above 4 MiB inside its 16 MiB block — moved to
+  `arm9-memory-map.md`: GBATEK's general rule ("typically" mirrored) is applied and recorded as
+  Unverified there.

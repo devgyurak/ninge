@@ -71,7 +71,7 @@ fn pixel(m: &Machine, screen: Screen, x: usize, y: usize) -> u32 {
     m.frame(screen)[y * SCREEN_WIDTH + x]
 }
 
-/// Indices of pixels on `screen` that differ from `expected`.
+/// How many pixels of `screen` differ from `expected`.
 fn not_equal_to(m: &Machine, screen: Screen, expected: u32) -> usize {
     m.frame(screen).iter().filter(|&&p| p != expected).count()
 }
@@ -92,7 +92,7 @@ fn pixel_failures(cases: &[(usize, usize, u16, u32)]) -> Vec<(usize, usize, u32,
         .collect()
 }
 
-/// (register addr, write width bits, value, expected DISPCNT) cases that read back wrong.
+/// Failed cases as (case number, got, wanted) for DISPCNT writes of each width.
 fn dispcnt_failures() -> Vec<(u32, u32, u32)> {
     let mut failures = Vec::new();
     // word write
@@ -374,9 +374,12 @@ fn given_two_machines_with_identical_writes_when_rendered_then_their_frames_are_
     };
     let (a, b) = (build(), build());
     assert_eq!(
-        (a.frame(Screen::Top) == b.frame(Screen::Top)),
-        (a.frame(Screen::Bottom) == b.frame(Screen::Bottom))
-            && a.frame(Screen::Top).len() == PIXELS
+        (
+            a.frame(Screen::Top) == b.frame(Screen::Top),
+            a.frame(Screen::Bottom) == b.frame(Screen::Bottom),
+            a.frame(Screen::Top).len()
+        ),
+        (true, true, PIXELS)
     );
     assert_eq!(a.frame(Screen::Top), b.frame(Screen::Top));
 }

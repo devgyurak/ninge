@@ -24,7 +24,7 @@ byte accesses to consecutive addresses.
 |---|---|---|
 | 0-2 | BG mode | `TODO(phase3)` |
 | 3 | BG0 is 2D (0) or 3D (1) | `TODO(phase7)` |
-| 4-6 | tile/bitmap OBJ and BG mapping options | `TODO(phase3)` / `TODO(phase4)` |
+| 4-6 | OBJ options: tile OBJ mapping, bitmap OBJ 2D dimension, bitmap OBJ mapping | `TODO(phase4)` |
 | 7-15 | same as the GBA register: forced blank (7), BG0-BG3 enables (8-11), OBJ enable (12), windows (13-15) | `TODO(phase3)` / `TODO(phase4)`; bit 7 see "Unverified" |
 | 16-17 | display mode: 0 off, 1 graphics, 2 VRAM display, 3 main-memory display | 0 and 2 now |
 | 18-19 | VRAM block for mode 2: 0 = bank A, 1 = B, 2 = C, 3 = D | block 0 now |

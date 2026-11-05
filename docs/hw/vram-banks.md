@@ -41,6 +41,13 @@ store is dropped and changes nothing (GBATEK "DS Memory Control - VRAM", the not
 bank table). The one exception is the ARM7's own work-RAM mapping of banks C and D, which is
 Phase 3-4. Reads work in any width. The write rule applies to the LCDC window too.
 
+## Evidence
+
+The `memmap` test ROM (`testroms/memmap/`) enables bank A with MST 0, stores a word and a
+halfword at `0680_0000h` and reads them back, stores a byte over a word and reads the word
+(slots 28-30), then disables the bank and reads (slot 31). `crates/runner/tests/memmap.rs`
+holds the expected values.
+
 ## Edge cases
 
 - A byte write to bank A leaves the bank unchanged.
@@ -58,7 +65,8 @@ Phase 3-4. Reads work in any width. The write rule applies to the LCDC window to
   read gives. — `Memory::read_slow` — verify likewise.
 - **A disabled bank, or one with MST other than 0,** is unmapped at the LCDC address (reads 0,
   writes ignored). GBATEK describes the mapping only for the enabled case. —
-  `Memory::build_page_table` — verify likewise.
+  `Memory::build_page_table` — verify likewise. The `memmap` ROM records the disabled-bank read
+  (slot 31); running that ROM on hardware settles it. MST values other than 0 are not exercised.
 - **Mirrors of the LCDC window** inside its 16 MiB block (`0600_0000h` block) are not modeled:
   the BG/OBJ windows and the LCDC area share a block and GBATEK's mirror rule is not specific.
   — `Memory::build_page_table` — verify likewise.

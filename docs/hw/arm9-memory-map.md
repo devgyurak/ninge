@@ -26,6 +26,16 @@ regions below are simply unmapped.
 | `0800_0000h`.. | | GBA slot | unmapped |
 | `FFFF_0000h` | 32 KiB | ARM9 BIOS | unmapped, `TODO(phase3)` (#27) |
 
+## Evidence
+
+The `memmap` test ROM (`testroms/memmap/`) exercises the map on the emulator and records what
+it read; `crates/runner/tests/memmap.rs` holds the expected values. It covers main RAM in all
+three widths and the unaligned load (slots 0-9), the 4 MiB mirrors (10-17), the DTCM, its
+mirroring and its load mode (18-24), the ITCM, its mirror and an instruction fetch from it
+(25-27), and an undefined I/O port at `0400_0090h`, an address no ARM9 register in GBATEK's I/O
+map occupies (32). Running the same ROM on hardware and comparing the record with this note
+settles the Unverified items marked below.
+
 ## Behavior
 
 ### Order of decoding
@@ -114,12 +124,13 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 
 - **Main RAM mirroring.** The mirror through the whole 16 MiB block is GBATEK's general rule
   ("usually", "typically"), not a statement about main RAM. — `Memory::build_page_table` in
-  `crates/core/src/bus/memory.rs` — verify by a test ROM on real hardware.
+  `crates/core/src/bus/memory.rs` — verify by a test ROM on real hardware. The `memmap` ROM records it (slots 10-13, 15-17);
+  running that ROM on hardware settles it.
 - **Power-on RAM contents** are not stated; all RAM (main RAM, TCM, VRAM) starts at zero. —
   `Memory::new` — verify likewise.
 - **Unmapped reads** return 0 and writes are ignored; GBATEK says "undefined" for memory and
   gives zero only for I/O ports. — `Memory::read_slow` in `bus/memory.rs` — verify
-  likewise.
+  likewise. The `memmap` ROM records the I/O case (slot 32) only.
 - **Write-only registers read.** VRAMCNT_A is marked write-only; a read returns 0 here. —
   `Memory::read_slow` — verify likewise.
 - **Wider writes to a byte register.** VRAMCNT_A sits next to VRAMCNT_B; a halfword or word

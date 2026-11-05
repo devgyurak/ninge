@@ -20,6 +20,7 @@ itself. Local runs, `./scripts/verify.sh`, and CI all go through it.
 | `smoke/` | Minimal ROM: ARM9 and ARM7 each spin in an infinite loop from their own entry point. No libnds, no BlocksDS crt0. |
 | `boot/` | Direct-boot ROM: loads at `0x02000000` but enters at `0x02000100`, records r0-r14, CPSR and the IRQ/Supervisor stack pointers at `0x02000200`, then spins. Its addresses come from per-ROM variables in the `Makefile`. |
 | `memmap/` | Memory-map ROM: exercises main RAM and its mirrors, both TCMs, VRAM bank A and an undefined I/O port from `0x02000100`, and records the values it read at `0x02004000` (slot layout at the top of `memmap/arm9.s`). It records observed values only; the expected ones are in `crates/runner/tests/memmap.rs`. |
+| `vramdisp/` | VRAM-display ROM: writes POWCNT1 (display swap clear), VRAMCNT_A (MST 0) and DISPCNT (mode 2, block 0), then computes a test picture into bank A: colour bars, then red/green/blue/grey ramps, with bit 15 set on odd bar rows (layout at the top of `vramdisp/arm9.s`). Entered at `0x02000100`. No image asset. Expected pixels are in `crates/runner/tests/vramdisp.rs`. |
 
 The header is built with a 0x4000-byte header size (`ndstool -h`), so the ARM9 offset meets the
 range in `docs/hw/cart-header.md`. Line 1 of every source file is the SPDX line (`@ ...` in ARM assembly). Addresses come from

@@ -9,7 +9,7 @@ LD := $(GCC_BIN)/arm-none-eabi-ld
 OBJCOPY := $(GCC_BIN)/arm-none-eabi-objcopy
 NDSTOOL := $(WONDERFUL)/thirdparty/blocksds/core/tools/ndstool/ndstool
 
-ROMS := smoke boot memmap
+ROMS := smoke boot memmap vramdisp
 OUT := build
 
 # Per-ROM load and entry addresses: ARM9_RAM_<rom>, ARM9_ENTRY_<rom>, ARM7_RAM_<rom> and
@@ -17,6 +17,7 @@ OUT := build
 ARM9_RAM_boot := 0x02000000
 ARM9_ENTRY_boot := 0x02000100
 ARM9_ENTRY_memmap := 0x02000100
+ARM9_ENTRY_vramdisp := 0x02000100
 ARM9_RAM_DEFAULT := 0x02000000
 ARM7_RAM_DEFAULT := 0x02380000
 

@@ -138,14 +138,16 @@ impl Gpu2d {
     pub(crate) fn render_engine_a(&self, bank_a: Option<&[u8]>, out: &mut [u32]) {
         let mode = (self.dispcnt_a >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
         let block = (self.dispcnt_a >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
-        out.fill(BLACK);
         if mode == MODE_OFF {
             out.fill(WHITE);
         } else if mode == MODE_VRAM && block == BLOCK_A {
+            out.fill(BLACK);
             let (pairs, _) = bank_a.unwrap_or(&[]).as_chunks::<2>();
             out.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
                 *pixel = expand_color(u16::from_le_bytes(bytes));
             });
+        } else {
+            out.fill(BLACK);
         }
     }
 }

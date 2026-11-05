@@ -1,6 +1,6 @@
 # Engine A display mode 2 (VRAM display) and the screen swap
 
-Sources: GBATEK "DS Video - LCD Control" (`4000000h` DISPCNT for engine A, display mode and
+Sources: GBATEK "DS Video BG Modes / Control" (`4000000h` DISPCNT for engine A, display mode and
 VRAM block fields); GBATEK "DS Power Control" (`4000304h` POWCNT1); GBATEK "DS Video - Color
 Format" (15-bit colour); GBATEK "DS Memory Control - VRAM" (LCDC mapping of bank A).
 Used by: `crates/core/src/gpu2d/`, `crates/core/src/bus/memory.rs` (the I/O slow path)   Phase: 2 (#20)
@@ -13,7 +13,7 @@ graphics engine A. Everything else DISPCNT and POWCNT1 control is a later phase.
 | Address | Name | Width | Access | Reset |
 |---|---|---|---|---|
 | `0400_0000h` | DISPCNT (engine A) | 32 | R/W | 0 (see "Unverified") |
-| `0400_0304h` | POWCNT1 | 16 | R/W | `820Fh` (a choice, see "Unverified") |
+| `0400_0304h` | POWCNT1 | 16 (GBATEK's table is 32 bits wide with bits 16-31 unused; a word read gives 0 there) | R/W | `820Fh` (a choice, see "Unverified") |
 
 Both registers accept byte, halfword and word accesses; a wider access is the same as the
 byte accesses to consecutive addresses.
@@ -24,7 +24,8 @@ byte accesses to consecutive addresses.
 |---|---|---|
 | 0-2 | BG mode | `TODO(phase3)` |
 | 3 | BG0 is 2D (0) or 3D (1) | `TODO(phase7)` |
-| 4-15 | tile/bitmap OBJ options, BG0-BG2/OBJ enables, windows | `TODO(phase3)` / `TODO(phase4)` |
+| 4-6 | tile/bitmap OBJ and BG mapping options | `TODO(phase3)` / `TODO(phase4)` |
+| 7-15 | same as the GBA register: forced blank (7), BG0-BG3 enables (8-11), OBJ enable (12), windows (13-15) | `TODO(phase3)` / `TODO(phase4)`; bit 7 see "Unverified" |
 | 16-17 | display mode: 0 off, 1 graphics, 2 VRAM display, 3 main-memory display | 0 and 2 now |
 | 18-19 | VRAM block for mode 2: 0 = bank A, 1 = B, 2 = C, 3 = D | block 0 now |
 | 20-31 | tile OBJ boundary, bitmap OBJ options, H-blank OBJ processing, character/screen base, extended palettes | `TODO(phase4)` |
@@ -68,6 +69,9 @@ Each halfword is 15-bit colour: bits 0-4 red, bits 5-9 green, bits 10-14 blue, f
 channel. Bit 15 is not used by the colour; it has no effect on the displayed pixel.
 
 Only block 0 (bank A) exists in Phase 2. Blocks 1-3 (banks B, C, D) are `TODO(phase4)` (#35).
+
+GBATEK also says modes 2 and 3 bypass the 2D and 3D pipelines but the master brightness unit
+still applies to their output. Master brightness is not modeled: `TODO(phase4)` (#34).
 
 ### The screen swap (POWCNT1 bit 15)
 
@@ -113,6 +117,9 @@ stays white. Changing this formula changes every golden frame that contains colo
   shows are not modeled: the bits are stored and the picture ignores them. —
   `Gpu2d::engine_a_on_top` and the render entry point in `crates/core/src/gpu2d/mod.rs` — verify
   by a test ROM that clears each bit and observes the screens on hardware.
+- **DISPCNT bit 7 (forced blank)** is stored but ignored. It draws a white line on the GBA;
+  GBATEK has no DS description of its effect in display modes 0 and 2. —
+  `Gpu2d::render_engine_a` — verify by a test ROM on real hardware that sets it in mode 2.
 - **POWCNT1 undefined bits** (4-8, 10-14) read back as written. — `Gpu2d::write_byte`
   — verify likewise.
 - **A selected block that is not readable as LCDC VRAM** — bank A disabled, or its MST not

@@ -209,6 +209,7 @@ impl Memory {
     // TODO(hw-unverified): an undefined I/O port reads 0 (GBATEK says so); unmapped memory is
     // "undefined" there and reads 0 here; VRAMCNT_A is write-only and reads 0
     // (`arm9-memory-map.md`, "Unverified").
+    // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
     // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
     fn read_slow<const N: usize>() -> [u8; N] {
         [0; N]
@@ -220,6 +221,7 @@ impl Memory {
         let addr = addr & !(N as u32 - 1);
         // The ITCM has priority over the DTCM; in load mode it claims the address but only
         // writes reach it, so the read goes underneath.
+        // TODO(hw-unverified): GBATEK says the ITCM "appears to have priority"; taken as certain.
         // TODO(hw-unverified): a load-mode ITCM over an enabled DTCM reads underneath, not the
         // DTCM (`arm9-memory-map.md`, "Unverified").
         match tcm_offset(&tcm.itcm, ITCM_SIZE, addr) {
@@ -245,6 +247,7 @@ impl Memory {
 
     /// Stores `N` bytes at `addr` (aligned down to `N`). A TCM takes the store whether or not
     /// it is in load mode.
+    // TODO(hw-unverified): the ITCM wins over an overlapping DTCM (see `Memory::load`).
     fn store<const N: usize>(&mut self, tcm: &TcmConfig, addr: u32, bytes: [u8; N]) {
         let addr = addr & !(N as u32 - 1);
         if let Some(offset) = tcm_offset(&tcm.itcm, ITCM_SIZE, addr) {
@@ -267,6 +270,7 @@ impl Memory {
     /// The slow path for a write: I/O ports; an unmapped address ignores the write.
     // TODO(hw-unverified): a wider write over a byte register uses only the byte at the
     // register's address (`arm9-memory-map.md`, "Unverified").
+    // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
     // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
     fn write_slow<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
         // The index of VRAMCNT_A's byte inside this write. An address past the register wraps

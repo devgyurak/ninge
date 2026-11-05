@@ -69,11 +69,14 @@ A TCM is described by the resolved view in `cp15.md` ("C9,C1,0 / C9,C1,1"): base
   the same formula holds). On the DS the firmware sets the ITCM size to 32 MiB, which mirrors
   the ITCM through `0000_0000h`-`01FF_FFFFh`.
 - **Priority.** A TCM takes the access before main RAM or any other region, so it hides the
-  memory underneath. If the two TCMs overlap, the ITCM has priority.
+  memory underneath: GBATEK says TCM does not use the bus, and its load-mode text has a TCM
+  answer at the same addresses as the main memory it overlays. If the two TCMs overlap, GBATEK
+  says the ITCM "appears to have priority"; the model treats that as the rule (see
+  "Unverified").
 - **Disabled.** A disabled TCM is not there: the access reaches the memory underneath.
 - **Load mode** (enabled, load-mode bit set). The TCM is write-only: a load reads the memory
-  underneath and a store writes the TCM. It applies to every load and store except SWP and
-  SWPB (`cp15.md`, "C1,C0,0"; SWP/SWPB are not part of this PR's tests, see "Unverified").
+  underneath and a store writes the TCM. GBATEK says it works for every load and store
+  opcode except SWP and SWPB, which are not modeled (see "Not modeled").
 - **Instruction fetches.** GBATEK says the DTCM serves data accesses only; the ITCM serves both
   code and data. So a fetch can hit the ITCM and never hits the DTCM: a fetch from an address
   inside the DTCM region reads the memory underneath. A load-mode ITCM is write-only, so a fetch
@@ -95,8 +98,17 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 - A word access at `0200_0003h` uses the word at `0200_0000h`.
 - A TCM virtual size above the physical size repeats the TCM; a size field below 3 or a base
   that is not aligned to its size is held as written (`cp15.md`) and the region follows it.
-- A TCM region reaching past `FFFF_FFFFh` ends at the top of the address space.
+- A TCM region whose end is exactly `1_0000_0000h` (for example a 16 KiB DTCM at `FFFF_C000h`)
+  serves its last word and byte. With an aligned base a region cannot reach past the top.
 - A byte write to a TCM works (only VRAM, palette and OAM ignore byte writes, `vram-banks.md`).
+
+## Not modeled
+
+- **SWP and SWPB ignore load mode on the hardware** (GBATEK, "TCM Enable, TCM Load Mode"): a
+  swap on a load-mode TCM reads the TCM, not the memory underneath. The model cannot tell a swap
+  from a load, because the `Bus` trait carries no access kind (#76), so a swap sees the load-mode
+  rule. This is a known gap, not an open question. — `Cpu::swap` in
+  `crates/core/src/cpu/arm_transfer.rs` carries `TODO(phase8)`.
 
 ## Unverified
 
@@ -116,11 +128,16 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 - **A fetch from the DTCM region** reads the memory underneath; a fetch from a load-mode ITCM
   reads underneath. GBATEK does not describe the fetch path in either case. —
   `Memory::fetch` in `bus/memory.rs` — verify likewise.
+- **ITCM priority over the DTCM.** GBATEK words it as "ITCM appears to have priority"; the model
+  takes it as certain. — `Memory::load` and `Memory::store` in `bus/memory.rs` — verify
+  likewise.
+- **I/O blocks are not mirrored.** The `04xx_xxxxh` block is decoded at its exact register
+  addresses only, although GBATEK's general 16 MiB rule would suggest mirrors, and it says
+  nothing specific for I/O. — `Memory::write_slow` and `Memory::read_slow` in `bus/memory.rs` —
+  verify likewise.
 - **Load-mode ITCM over the DTCM.** When the ITCM is in load mode and its region overlaps an
   enabled DTCM, a load at an overlapping address reads the memory underneath, not the DTCM:
   the ITCM claims the address. — `Memory::load` — verify likewise.
-- **SWP and SWPB** do not honor load mode (GBATEK); this is not modeled because the access
-  path does not know the instruction. — `crates/core/src/cpu/arm_transfer.rs` — a later phase.
 - **Opcodes already prefetched** when a CP15 write changes a TCM mapping keep the old mapping:
   the pipeline is not refilled. — `Machine::step_arm9` in `crates/core/src/lib.rs` — verify
   likewise.

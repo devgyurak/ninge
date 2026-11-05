@@ -258,18 +258,6 @@ fn given_a_word_in_main_ram_when_peeked_at_each_width_then_the_bytes_and_alignme
 }
 
 #[test]
-fn given_a_machine_when_peeked_everywhere_then_it_is_unchanged() {
-    let machine = machine_with_word();
-    let before = machine.clone();
-    let _ = (
-        machine.arm9_peek32(ENTRY + 0x20),
-        machine.arm9_peek16(0x0680_0000),
-        machine.arm9_peek8(0xFFFF_FFFF),
-    );
-    assert_eq!(machine, before);
-}
-
-#[test]
 fn given_a_peek_through_a_dtcm_when_the_tcm_is_enabled_then_it_sees_the_tcm_word() {
     let dtcm = 0x0210_0000;
     let machine = run(

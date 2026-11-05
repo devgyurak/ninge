@@ -202,6 +202,9 @@ fn given_a_write_at_the_first_address_after_the_mirror_block_when_main_ram_is_re
 
 /// Base of the DTCM used over main RAM, and the physical sizes.
 const DT: u32 = 0x0200_4000;
+/// A base aligned to 64 KiB, for the DTCM regions larger than the physical size: GBATEK says the
+/// base must be aligned to the size (`cp15.md`, "C9,C1,0 / C9,C1,1").
+const DT64: u32 = 0x0201_0000;
 const DTCM_PHYS: u64 = 0x4000;
 const ITCM_PHYS: u64 = 0x8000;
 
@@ -282,12 +285,12 @@ fn given_an_itcm_in_load_mode_when_stored_to_then_the_data_appears_once_load_mod
 /// that do not read `X`.
 fn dtcm_mirror_misses(size: u64, offsets: &[u32]) -> Vec<u32> {
     let mut m = Memory::new();
-    let mut v = Arm9View::new(&mut m, cfg(off(), on(DT, size)));
-    v.write32(DT + 8, X);
+    let mut v = Arm9View::new(&mut m, cfg(off(), on(DT64, size)));
+    v.write32(DT64 + 8, X);
     offsets
         .iter()
         .copied()
-        .filter(|&o| v.read32(DT + o) != X)
+        .filter(|&o| v.read32(DT64 + o) != X)
         .collect()
 }
 
@@ -302,9 +305,9 @@ fn given_a_dtcm_virtual_size_of_four_times_the_physical_when_read_through_the_re
 fn given_a_dtcm_virtual_size_of_four_times_the_physical_when_a_word_is_stored_then_the_neighbour_in_a_repeat_stays_zero()
  {
     let mut m = Memory::new();
-    let mut v = Arm9View::new(&mut m, cfg(off(), on(DT, 0x1_0000)));
-    v.write32(DT + 8, X);
-    assert_eq!(v.read32(DT + 0x400C), 0);
+    let mut v = Arm9View::new(&mut m, cfg(off(), on(DT64, 0x1_0000)));
+    v.write32(DT64 + 8, X);
+    assert_eq!(v.read32(DT64 + 0x400C), 0);
 }
 
 #[test]
@@ -387,10 +390,10 @@ fn given_an_itcm_in_load_mode_holding_a_word_when_fetched_then_the_memory_undern
 }
 
 #[test]
-fn given_a_dtcm_reaching_the_top_of_the_address_space_when_the_last_word_is_accessed_then_it_works()
-{
+fn given_a_dtcm_ending_at_the_top_of_the_address_space_when_the_last_word_is_accessed_then_it_and_its_bytes_read_back()
+ {
     let mut m = Memory::new();
-    let mut v = Arm9View::new(&mut m, cfg(off(), on(0xFFFF_C000, 0x1_0000)));
+    let mut v = Arm9View::new(&mut m, cfg(off(), on(0xFFFF_C000, DTCM_PHYS)));
     v.write32(0xFFFF_FFFC, X);
     assert_eq!(
         (

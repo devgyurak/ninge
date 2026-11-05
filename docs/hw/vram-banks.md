@@ -36,9 +36,10 @@ The mapping depends on the whole register: the bank is visible at its LCDC addre
 enable bit is 1 and MST is 0. Writing VRAMCNT_A can therefore move the bank in or out of the
 address space, and the lookup structure derived from the mapping is rebuilt on every write.
 
-All VRAM (and palette and OAM) can be written only in 16-bit and 32-bit units; a byte write
-(STRB) is ignored (GBATEK "DS Memory Control - VRAM", the notes under the bank table). The one exception is the ARM7's own work-RAM mapping of banks C and D, which
-is Phase 3-4. Reads work in any width. The write rule applies to the LCDC window too.
+The CPU can store to VRAM, palette RAM and OAM with halfword and word accesses only; a byte
+store is dropped and changes nothing (GBATEK "DS Memory Control - VRAM", the notes under the
+bank table). The one exception is the ARM7's own work-RAM mapping of banks C and D, which is
+Phase 3-4. Reads work in any width. The write rule applies to the LCDC window too.
 
 ## Edge cases
 

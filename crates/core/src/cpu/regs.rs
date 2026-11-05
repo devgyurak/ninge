@@ -184,6 +184,14 @@ impl Registers {
         Mode::from_bits(self.cpsr).is_none_or(|mode| mode.bank() == self.bank)
     }
 
+    /// Test helper: makes the visible bank disagree with the CPSR mode, as only a damaged
+    /// savestate could.
+    #[cfg(test)]
+    pub(crate) fn break_bank_for_test(&mut self) {
+        self.bank = Bank::Fiq;
+        self.cpsr = Mode::User.bits();
+    }
+
     /// The SPSR of `bank`, or `None` for User/System, which have none.
     // TODO(hw-unverified): what a read of the SPSR gives in User/System mode is not stated by
     // the sources (`docs/hw/cpu-registers.md`, "Unverified"); modeled as having none.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Savestate round trips over our own `smoke`, `boot` and `memmap` test ROMs (#19): a run resumed from a
-//! savestate matches an uninterrupted run in every frame hash and in the final savestate bytes.
+//! Savestate round trips over our own `smoke`, `boot` and `memmap` test ROMs (#19): a run
+//! resumed from a savestate matches an uninterrupted run in every frame hash and in the final savestate bytes.
 
 use ninge_runner::golden::{assert_deterministic, assert_savestate_round_trip};
 

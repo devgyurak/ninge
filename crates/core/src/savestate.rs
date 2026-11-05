@@ -37,7 +37,8 @@
 //! # Checked on load
 //!
 //! Memory buffer sizes, the header/ROM presence rule, and the CPU's bank against its CPSR mode.
-//! Other decoded values (CP15 masked fields, header contents) are taken as written: they are
+//! Other decoded values (CP15 masked fields, header contents, the zero padding of
+//! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
 //! The only supported load path is [`Machine::load_state`]; deserializing a `Machine` directly
 //! skips every check here.

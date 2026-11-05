@@ -520,3 +520,18 @@ fn given_a_booted_machine_after_two_frames_when_saved_then_len_and_hash_match_th
          saved state changed by accident"
     );
 }
+
+#[test]
+fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.arm9.regs_mut().break_bank_for_test();
+    let mut target = booted(&rom, 0);
+    let before = target.clone();
+    let result = target.load_state(&saver.save_state());
+    assert_eq!(
+        (result, target == before),
+        (Err(SavestateError::Corrupt), true)
+    );
+}

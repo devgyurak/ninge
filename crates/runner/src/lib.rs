@@ -13,7 +13,8 @@
 //! `cpu-suite` directory: pass `./-x` for a directory whose name starts with `-`.
 //!
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
-//! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error.
+//! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error, 3 when
+//! the machine refuses the ROM (an invalid header).
 //!
 //! `cpu-suite` prints one `<file>: <cases> cases, <failed> failed` line per `*.json.bin` file
 //! and a final `total:` line. Failing cases are expected until the CPU executes instructions
@@ -26,7 +27,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use ninge_core::{Machine, Screen};
+use ninge_core::{Machine, RomError, Screen};
 
 /// Why the runner could not do what was asked.
 #[derive(Debug)]
@@ -42,6 +43,8 @@ pub enum RunnerError {
     },
     /// A CPU suite file could not be read or decoded.
     Suite(cpu_suite::SuiteError),
+    /// The machine refused the ROM: its header is invalid.
+    Rom(RomError),
 }
 
 impl fmt::Display for RunnerError {
@@ -50,6 +53,7 @@ impl fmt::Display for RunnerError {
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             Self::Suite(error) => write!(f, "{error}"),
+            Self::Rom(error) => write!(f, "the ROM was refused: {error}"),
         }
     }
 }
@@ -60,7 +64,14 @@ impl std::error::Error for RunnerError {
             Self::Usage(_) => None,
             Self::Io { source, .. } => Some(source),
             Self::Suite(error) => Some(error),
+            Self::Rom(error) => Some(error),
         }
+    }
+}
+
+impl From<RomError> for RunnerError {
+    fn from(error: RomError) -> Self {
+        Self::Rom(error)
     }
 }
 
@@ -192,17 +203,19 @@ impl fmt::Display for RunReport {
 }
 
 /// Loads `rom` into a fresh machine, runs `frames` frames, and hashes both screens.
-pub fn run(rom: Vec<u8>, frames: u64) -> RunReport {
+///
+/// A ROM the machine refuses (an invalid header) is an error, not a blank run.
+pub fn run(rom: Vec<u8>, frames: u64) -> Result<RunReport, RunnerError> {
     let mut machine = Machine::new();
-    machine.load_rom(rom);
+    machine.load_rom(rom)?;
     for _ in 0..frames {
         machine.run_frame();
     }
-    RunReport {
+    Ok(RunReport {
         frames: machine.frame_count(),
         top_hash: frame_hash(machine.frame(Screen::Top)),
         bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
-    }
+    })
 }
 
 /// FNV-1a 64 over each pixel's little-endian bytes, in row order.

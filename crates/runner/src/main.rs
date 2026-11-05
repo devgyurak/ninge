@@ -23,16 +23,17 @@ fn execute() -> Result<String, RunnerError> {
     match parse_command(std::env::args_os().skip(1))? {
         Command::Run(args) => {
             let rom = load_rom_file(args.rom())?;
-            Ok(run(rom, args.frames()).to_string())
+            Ok(run(rom, args.frames())?.to_string())
         }
         Command::CpuSuite(dir) => Ok(report_dir(&dir)?),
     }
 }
 
-/// Usage errors exit 2, IO errors exit 1.
+/// Usage errors exit 2, a refused ROM exits 3, IO errors exit 1.
 fn exit_code(error: &RunnerError) -> u8 {
     match error {
         RunnerError::Usage(_) => 2,
+        RunnerError::Rom(_) => 3,
         RunnerError::Io { .. } | RunnerError::Suite(_) => 1,
     }
 }

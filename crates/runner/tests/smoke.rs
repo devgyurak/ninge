@@ -5,7 +5,7 @@ use ninge_runner::{load_rom_file, run, testrom_path};
 
 fn run_smoke(frames: u64) -> ninge_runner::RunReport {
     let rom = load_rom_file(&testrom_path("smoke")).expect("smoke ROM is built");
-    run(rom, frames)
+    run(rom, frames).expect("smoke ROM has a valid header")
 }
 
 #[test]

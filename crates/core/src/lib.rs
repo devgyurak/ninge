@@ -2,9 +2,12 @@
 //! ninge-core: the emulator itself. Pure logic with no IO; inputs in, frames out.
 
 pub mod bus;
+pub mod cart;
 pub mod cpu;
+mod hle;
 
 use bus::{Arm9View, Memory, TcmConfig, VramBankState};
+use cart::Header;
 use cpu::Cpu;
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +51,9 @@ pub struct Machine {
     //     refuse to run.
     //  2. The derived `PartialEq` compares `rom` too, so a round-trip comparison must
     //     exclude it.
-    //  3. `Clone` copies the whole ROM; revisit before rewind and run-ahead.
+    //  3. `header` is saved but `rom` is not, so a loaded state has a header and no ROM;
+    //     `run_frame` steps on `header` alone, so the loader must not leave that combination.
+    //  4. `Clone` copies the whole ROM; revisit before rewind and run-ahead.
     #[serde(skip)]
     rom: Vec<u8>,
     // Frames completed by `run_frame`; plain state, so it is serialized. A savestate
@@ -61,7 +66,20 @@ pub struct Machine {
     arm9: Cpu<true>,
     #[serde(default)]
     memory: Memory,
+    // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
+    #[serde(default)]
+    header: Option<Header>,
 }
+
+/// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
+pub type RomError = cart::HeaderError;
+
+/// ARM9 instructions stepped per frame by [`Machine::run_frame`]: one per ARM9 cycle of a
+/// 263 x 355 dot frame at 6 bus cycles per dot, the ARM9 at twice the bus clock
+/// (`docs/hw/direct-boot.md`, "The per-frame ARM9 budget").
+// TODO(hw-unverified): an estimate, not a timing claim (`docs/hw/direct-boot.md`, "Unverified").
+// TODO(phase3): the scheduler (#21) replaces this approximation.
+const ARM9_STEPS_PER_FRAME: u32 = 263 * 355 * 6 * 2;
 
 /// A black screen of exactly `SCREEN_WIDTH * SCREEN_HEIGHT` pixels.
 fn blank_screen() -> Vec<u32> {
@@ -80,20 +98,33 @@ impl Machine {
             frame_count: 0,
             arm9: Cpu::new(),
             memory: Memory::new(),
+            header: None,
         }
     }
 
-    /// Hands the machine a ROM image, kept verbatim.
+    /// Hands the machine a ROM image, kept verbatim, and direct-boots it.
     ///
-    /// Loading a ROM starts from power-on; every other piece of state is reset. This is the
-    /// host API's contract, not hardware behavior, and a Phase 0 placeholder.
+    /// Loading a ROM starts from power-on: every other piece of state is reset first. This is
+    /// the host API's contract, not hardware behavior. The header is then parsed and the ARM9
+    /// started at its entry point (`docs/hw/direct-boot.md`).
     ///
-    /// Any length is accepted, including empty or odd: the image is guest-controlled input
-    /// and never panics the core.
-    pub fn load_rom(&mut self, rom: Vec<u8>) {
-        // TODO(phase2): header parse and direct boot (#17).
+    /// A ROM whose header is invalid is refused with a [`RomError`] and the machine stays in
+    /// the power-on state with no program loaded. A header whose CRC does not match is
+    /// accepted and boots (`docs/hw/cart-header.md`). The image is guest-controlled input and
+    /// never panics the core.
+    pub fn load_rom(&mut self, rom: Vec<u8>) -> Result<(), RomError> {
         *self = Self::new();
+        let header = cart::parse(&rom)?;
+        hle::boot(&mut self.arm9, &mut self.memory, &rom, &header);
+        self.header = Some(header);
         self.rom = rom;
+        Ok(())
+    }
+
+    /// The parsed header of the booted program, or `None` when no program is booted.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn header(&self) -> Option<&Header> {
+        self.header.as_ref()
     }
 
     /// Returns the loaded ROM image; empty until [`Machine::load_rom`] is called.
@@ -101,10 +132,17 @@ impl Machine {
         &self.rom
     }
 
-    /// Runs the machine for one frame.
+    /// Runs the machine for one frame: steps the ARM9 [`ARM9_STEPS_PER_FRAME`] instructions,
+    /// then counts the frame.
+    ///
+    /// A machine with no booted program (no ROM, or a refused one) does not step the ARM9: the
+    /// frame only advances the counter and leaves both screens black.
+    // TODO(hw-unverified): the step budget is an estimate (`docs/hw/direct-boot.md`).
+    // TODO(phase3): the scheduler (#21) replaces the fixed step budget.
     pub fn run_frame(&mut self) {
-        // TODO(phase2): execution entry point (#17) arrives with the ARM9 bring-up; until then a
-        // frame only advances the counter and leaves both screens black.
+        if self.header.is_some() {
+            (0..ARM9_STEPS_PER_FRAME).for_each(|_| self.step_arm9());
+        }
         self.frame_count = self.frame_count.wrapping_add(1);
     }
 
@@ -143,21 +181,21 @@ impl Machine {
     }
 
     /// Reads a byte as the ARM9 data bus would, without side effects.
-    // The debugger's memory viewer (#57) and the runner's memory-dump test (#17) use it.
+    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
     pub fn arm9_peek8(&self, addr: u32) -> u8 {
         self.memory
             .read8(&TcmConfig::from_cp15(self.arm9.cp15()), addr)
     }
 
     /// Reads a halfword as the ARM9 data bus would, without side effects.
-    // The debugger's memory viewer (#57) and the runner's memory-dump test (#17) use it.
+    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
     pub fn arm9_peek16(&self, addr: u32) -> u16 {
         self.memory
             .read16(&TcmConfig::from_cp15(self.arm9.cp15()), addr)
     }
 
     /// Reads a word as the ARM9 data bus would, without side effects.
-    // The debugger's memory viewer (#57) and the runner's memory-dump test (#17) use it.
+    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
     pub fn arm9_peek32(&self, addr: u32) -> u32 {
         self.memory
             .read32(&TcmConfig::from_cp15(self.arm9.cp15()), addr)
@@ -218,8 +256,19 @@ mod tests {
     #[test]
     fn given_rom_bytes_when_loading_then_rom_is_kept_verbatim() {
         let mut machine = Machine::new();
-        machine.load_rom(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
-        assert_eq!(machine.rom(), &[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
+        let image = cart::test_image::Image::valid().build();
+        machine.load_rom(image.clone()).expect("valid image");
+        assert_eq!(machine.rom(), image.as_slice());
+    }
+
+    #[test]
+    fn given_six_byte_rom_when_loading_then_it_is_refused_as_too_short_and_not_kept() {
+        let mut machine = Machine::new();
+        let result = machine.load_rom(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
+        assert_eq!(
+            (result, machine.rom().len()),
+            (Err(cart::HeaderError::ImageTooShort { len: 6 }), 0)
+        );
     }
 
     #[test]
@@ -236,21 +285,26 @@ mod tests {
     }
 
     #[test]
-    fn given_empty_rom_when_running_a_frame_then_rom_stays_empty_and_frame_count_is_one() {
+    fn given_empty_rom_when_running_a_frame_then_it_is_refused_rom_is_empty_and_frame_count_is_one()
+    {
         let mut machine = Machine::new();
-        machine.load_rom(Vec::new());
+        let result = machine.load_rom(Vec::new());
         machine.run_frame();
-        assert_eq!((machine.rom().len(), machine.frame_count()), (0, 1));
+        assert_eq!(
+            (result, machine.rom().len(), machine.frame_count()),
+            (Err(cart::HeaderError::ImageTooShort { len: 0 }), 0, 1)
+        );
     }
 
     #[test]
-    fn given_odd_length_rom_when_running_a_frame_then_rom_is_unchanged_and_frame_count_is_one() {
+    fn given_odd_length_rom_when_running_a_frame_then_it_is_refused_rom_is_empty_and_frame_count_is_one()
+     {
         let mut machine = Machine::new();
-        machine.load_rom(vec![1, 2, 3]);
+        let result = machine.load_rom(vec![1, 2, 3]);
         machine.run_frame();
         assert_eq!(
-            (machine.rom().to_vec(), machine.frame_count()),
-            (vec![1, 2, 3], 1)
+            (result, machine.rom().len(), machine.frame_count()),
+            (Err(cart::HeaderError::ImageTooShort { len: 3 }), 0, 1)
         );
     }
 
@@ -282,7 +336,9 @@ mod tests {
         let mut machine = Machine::new();
         machine.run_frame();
         machine.run_frame();
-        machine.load_rom(vec![1, 2, 3]);
+        machine
+            .load_rom(cart::test_image::Image::valid().build())
+            .expect("valid image");
         assert_eq!(machine.frame_count(), 0);
     }
 }

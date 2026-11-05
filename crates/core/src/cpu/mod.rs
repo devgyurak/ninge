@@ -77,9 +77,16 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Sets the prefetch pipeline, for the host and the test harness to set up state.
-    // TODO(phase2): direct boot (#17) fills the pipeline from the entry point.
     pub fn set_pipeline(&mut self, pipeline: [u32; 2]) {
         self.pipeline = pipeline;
+    }
+
+    /// Starts execution at `entry` as if branched to: R15 is set and the pipeline refilled
+    /// (`docs/hw/direct-boot.md`, "The pipeline"); a narrow entry point for direct boot, so
+    /// `refill` itself stays private to `cpu/`.
+    pub(crate) fn start_at<B: Bus>(&mut self, bus: &mut B, entry: u32) {
+        self.regs.set(15, entry);
+        self.refill(bus);
     }
 
     /// Executes one instruction, in the state the CPSR's T bit selects (ARM when clear, Thumb

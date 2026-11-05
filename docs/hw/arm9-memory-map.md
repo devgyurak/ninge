@@ -30,11 +30,13 @@ regions below are simply unmapped.
 
 The `memmap` test ROM (`testroms/memmap/`) exercises the map on the emulator and records what
 it read; `crates/runner/tests/memmap.rs` holds the expected values. It covers main RAM in all
-three widths and the unaligned load (slots 0-9), the 4 MiB mirrors (10-17), the DTCM, its
+three widths and the unaligned load (slots 0-9), the last word of the 4 MiB (14) and the mirrors of it and of other words (10-13, 15-17), the DTCM, its
 mirroring and its load mode (18-24), the ITCM, its mirror and an instruction fetch from it
 (25-27), and an undefined I/O port at `0400_0090h`, an address no ARM9 register in GBATEK's I/O
-map occupies (32). Running the same ROM on hardware and comparing the record with this note
-settles the Unverified items marked below.
+map occupies (32). The ROM clears the protection unit and cache enable bits of the control register before it
+starts (the entry state is not stated, `direct-boot.md`), so on hardware the record does not
+depend on them. Running it there and comparing the record with this note settles the
+Unverified items marked below.
 
 ## Behavior
 

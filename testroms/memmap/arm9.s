@@ -47,7 +47,8 @@
 @         4 load mode, 5 ITCM, 6 VRAM, 7 I/O)
 @   34    sentinel, written last
 @
-@ Both TCMs are switched off at the start and before the spin, so the record reads back
+@ The protection unit and both caches are switched off at the start (control register bits 0,
+@ 2, 12), and both TCMs are switched off at the start and before the spin, so the record reads back
 @ through the bus. Code runs from main RAM only, away from every TCM region.
     .equ REC, 0x02004000
 
@@ -79,6 +80,17 @@
     .global _start
 _start:
     ldr r8, =REC
+    @ Entry state of CP15 is not stated (direct-boot.md): clear the protection unit enable
+    @ (bit 0), data cache enable (bit 2) and instruction cache enable (bit 12) so the record
+    @ does not depend on them, then both TCMs. No cache line is cleaned first: nothing has
+    @ been written yet that a cache could hold.
+    mrc p15, 0, r0, c1, c0, 0
+    bic r0, r0, #0x00001000
+    bic r0, r0, #0x00000005
+    mcr p15, 0, r0, c1, c0, 0
+    nop
+    nop
+    nop
     tcm 0
 
     @ ---- group 1: main RAM widths ----

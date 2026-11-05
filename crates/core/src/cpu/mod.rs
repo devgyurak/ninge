@@ -44,6 +44,12 @@ pub struct Cpu<const ARM9: bool> {
 }
 
 impl<const ARM9: bool> Cpu<ARM9> {
+    /// Whether decoded state keeps the invariants the core relies on (the bank matches the
+    /// CPSR mode). A savestate that decodes to anything else is corrupt.
+    pub(crate) fn is_well_formed(&self) -> bool {
+        self.regs.is_consistent()
+    }
+
     /// A CPU in its power-on state.
     pub fn new() -> Self {
         Self {

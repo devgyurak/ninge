@@ -16,6 +16,10 @@ use crate::{Machine, Screen};
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
 const PINNED_LEN: usize = 4_374_661;
 const PINNED_HASH: u64 = 0x130c_51da_7a88_1a0a;
+/// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
+/// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
+const PINNED_BOOTED_LEN: usize = 4_374_722;
+const PINNED_BOOTED_HASH: u64 = 0xb040_3b47_3fe7_14af;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -502,5 +506,17 @@ fn given_a_power_on_machine_when_saved_then_len_and_hash_match_the_pinned_layout
         "the savestate layout changed. If the change is intended, bump FORMAT_VERSION in \
          savestate.rs and update PINNED_LEN and PINNED_HASH here; if not, the saved state \
          changed by accident"
+    );
+}
+
+#[test]
+fn given_a_booted_machine_after_two_frames_when_saved_then_len_and_hash_match_the_pinned_layout() {
+    let bytes = booted(&counter_rom(), 2).save_state();
+    assert_eq!(
+        (bytes.len(), fnv1a64(&bytes)),
+        (PINNED_BOOTED_LEN, PINNED_BOOTED_HASH),
+        "the savestate layout changed (header, registers or RAM). If the change is intended, \
+         bump FORMAT_VERSION in savestate.rs and update the pinned values here; if not, the \
+         saved state changed by accident"
     );
 }

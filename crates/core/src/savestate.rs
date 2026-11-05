@@ -34,6 +34,14 @@
 //! ROM again. The hash is a non-cryptographic guard against loading a state into the wrong
 //! game, not against a deliberate collision.
 //!
+//! # Checked on load
+//!
+//! Memory buffer sizes, the header/ROM presence rule, and the CPU's bank against its CPSR mode.
+//! Other decoded values (CP15 masked fields, header contents) are taken as written: they are
+//! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
+//! The only supported load path is [`Machine::load_state`]; deserializing a `Machine` directly
+//! skips every check here.
+//!
 //! # Not saved
 //!
 //! The frame buffers are derived output: a load leaves both screens black until the next
@@ -110,11 +118,10 @@ impl Machine {
         out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.rom.len() as u64).to_le_bytes());
         out.extend_from_slice(&fnv1a64(&self.rom).to_le_bytes());
-        // Serializing plain data into a `Vec` cannot fail; if it ever did, an empty body is
-        // refused as corrupt on load rather than half-loaded.
-        if let Ok(body) = postcard::to_allocvec(self) {
-            out.extend_from_slice(&body);
-        }
+        // Encoding plain data into a `Vec` cannot fail: that is an invariant we own, and a
+        // failure is a bug to surface here rather than hand back a header-only state.
+        let body = postcard::to_allocvec(self).expect("a Machine is plain data and always encodes");
+        out.extend_from_slice(&body);
         out
     }
 
@@ -153,6 +160,7 @@ impl Machine {
         if !rest.is_empty()
             || loaded.header.is_some() != !self.rom.is_empty()
             || !loaded.memory.is_well_formed()
+            || !loaded.arm9.is_well_formed()
         {
             return Err(SavestateError::Corrupt);
         }

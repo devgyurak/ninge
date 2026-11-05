@@ -33,6 +33,9 @@ pub enum Screen {
 ///
 /// Frame buffers are `u32` per pixel in xRGB8888 (`0x00RRGGBB`). That is the emulator's
 /// host-side output format, not a hardware fact (`docs/hw/display.md`).
+///
+/// Load a savestate only through [`Machine::load_state`]; deserializing a `Machine` directly
+/// skips its checks and leaves the derived page table empty.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machine {
     // Invariant: each buffer holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels. They are
@@ -48,7 +51,8 @@ pub struct Machine {
     // loads onto a machine that was handed the ROM again, so a savestate never embeds the
     // (possibly commercial) image (`savestate` module docs). Defaults to empty.
     // Invariant: `header` is `Some` exactly when `rom` is non-empty; `load_state` keeps it.
-    // TODO(phase7): `Clone` copies the whole ROM; revisit before rewind and run-ahead.
+    // Note: `Clone` copies the whole ROM; revisit before rewind and run-ahead (no phase or issue
+    // plans them yet).
     #[serde(skip)]
     rom: Vec<u8>,
     // Frames completed by `run_frame`; plain state, so it is serialized. A savestate

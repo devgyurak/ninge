@@ -413,7 +413,15 @@ const ALU_CASES: [AluCase; 21] = [
     ("CMN", 11, 0xFFFF_FFFF, 1, 0, 0xFFFF_FFFF, Z | C),
     ("ORR", 12, 0xF0, 0x0F, 0, 0xFF, 0),
     ("MUL", 13, 3, 5, 0, 15, 0),
-    ("MUL to zero", 13, 0x8000_0000, 2, 0, 0, Z),
+    (
+        "MUL to zero, C from the carry model",
+        13,
+        0x8000_0000,
+        2,
+        0,
+        0,
+        Z | C,
+    ),
     ("BIC", 14, 0xFF, 0x0F, 0, 0xF0, 0),
     ("MVN", 15, 9, 0, 0, 0xFFFF_FFFF, N),
 ];
@@ -941,4 +949,12 @@ fn given_ldmia_without_rb_in_the_list_when_executed_on_the_arm9_then_rb_is_writt
 fn given_stmia_with_rb_not_first_when_executed_on_the_arm9_then_the_old_base_is_stored() {
     let (_, bus) = exec_arm9(&[(0, 0xA0), (1, 0x100)], 0, block(0, 1, 0b11));
     assert_eq!(bus.writes, vec![(32, 0x100, 0xA0), (32, 0x104, 0x100)]);
+}
+
+#[test]
+fn given_mul_that_the_arm7_gives_c_when_executed_on_the_arm9_then_c_is_kept() {
+    // The same operands as the "MUL to zero" row of the ALU table: the ARM7 sets C, the ARM9
+    // leaves it as it was (docs/hw/arm-multiply.md).
+    let (cpu, _) = exec_arm9(&[(0, 0x8000_0000), (1, 2)], 0, alu(13, 1, 0));
+    assert_eq!(cpu.regs().cpsr() & C, 0);
 }

@@ -77,8 +77,10 @@ as an unconditional branch (see "Unverified"). `off8` and `off11` are signed, si
 - **ROR by register.** The amount is the low byte of Rs. Rotating by a multiple of 32 other than 0
   leaves the value and sets C to its bit 31; an amount of 0 changes nothing.
 - **NEG.** Rd = 0 - Rs, with the flags of that subtraction.
-- **MUL.** Rd = Rd * Rs (low 32 bits); N and Z update. C and V are left unchanged here (see
-  "Unverified").
+- **MUL.** Rd = Rd * Rs (low 32 bits); N and Z update. V is unchanged. On the ARM7 C comes
+  from the multiplier model (`arm-multiply.md`, "ARM7TDMI multiply carry"); the multiplier
+  operand is the incoming Rd (GBATEK: m depends on the MSBs of Rd) and the multiplicand is Rs.
+  On the ARM9 C is unchanged.
 - **Format 5.** ADD and MOV set no flags; CMP sets N, Z, C, V like a normal CMP.
 - **Formats 6 to 15 and 18 to 19** set no flags.
 
@@ -211,10 +213,9 @@ reference emulator.
   usual target and no exception (50,000 cases); the documentation calls the encoding
   undefined. The suite is ARMv4T only, so the ARM9 may differ (it may take the Undefined
   exception). — `thumb_decode.rs`.
-- **MUL's C and V.** C after MUL is "meaningless" per GBATEK on ARMv4T and the suite shows it
-  changing (the same gap as ARM multiply, #81); V is unchanged. We leave C unchanged. The one
-  suite file this affects, `thumb_data_proc`, is pinned by a test that expects only MUL's C bit
-  to differ. — `alu_register` in `thumb.rs`.
+- **MUL's C and V.** C after MUL is "meaningless" per GBATEK on ARMv4T; it follows the model in
+  `arm-multiply.md` (oracle evidence only, see its "Unverified"); V is unchanged. — `alu_register`
+  in `thumb.rs`.
 - **Empty register list in PUSH, POP, STMIA and LDMIA.** GBATEK states the R15 transfer and the
   0x40 base move for LDMIA and STMIA; the suite shows PUSH and POP doing the same. The
   stored R15 value is the instruction's address + 6 (suite; ARM's late read is +12, Thumb's is

@@ -7,6 +7,7 @@
 use super::alu;
 use super::decode::{Kind, decode};
 use super::exception::Exception;
+use super::multiply_carry::multiply_carry;
 use super::psr::{
     FLAG_C, FLAG_T, FLAG_V, FLAGS_BYTE, condition_holds, field_mask, is_user, with_flags,
 };
@@ -309,10 +310,10 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// MUL and MLA (`docs/hw/arm-multiply.md`): Rd = Rm × Rs (+ Rn), low 32 bits. True if it
     /// wrote the PC.
-    // TODO(hw-unverified): ARM7 C after S is left unchanged, which the suite contradicts in about
-    // half the S cases (#81); no carry model is implemented (its origin is the idea recorded in
-    // `docs/hw/arm-multiply.md`, "ARM7TDMI multiply carry", and is itself unverified). On ARM9 C
-    // is unaffected per GBATEK, no suite covers it. An R15 operand reads the address + 12 and an
+    // TODO(hw-unverified): ARM7 C after S is the multiplier carry model of `multiply_carry.rs`
+    // (#81, oracle evidence only; `docs/hw/arm-multiply.md`, "ARM7TDMI multiply carry"). On ARM9 C
+    // is unaffected per GBATEK, no suite covers it. MUL and MLA run as signed multiplies for the
+    // carry (inferred from the TRM `m` rule). An R15 operand reads the address + 12 and an
     // R15 Rd flushes the pipeline (suite; `docs/hw/arm-branch-pipeline.md`). Rd = Rm gives the plain
     // result because every operand is read before the write (suite). MUL does not read its Rn
     // field (inferred).
@@ -321,15 +322,18 @@ impl<const ARM9: bool> Cpu<ARM9> {
         let rn = (word >> 12) & 0xF;
         let rs = (word >> 8) & 0xF;
         let rm = word & 0xF;
-        let product = self
-            .operand(rm, LATE_PC_EXTRA)
-            .wrapping_mul(self.operand(rs, LATE_PC_EXTRA));
+        let multiplicand = self.operand(rm, LATE_PC_EXTRA);
+        let multiplier = self.operand(rs, LATE_PC_EXTRA);
+        let product = multiplicand.wrapping_mul(multiplier);
         // Bit 21 is A: only MLA reads Rn.
-        let result = match word >> 21 & 1 {
-            1 => product.wrapping_add(self.operand(rn, LATE_PC_EXTRA)),
-            _ => product,
+        let accumulate = match word >> 21 & 1 {
+            1 => self.operand(rn, LATE_PC_EXTRA),
+            _ => 0,
         };
-        self.set_multiply_flags(word, result >> 31 == 1, result == 0);
+        let result = product.wrapping_add(accumulate);
+        self.set_multiply_flags(word, result >> 31 == 1, result == 0, || {
+            multiply_carry(multiplier, multiplicand, u64::from(accumulate), true, false)
+        });
         match rd {
             15 => self.write_pc(result),
             _ => self.regs.set(rd as usize, result),
@@ -339,8 +343,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// UMULL, UMLAL, SMULL and SMLAL (`docs/hw/arm-multiply.md`): RdHi:RdLo = Rm × Rs (+ the old
     /// pair), wrapping at 64 bits. True if it wrote the PC.
-    // TODO(hw-unverified): ARM7 C after S is left unchanged (#81; no carry model, see `multiply`)
-    // and on ARM9 it is unaffected per GBATEK; V is left unchanged although GBATEK marks it
+    // TODO(hw-unverified): ARM7 C after S is the carry model of `multiply_carry.rs` (#81, see
+    // `multiply`) and on ARM9 it is unaffected per GBATEK; V is left unchanged although GBATEK marks it
     // "destroyed???" for ARMv4; RdHi = RdLo leaves the Hi half (suite); R15 operands and
     // destinations follow the late-read rule and the flush (suite, `docs/hw/arm-branch-pipeline.md`); RdHi/RdLo = Rm gives the plain
     // result (suite).
@@ -353,20 +357,26 @@ impl<const ARM9: bool> Cpu<ARM9> {
         let multiplier = self.operand(rs, LATE_PC_EXTRA);
         // Bit 22 is U: set for the signed forms. The sign-extending casts are the signed
         // reading of the 32-bit operands.
-        let product = match word >> 22 & 1 {
-            1 => (i64::from(multiplicand as i32).wrapping_mul(i64::from(multiplier as i32))) as u64,
-            _ => u64::from(multiplicand).wrapping_mul(u64::from(multiplier)),
+        let signed = word >> 22 & 1 == 1;
+        let product = match signed {
+            true => {
+                (i64::from(multiplicand as i32).wrapping_mul(i64::from(multiplier as i32))) as u64
+            }
+            false => u64::from(multiplicand).wrapping_mul(u64::from(multiplier)),
         };
         // Bit 21 is A: the accumulate forms add the old pair, read before either half is written.
-        let result = match word >> 21 & 1 {
+        let accumulate = match word >> 21 & 1 {
             1 => {
                 let high = u64::from(self.operand(rd_hi, LATE_PC_EXTRA));
                 let low = u64::from(self.operand(rd_lo, LATE_PC_EXTRA));
-                product.wrapping_add(high << 32 | low)
+                high << 32 | low
             }
-            _ => product,
+            _ => 0,
         };
-        self.set_multiply_flags(word, result >> 63 == 1, result == 0);
+        let result = product.wrapping_add(accumulate);
+        self.set_multiply_flags(word, result >> 63 == 1, result == 0, || {
+            multiply_carry(multiplier, multiplicand, accumulate, signed, true)
+        });
         // Lo first, so that with RdHi = RdLo the Hi half remains.
         let lo = result as u32; // truncation: the low half
         let hi = (result >> 32) as u32;
@@ -383,11 +393,22 @@ impl<const ARM9: bool> Cpu<ARM9> {
         }
     }
 
-    /// With S (bit 20): N and Z from the result. V and C stay.
+    /// With S (bit 20): N and Z from the result, V stays. C stays on the ARM9; on the ARM7 it is
+    /// the `arm7_carry` closure, the multiplier carry model (`multiply_carry.rs`), run only when S is set.
     // TODO(hw-unverified): see `multiply` and `multiply_long` for C and V.
-    fn set_multiply_flags(&mut self, word: u32, negative: bool, zero: bool) {
+    fn set_multiply_flags(
+        &mut self,
+        word: u32,
+        negative: bool,
+        zero: bool,
+        arm7_carry: impl FnOnce() -> bool,
+    ) {
         let cpsr = self.regs.cpsr();
-        let flags = with_flags(cpsr, negative, zero, cpsr & FLAG_C != 0, cpsr & FLAG_V != 0);
+        let carry = match ARM9 || word >> 20 & 1 == 0 {
+            true => cpsr & FLAG_C != 0,
+            false => arm7_carry(),
+        };
+        let flags = with_flags(cpsr, negative, zero, carry, cpsr & FLAG_V != 0);
         self.regs.set_cpsr(match word >> 20 & 1 {
             1 => flags,
             _ => cpsr,

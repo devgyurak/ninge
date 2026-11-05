@@ -82,8 +82,9 @@ _start:
     ldr r8, =REC
     @ Entry state of CP15 is not stated (direct-boot.md): clear the protection unit enable
     @ (bit 0), data cache enable (bit 2) and instruction cache enable (bit 12) so the record
-    @ does not depend on them, then both TCMs. No cache line is cleaned first: nothing has
-    @ been written yet that a cache could hold.
+    @ does not depend on them, then both TCMs. No cache line is cleaned first: every value the
+    @ ROM reads back is either written by the ROM after the caches are off, or part of the
+    @ ROM's own binary, which the loader had to make visible in RAM before it could run.
     mrc p15, 0, r0, c1, c0, 0
     bic r0, r0, #0x00001000
     bic r0, r0, #0x00000005

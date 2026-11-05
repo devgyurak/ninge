@@ -2,7 +2,7 @@
 
 Sources: GBATEK "ARM Opcodes: Multiply and Multiply-Accumulate (MUL, MLA)" (the same
 section covers the long forms) is the primary source for the behavior; ARM ARM (ARMv5TE) "MUL",
-"MLA", "UMULL", "UMLAL", "SMULL", "SMLAL" and ARM7TDMI TRM "Multiply instructions" are listed as
+"MLA", "UMULL", "UMLAL", "SMULL", "SMLAL" and the ARM7TDMI TRM's instruction text are listed as
 background; not re-read for this note. For the ARM7TDMI carry only, the research session also
 read the TRM (DDI 0029G) §6.6 and Table 6-23 (the `m` rule) and its block diagram (32 x 8
 multiplier), and: US 5,583,804, US 5,528,529 and

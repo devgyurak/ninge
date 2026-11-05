@@ -4,8 +4,8 @@
 //!
 //! The multiplier retires eight multiplier bits per iteration in four radix-4 Booth rows, keeps
 //! the running sum as a save vector and a carry vector, and stops after one to four iterations.
-//! The ARM7TDMI sets C from the barrel shifter's carry-out while the final cycles bring the
-//! carry vector back through it, which is a bit of that vector.
+//! The ARM7TDMI's C is modelled as the barrel shifter's carry-out while the final cycles bring
+//! the carry vector back through it, which is a bit of that vector.
 // TODO(hw-unverified), all listed in `docs/hw/arm-multiply.md`, "Unverified":
 // - the link from the shifter to C is oracle evidence only (the pinned suite);
 // - m = 1 and 2 are untested there;

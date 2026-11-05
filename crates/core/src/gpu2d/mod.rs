@@ -133,6 +133,9 @@ impl Gpu2d {
     // TODO(phase3): mode 1 draws the text backgrounds (#21 brings scanline timing).
     // TODO(phase4): mode 1 completes, mode 3 draws the main-memory bitmap, and blocks 1-3
     // (banks B-D) join mode 2 (#35).
+    // TODO(phase4): master brightness applies to the output of modes 2 and 3 (#34).
+    // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored
+    // (`display-mode-vram.md`, "Unverified").
     // TODO(hw-unverified): a bank that is disabled or not in LCDC mode is drawn as zeros, i.e.
     // black (`display-mode-vram.md`, "Unverified").
     pub(crate) fn render_engine_a(&self, bank_a: Option<&[u8]>, out: &mut [u32]) {

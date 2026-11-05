@@ -160,9 +160,8 @@ const WRAM_SIZE_MAX: u32 = 0xFE00;
 
 /// CRC-16/MODBUS: initial value `FFFFh`, reflected polynomial `A001h`, no final xor
 /// (`cart-header.md`, "The header CRC16").
-// TODO(hw-unverified): GBATEK's pseudo-code read literally does not give this variant; it is
-// confirmed by the standard check vector and by the CRC `ndstool` wrote into our own test ROM
-// (`cart-header.md`, "Unverified").
+// GBATEK's table form, read with a register wider than 16 bits, is this variant; the standard
+// check vector and the CRC `ndstool` wrote into our own test ROM agree.
 pub fn crc16(data: &[u8]) -> u16 {
     const POLYNOMIAL: u16 = 0xA001;
     data.iter().fold(0xFFFF, |crc, &byte| {

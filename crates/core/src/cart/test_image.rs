@@ -45,20 +45,24 @@ pub(crate) fn arm7_byte(j: usize) -> u8 {
     (j as u8) ^ 0x7A
 }
 
-/// Bitwise CRC-16/MODBUS, the algorithm of `cart-header.md`, "The header CRC16".
+/// The CRC in GBATEK's table form: a 32-bit register and the constants shifted by `7 - j`
+/// (`cart-header.md`, "The header CRC16"). Written differently from `crc16` on purpose.
 pub(crate) fn reference_crc16(data: &[u8]) -> u16 {
-    let mut crc = 0xFFFFu16;
+    const TABLE: [u32; 8] = [
+        0xC0C1, 0xC181, 0xC301, 0xC601, 0xCC01, 0xD801, 0xF001, 0xA001,
+    ];
+    let mut crc = 0xFFFFu32;
     for &byte in data {
-        crc ^= u16::from(byte);
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xA001
-            } else {
-                crc >> 1
-            };
+        crc ^= u32::from(byte);
+        for (j, constant) in TABLE.iter().enumerate() {
+            let carry = crc & 1 != 0;
+            crc >>= 1;
+            if carry {
+                crc ^= constant << (7 - j);
+            }
         }
     }
-    crc
+    (crc & 0xFFFF) as u16
 }
 
 /// Little-endian words as bytes.

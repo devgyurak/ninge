@@ -50,8 +50,10 @@ The stack pointers lie in shared WRAM, which Phase 2 does not map (`arm9-memory-
 are only register values here.
 
 GBATEK does not give the processor mode, the I and F bits or the T bit at entry. The running
-mode's R13 is listed apart from the IRQ and Supervisor ones, so the mode is neither of them.
-**Chosen so the machine can run:** System mode (`1Fh`), ARM state, I and F set (interrupts
+mode's R13 is listed apart from the IRQ and Supervisor ones, so the mode is neither of them;
+that leaves System and User, which share one R13 bank and cannot be told apart from GBATEK.
+**Chosen so the machine can run:** System mode, because User could not change mode or touch
+privileged state (`1Fh`), ARM state, I and F set (interrupts
 disabled), flags clear; CPSR = `0000_00DFh`. See "Unverified".
 
 Registers of the other banks (FIQ, Abort, Undefined) are not stated and stay at power-on zero.
@@ -101,6 +103,10 @@ only advances the frame counter.
 - **CPSR at entry** (System mode, ARM state, I and F set). Chosen so the machine can run;
   GBATEK gives only the stack registers. — `crates/core/src/hle/direct_boot.rs` (`boot`) —
   verify by a test ROM that reads CPSR at entry on hardware.
+  That test ROM (`testroms/boot`) records CPSR first, then switches mode with `msr cpsr_c` to
+  read the Supervisor and IRQ stacks. If hardware enters in User mode, that `msr` cannot
+  change the mode and those two records would hold the running mode's SP; read the CPSR
+  record first to tell the cases apart.
 - **CP15 at entry** is left at power-on (TCMs disabled), though the firmware configures an
   ITCM of 32 MiB and a DTCM at `027C_0000h` by GBATEK's own description; whether they are on
   at entry is not stated. — `boot` in `hle/direct_boot.rs` — verify likewise. The code that

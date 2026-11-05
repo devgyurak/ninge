@@ -48,11 +48,16 @@ GBATEK describes the algorithm as the BIOS function GetCRC16: start from an init
 eight times, xoring in a constant when a bit falls out. The header checksum is this CRC with
 initial value `FFFFh` over bytes `000h`-`15Dh`, stored at `15Eh`.
 
-Read literally, as we understand it, GBATEK's pseudo-code (a table of eight constants combined
-with a shift of `7 - j`) does not reproduce the well-known check value, while the constants are the single-bit
-entries of the byte table for the reflected polynomial `A001h` (CRC-16/MODBUS: initial value
-`FFFFh`, reflected polynomial `A001h`, no final xor, check value `4B37h` over the ASCII text
-"123456789"). The model implements CRC-16/MODBUS; see "Unverified".
+GBATEK's pseudo-code combines a table of eight constants with a shift of `7 - j`. The shifted
+constant has up to 24 significant bits, so the running value has to be read as a register wider
+than 16 bits (our inference from the constant widths; GBATEK does not state the register size)
+and must not be cut to 16 bits after each
+shift: the bits above bit 15 come down in the later shifts. Read that way, the algorithm is
+CRC-16/MODBUS (initial value `FFFFh`, reflected polynomial `A001h`, no final xor, check value
+`4B37h` over the ASCII text "123456789"). Cutting the value to 16 bits at every shift gives
+`D851h` instead, which is a misreading. The model implements CRC-16/MODBUS; the test helper
+follows the table form with a wide register, so the two are independent. The eight constants are the
+single-bit entries of the byte table for the reflected polynomial `A001h`.
 
 ## Behavior
 
@@ -90,10 +95,6 @@ and parsed; it is not placed in Phase 2 (`TODO(phase3)`, #22).
   copy at `027FF808h` is labelled "verified") but not what happens on a mismatch. The model
   boots anyway. — `crates/core/src/cart/header.rs` (`Header::crc_ok`) — verify by a test ROM
   with a bad CRC on hardware.
-- **The CRC16 pseudo-code.** The literal pseudo-code does not give `4B37h`; the model uses
-  CRC-16/MODBUS, which matches the standard check vector and the CRC `ndstool` wrote into our
-  own test ROM. — `crc16` in `crates/core/src/cart/header.rs` — verify against a header with a
-  known CRC from hardware.
 - **Minimum image length.** `170h` (the stored part of the header) is our choice for "too short
   to hold a header"; GBATEK does not give a minimum. — `parse` in `cart/header.rs` — verify likewise.
 - **The load-area end** (`023B_FE00h`, `0380_7E00h`) is derived from GBATEK's statement of where

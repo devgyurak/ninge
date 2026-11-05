@@ -4,6 +4,7 @@
 pub mod bus;
 pub mod cart;
 pub mod cpu;
+pub mod gpu2d;
 mod hle;
 pub mod savestate;
 
@@ -129,15 +130,40 @@ impl Machine {
     /// Runs the machine for one frame: steps the ARM9 [`ARM9_STEPS_PER_FRAME`] instructions,
     /// then counts the frame.
     ///
-    /// A machine with no booted program (no ROM, or a refused one) does not step the ARM9: the
-    /// frame only advances the counter and leaves both screens black.
+    /// A machine with no booted program (no ROM, or a refused one) does not step the ARM9 or
+    /// draw: the frame only advances the counter and leaves both screens black.
     // TODO(hw-unverified): the step budget is an estimate (`docs/hw/direct-boot.md`).
     // TODO(phase3): the scheduler (#21) replaces the fixed step budget.
     pub fn run_frame(&mut self) {
         if self.header.is_some() {
             (0..ARM9_STEPS_PER_FRAME).for_each(|_| self.step_arm9());
+            self.render_frame();
         }
         self.frame_count = self.frame_count.wrapping_add(1);
+    }
+
+    /// Draws both screens from the registers and VRAM as they are now.
+    ///
+    /// Engine A goes to the screen POWCNT1 bit 15 picks; the other screen is a black
+    /// placeholder for engine B (`docs/hw/display-mode-vram.md`).
+    // TODO(phase4): engine B draws its screen.
+    // TODO(phase3): per-scanline drawing replaces the whole-frame render (#21).
+    pub(crate) fn render_frame(&mut self) {
+        let (engine_a, engine_b) = if self.memory.gpu2d().engine_a_on_top() {
+            (&mut self.top, &mut self.bottom)
+        } else {
+            (&mut self.bottom, &mut self.top)
+        };
+        self.memory
+            .gpu2d()
+            .render_engine_a(self.memory.vram_a_lcdc(), engine_a);
+        engine_b.fill(gpu2d::BLACK);
+    }
+
+    /// Engine A's display registers.
+    // The debugger's IO register panel will show them.
+    pub fn gpu2d(&self) -> &gpu2d::Gpu2d {
+        self.memory.gpu2d()
     }
 
     /// Returns how many frames [`Machine::run_frame`] has completed.

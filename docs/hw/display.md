@@ -17,14 +17,14 @@ The words top and bottom name the physical screens, not the graphics engines. PO
 swaps which engine's output goes to the upper and which to the lower screen.
 
 Phase 0 implements only the shape of the output: two frame buffers of that size, readable
-per screen.
+per screen. Phase 2 fills them (`display-mode-vram.md`).
 
 ## Output format (not hardware)
 
 The emulator hands frames to the host as one `u32` per pixel in xRGB8888 (`0x00RRGGBB`).
 This is a host-side choice, not a hardware fact: the LCDs have 18-bit colour depth ("DS
-Technical Data"), and xRGB8888 is wide enough to hold it. The all-black initial contents are
-a placeholder, not the power-on state.
+Technical Data"), and xRGB8888 is wide enough to hold it. The black contents of a screen no
+engine draws yet are a placeholder, not the power-on state.
 
 ## Edge cases
 
@@ -32,7 +32,13 @@ None in Phase 0.
 
 ## Not implemented yet
 
-- Routing of the two graphics engines to the two screens through POWCNT1 bit 15 (Phase 2–3).
+- Engine B's picture (`TODO(phase4)`): the screen it is routed to stays a black placeholder.
+- Engine A's graphics (mode 1) and main-memory display (mode 3) pictures (`TODO(phase3)`,
+  `TODO(phase4)`).
+- Per-scanline drawing; a frame is rendered at once at the end of `run_frame` (`TODO(phase3)`, #21).
+
+Engine A's display-off (white) and VRAM-display pictures and the POWCNT1 bit-15 routing are in
+`display-mode-vram.md` (Phase 2, #20).
 
 ## Unverified
 

@@ -20,9 +20,13 @@ fn run_cli_on_smoke(extra: &[&str]) -> Output {
     run_cli(&args)
 }
 
+/// The smoke ROM never writes DISPCNT, so engine A is display-off and shows white; POWCNT1
+/// starts with the swap bit set, which puts engine A on the top screen. Engine B is a black
+/// placeholder (`docs/hw/display-mode-vram.md`).
 fn expected_line(frames: u64) -> String {
+    let white = frame_hash(&vec![0x00FF_FFFFu32; SCREEN_WIDTH * SCREEN_HEIGHT]);
     let black = frame_hash(&vec![0u32; SCREEN_WIDTH * SCREEN_HEIGHT]);
-    format!("frames={frames} top={black:016x} bottom={black:016x}\n")
+    format!("frames={frames} top={white:016x} bottom={black:016x}\n")
 }
 
 #[test]

@@ -7,6 +7,7 @@
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
+use crate::gpu2d::Gpu2d;
 use serde::{Deserialize, Serialize};
 
 /// Page size of the fast-path table: 16 KiB (AGENTS.md §2 rule 9).
@@ -86,6 +87,8 @@ pub struct Memory {
     dtcm: Vec<u8>,
     vram_a: Vec<u8>,
     vramcnt_a: u8,
+    // Engine A's display registers, reached through the I/O slow path.
+    gpu2d: Gpu2d,
     // Derived from `vramcnt_a`, so it is not saved; `build_page_table` rebuilds it. Empty after
     // a load until then, which reads as all-unmapped rather than panicking. One entry per 16 KiB
     // page (the page-table `decision` issue).
@@ -135,6 +138,7 @@ impl Memory {
             dtcm: vec![0; DTCM_SIZE],
             vram_a: vec![0; VRAM_A_SIZE],
             vramcnt_a: 0,
+            gpu2d: Gpu2d::new(),
             pages: Vec::new(),
         };
         memory.build_page_table();
@@ -172,6 +176,18 @@ impl Memory {
         }
     }
 
+    /// Engine A's display registers.
+    // The debugger's IO register panel will show them (#58 shows the VRAM view).
+    pub fn gpu2d(&self) -> &Gpu2d {
+        &self.gpu2d
+    }
+
+    /// The bytes of bank A while the CPU sees it as LCDC VRAM (enabled, MST 0), else `None`.
+    pub(crate) fn vram_a_lcdc(&self) -> Option<&[u8]> {
+        let bank = self.vram_a();
+        (bank.enabled && bank.mst == MST_LCDC).then_some(self.vram_a.as_slice())
+    }
+
     /// The region backing the page that holds `addr`.
     pub fn region(&self, addr: u32) -> Region {
         self.page(addr).region
@@ -200,18 +216,23 @@ impl Memory {
         match page.region {
             Region::MainRam => bytes_at(&self.main_ram, offset),
             Region::VramA => bytes_at(&self.vram_a, offset),
-            Region::Unmapped => Self::read_slow(),
+            Region::Unmapped => self.read_slow(addr),
         }
     }
 
-    /// The slow path for a read: I/O ports and unmapped addresses.
+    /// The slow path for a read: I/O ports and unmapped addresses. Each byte is read from the
+    /// register at its own address, so a wider read spans neighbouring registers.
     // TODO(hw-unverified): an undefined I/O port reads 0 (GBATEK says so); unmapped memory is
     // "undefined" there and reads 0 here; VRAMCNT_A is write-only and reads 0
     // (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
     // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
-    fn read_slow<const N: usize>() -> [u8; N] {
-        [0; N]
+    fn read_slow<const N: usize>(&self, addr: u32) -> [u8; N] {
+        std::array::from_fn(|i| {
+            self.gpu2d
+                .read_byte(addr.wrapping_add(i as u32))
+                .unwrap_or(0)
+        })
     }
 
     /// The bytes an ARM9 data read of `N` bytes at `addr` sees. `addr` is aligned down to `N`,
@@ -267,16 +288,20 @@ impl Memory {
     }
 
     /// The slow path for a write: I/O ports; an unmapped address ignores the write.
-    // TODO(hw-unverified): a wider write over a byte register uses only the byte at the
-    // register's address (`arm9-memory-map.md`, "Unverified").
+    // TODO(hw-unverified): a wider write is split into bytes and each goes to the register at
+    // its own address; a byte on no register is dropped (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
     // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
     fn write_slow<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
-        // The index of VRAMCNT_A's byte inside this write. An address past the register wraps
-        // to a huge index and a VRAM byte write lands here too; both miss `get` and do nothing.
-        let touched = VRAMCNT_A_ADDR.wrapping_sub(addr) as usize;
-        if let Some(&value) = bytes.get(touched) {
-            self.write_vramcnt_a(value);
+        // Each byte goes to the register at its own address; an address no register holds
+        // ignores it, as does a VRAM byte write that lands here.
+        for (i, &value) in bytes.iter().enumerate() {
+            let at = addr.wrapping_add(i as u32);
+            if at == VRAMCNT_A_ADDR {
+                self.write_vramcnt_a(value);
+            } else {
+                self.gpu2d.write_byte(at, value);
+            }
         }
     }
 

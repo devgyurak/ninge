@@ -224,7 +224,7 @@ pub fn assert_frame_hash(rom: &str, frames: u64) {
     });
     let golden = parse_golden(&text)
         .unwrap_or_else(|error| panic!("{}", failure_message(rom, frames, &path, &error)));
-    let actual = run(load_rom(rom), frames);
+    let actual = run(load_rom(rom), frames).expect("the golden ROM has a valid header");
     if let Err(error) = check_frame_hash(&golden, &actual) {
         panic!("{}", failure_message(rom, frames, &path, &error));
     }
@@ -233,7 +233,7 @@ pub fn assert_frame_hash(rom: &str, frames: u64) {
 /// Runs `rom` for `frames` frames and returns the `(top, bottom)` hash after each frame.
 pub fn run_frame_hashes(rom: Vec<u8>, frames: u64) -> Vec<(u64, u64)> {
     let mut machine = Machine::new();
-    machine.load_rom(rom);
+    machine.load_rom(rom).expect("the ROM has a valid header");
     (0..frames)
         .map(|_| {
             machine.run_frame();
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn given_smoke_rom_when_hashing_frames_then_last_entry_equals_run_report_hashes() {
         let rom = crate::load_rom_file(&crate::testrom_path("smoke")).unwrap();
-        let report = crate::run(rom.clone(), 3);
+        let report = crate::run(rom.clone(), 3).unwrap();
         let hashes = run_frame_hashes(rom, 3);
         assert_eq!(hashes.last(), Some(&(report.top_hash, report.bottom_hash)));
     }

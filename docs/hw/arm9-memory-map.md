@@ -146,5 +146,5 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
   verify likewise.
 - **Default DTCM base.** GBATEK names `027C0000h` as the default base, but does not say whether
   that is a hardware reset value or the value the firmware or software sets; CP15 starts at
-  zero here (`cp15.md`, "Unverified"). Direct boot (#17) decides what to program. — no code
-  site in this PR.
+  zero here (`cp15.md`, "Unverified"). Direct boot leaves CP15 at power-on and records the
+  question in `direct-boot.md`, "Unverified". — no code site in this note.

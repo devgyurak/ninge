@@ -18,8 +18,10 @@ itself. Local runs, `./scripts/verify.sh`, and CI all go through it.
 |---|---|
 | `Makefile` | Builds every ROM in `ROMS` into `build/` and writes `build/SHA256SUMS`. |
 | `smoke/` | Minimal ROM: ARM9 and ARM7 each spin in an infinite loop from their own entry point. No libnds, no BlocksDS crt0. |
+| `boot/` | Direct-boot ROM: loads at `0x02000000` but enters at `0x02000100`, records r0-r14, CPSR and the IRQ/Supervisor stack pointers at `0x02000200`, then spins. Its addresses come from per-ROM variables in the `Makefile`. |
 
-Line 1 of every source file is the SPDX line (`@ ...` in ARM assembly). Addresses come from
+The header is built with a 0x4000-byte header size (`ndstool -h`), so the ARM9 offset meets the
+range in `docs/hw/cart-header.md`. Line 1 of every source file is the SPDX line (`@ ...` in ARM assembly). Addresses come from
 `docs/hw/cart-header.md` and `docs/hw/memory-map.md`.
 
 ## Running a ROM headlessly
@@ -32,5 +34,6 @@ cargo run -p ninge-runner -- testroms/build/smoke.nds --frames 3
 # frames=3 top=<016x> bottom=<016x>
 ```
 
-Exit code 0 on success, 1 on an IO error (missing ROM), 2 on a usage error. Tests find a
+Exit code 0 on success, 1 on an IO error (missing ROM), 2 on a usage error, 3 when the machine
+refuses the ROM (an invalid header, `docs/hw/cart-header.md`). Tests find a
 built ROM with `ninge_runner::testrom_path("smoke")`.

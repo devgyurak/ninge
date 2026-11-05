@@ -148,3 +148,24 @@ fn given_cpu_suite_with_a_flag_as_the_directory_when_cli_runs_then_exit_code_is_
     let out = run_cli(&["cpu-suite", "--help"]);
     assert_eq!(out.status.code(), Some(2));
 }
+
+#[test]
+fn given_a_file_of_junk_bytes_when_cli_runs_it_as_a_rom_then_exit_code_is_three() {
+    let dir = SuiteDir::with("junk-code", &[("junk.nds", &[1, 2, 3, 4, 5])]);
+    let out = run_cli(&[dir.0.join("junk.nds")]);
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn given_a_file_of_junk_bytes_when_cli_runs_it_as_a_rom_then_stderr_says_the_rom_was_refused() {
+    let dir = SuiteDir::with("junk-msg", &[("junk.nds", &[1, 2, 3, 4, 5])]);
+    let out = run_cli(&[dir.0.join("junk.nds")]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("the ROM was refused"));
+}
+
+#[test]
+fn given_a_file_of_junk_bytes_when_cli_runs_it_as_a_rom_then_stdout_is_empty() {
+    let dir = SuiteDir::with("junk-out", &[("junk.nds", &[1, 2, 3, 4, 5])]);
+    let out = run_cli(&[dir.0.join("junk.nds")]);
+    assert!(out.stdout.is_empty());
+}

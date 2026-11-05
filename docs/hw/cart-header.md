@@ -1,12 +1,15 @@
 # Cartridge header
 
-Sources: GBATEK "DS Cartridge Header".
-Used by: `crates/core/src/cart/` (planned, #17: header parse, direct boot)   Phase: 0 (fields the smoke ROM relies on); #17 extends it
+Sources: GBATEK "DS Cartridge Header"; GBATEK "BIOS Misc Functions" (GetCRC16); GBATEK "NDS BIOS RAM
+Usage" (where the header lands in RAM).
+Used by: `crates/core/src/cart/header.rs`, `crates/core/src/hle/direct_boot.rs`   Phase: 2 (#17)
 
-## Layout (Phase 0 subset)
+## Layout
 
-The header sits at the start of the ROM image. Only the fields that place the two CPU
-binaries and guard the header are listed here; the rest are added with #17.
+The header sits at the start of the ROM image. The first `170h` bytes are the part the loader keeps
+in RAM (`direct-boot.md`); the rest up to `200h` is reserved, zero, and not stored. The fields
+below are the ones Phase 2 reads; the others (title, game code, file tables, icon, secure area
+and logo checksums) are not parsed yet.
 
 | Offset | Name | Width | Meaning |
 |---|---|---|---|
@@ -20,6 +23,8 @@ binaries and guard the header are listed here; the rest are added with #17.
 | 0x03C | ARM7 size | 32 | Byte length of the ARM7 binary. |
 | 0x15E | Header CRC16 | 16 | CRC-16 over bytes 0x000 to 0x15D. |
 
+All fields are little-endian.
+
 ## Allowed values (GBATEK)
 
 | Field | Allowed |
@@ -29,28 +34,68 @@ binaries and guard the header are listed here; the rest are added with #17.
 | ARM9 size | at most 0x3B_FE00 |
 | ARM7 ROM offset | 0x8000 or higher |
 | ARM7 entry / RAM address | 0x0200_0000 to 0x023B_FE00, or 0x037F_8000 to 0x0380_7E00 (shared WRAM mirror + ARM7 WRAM) |
-| ARM7 size | at most 0x3B_FE00 (main RAM) or 0xFE00 (the 0x037F_8000 range: shared WRAM mirror + ARM7 WRAM) |
+| ARM7 size | at most 0x3B_FE00 (main RAM) or 0xFE00 (the 0x037F_8000 range) |
 
-See `memory-map.md` for the regions these ranges fall in.
+Both bounds of a range are inclusive, as GBATEK writes them. See `memory-map.md` for the regions.
+GBATEK's "NDS BIOS RAM Usage" says the boot code is loaded into `0200_0000h`-`023B_FDFFh` (main
+RAM, both CPUs) or `037F_8000h`-`0380_7DFFh` (ARM7 only); the top of main RAM is left to the
+header copy and system data.
+
+## The header CRC16
+
+GBATEK describes the algorithm as the BIOS function GetCRC16: start from an initial value
+(usually `FFFFh`), and for each byte xor it into the low bits of the running value and shift
+eight times, xoring in a constant when a bit falls out. The header checksum is this CRC with
+initial value `FFFFh` over bytes `000h`-`15Dh`, stored at `15Eh`.
+
+Read literally, as we understand it, GBATEK's pseudo-code (a table of eight constants combined
+with a shift of `7 - j`) does not reproduce the well-known check value, while the constants are the single-bit
+entries of the byte table for the reflected polynomial `A001h` (CRC-16/MODBUS: initial value
+`FFFFh`, reflected polynomial `A001h`, no final xor, check value `4B37h` over the ASCII text
+"123456789"). The model implements CRC-16/MODBUS; see "Unverified".
 
 ## Behavior
 
-Direct boot (no BIOS, no firmware) copies each binary from its ROM offset to its RAM address
-for its size, then starts each CPU at its entry address. The header CRC16 exists so a loader
-can reject a damaged header.
+Direct boot (no BIOS, no firmware) copies each binary from its ROM offset to its RAM address for
+its size, then starts the ARM9 at its entry address (`direct-boot.md`).
 
-## Phase 0 use
+The CRC is computed and the result recorded in the parsed header (`crc_ok`). A mismatch does
+not stop the boot: the header is accepted and the machine boots anyway. This is a host-side
+choice, not a hardware fact (see "Unverified").
 
-The smoke test ROM is packed by `ndstool`, which fills these fields and computes the CRC16.
-Nothing in Phase 0 parses the header; the table fixes the facts the ROM's addresses rely on.
-The smoke ROM uses ARM9 load = entry = 0x0200_0000 and ARM7 load = entry = 0x0238_0000, both
-in main memory and inside the ranges above.
+## Refusals
+
+A header is refused, with a variant that names the field and the value, when:
+
+- the image is shorter than `170h` bytes (it cannot hold the part of the header the loader keeps);
+- the ARM9 ROM offset is below `4000h` or not a multiple of `1000h`;
+- the ARM7 ROM offset is below `8000h`;
+- an entry or RAM address is outside its range above;
+- a size is zero (both binaries), or larger than its limit above;
+- a binary runs past the end of the image (`ROM offset + size` beyond the image length);
+- a binary runs past the loadable area (`RAM address + size` beyond `023B_FE00h` in main RAM, or
+  beyond `0380_7E00h` in the ARM7 range).
+
+Nothing is clamped, masked or guessed. An ARM7 destination in the `037F_8000h` range is accepted
+and parsed; it is not placed in Phase 2 (`TODO(phase3)`, #22).
 
 ## Edge cases
 
-Not covered in Phase 0 (#17): misaligned or out-of-range fields, size zero, CRC mismatch.
+- A bad CRC does not make parsing fail; only `crc_ok` is false.
+- Arithmetic on guest fields uses widened integers, so `offset + size` cannot wrap.
 
 ## Unverified
 
-- Whether direct boot should validate the header CRC16 or ignore it — decide in #17; verify
-  with a test ROM carrying a bad CRC.
+- **What real firmware does on a CRC mismatch.** GBATEK says the header CRC is verified (the RAM
+  copy at `027FF808h` is labelled "verified") but not what happens on a mismatch. The model
+  boots anyway. — `crates/core/src/cart/header.rs` (`Header::crc_ok`) — verify by a test ROM
+  with a bad CRC on hardware.
+- **The CRC16 pseudo-code.** The literal pseudo-code does not give `4B37h`; the model uses
+  CRC-16/MODBUS, which matches the standard check vector and the CRC `ndstool` wrote into our
+  own test ROM. — `crc16` in `crates/core/src/cart/header.rs` — verify against a header with a
+  known CRC from hardware.
+- **Minimum image length.** `170h` (the stored part of the header) is our choice for "too short
+  to hold a header"; GBATEK does not give a minimum. — `parse` in `cart/header.rs` — verify likewise.
+- **The load-area end** (`023B_FE00h`, `0380_7E00h`) is derived from GBATEK's statement of where
+  boot code can be loaded, not from a rule on the sum of address and size. — `check` in `cart/header.rs` — verify
+  likewise.

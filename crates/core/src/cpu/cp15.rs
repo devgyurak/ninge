@@ -131,7 +131,7 @@ impl Cp15 {
     }
 
     /// The data TCM as the registers resolve it.
-    // TODO(phase2): #18 maps the TCM into the ARM9's address space from this.
+    // The ARM9 bus view copies it before each step (`docs/hw/arm9-memory-map.md`).
     // TODO(hw-unverified): a size field outside 3-23 and a base not aligned to the size are
     // reported as written (`docs/hw/cp15.md`, "Unverified").
     pub fn dtcm(&self) -> Tcm {
@@ -139,7 +139,7 @@ impl Cp15 {
     }
 
     /// The instruction TCM as the registers resolve it; its base is always 0.
-    // TODO(phase2): #18 maps the TCM into the ARM9's address space from this.
+    // The ARM9 bus view copies it before each step (`docs/hw/arm9-memory-map.md`).
     // TODO(hw-unverified): see `Cp15::dtcm`; the base is dropped on a write from GBATEK's
     // "always 00000000h" (`docs/hw/cp15.md`, "Unverified").
     pub fn itcm(&self) -> Tcm {

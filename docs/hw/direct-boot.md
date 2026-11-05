@@ -52,9 +52,9 @@ are only register values here.
 GBATEK does not give the processor mode, the I and F bits or the T bit at entry. The running
 mode's R13 is listed apart from the IRQ and Supervisor ones, so the mode is neither of them;
 that leaves System and User, which share one R13 bank and cannot be told apart from GBATEK.
-**Chosen so the machine can run:** System mode, because User could not change mode or touch
-privileged state (`1Fh`), ARM state, I and F set (interrupts
-disabled), flags clear; CPSR = `0000_00DFh`. See "Unverified".
+**Chosen so the machine can run:** System mode (`1Fh`), because User mode could not change
+mode or touch privileged state; ARM state, I and F set (interrupts disabled), flags clear;
+CPSR = `0000_00DFh`. See "Unverified".
 
 Registers of the other banks (FIQ, Abort, Undefined) are not stated and stay at power-on zero.
 

@@ -22,5 +22,5 @@ fn start() -> Result<(), StartError> {
             Some(path) => load(path)?,
             None => Source::Pattern,
         };
-    ninge::term::run(source).map_err(|e| StartError::Run(e.to_string()))
+    ninge::term::run(source).map_err(|e| StartError::Run(format!("{e:#}")))
 }

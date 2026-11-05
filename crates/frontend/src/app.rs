@@ -137,22 +137,27 @@ impl<S: ShmSink> App<S> {
     /// its frames even when the terminal is too small to show it.
     pub fn graphics(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
-        let (top, bottom) = match &mut self.source {
-            Source::Machine(machine) => {
-                machine.run_frame();
-                (
-                    machine.frame(Screen::Top).to_vec(),
-                    machine.frame(Screen::Bottom).to_vec(),
-                )
-            }
-            Source::Pattern => (dummy_frame(self.frame_no, 0), dummy_frame(self.frame_no, 1)),
-        };
+        if let Source::Machine(machine) = &mut self.source {
+            machine.run_frame();
+        }
         if let Some(areas) = self.areas {
+            let (top, bottom) = self.screens();
             out.extend(self.send(TOP_IMAGE_ID, &top, areas.top));
             out.extend(self.send(BOTTOM_IMAGE_ID, &bottom, areas.bottom));
         }
         self.frame_no += 1;
         out
+    }
+
+    /// The pixels of both screens for this tick.
+    fn screens(&self) -> (Vec<u32>, Vec<u32>) {
+        match &self.source {
+            Source::Machine(machine) => (
+                machine.frame(Screen::Top).to_vec(),
+                machine.frame(Screen::Bottom).to_vec(),
+            ),
+            Source::Pattern => (dummy_frame(self.frame_no, 0), dummy_frame(self.frame_no, 1)),
+        }
     }
 
     /// One screen over the current medium. A failed shared-memory write is not retried:

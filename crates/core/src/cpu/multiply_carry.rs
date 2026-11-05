@@ -6,11 +6,13 @@
 //! the running sum as a save vector and a carry vector, and stops after one to four iterations.
 //! The ARM7TDMI sets C from the barrel shifter's carry-out while the final cycles bring the
 //! carry vector back through it, which is a bit of that vector.
-// TODO(hw-unverified): the link from the shifter to C is oracle evidence only (the pinned
-// suite), m = 1 and 2 are untested there, the long-form m < 4 slice is inferred from the shift
-// amounts of US 5,557,563 Table 1, the patents' embodiment being the ARM7TDMI's multiplier and
-// the off-by-one reading of the P1/P2 table are inferences, and SIGNED = 1 for MUL, MLA and Thumb MUL is inferred from
-// the TRM `m` rule (`docs/hw/arm-multiply.md`, "Unverified").
+// TODO(hw-unverified), all listed in `docs/hw/arm-multiply.md`, "Unverified":
+// - the link from the shifter to C is oracle evidence only (the pinned suite);
+// - m = 1 and 2 are untested there;
+// - the long-form m < 4 slice is inferred from the shift amounts of US 5,557,563 Table 1;
+// - that the patents' embodiment is the ARM7TDMI's multiplier, and the off-by-one reading of
+//   the P1/P2 table, are inferences;
+// - SIGNED = 1 for MUL, MLA and Thumb MUL is inferred from the TRM `m` rule.
 
 /// Bits of the multiplier consumed per iteration (four rows of two bits).
 const BITS_PER_ITERATION: u32 = 8;
@@ -19,9 +21,14 @@ const ROWS_PER_ITERATION: u32 = 4;
 /// Width of the active region of the save and carry vectors, in bits.
 const ACTIVE_BITS: u32 = 33;
 const ACTIVE_MASK: u64 = (1 << ACTIVE_BITS) - 1;
-/// The multiplicand and multiplier are widened to 33 bits, and the multiple to 34.
-const OPERAND_MASK: u64 = (1 << ACTIVE_BITS) - 1;
+/// The multiplicand and multiplier are widened to 33 bits (the same width as the active region).
+const OPERAND_MASK: u64 = ACTIVE_MASK;
+/// A multiple of the multiplicand is 34 bits wide.
 const MULTIPLE_MASK: u64 = (1 << 34) - 1;
+/// The bit that holds the sign of a widened 33-bit operand.
+const SIGN_BIT: u32 = 32;
+/// The low word of an operand or a vector.
+const WORD_MASK: u64 = 0xFFFF_FFFF;
 /// The bit of the carry vector C is taken from: the word's top bit, or the long result's.
 const CARRY_BIT_WORD: u32 = 31;
 const CARRY_BIT_LONG: u32 = 63;
@@ -63,13 +70,13 @@ fn booth_digit(bits: u64) -> i32 {
 /// `d` is the 33-bit multiplicand `D[32:0]`.
 fn multiple(digit: i32, d: u64) -> (u64, u64) {
     let inverse = !d & OPERAND_MASK;
-    let top = |v: u64| (v >> 32 & 1) << 33;
+    let top = |v: u64| (v >> SIGN_BIT & 1) << 33;
     match digit {
-        -2 => (top(inverse) | (inverse & 0xFFFF_FFFF) << 1 | 1, 1),
+        -2 => (top(inverse) | (inverse & WORD_MASK) << 1 | 1, 1),
         -1 => (top(inverse) | inverse, 1),
         0 => (0, 0),
         1 => (top(d) | d, 0),
-        _ => (top(d) | (d & 0xFFFF_FFFF) << 1, 0),
+        _ => (top(d) | (d & WORD_MASK) << 1, 0),
     }
 }
 
@@ -102,7 +109,7 @@ pub(crate) fn carry_save(
     let mut save = initial_save >> 1;
     let mut carry = initial_carry >> 1;
     // The accumulate bits above the initialiser enter two per row.
-    let high = (acc >> 34) as u64 & 0xFFFF_FFFF; // truncation: 32 bits, two per row
+    let high = (acc >> 34) as u64 & WORD_MASK; // truncation: 32 bits, two per row
     for k in 0..ROWS_PER_ITERATION * m {
         let (x, xc) = multiple(booth_digit(r >> (2 * k)), d);
         let ah = high >> (2 * k) & 3;
@@ -113,8 +120,10 @@ pub(crate) fn carry_save(
         let top = (ah & 1) + (!carry >> 32 & 1) + (!x >> 33 & 1);
         low_save |= (sum & 3) << (1 + 2 * k);
         low_carry |= (xc | (carries & 1) << 1) << (1 + 2 * k);
-        save = (sum >> 2 & 0x7FFF_FFFF) | (top & 1) << 31 | (top >> 1) << 32;
-        carry = (carries >> 1 & 0xFFFF_FFFF) | (!ah >> 1 & 1) << 32;
+        // The active region moves up two bits: S'[30:0] = sum[32:2], S'[31] and S'[32] are the
+        // top sum and its carry, C'[31:0] = carries[32:1], C'[32] = !AH1 (US 5,583,804).
+        save = (sum >> 2 & (WORD_MASK >> 1)) | (top & 1) << 31 | (top >> 1) << SIGN_BIT;
+        carry = (carries >> 1 & WORD_MASK) | (!ah >> 1 & 1) << SIGN_BIT;
     }
     let low_bits = BITS_PER_ITERATION * m + 1;
     // Past the low region: the active save, and the accumulate bits that never entered.
@@ -124,7 +133,8 @@ pub(crate) fn carry_save(
     // The active carry is a 33-bit signed value (its bit 32 repeats upward).
     // truncation: the 33-bit value sign-extended through i64
     let carry_signed = ((carry << 31) as i64) >> 31;
-    let total_carry = low_carry.wrapping_add((carry_signed as u64) << low_bits);
+    let carry_bits = carry_signed as u64; // reinterpret: two's complement
+    let total_carry = low_carry.wrapping_add(carry_bits << low_bits);
     CarrySave {
         save: total_save as u64, // truncation: modulo 2^64
         carry: total_carry,

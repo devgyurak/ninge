@@ -3,8 +3,9 @@
 Sources: GBATEK "ARM Opcodes: Multiply and Multiply-Accumulate (MUL, MLA)" (the same
 section covers the long forms) is the primary source for the behavior; ARM ARM (ARMv5TE) "MUL",
 "MLA", "UMULL", "UMLAL", "SMULL", "SMLAL" and ARM7TDMI TRM "Multiply instructions" are listed as
-background; not re-read for this note (the carry section uses the TRM's `m` rule and block
-diagram, as quoted in "Cycle count" above). For the ARM7TDMI carry only: US 5,583,804, US 5,528,529 and
+background; not re-read for this note. For the ARM7TDMI carry only, the research session also
+read the TRM (DDI 0029G) §6.6 and Table 6-23 (the `m` rule) and its block diagram (32 x 8
+multiplier), and: US 5,583,804, US 5,528,529 and
 US 5,557,563 (see "ARM7TDMI multiply carry"). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
 Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
 `multiply_long`)   Phase: 1 (#9)
@@ -102,9 +103,11 @@ taken from GBATEK. They are oracle evidence, not hardware evidence.
 ## ARM7TDMI multiply carry
 
 ARMv4 documents C after a flag-setting multiply as meaningless, but the suite shows it is a
-fixed function of the operands (see "Measured on the pinned suite"). Nothing below comes from
-the public article an earlier revision of this note pointed at (recorded in #80; #81 forbids
-reusing it), and the sessions that wrote this section did not open it.
+fixed function of the operands (see "Measured on the pinned suite"). Nothing below was copied
+from the public article an earlier revision of this note pointed at (recorded in #80; #81
+forbids reusing it), and the sessions that wrote this section did not open it. One idea is
+not independent of it: the shifter-carry hypothesis was suggested by #80's summary (see "Evidence
+level" below); the datapath is from the patents.
 
 ### Sources read for #81
 
@@ -217,9 +220,13 @@ shifter and ALU. Read in full (abstract, tables, examples):
   save `sumb` = 0xFFFFFFFF. The model reproduces all of them (a unit test pins them).
 
 The ARM7TDMI TRM (DDI 0029G) block diagram shows a 32 x 8 multiplier next to the barrel
-shifter and ALU, and its `m` rule (the "Cycle count" section above) counts all-ones as terminal
-for MUL and MLA. That rule is only valid for a signed multiplier, so MUL, MLA and Thumb MUL are
-modelled with SIGNED = 1 (an inference, see Unverified).
+shifter and ALU, and §6.6 says the multiply hardware does "integer multiplication with early
+termination". Its Table 6-23 gives `m` as 1, 2 or 3 when the multiplier's upper 24, 16 or 8
+bits are all zero or all one (it prints some bit ranges with a typo), for the multiplies in
+general. GBATEK gives the same rule, with all-ones counted only for MUL, MLA and the signed
+long forms (the "Cycle count" section above). All-ones can only be terminal for a signed
+multiplier, so MUL, MLA and Thumb MUL are modelled with SIGNED = 1 (an inference, see
+Unverified).
 
 ### The C rule
 
@@ -230,10 +237,11 @@ sources were fixed in writing before any comparison with the suite:
 - the barrel shifter's carry-out in that cycle (for a rotate right by n, bit 31 of the shifter
   output; for an arithmetic shift right, the last bit shifted out).
 
-Compared once with the pinned suite, the ALU candidate matched about 63% of the cases and was
-rejected. "Evaluable" there means S cases whose condition passes, with no R15 operand and a
-defined mode, and m = 3 or 4: 9,623 + 70 + 10,129 + 71 + 29 + 3,127 = 23,049 cases (long m = 4
-and 3, MUL/MLA m = 4 and 3, Thumb MUL m = 4 and 3). The shifter candidate matched all of them.
+Compared once with the pinned suite, the ALU candidate matched 14,727 of the 23,049 evaluable
+cases (about 64%) and was rejected. "Evaluable" means S cases whose condition passes, with no
+R15 operand and a defined mode, and m = 3 or 4: long m = 4 9,623 and m = 3 71; MUL/MLA m = 4
+10,129 and m = 3 70; Thumb MUL m = 4 3,127 and m = 3 29; 23,049 in all. The shifter candidate
+matched all of them.
 The suite has no case with m = 1 or 2, because its operands are random. The implemented model
 then also matches every case of the three suite files, R15 operands included. So the rule is:
 

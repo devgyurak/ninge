@@ -8,8 +8,6 @@
 //! value an MCR with Rd = R15 sends (the note's "Access").
 
 use super::*;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 /// Address of the instruction under test.
 const ADDR: u32 = 0x1000;
@@ -915,15 +913,31 @@ fn given_the_trace_process_id_written_at_c13_c1_1_when_read_at_c13_c0_1_then_it_
 
 // ---------------------------------------------------------------- state is plain data
 
-fn assert_serde<T: Serialize + DeserializeOwned>() {}
+/// Encodes with postcard and decodes again.
+fn postcard_round_trip<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
+    let bytes = postcard::to_allocvec(value).expect("state is plain data and encodes");
+    postcard::from_bytes(&bytes).expect("bytes just encoded decode")
+}
 
 #[test]
 fn given_a_cp15_holding_non_default_values_when_compared_then_it_differs_from_power_on() {
-    // TODO(phase2): a byte-level serde round trip belongs with the savestate encoder (#19, Phase
-    // 2); no serde format crate is a dependency yet, so the serde bounds are checked at compile
-    // time here.
-    assert_serde::<Cp15>();
-    assert_serde::<Cpu<true>>();
-    assert_serde::<Cpu<false>>();
     assert_ne!(*preloaded().cp15(), Cp15::new());
+}
+
+#[test]
+fn given_a_cp15_holding_non_default_values_when_postcard_round_tripped_then_it_is_equal() {
+    let cp15 = preloaded().cp15().clone();
+    assert_eq!(postcard_round_trip(&cp15), cp15);
+}
+
+#[test]
+fn given_an_arm9_core_holding_non_default_values_when_postcard_round_tripped_then_it_is_equal() {
+    let cpu = preloaded();
+    assert_eq!(postcard_round_trip(&cpu), cpu);
+}
+
+#[test]
+fn given_an_arm7_core_when_postcard_round_tripped_then_it_is_equal() {
+    let cpu = Cpu::<false>::new();
+    assert_eq!(postcard_round_trip(&cpu), cpu);
 }

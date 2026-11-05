@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Dummy frames for the display test. Not an emulation decision: the core draws nothing
-//! yet, so the frontend shows a moving pattern to prove the output path.
+//! Dummy frames shown when no ROM is given. Not an emulation decision: a moving pattern
+//! that exercises the output path without a machine.
 
 use ninge_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 

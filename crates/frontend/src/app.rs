@@ -5,9 +5,11 @@ use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
 use crate::placeholder::ScreenImage;
+use crate::source::Source;
 use crate::transfer::{NoShm, ShmSink, Transfer};
 use anyhow::anyhow;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ninge_core::{Machine, Screen};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -59,6 +61,7 @@ pub struct App<S = NoShm> {
     size: TermSize,
     areas: Option<Areas>,
     frame_no: u64,
+    source: Source,
     quit: bool,
     transfer: Transfer,
     sink: S,
@@ -79,9 +82,25 @@ impl<S: ShmSink> App<S> {
             size,
             areas: compute(size),
             frame_no: 0,
+            source: Source::Pattern,
             quit: false,
             transfer,
             sink,
+        }
+    }
+
+    /// Takes frames from `source` instead of the dummy pattern.
+    #[must_use]
+    pub fn with_source(mut self, source: Source) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// The machine behind the screens, `None` while the dummy pattern is shown.
+    pub fn machine(&self) -> Option<&Machine> {
+        match &self.source {
+            Source::Machine(machine) => Some(machine),
+            Source::Pattern => None,
         }
     }
 
@@ -114,17 +133,31 @@ impl<S: ShmSink> App<S> {
 
     /// The graphics bytes for this frame: each screen's pixels with its virtual
     /// placement. Re-transmitting an image deletes its placements, so every frame
-    /// places both again. Advances the frame counter.
+    /// places both again. Advances the frame counter and, with a machine, runs one of
+    /// its frames even when the terminal is too small to show it.
     pub fn graphics(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
+        if let Source::Machine(machine) = &mut self.source {
+            machine.run_frame();
+        }
         if let Some(areas) = self.areas {
-            let top = dummy_frame(self.frame_no, 0);
-            let bottom = dummy_frame(self.frame_no, 1);
+            let (top, bottom) = self.screens();
             out.extend(self.send(TOP_IMAGE_ID, &top, areas.top));
             out.extend(self.send(BOTTOM_IMAGE_ID, &bottom, areas.bottom));
         }
         self.frame_no += 1;
         out
+    }
+
+    /// The pixels of both screens for this tick.
+    fn screens(&self) -> (Vec<u32>, Vec<u32>) {
+        match &self.source {
+            Source::Machine(machine) => (
+                machine.frame(Screen::Top).to_vec(),
+                machine.frame(Screen::Bottom).to_vec(),
+            ),
+            Source::Pattern => (dummy_frame(self.frame_no, 0), dummy_frame(self.frame_no, 1)),
+        }
     }
 
     /// One screen over the current medium. A failed shared-memory write is not retried:
@@ -408,13 +441,13 @@ mod tests {
 
     /// Hands out `/fake-<n>` names, or fails every put.
     struct FakeSink {
-        puts: Vec<usize>,
+        puts: Vec<Vec<u8>>,
         fail: bool,
     }
 
     impl ShmSink for FakeSink {
         fn put(&mut self, data: &[u8]) -> std::io::Result<String> {
-            self.puts.push(data.len());
+            self.puts.push(data.to_vec());
             if self.fail {
                 Err(std::io::Error::other("no space left"))
             } else {
@@ -443,7 +476,7 @@ mod tests {
             (
                 out.matches("t=s,S=147456,q=2").count(),
                 out.contains("t=d"),
-                app.sink.puts.clone()
+                app.sink.puts.iter().map(Vec::len).collect::<Vec<_>>()
             ),
             (2, false, vec![256 * 192 * 3, 256 * 192 * 3])
         );

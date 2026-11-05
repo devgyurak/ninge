@@ -8,6 +8,7 @@
 use crate::app::{Action, App, frame_step, map_event, poll_timeout};
 use crate::kitty;
 use crate::layout::TermSize;
+use crate::source::Source;
 use crate::transfer::Transfer;
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
@@ -125,8 +126,8 @@ pub fn size() -> io::Result<TermSize> {
     Ok(TermSize::from_window(w.columns, w.rows, w.width, w.height))
 }
 
-/// Runs the TUI until the user quits.
-pub fn run() -> anyhow::Result<()> {
+/// Runs the TUI until the user quits, showing frames from `source`.
+pub fn run(source: Source) -> anyhow::Result<()> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -138,7 +139,7 @@ pub fn run() -> anyhow::Result<()> {
     let mut out = io::stdout();
     crossterm::execute!(out, EnterAlternateScreen, Hide)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let mut app = App::with_transfer(size()?, sink, transfer);
+    let mut app = App::with_transfer(size()?, sink, transfer).with_source(source);
     let mut gfx = io::stdout();
     while !app.should_quit() {
         let deadline = Instant::now() + FRAME_TIME;

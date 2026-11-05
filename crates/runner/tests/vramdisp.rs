@@ -16,14 +16,20 @@ use ninge_runner::{load_rom_file, testrom_path};
 /// A mismatch: (x, y, expected, got).
 type Mismatch = (usize, usize, u32, u32);
 
-/// A machine that booted the `vramdisp` ROM and ran one frame.
-fn boot_one_frame() -> Machine {
+/// Frames run before the screens are inspected. The ROM draws within about 840,000 steps, and
+/// the per-frame step budget is an unverified estimate that the scheduler (#21) will replace,
+/// so the tests do not assume the picture is finished after one frame; the golden uses the same
+/// count.
+const FRAMES: u64 = 3;
+
+/// A machine that booted the `vramdisp` ROM and ran `FRAMES` frames.
+fn boot_frames() -> Machine {
     let rom = load_rom_file(&testrom_path("vramdisp")).expect("vramdisp ROM is built");
     let mut machine = Machine::new();
     machine
         .load_rom(rom)
         .expect("vramdisp ROM has a valid header");
-    machine.run_frame();
+    (0..FRAMES).for_each(|_| machine.run_frame());
     machine
 }
 
@@ -74,8 +80,8 @@ fn pixel_failures(machine: &Machine, screen: Screen) -> Vec<Mismatch> {
 }
 
 #[test]
-fn given_vramdisp_rom_when_one_frame_runs_then_the_bottom_screen_shows_the_expected_pixels() {
-    let machine = boot_one_frame();
+fn given_vramdisp_rom_when_3_frames_run_then_the_bottom_screen_shows_the_expected_pixels() {
+    let machine = boot_frames();
     assert_eq!(
         pixel_failures(&machine, Screen::Bottom),
         Vec::<Mismatch>::new()
@@ -83,14 +89,14 @@ fn given_vramdisp_rom_when_one_frame_runs_then_the_bottom_screen_shows_the_expec
 }
 
 #[test]
-fn given_vramdisp_rom_with_the_swap_bit_clear_when_one_frame_runs_then_the_top_screen_is_black() {
-    let machine = boot_one_frame();
+fn given_vramdisp_rom_with_the_swap_bit_clear_when_3_frames_run_then_the_top_screen_is_black() {
+    let machine = boot_frames();
     assert!(machine.frame(Screen::Top).iter().all(|&pixel| pixel == 0));
 }
 
 #[test]
-fn given_vramdisp_rom_when_one_frame_runs_then_the_rom_wrote_the_registers_it_set() {
-    let machine = boot_one_frame();
+fn given_vramdisp_rom_when_3_frames_run_then_the_rom_wrote_the_registers_it_set() {
+    let machine = boot_frames();
     assert_eq!(
         (
             machine.gpu2d().powcnt1(),

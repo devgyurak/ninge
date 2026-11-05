@@ -104,10 +104,10 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 
 ## Not modeled
 
-- **SWP and SWPB ignore load mode on the hardware** (GBATEK, "TCM Enable, TCM Load Mode"): a
-  swap on a load-mode TCM reads the TCM, not the memory underneath. The model cannot tell a swap
-  from a load, because the `Bus` trait carries no access kind (#76), so a swap sees the load-mode
-  rule. This is a known gap, not an open question. — `Cpu::swap` in
+- **Load mode does not apply to SWP and SWPB** (GBATEK, "TCM Enable, TCM Load Mode"). GBATEK
+  says only that; what a swap reads there is not stated (most likely the TCM like a normal
+  access, which is an inference). The model cannot tell a swap from a load, because the `Bus`
+  trait carries no access kind (#76), so a swap sees the load-mode rule. This is a known gap, not an open question. — `Cpu::swap` in
   `crates/core/src/cpu/arm_transfer.rs` carries `TODO(phase8)`.
 
 ## Unverified

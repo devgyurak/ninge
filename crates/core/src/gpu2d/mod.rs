@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Graphics engine A's display registers and the Phase 2 picture: display off and the VRAM
+//! display (`docs/hw/display-mode-vram.md`).
+//!
+//! The whole frame is drawn at once from the registers and VRAM as they are when it is asked
+//! for. No allocation, formatting or collection happens while pixels are made.
+
+use serde::{Deserialize, Serialize};
+
+/// DISPCNT of engine A, at `0400_0000h` (`display-mode-vram.md`, "Registers").
+pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;
+/// POWCNT1, at `0400_0304h` (`display-mode-vram.md`, "Registers").
+pub const POWCNT1_ADDR: u32 = 0x0400_0304;
+/// The xRGB8888 value of a white pixel.
+pub const WHITE: u32 = 0x00FF_FFFF;
+/// The xRGB8888 value of a black pixel.
+pub const BLACK: u32 = 0;
+
+/// DISPCNT bits 16-17: the display mode.
+const DISPCNT_MODE_SHIFT: u32 = 16;
+const DISPCNT_MODE_MASK: u32 = 0x3;
+/// Display mode 0: display off, a white screen.
+const MODE_OFF: u32 = 0;
+/// Display mode 2: the bitmap read from a VRAM block.
+const MODE_VRAM: u32 = 2;
+/// DISPCNT bits 18-19: the VRAM block mode 2 reads.
+const DISPCNT_BLOCK_SHIFT: u32 = 18;
+const DISPCNT_BLOCK_MASK: u32 = 0x3;
+/// The block number of bank A, the only block modeled in Phase 2.
+const BLOCK_A: u32 = 0;
+/// POWCNT1 bit 15: display swap. Set sends engine A to the upper screen.
+const POWCNT1_SWAP: u16 = 1 << 15;
+/// POWCNT1 after direct boot: LCD, both 2D engines and both 3D units on, engine A on top.
+// TODO(hw-unverified): a choice made for lack of evidence; the smoke golden depends on bit 15
+// (`display-mode-vram.md`, "Unverified").
+const POWCNT1_RESET: u16 = 0x820F;
+
+/// Colour channel mask: five bits per channel in the 15-bit colour.
+const CHANNEL_MASK: u16 = 0x1F;
+/// Bit offsets of green and blue in the 15-bit colour; red is at bit 0.
+const GREEN_SHIFT: u32 = 5;
+const BLUE_SHIFT: u32 = 10;
+
+/// Engine A's display registers (`display-mode-vram.md`, "Registers").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpu2d {
+    dispcnt_a: u32,
+    powcnt1: u16,
+}
+
+/// Widens a 5-bit channel to 8 bits by repeating its top bits. A host-side choice, not a
+/// hardware fact (`display-mode-vram.md`, "Colour expansion"; #68).
+fn expand_channel(channel: u16) -> u32 {
+    let c = u32::from(channel & CHANNEL_MASK);
+    (c << 3) | (c >> 2)
+}
+
+/// A 15-bit colour as xRGB8888. Bit 15 is not part of the colour.
+fn expand_color(halfword: u16) -> u32 {
+    (expand_channel(halfword) << 16)
+        | (expand_channel(halfword >> GREEN_SHIFT) << 8)
+        | expand_channel(halfword >> BLUE_SHIFT)
+}
+
+/// `reg` with its byte `index` replaced by `value`.
+fn with_byte(reg: u32, index: u32, value: u8) -> u32 {
+    let shift = index * 8;
+    (reg & !(0xFF << shift)) | (u32::from(value) << shift)
+}
+
+impl Gpu2d {
+    /// Registers in their power-on state.
+    // TODO(hw-unverified): DISPCNT starts at 0 and POWCNT1 at `820Fh`, neither stated by
+    // GBATEK (`display-mode-vram.md`, "Unverified").
+    pub fn new() -> Self {
+        Self {
+            dispcnt_a: 0,
+            powcnt1: POWCNT1_RESET,
+        }
+    }
+
+    /// DISPCNT of engine A.
+    pub fn dispcnt_a(&self) -> u32 {
+        self.dispcnt_a
+    }
+
+    /// POWCNT1.
+    pub fn powcnt1(&self) -> u16 {
+        self.powcnt1
+    }
+
+    /// Whether POWCNT1 bit 15 sends engine A to the upper screen.
+    // TODO(hw-unverified): bits 0 (LCD enable) and 1 (engine A enable) have no effect on the
+    // picture (`display-mode-vram.md`, "Unverified").
+    // TODO(phaseN): the other POWCNT1 bits arrive with their units (3D: phase 7, engine B:
+    // phase 4).
+    pub fn engine_a_on_top(&self) -> bool {
+        self.powcnt1 & POWCNT1_SWAP != 0
+    }
+
+    /// The byte of DISPCNT at `0400_0000h + index`, or `None` outside it.
+    pub(crate) fn read_byte(&self, addr: u32) -> Option<u8> {
+        let (reg, base) = self.register_at(addr)?;
+        Some((reg >> ((addr - base) * 8)) as u8)
+    }
+
+    /// Writes one byte of DISPCNT or POWCNT1; any other address is not ours and is ignored.
+    // TODO(hw-unverified): POWCNT1's undefined bits are kept as written
+    // (`display-mode-vram.md`, "Unverified").
+    pub(crate) fn write_byte(&mut self, addr: u32, value: u8) {
+        let dispcnt_index = addr.wrapping_sub(DISPCNT_A_ADDR);
+        let powcnt1_index = addr.wrapping_sub(POWCNT1_ADDR);
+        if dispcnt_index < 4 {
+            self.dispcnt_a = with_byte(self.dispcnt_a, dispcnt_index, value);
+        } else if powcnt1_index < 2 {
+            self.powcnt1 = with_byte(u32::from(self.powcnt1), powcnt1_index, value) as u16;
+        }
+    }
+
+    /// The register that holds `addr` and its base address.
+    fn register_at(&self, addr: u32) -> Option<(u32, u32)> {
+        if addr.wrapping_sub(DISPCNT_A_ADDR) < 4 {
+            Some((self.dispcnt_a, DISPCNT_A_ADDR))
+        } else if addr.wrapping_sub(POWCNT1_ADDR) < 2 {
+            Some((u32::from(self.powcnt1), POWCNT1_ADDR))
+        } else {
+            None
+        }
+    }
+
+    /// Draws engine A's picture into `out` (`SCREEN_WIDTH * SCREEN_HEIGHT` pixels, from the crate root), given the
+    /// bytes of bank A when the CPU can see it as LCDC VRAM.
+    // TODO(phase3): mode 1 draws the text backgrounds (#21 brings scanline timing).
+    // TODO(phase4): mode 1 completes, mode 3 draws the main-memory bitmap, and blocks 1-3
+    // (banks B-D) join mode 2 (#35).
+    // TODO(hw-unverified): a bank that is disabled or not in LCDC mode is drawn as zeros, i.e.
+    // black (`display-mode-vram.md`, "Unverified").
+    pub(crate) fn render_engine_a(&self, bank_a: Option<&[u8]>, out: &mut [u32]) {
+        let mode = (self.dispcnt_a >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
+        let block = (self.dispcnt_a >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
+        out.fill(BLACK);
+        if mode == MODE_OFF {
+            out.fill(WHITE);
+        } else if mode == MODE_VRAM && block == BLOCK_A {
+            let (pairs, _) = bank_a.unwrap_or(&[]).as_chunks::<2>();
+            out.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
+                *pixel = expand_color(u16::from_le_bytes(bytes));
+            });
+        }
+    }
+}
+
+impl Default for Gpu2d {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests;

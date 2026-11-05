@@ -136,7 +136,8 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 - **Write-only registers read.** VRAMCNT_A is marked write-only; a read returns 0 here. —
   `Memory::read_slow` — verify likewise.
 - **Wider writes to a byte register.** VRAMCNT_A sits next to VRAMCNT_B; a halfword or word
-  write there is split into bytes and only the byte at VRAMCNT_A's address is used. —
+  write there is split into bytes, each byte goes to the register at its own address, and a
+  byte that lands on no register (VRAMCNT_B before it exists) is dropped. —
   `Memory::write_slow` — verify likewise.
 - **A fetch from the DTCM region** reads the memory underneath; a fetch from a load-mode ITCM
   reads underneath. GBATEK does not describe the fetch path in either case. —

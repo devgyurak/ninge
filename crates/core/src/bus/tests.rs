@@ -632,7 +632,8 @@ fn given_vramcnt_a_enabled_then_set_to_mst_1_when_the_window_is_looked_up_then_i
 const UNMAPPED: [u32; 9] = [
     0x0000_0000,
     0x0300_0000,
-    0x0400_0000,
+    // An I/O port no register occupies; 0x0400_0000 is DISPCNT since #20.
+    0x0400_0090,
     0x0500_0000,
     0x0600_0000,
     0x0700_0000,

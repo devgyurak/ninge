@@ -21,8 +21,8 @@
 //!
 //! # Version policy
 //!
-//! [`FORMAT_VERSION`] starts at 1. Before 1.0 there is no backward compatibility: a state
-//! whose version differs from this build's is refused with
+//! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20). Before
+//! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
 //!
@@ -53,7 +53,7 @@ use crate::Machine;
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;

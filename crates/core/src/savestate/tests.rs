@@ -14,12 +14,12 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_374_661;
-const PINNED_HASH: u64 = 0x130c_51da_7a88_1a0a;
+const PINNED_LEN: usize = 4_374_665;
+const PINNED_HASH: u64 = 0x7d71_5869_eec5_edf6;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
-const PINNED_BOOTED_LEN: usize = 4_374_722;
-const PINNED_BOOTED_HASH: u64 = 0xb040_3b47_3fe7_14af;
+const PINNED_BOOTED_LEN: usize = 4_374_726;
+const PINNED_BOOTED_HASH: u64 = 0x2aa1_fece_e5c1_7069;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -152,7 +152,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &1u32.to_le_bytes(),
+        &2u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -193,7 +193,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 7,
-            expected: 1
+            expected: 2
         })
     );
 }
@@ -204,9 +204,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 7 is not version 1")
+        .expect_err("version 7 is not version 2")
         .to_string();
-    assert!(message.contains("version 7") && message.contains("version 1"));
+    assert!(message.contains("version 7") && message.contains("version 2"));
 }
 
 #[test]

@@ -178,6 +178,20 @@ impl Registers {
         }
     }
 
+    /// Whether the visible bank is the one the CPSR's mode bits name. A CPSR that names no mode
+    /// leaves the bank free (`set_cpsr`). A savestate that decodes to anything else is corrupt.
+    pub(crate) fn is_consistent(&self) -> bool {
+        Mode::from_bits(self.cpsr).is_none_or(|mode| mode.bank() == self.bank)
+    }
+
+    /// Test helper: makes the visible bank disagree with the CPSR mode, as only a damaged
+    /// savestate could.
+    #[cfg(test)]
+    pub(crate) fn break_bank_for_test(&mut self) {
+        self.bank = Bank::Fiq;
+        self.cpsr = Mode::User.bits();
+    }
+
     /// The SPSR of `bank`, or `None` for User/System, which have none.
     // TODO(hw-unverified): what a read of the SPSR gives in User/System mode is not stated by
     // the sources (`docs/hw/cpu-registers.md`, "Unverified"); modeled as having none.
@@ -210,5 +224,39 @@ impl Registers {
 impl Default for Registers {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests_consistent {
+    use super::*;
+
+    #[test]
+    fn given_power_on_registers_when_checked_then_they_are_consistent() {
+        assert!(Registers::new().is_consistent());
+    }
+
+    #[test]
+    fn given_a_cpsr_written_with_irq_mode_when_checked_then_the_banks_follow_and_it_is_consistent()
+    {
+        let mut regs = Registers::new();
+        regs.set_cpsr(0x12);
+        assert!(regs.is_consistent());
+    }
+
+    #[test]
+    fn given_irq_mode_bits_but_the_user_bank_when_checked_then_it_is_inconsistent() {
+        let mut regs = Registers::new();
+        regs.cpsr = 0x12;
+        regs.bank = Bank::UserSystem;
+        assert!(!regs.is_consistent());
+    }
+
+    #[test]
+    fn given_mode_bits_naming_no_mode_when_checked_then_any_bank_is_consistent() {
+        let mut regs = Registers::new();
+        regs.cpsr = 0x00;
+        regs.bank = Bank::Fiq;
+        assert!(regs.is_consistent());
     }
 }

@@ -141,15 +141,14 @@ impl Memory {
         memory
     }
 
-    /// Rebuilds the page table from the mapping state. Called at construction and after every
-    /// mapping change (a VRAMCNT_A write).
-    // TODO(phase2): rebuild after load (#19).
+    /// Rebuilds the page table from the mapping state. Called at construction, after every
+    /// mapping change (a VRAMCNT_A write), and after a savestate load (`savestate`).
     // TODO(phase3): shared WRAM and the BIOS join the table (#22, #27).
     // TODO(phase4): the other VRAM banks and MST values join it (#35).
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
     // rule; a disabled bank or MST other than 0 is unmapped; the LCDC window has no mirrors
     // (`arm9-memory-map.md`, `vram-banks.md`, "Unverified").
-    fn build_page_table(&mut self) {
+    pub(crate) fn build_page_table(&mut self) {
         self.pages.clear();
         self.pages.resize(PAGE_COUNT, UNMAPPED_PAGE);
         let ram_pages = MAIN_RAM_SIZE / PAGE_SIZE;
@@ -281,6 +280,17 @@ impl Memory {
         }
     }
 
+    /// Whether the buffers have the sizes `new` allocates and VRAMCNT_A holds only used bits.
+    /// A savestate that decodes to anything else is corrupt (`savestate`); the accessors stay
+    /// total either way, so this guards behavior, not memory safety.
+    pub(crate) fn is_well_formed(&self) -> bool {
+        self.main_ram.len() == MAIN_RAM_SIZE
+            && self.itcm.len() == ITCM_SIZE
+            && self.dtcm.len() == DTCM_SIZE
+            && self.vram_a.len() == VRAM_A_SIZE
+            && self.vramcnt_a & !VRAMCNT_USED == 0
+    }
+
     /// Stores VRAMCNT_A and rebuilds the page table, since the write can move the bank.
     // TODO(hw-unverified): bit 2 is dropped (`vram-banks.md`, "Unverified").
     fn write_vramcnt_a(&mut self, value: u8) {
@@ -332,5 +342,50 @@ impl Memory {
 impl Default for Memory {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests_well_formed {
+    use super::*;
+
+    #[test]
+    fn given_power_on_memory_when_checked_then_it_is_well_formed() {
+        assert!(Memory::new().is_well_formed());
+    }
+
+    #[test]
+    fn given_a_short_main_ram_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.main_ram.pop();
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_a_short_itcm_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.itcm.pop();
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_a_short_dtcm_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.dtcm.pop();
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_a_long_vram_a_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.vram_a.push(0);
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_an_unused_vramcnt_a_bit_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.vramcnt_a = !VRAMCNT_USED;
+        assert!(!memory.is_well_formed());
     }
 }

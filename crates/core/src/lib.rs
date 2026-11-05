@@ -5,6 +5,7 @@ pub mod bus;
 pub mod cart;
 pub mod cpu;
 mod hle;
+pub mod savestate;
 
 use bus::{Arm9View, Memory, TcmConfig, VramBankState};
 use cart::Header;
@@ -32,42 +33,35 @@ pub enum Screen {
 ///
 /// Frame buffers are `u32` per pixel in xRGB8888 (`0x00RRGGBB`). That is the emulator's
 /// host-side output format, not a hardware fact (`docs/hw/display.md`).
+///
+/// Load a savestate only through [`Machine::load_state`]; deserializing a `Machine` directly
+/// skips its checks and leaves the derived page table empty.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machine {
     // Invariant: each buffer holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels. They are
     // `Vec`s because serde does not derive for arrays this large. The buffers are derived
     // output, not savestate data: they are skipped on save, and a load recreates them blank
-    // (restoring the invariant) until the next frame is drawn. The savestate format itself
-    // is owned by #19.
+    // (restoring the invariant) until the next frame is drawn. The savestate format is in
+    // the `savestate` module.
     #[serde(skip, default = "blank_screen")]
     top: Vec<u32>,
     #[serde(skip, default = "blank_screen")]
     bottom: Vec<u32>,
     // The ROM image is an input, not machine state: it is skipped on save and a savestate
     // loads onto a machine that was handed the ROM again, so a savestate never embeds the
-    // (possibly commercial) image. Defaults to empty.
-    // TODO(phase2): the savestate loader (#19) must meet these constraints:
-    //  1. Re-attach the ROM and check it matches the state; a machine without a ROM must
-    //     refuse to run.
-    //  2. The derived `PartialEq` compares `rom` too, so a round-trip comparison must
-    //     exclude it.
-    //  3. `header` is saved but `rom` is not, so a loaded state has a header and no ROM;
-    //     `run_frame` steps on `header` alone, so the loader must not leave that combination.
-    //  4. `Clone` copies the whole ROM; revisit before rewind and run-ahead.
+    // (possibly commercial) image (`savestate` module docs). Defaults to empty.
+    // Invariant: `header` is `Some` exactly when `rom` is non-empty; `load_state` keeps it.
+    // Note: `Clone` copies the whole ROM; revisit before rewind and run-ahead (no phase or issue
+    // plans them yet).
     #[serde(skip)]
     rom: Vec<u8>,
     // Frames completed by `run_frame`; plain state, so it is serialized. A savestate
     // without it is refused, never half-loaded (AGENTS.md §2 rule 5).
     frame_count: u64,
-    // The ARM9 and the memory it sees. Plain data. `default` keeps a savestate map that lacks
-    // them loadable by the existing map tests.
-    // TODO(phase2): the savestate encoder (#19) decides whether a state without them is refused.
-    #[serde(default)]
+    // The ARM9 and the memory it sees. Plain data; a savestate lacking them is refused.
     arm9: Cpu<true>,
-    #[serde(default)]
     memory: Memory,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
-    #[serde(default)]
     header: Option<Header>,
 }
 
@@ -221,6 +215,10 @@ mod tests {
     use super::*;
     use serde::de::value::{Error, MapDeserializer};
 
+    fn run_frames(machine: &mut Machine, frames: u32) {
+        (0..frames).for_each(|_| machine.run_frame());
+    }
+
     #[test]
     fn given_new_machine_when_reading_each_screen_then_length_is_256_by_192() {
         let machine = Machine::new();
@@ -241,16 +239,16 @@ mod tests {
     }
 
     #[test]
-    fn given_savestate_map_with_frame_count_when_deserializing_machine_then_both_screens_are_full_size()
-     {
-        // TODO(phase2): save -> load round trip with the savestate encoder (#19).
-        let map = MapDeserializer::<_, Error>::new([("frame_count", 0u32)].into_iter());
-        let machine = Machine::deserialize(map).expect("a map with frame_count is a valid Machine");
+    fn given_saved_machine_when_loaded_onto_a_fresh_one_then_both_screens_are_full_size() {
+        let mut saved = Machine::new();
+        saved.run_frame();
+        let mut machine = Machine::new();
+        let result = machine.load_state(&saved.save_state());
         let lengths = [
             machine.frame(Screen::Top).len(),
             machine.frame(Screen::Bottom).len(),
         ];
-        assert_eq!(lengths, [49_152, 49_152]);
+        assert_eq!((result, lengths), (Ok(()), [49_152, 49_152]));
     }
 
     #[test]
@@ -318,11 +316,22 @@ mod tests {
     }
 
     #[test]
-    fn given_savestate_map_with_frame_count_7_when_deserializing_machine_then_rom_is_empty_and_frame_count_is_seven()
+    fn given_machine_that_ran_7_frames_when_saved_and_loaded_then_rom_is_empty_and_frame_count_is_seven()
      {
+        let mut saved = Machine::new();
+        run_frames(&mut saved, 7);
+        let mut machine = Machine::new();
+        let result = machine.load_state(&saved.save_state());
+        assert_eq!(
+            (result, machine.rom().len(), machine.frame_count()),
+            (Ok(()), 0, 7)
+        );
+    }
+
+    #[test]
+    fn given_savestate_map_with_only_frame_count_when_deserializing_machine_then_it_is_refused() {
         let map = MapDeserializer::<_, Error>::new([("frame_count", 7u32)].into_iter());
-        let machine = Machine::deserialize(map).expect("a map with frame_count is a valid Machine");
-        assert_eq!((machine.rom().len(), machine.frame_count()), (0, 7));
+        assert!(Machine::deserialize(map).is_err());
     }
 
     #[test]

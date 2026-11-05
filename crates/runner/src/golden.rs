@@ -232,8 +232,19 @@ pub fn assert_frame_hash(rom: &str, frames: u64) {
 
 /// Runs `rom` for `frames` frames and returns the `(top, bottom)` hash after each frame.
 pub fn run_frame_hashes(rom: Vec<u8>, frames: u64) -> Vec<(u64, u64)> {
-    let mut machine = Machine::new();
-    machine.load_rom(rom).expect("the ROM has a valid header");
+    step_frame_hashes(&mut booted(rom), frames)
+}
+
+/// Index of the first position where `a` and `b` differ; the shorter length if one is a prefix.
+pub fn first_divergence(a: &[(u64, u64)], b: &[(u64, u64)]) -> Option<usize> {
+    let common = a.len().min(b.len());
+    (0..common)
+        .find(|&index| a[index] != b[index])
+        .or((a.len() != b.len()).then_some(common))
+}
+
+/// Hashes both screens after every frame of `machine`'s next `frames` frames.
+fn step_frame_hashes(machine: &mut Machine, frames: u64) -> Vec<(u64, u64)> {
     (0..frames)
         .map(|_| {
             machine.run_frame();
@@ -245,35 +256,99 @@ pub fn run_frame_hashes(rom: Vec<u8>, frames: u64) -> Vec<(u64, u64)> {
         .collect()
 }
 
-/// Index of the first position where `a` and `b` differ; the shorter length if one is a prefix.
-pub fn first_divergence(a: &[(u64, u64)], b: &[(u64, u64)]) -> Option<usize> {
+/// A fresh machine that booted `rom`.
+fn booted(rom: Vec<u8>) -> Machine {
+    let mut machine = Machine::new();
+    machine.load_rom(rom).expect("the ROM has a valid header");
+    machine
+}
+
+/// Index of the first byte where `a` and `b` differ; the shorter length if one is a prefix.
+fn first_byte_difference(a: &[u8], b: &[u8]) -> Option<usize> {
     let common = a.len().min(b.len());
     (0..common)
         .find(|&index| a[index] != b[index])
         .or((a.len() != b.len()).then_some(common))
 }
 
-/// Asserts that two fresh machines running `rom` for `frames` frames hash identically.
+/// Asserts that two fresh machines running `rom` for `frames` frames hash identically and end
+/// in the same savestate bytes.
 ///
-/// TODO(phase1): take an input log once the core has an input API (#61).
-/// Savestate-byte equality is a separate check that belongs with savestates (#19).
+/// Until display mode 2 lands (#20) every frame is black, so the savestate bytes are the
+/// check that can actually see a difference.
 ///
 /// # Panics
 ///
 /// On `frames == 0` (nothing would be compared), a missing ROM, or a difference; the message
-/// names the first diverging frame.
+/// names the first diverging frame, or the first differing savestate byte.
+// TODO(phase1): take an input log once the core has an input API (#61).
 pub fn assert_deterministic(rom: &str, frames: u64) {
     assert!(
         frames > 0,
         "assert_deterministic needs at least one frame to compare; got frames=0 for {rom}"
     );
     let bytes = load_rom(rom);
-    let first = run_frame_hashes(bytes.clone(), frames);
-    let second = run_frame_hashes(bytes, frames);
-    if let Some(index) = first_divergence(&first, &second) {
+    let mut first = booted(bytes.clone());
+    let mut second = booted(bytes);
+    let first_hashes = step_frame_hashes(&mut first, frames);
+    let second_hashes = step_frame_hashes(&mut second, frames);
+    if let Some(index) = first_divergence(&first_hashes, &second_hashes) {
         panic!(
             "{rom} is not deterministic: the two runs first differ at frame {}",
             index + 1
+        );
+    }
+    if let Some(offset) = first_byte_difference(&first.save_state(), &second.save_state()) {
+        panic!(
+            "{rom} is not deterministic: the two runs end in different savestates \
+             (first differing byte at offset {offset})"
+        );
+    }
+}
+
+/// Asserts that saving after `frames_before` frames, loading into a fresh machine that was
+/// handed the same ROM, and running `frames_after` more frames matches an uninterrupted run of
+/// `frames_before + frames_after` frames, in every frame hash and in the final savestate bytes.
+///
+/// # Panics
+///
+/// On `frames_after == 0` (nothing would be compared), a missing ROM, a refused savestate, or
+/// a difference; the message names the first diverging frame, or the first differing
+/// savestate byte.
+pub fn assert_savestate_round_trip(rom: &str, frames_before: u64, frames_after: u64) {
+    assert!(
+        frames_after > 0,
+        "assert_savestate_round_trip needs at least one frame after the load; got \
+         frames_after=0 for {rom}"
+    );
+    let bytes = load_rom(rom);
+
+    let mut uninterrupted = booted(bytes.clone());
+    let expected_hashes = step_frame_hashes(&mut uninterrupted, frames_before + frames_after);
+
+    let mut saver = booted(bytes.clone());
+    step_frame_hashes(&mut saver, frames_before);
+    let mut resumed = booted(bytes);
+    resumed
+        .load_state(&saver.save_state())
+        .unwrap_or_else(|error| panic!("{rom}: the savestate was refused: {error}"));
+    let resumed_hashes = step_frame_hashes(&mut resumed, frames_after);
+
+    let after_load = &expected_hashes[usize::try_from(frames_before).expect("frame count fits")..];
+    if let Some(index) = first_divergence(after_load, &resumed_hashes) {
+        panic!(
+            "{rom}: the run resumed from a savestate taken after {frames_before} frames first \
+             differs from the uninterrupted run at frame {}",
+            frames_before + index as u64 + 1
+        );
+    }
+    if let Some(offset) = first_byte_difference(&uninterrupted.save_state(), &resumed.save_state())
+    {
+        panic!(
+            "{rom}: the run resumed from a savestate taken after {frames_before} frames ends in \
+             a different savestate than the uninterrupted run (first differing byte at offset \
+             {offset}, after frame {})",
+            frames_before + frames_after
         );
     }
 }
@@ -494,6 +569,33 @@ mod tests {
     #[should_panic(expected = "nonexistent_rom_for_test")]
     fn given_nonexistent_rom_when_asserting_deterministic_then_panic_names_the_rom() {
         assert_deterministic("nonexistent_rom_for_test", 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "nonexistent_rom_for_test")]
+    fn given_nonexistent_rom_when_asserting_savestate_round_trip_then_panic_names_the_rom() {
+        assert_savestate_round_trip("nonexistent_rom_for_test", 1, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one frame after the load")]
+    fn given_zero_frames_after_when_asserting_savestate_round_trip_then_it_is_refused() {
+        assert_savestate_round_trip("nonexistent_rom_for_test", 1, 0);
+    }
+
+    #[test]
+    fn given_equal_byte_slices_when_compared_then_no_difference() {
+        assert_eq!(first_byte_difference(&[1, 2, 3], &[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn given_difference_at_byte_two_when_compared_then_offset_is_two() {
+        assert_eq!(first_byte_difference(&[1, 2, 3], &[1, 2, 4]), Some(2));
+    }
+
+    #[test]
+    fn given_shorter_byte_prefix_when_compared_then_offset_is_shorter_length() {
+        assert_eq!(first_byte_difference(&[1, 2], &[1, 2, 3, 4]), Some(2));
     }
 
     fn missing_substrings<'a>(message: &str, wanted: &[&'a str]) -> Vec<&'a str> {

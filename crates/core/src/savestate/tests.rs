@@ -11,11 +11,12 @@
 use super::*;
 use crate::bus::{Region, VramBankState};
 use crate::cart::test_image::{Image, words};
+use crate::cpu::Bus;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_174;
-const PINNED_HASH: u64 = 0x9299540be37ad475;
+const PINNED_LEN: usize = 4_473_172;
+const PINNED_HASH: u64 = 0x5fc9af6061107700;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -24,8 +25,10 @@ const PINNED_HASH: u64 = 0x9299540be37ad475;
 /// 50 bytes at power-on (two FIFOs of 16 + 3 one-byte varints each, two ports of 6 one-byte fields),
 /// so both lengths grew by 50. Version 8 (#25) added both CPUs' timers: 34 bytes at power-on
 /// (4 timers of 4 one-byte fields and a one-byte dirty mask, twice), so both lengths grew by 34.
-const PINNED_BOOTED_LEN: usize = 4_473_261;
-const PINNED_BOOTED_HASH: u64 = 0xcc80c670d3b0689a;
+/// Version 9 (#109) split the devices out of the memory block without moving a byte and dropped the dirty mask: one byte per timer set, so both lengths
+/// shrank by 2 and both hashes moved (the version field changed too).
+const PINNED_BOOTED_LEN: usize = 4_473_259;
+const PINNED_BOOTED_HASH: u64 = 0xfc9d22880f12b0b5;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -158,7 +161,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &8u32.to_le_bytes(),
+        &9u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -193,13 +196,13 @@ fn given_a_state_with_a_wrong_magic_when_loaded_then_it_is_refused_as_bad_magic(
 #[test]
 fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &9u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
     assert_eq!(
         result,
         Err(SavestateError::VersionMismatch {
-            found: 9,
-            expected: 8
+            found: 10,
+            expected: 9
         })
     );
 }
@@ -207,12 +210,12 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
 #[test]
 fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &9u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 9 is not version 8")
+        .expect_err("version 10 is not version 9")
         .to_string();
-    assert!(message.contains("version 9") && message.contains("version 8"));
+    assert!(message.contains("version 10") && message.contains("version 9"));
 }
 
 #[test]
@@ -546,7 +549,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_8_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_9_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -554,14 +557,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_8
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 8
+            expected: 9
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_8_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_9_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -569,15 +572,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_8
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 8
+            expected: 9
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_8() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_9() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 8u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 9u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -792,44 +795,25 @@ fn given_a_state_with_a_clock_just_above_the_time_limit_when_loaded_then_it_is_c
 const SHARED: u32 = 0x0300_0000;
 /// WRAMCNT (`wramcnt.md`, "Registers").
 const WRAMCNT_ADDR: u32 = 0x0400_0247;
-/// A TCM-free configuration, so every access goes through the page table.
-const NO_TCM: crate::bus::TcmConfig = crate::bus::TcmConfig {
-    itcm: crate::cpu::Tcm {
-        base: 0,
-        size: 0,
-        enabled: false,
-        load_mode: false,
-    },
-    dtcm: crate::cpu::Tcm {
-        base: 0,
-        size: 0,
-        enabled: false,
-        load_mode: false,
-    },
-    now: 0,
-};
-
 /// A machine whose WRAMCNT is `mode` and whose shared WRAM holds a word at the start of each
 /// 16 KiB half. A booted machine is in mode 3 (direct boot, `wramcnt.md`), so the mode is first
 /// set to 0 (the whole 32 KiB is the ARM9's) for the writes, then to `mode`.
 fn with_wram(mode: u8) -> Machine {
     let mut machine = booted(&counter_rom(), 0);
-    machine.memory.write8(&NO_TCM, WRAMCNT_ADDR, 0);
-    machine.memory.write32(&NO_TCM, SHARED, 0xA1A1_A1A1);
-    machine
-        .memory
-        .write32(&NO_TCM, SHARED + 0x4000, 0xB2B2_B2B2);
-    machine.memory.write8(&NO_TCM, WRAMCNT_ADDR, mode);
+    machine.bus9().write8(WRAMCNT_ADDR, 0);
+    machine.bus9().write32(SHARED, 0xA1A1_A1A1);
+    machine.bus9().write32(SHARED + 0x4000, 0xB2B2_B2B2);
+    machine.bus9().write8(WRAMCNT_ADDR, mode);
     machine
 }
 
 /// What each CPU reads at the start of the window and of the second half.
 fn wram_reads(machine: &Machine) -> [u32; 4] {
     [
-        machine.memory.read32(&NO_TCM, SHARED),
-        machine.memory.read32(&NO_TCM, SHARED + 0x4000),
-        machine.memory.read32_arm7(0, SHARED),
-        machine.memory.read32_arm7(0, SHARED + 0x4000),
+        machine.arm9_peek32(SHARED),
+        machine.arm9_peek32(SHARED + 0x4000),
+        machine.arm7_peek32(0, SHARED),
+        machine.arm7_peek32(0, SHARED + 0x4000),
     ]
 }
 
@@ -873,7 +857,7 @@ fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() 
             target.memory.wramcnt().mode,
             // Mode 1 gives the ARM7 the first half, which repeats every 16 KiB; mode 3 would
             // show the second half here (0xB2B2_B2B2).
-            target.memory.read32_arm7(0, SHARED + 0x4000)
+            target.arm7_peek32(0, SHARED + 0x4000)
         ),
         (
             Ok(()),
@@ -930,12 +914,11 @@ const IRQ_IE: u32 = 0x0400_0210;
 /// bit 16, IF bit 7 and bit 24. The ARM9's I flag is set, so no IRQ is taken.
 fn with_irq_state(frames: u32) -> Machine {
     let mut machine = booted(&counter_rom(), frames);
-    let tcm = crate::bus::TcmConfig::from_cp15(machine.arm9.cp15());
-    machine.memory.write32(&tcm, IRQ_IME, 0xFFFF_FFFF);
-    machine.memory.write32(&tcm, IRQ_IE, 0xFFFF_FFFF);
-    machine.memory.write32_arm7(0, IRQ_IE, 1 << 7 | 1 << 16);
-    machine.request_irq9(0b1001);
-    machine.request_irq7(1 << 7 | 1 << 24);
+    machine.bus9().write32(IRQ_IME, 0xFFFF_FFFF);
+    machine.bus9().write32(IRQ_IE, 0xFFFF_FFFF);
+    machine.bus7(0).write32(IRQ_IE, 1 << 7 | 1 << 16);
+    machine.io.request_irq(0b1001, 0);
+    machine.io.request_irq(0, 1 << 7 | 1 << 24);
     machine
 }
 
@@ -989,8 +972,8 @@ fn given_a_state_with_interrupt_registers_when_loaded_over_a_machine_with_others
  {
     let saved = with_irq_state(1);
     let mut target = booted(&counter_rom(), 0);
-    target.request_irq9(1 << 16);
-    target.request_irq7(1 << 8);
+    target.io.request_irq(1 << 16, 0);
+    target.io.request_irq(0, 1 << 8);
     let result = target.load_state(&saved.save_state());
     assert_eq!((result, irq_state(&target)), (Ok(()), IRQ_STATE));
 }
@@ -1038,7 +1021,7 @@ fn given_a_state_with_vcount_263_when_loaded_then_it_is_corrupt_and_the_target_i
     // `docs/hw/display-timing.md`: there are 263 lines, 0-262.
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
-    saver.memory.timing_mut().set_vcount_for_test(263);
+    saver.io.timing_mut().set_vcount_for_test(263);
     assert_eq!(
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
@@ -1050,7 +1033,7 @@ fn given_a_state_whose_vblank_flag_disagrees_with_vcount_when_loaded_then_it_is_
  {
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
-    saver.memory.timing_mut().set_vblank_for_test(true);
+    saver.io.timing_mut().set_vblank_for_test(true);
     assert_eq!(
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
@@ -1063,7 +1046,7 @@ fn given_a_state_with_a_dispstat_bit_that_does_not_exist_when_loaded_then_it_is_
     // Bit 0 (the VBlank flag) is derived, never stored: only `FFB8h` can be written.
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
-    saver.memory.timing_mut().set_arm7_control_for_test(0x0001);
+    saver.io.timing_mut().set_arm7_control_for_test(0x0001);
     assert_eq!(
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
@@ -1094,19 +1077,18 @@ const IPC_RECV: u32 = 0x0410_0000;
 /// three words (`ipc.md`, "Behavior"); the ARM7 has taken none, and has its receive IRQ on.
 fn with_words_in_flight(frames: u32) -> Machine {
     let mut machine = booted(&counter_rom(), frames);
-    let tcm = crate::bus::TcmConfig::from_cp15(machine.arm9.cp15());
-    machine.memory.write16(&tcm, IPC_CNT, 1 << 15);
-    machine.memory.write16_arm7(0, IPC_CNT, 1 << 15 | 1 << 10);
+    machine.bus9().write16(IPC_CNT, 1 << 15);
+    machine.bus7(0).write16(IPC_CNT, 1 << 15 | 1 << 10);
     [0x11, 0x2222, 0x33_3333]
         .into_iter()
-        .for_each(|word| machine.memory.write32(&tcm, IPC_SEND, word));
+        .for_each(|word| machine.bus9().write32(IPC_SEND, word));
     machine
 }
 
 /// The three words the ARM7 takes from `machine`, then the error flag of its IPCFIFOCNT.
 fn arm7_takes_three(machine: &mut Machine) -> ([u32; 3], u16) {
-    let words = std::array::from_fn(|_| machine.memory.read32_arm7_mut(0, IPC_RECV));
-    (words, machine.memory.read16_arm7(0, IPC_CNT) & (1 << 14))
+    let words = std::array::from_fn(|_| machine.bus7(0).read32(IPC_RECV));
+    (words, machine.arm7_peek16(0, IPC_CNT) & (1 << 14))
 }
 
 #[test]
@@ -1172,7 +1154,7 @@ fn given_words_in_flight_when_the_state_loads_over_a_machine_with_an_empty_fifo_
 fn load_with_ipc(ipc: crate::ipc::Ipc) -> (Result<(), SavestateError>, bool) {
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
-    saver.memory.replace_ipc_for_test(ipc);
+    saver.io.replace_ipc_for_test(ipc);
     load_onto_fresh(&rom, &saver)
 }
 

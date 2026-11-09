@@ -8,7 +8,7 @@
 //! pipeline"); each step fetches the opcode at R15 from the bus.
 
 use super::*;
-use crate::cpu::{Bus, Tcm};
+use crate::cpu::Bus;
 
 const ENTRY: u32 = 0x0200_0000;
 const SVC: u32 = 0x13;
@@ -45,25 +45,11 @@ const MOV_R6_55: u32 = 0xE3A0_6055;
 /// `MOV R7, #0x66`.
 const MOV_R7_66: u32 = 0xE3A0_7066;
 
-fn plain() -> TcmConfig {
-    let off = Tcm {
-        base: 0,
-        size: 0,
-        enabled: false,
-        load_mode: false,
-    };
-    TcmConfig {
-        itcm: off,
-        dtcm: off,
-        now: 0,
-    }
-}
-
 /// A machine with `program` in main RAM at `ENTRY`, Supervisor mode in ARM state, the pipeline
 /// full, and the listed registers set.
 fn boot(program: &[u32], regs: &[(usize, u32)]) -> Machine {
     let mut machine = Machine::new();
-    let mut view = Arm9View::new(&mut machine.memory, plain());
+    let mut view = machine.bus9();
     program.iter().enumerate().for_each(|(i, &op)| {
         view.write32(ENTRY + 4 * i as u32, op);
     });
@@ -241,7 +227,7 @@ fn given_vram_a_enabled_by_the_cpu_when_a_byte_is_peeked_then_it_is_the_stored_l
 /// A machine with `X` stored at `ENTRY + 0x20` through the bus.
 fn machine_with_word() -> Machine {
     let mut machine = Machine::new();
-    Arm9View::new(&mut machine.memory, plain()).write32(ENTRY + 0x20, X);
+    machine.bus9().write32(ENTRY + 0x20, X);
     machine
 }
 

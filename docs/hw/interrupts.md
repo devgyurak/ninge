@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Interrupts" (IME, IE and IF registers, the interrupt bit table);
 GBATEK "ARM CPU Exceptions" for the IRQ entry (see `arm-exceptions-modes.md`).
-Used by: `crates/core/src/irq.rs`, `crates/core/src/bus/memory.rs`, `crates/core/src/lib.rs`   Phase: 3 (#23)
+Used by: `crates/core/src/irq.rs`, `crates/core/src/io.rs`, `crates/core/src/lib.rs`   Phase: 3 (#23)
 
 Each CPU has its own interrupt controller: three registers that sit at the same addresses on
 both CPUs but are separate hardware. A write by one CPU never shows on the other. This note

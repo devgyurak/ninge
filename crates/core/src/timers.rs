@@ -4,8 +4,9 @@
 //! Each CPU owns one set at the same addresses; they never see each other. The counter is not
 //! stepped: a running timer stores the counter it had at an origin time and every read works the
 //! value out from the clock it is given (`timers.md`, "Model"). An overflow is a scheduler event;
-//! this module has no way to reach the scheduler or an interrupt controller, so what it would
-//! raise comes back as an IF mask and what it needs scheduled is asked of it
+//! this module has no way to reach the scheduler or an interrupt controller, so a write or an
+//! overflow hands back an [`Outcome`]: the IF mask it would raise and the mask of timers whose
+//! overflow event must be replaced. `Io` schedules them, asking each timer for its next overflow
 //! ([`Timers::overflow_time`]).
 
 use crate::irq::{TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
@@ -38,6 +39,25 @@ const COUNTER_RANGE: u64 = 0x1_0000;
 const MASTER_CYCLES_PER_TICK: u64 = 2;
 /// log2 of the clock divider each prescaler setting picks: F/1, F/64, F/256, F/1024.
 const PRESCALER_SHIFT: [u32; 4] = [0, 6, 8, 10];
+
+/// What a register write or an overflow asks of its caller (`timers.md`, "Model").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Outcome {
+    /// The IF bits to raise.
+    pub(crate) requests: u32,
+    /// Bit n: timer n's schedule changed, so its overflow event must be replaced.
+    pub(crate) reschedule: u8,
+}
+
+impl Outcome {
+    /// Both outcomes in one: the requests and the timers to reschedule of each.
+    fn merge(self, other: Self) -> Self {
+        Self {
+            requests: self.requests | other.requests,
+            reschedule: self.reschedule | other.reschedule,
+        }
+    }
+}
 
 /// One timer's registers and the counter's value at a moment. Plain data.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,9 +116,6 @@ impl Timer {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timers<const ARM9: bool> {
     timers: [Timer; TIMER_COUNT],
-    // Bit n: timer n's schedule changed since the machine last looked; it replaces that timer's
-    // overflow event. The machine looks after every instruction, so a saved state has none.
-    dirty: u8,
 }
 
 impl<const ARM9: bool> Timers<ARM9> {
@@ -107,7 +124,6 @@ impl<const ARM9: bool> Timers<ARM9> {
     pub fn new() -> Self {
         Self {
             timers: [Timer::default(); TIMER_COUNT],
-            dirty: 0,
         }
     }
 
@@ -171,12 +187,6 @@ impl<const ARM9: bool> Timers<ARM9> {
         }
     }
 
-    /// Takes the schedule-changed mask and clears it: bit n means timer n's overflow event must
-    /// be replaced (`timers.md`, "Model").
-    pub(crate) fn take_dirty(&mut self) -> u8 {
-        std::mem::take(&mut self.dirty)
-    }
-
     /// Timer `index` overflows at master time `time`: it reloads, the timers it feeds tick, and
     /// the IF bits to raise come back (`timers.md`, "Counting" and "Count-up").
     ///
@@ -228,25 +238,32 @@ impl<const ARM9: bool> Timers<ARM9> {
     // low byte of the control acts at once (`timers.md`, "Unverified").
     ///
     /// Overflows already due at `now` are processed first, with the settings they happened
-    /// under (`timers.md`, "Model"); the IF bits they raise come back.
-    pub(crate) fn write_byte(&mut self, addr: u32, value: u8, now: u64) -> u32 {
+    /// under (`timers.md`, "Model"); the IF bits they raise come back, and so does the set of
+    /// timers whose overflow event is now stale: those that overflowed, and the one the write
+    /// retimed.
+    pub(crate) fn write_byte(&mut self, addr: u32, value: u8, now: u64) -> Outcome {
         let Some((index, high_half, shift)) = Self::locate(addr) else {
-            return 0;
+            return Outcome::default();
         };
-        let requests = self.settle(now);
+        let settled = self.settle(now);
         if high_half {
-            if shift == 0 {
-                self.write_control(index, value, now);
-            }
             // TODO(hw-unverified): the high byte of TMnCNT_H holds no bits (`timers.md`,
             // "Unverified").
-            return requests;
+            let retimed = if shift == 0 {
+                self.write_control(index, value, now)
+            } else {
+                0
+            };
+            return settled.merge(Outcome {
+                requests: 0,
+                reschedule: retimed,
+            });
         }
         if let Some(timer) = self.timers.get_mut(index) {
             let byte_mask = 0xFF_u16 << shift;
             timer.reload = (timer.reload & !byte_mask) | (u16::from(value) << shift);
         }
-        requests
+        settled
     }
 
     /// Processes every overflow due at or before `now` that its event has not fired yet: a
@@ -256,23 +273,23 @@ impl<const ARM9: bool> Timers<ARM9> {
     ///
     /// The gap is under one slice, so a timer overflows at most `SLICE / 2` times in it; the bound
     /// also keeps a hand-made state with a far-off origin from looping for ages.
-    fn settle(&mut self, now: u64) -> u32 {
-        (0..TIMER_COUNT).fold(0, |requests, index| {
-            requests | self.settle_timer(index, now)
+    fn settle(&mut self, now: u64) -> Outcome {
+        (0..TIMER_COUNT).fold(Outcome::default(), |outcome, index| {
+            outcome.merge(self.settle_timer(index, now))
         })
     }
 
     /// [`Timers::settle`] for timer `index` alone: what its event does when it fires.
-    pub(crate) fn settle_timer(&mut self, index: usize, now: u64) -> u32 {
-        let mut requests = 0;
+    pub(crate) fn settle_timer(&mut self, index: usize, now: u64) -> Outcome {
+        let mut outcome = Outcome::default();
         for _ in 0..SLICE {
             let Some(due) = self.overflow_time(index).filter(|&due| due <= now) else {
                 break;
             };
-            requests |= self.overflow(index, due);
-            self.dirty |= 1 << index;
+            outcome.requests |= self.overflow(index, due);
+            outcome.reschedule |= 1 << index;
         }
-        requests
+        outcome
     }
 
     /// Applies the low byte of TMnCNT_H at `now`: the counter is settled under the old settings
@@ -280,11 +297,14 @@ impl<const ARM9: bool> Timers<ARM9> {
     // TODO(hw-unverified): the new prescaler applies from the write and the phase restarts
     // there; the first tick comes one full period after a start, with no start delay
     // (`timers.md`, "Unverified").
-    fn write_control(&mut self, index: usize, value: u8, now: u64) {
+    ///
+    /// Returns the mask of timers whose overflow event no longer matches: the timer itself when
+    /// the write started, stopped or retimed it, nothing otherwise.
+    fn write_control(&mut self, index: usize, value: u8, now: u64) -> u8 {
         let was_running = self.timers.get(index).is_some_and(Timer::running);
         let settled = self.counter(index, now);
         let Some(timer) = self.timers.get_mut(index) else {
-            return;
+            return 0;
         };
         let old = timer.control;
         let new = u16::from(value) & CONTROL_MASK;
@@ -293,7 +313,7 @@ impl<const ARM9: bool> Timers<ARM9> {
         // change of timer 0's count-up bit, which has no effect (`counts_up`).
         let inert = CONTROL_IRQ_ENABLE | if index == 0 { CONTROL_COUNT_UP } else { 0 };
         if old & !inert == new & !inert {
-            return;
+            return 0;
         }
         timer.counter = match (was_running, new & CONTROL_START != 0) {
             // A start loads the reload value.
@@ -304,7 +324,7 @@ impl<const ARM9: bool> Timers<ARM9> {
         timer.origin = now;
         // The overflow event no longer matches: start, stop, the clock or the mode changed.
         // The index is below 4 here, so the shift cannot overflow.
-        self.dirty |= 1 << index;
+        1 << index
     }
 
     /// Which timer holds `addr`, whether it is the control half, and the bit position of the byte
@@ -322,7 +342,6 @@ impl<const ARM9: bool> Timers<ARM9> {
         self.timers
             .iter()
             .all(|timer| timer.control & !CONTROL_MASK == 0)
-            && self.dirty == 0
     }
 }
 

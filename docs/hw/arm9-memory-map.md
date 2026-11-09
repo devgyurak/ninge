@@ -94,7 +94,7 @@ A TCM is described by the resolved view in `cp15.md` ("C9,C1,0 / C9,C1,1"): base
   inside the DTCM region reads the memory underneath. A load-mode ITCM is write-only, so a fetch
   from it also reads underneath (see "Unverified").
 - **A CP15 change** takes effect for the next instruction. The model copies the TCM registers
-  into the memory view before each step; an opcode the pipeline already holds was fetched under
+  into the ARM9's bus view before each step; an opcode the pipeline already holds was fetched under
   the old mapping (see "Unverified").
 
 ### Unmapped addresses and I/O
@@ -131,14 +131,14 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 - **Power-on RAM contents** are not stated; all RAM (main RAM, TCM, VRAM) starts at zero. —
   `Memory::new` — verify likewise.
 - **Unmapped reads** return 0 and writes are ignored; GBATEK says "undefined" for memory and
-  gives zero only for I/O ports. — `Memory::read_slow` in `bus/memory.rs` — verify
+  gives zero only for I/O ports. — `read_registers` in `bus/view.rs` — verify
   likewise. The `memmap` ROM records the I/O case (slot 32) only.
 - **Write-only registers read.** VRAMCNT_A is marked write-only; a read returns 0 here. —
-  `Memory::read_slow` — verify likewise.
+  `read_registers` in `bus/view.rs` — verify likewise.
 - **Wider writes to a byte register.** VRAMCNT_A sits next to VRAMCNT_B; a halfword or word
   write there is split into bytes, each byte goes to the register at its own address, and a
   byte that lands on no register (VRAMCNT_B before it exists) is dropped. —
-  `Memory::write_slow` — verify likewise.
+  `Access::write_registers` in `bus/view.rs` — verify likewise.
 - **A fetch from the DTCM region** reads the memory underneath; a fetch from a load-mode ITCM
   reads underneath. GBATEK does not describe the fetch path in either case. —
   `Memory::fetch` in `bus/memory.rs` — verify likewise.
@@ -147,7 +147,7 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
   likewise.
 - **I/O blocks are not mirrored.** The `04xx_xxxxh` block is decoded at its exact register
   addresses only, although GBATEK's general 16 MiB rule would suggest mirrors, and it says
-  nothing specific for I/O. — `Memory::write_slow` and `Memory::read_slow` in `bus/memory.rs` —
+  nothing specific for I/O. — `Access::write_registers` in `bus/view.rs` and `read_registers` in `bus/view.rs` —
   verify likewise.
 - **Load-mode ITCM over the DTCM.** When the ITCM is in load mode and its region overlaps an
   enabled DTCM, a load at an overlapping address reads the memory underneath, not the DTCM:

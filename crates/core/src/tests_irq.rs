@@ -22,6 +22,7 @@
 use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
+use crate::cpu::Bus;
 
 const ENTRY9: u32 = 0x0200_0000;
 const ENTRY7: u32 = 0x0238_0000;
@@ -44,10 +45,6 @@ const VECTOR_PC: u32 = 0x18 + 8;
 /// `mov r0, #0x55`, `mov r1, #0x66`, `b .`.
 const PROGRAM: [u32; 3] = [0xE3A0_0055, 0xE3A0_1066, 0xEAFF_FFFE];
 
-fn plain() -> TcmConfig {
-    TcmConfig::from_cp15(Machine::new().arm9.cp15())
-}
-
 fn machine() -> Machine {
     let mut image = Image::valid();
     image.arm9_code = words(&PROGRAM);
@@ -59,14 +56,14 @@ fn machine() -> Machine {
 
 /// Writes IME and IE of the ARM9 through the bus.
 fn enable9(m: &mut Machine, ime: u32, ie: u32) {
-    m.memory.write32(&plain(), IME, ime);
-    m.memory.write32(&plain(), IE, ie);
+    m.bus9().write32(IME, ime);
+    m.bus9().write32(IE, ie);
 }
 
 /// Writes IME and IE of the ARM7 through the bus.
 fn enable7(m: &mut Machine, ime: u32, ie: u32) {
-    m.memory.write32_arm7(0, IME, ime);
-    m.memory.write32_arm7(0, IE, ie);
+    m.bus7(0).write32(IME, ime);
+    m.bus7(0).write32(IE, ie);
 }
 
 /// What a test needs to see of a CPU: (CPSR, R14_irq, SPSR_irq, R15, r0, r1).
@@ -113,7 +110,7 @@ struct Setup {
 fn prepared9(s: Setup) -> Machine {
     let mut m = machine();
     enable9(&mut m, u32::from(s.ime), s.ie);
-    m.request_irq9(s.request);
+    m.io.request_irq(s.request, 0);
     m.arm9.regs_mut().set_cpsr(if s.i_set {
         SYSTEM_I_SET
     } else {
@@ -126,7 +123,7 @@ fn prepared9(s: Setup) -> Machine {
 fn prepared7(s: Setup) -> Machine {
     let mut m = machine();
     enable7(&mut m, u32::from(s.ime), s.ie);
-    m.request_irq7(s.request);
+    m.io.request_irq(0, s.request);
     m.arm7.regs_mut().set_cpsr(if s.i_set {
         SYSTEM_I_SET
     } else {
@@ -270,11 +267,7 @@ fn given_an_irq_taken_when_if_is_read_then_the_entry_has_not_cleared_it_and_the_
     let mut m = prepared9(ALL_ON);
     m.step_arm9();
     assert_eq!(
-        (
-            m.irq9().if_(),
-            m.irq9().line(),
-            m.memory.read32(&plain(), IF)
-        ),
+        (m.irq9().if_(), m.irq9().line(), m.arm9_peek32(IF)),
         (TIMER0, true, TIMER0)
     );
 }
@@ -315,7 +308,7 @@ fn given_a_request_taken_while_ime_was_off_when_ime_is_set_later_then_the_pendin
         ..ALL_ON
     });
     m.step_arm9();
-    m.memory.write32(&plain(), IME, 1);
+    m.bus9().write32(IME, 1);
     m.step_arm9();
     // The first instruction ran; the IRQ replaced the second: R14 = second + 4 = ENTRY + 8.
     assert_eq!(
@@ -420,7 +413,7 @@ fn given_a_request_for_a_source_ie_does_not_enable_when_the_arm9_steps_then_it_i
 #[test]
 fn given_a_request_acknowledged_before_the_step_when_the_arm9_steps_then_the_request_is_dropped() {
     let mut m = prepared9(ALL_ON);
-    m.memory.write32(&plain(), IF, TIMER0);
+    m.bus9().write32(IF, TIMER0);
     m.step_arm9();
     assert_eq!(
         (
@@ -476,7 +469,7 @@ fn given_a_request_on_the_arm7_when_both_cpus_run_then_the_arm9_is_never_interru
 fn given_the_same_request_on_both_cpus_with_only_the_arm9_enabled_when_both_run_then_only_the_arm9_enters_irq_mode()
  {
     let mut m = prepared9(ALL_ON);
-    m.request_irq7(TIMER0);
+    m.io.request_irq(0, TIMER0);
     m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     // The ARM7's IME is off: its request stays latched.
     m.step_arm9();
@@ -499,8 +492,8 @@ fn given_a_pending_enabled_request_on_each_cpu_when_a_frame_runs_then_both_enter
     let mut m = machine();
     enable9(&mut m, 1, TIMER0);
     enable7(&mut m, 1, TIMER0);
-    m.request_irq9(TIMER0);
-    m.request_irq7(TIMER0);
+    m.io.request_irq(TIMER0, 0);
+    m.io.request_irq(0, TIMER0);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m.run_frame();
@@ -540,7 +533,7 @@ fn given_the_arm9_in_thumb_state_when_an_irq_is_taken_then_lr_is_the_next_instru
     m.step_arm9_instruction();
     let thumb_cpsr = m.arm9().regs().cpsr() & !0x80;
     m.arm9.regs_mut().set_cpsr(thumb_cpsr);
-    m.request_irq9(TIMER0);
+    m.io.request_irq(TIMER0, 0);
     m.step_arm9_instruction();
     // The Thumb code starts at ENTRY9 + 8; its first instruction did not run (r0 is still the
     // address `bx` jumped through), the CPSR is ARM state in IRQ mode with I set, SPSR_irq holds
@@ -555,5 +548,45 @@ fn given_the_arm9_in_thumb_state_when_an_irq_is_taken_then_lr_is_the_next_instru
             Some(thumb_cpsr),
             ENTRY9 + 9
         )
+    );
+}
+
+// ------------------------------------------------------- every source reaches IF the same way
+//
+// The LCD (`display-timing.md`), IPC (`ipc.md`) and the timers (`timers.md`) each raise IF bits on
+// the CPUs their own notes name; whatever path carries them, IF shows them and nothing else.
+
+const DISPSTAT: u32 = 0x0400_0004;
+const IPCSYNC: u32 = 0x0400_0180;
+const TM0CNT_L: u32 = 0x0400_0100;
+const TM0CNT_H: u32 = 0x0400_0102;
+const HBLANK_IRQ_ENABLE: u16 = 1 << 4;
+/// IPCSYNC bit 14, the IRQ enable; bit 13, the send strobe (`ipc.md`, "IPCSYNC").
+const SYNC_IRQ_ENABLE: u16 = 1 << 14;
+const SYNC_SEND_IRQ: u16 = 1 << 13;
+const START_WITH_IRQ: u16 = 0xC0;
+const HBLANK_BIT: u32 = 1 << 1;
+const IPCSYNC_BIT: u32 = 1 << 16;
+
+/// IF of both CPUs after the ARM9 enabled the HBlank IRQ and started timer 0, the ARM7 enabled
+/// the sync IRQ, the ARM9 strobed it, and the ARM9 then ran past the first HBlank and the timer's
+/// overflow (16 ticks, 32 cycles).
+fn if_after_lcd_ipc_and_timer() -> (u32, u32) {
+    let mut m = machine();
+    m.bus9().write16(DISPSTAT, HBLANK_IRQ_ENABLE);
+    m.bus9().write16(TM0CNT_L, 0xFFF0);
+    m.bus9().write16(TM0CNT_H, START_WITH_IRQ);
+    m.bus7(0).write16(IPCSYNC, SYNC_IRQ_ENABLE);
+    m.bus9().write16(IPCSYNC, SYNC_SEND_IRQ);
+    (0..4000).for_each(|_| m.step_arm9());
+    (m.irq9().if_(), m.irq7().if_())
+}
+
+#[test]
+fn given_lcd_ipc_and_timer_sources_when_each_raises_its_irq_then_if_shows_each_on_the_cpu_it_belongs_to()
+ {
+    assert_eq!(
+        if_after_lcd_ipc_and_timer(),
+        (HBLANK_BIT | TIMER0, IPCSYNC_BIT)
     );
 }

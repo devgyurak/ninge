@@ -29,34 +29,36 @@ const fn control_addr(index: u32) -> u32 {
     TM0CNT_L_ADDR + 4 * index + 2
 }
 
-/// A halfword write: bytes in ascending address order, as the bus splits it.
-fn write16(timers: &mut Arm9Timers, addr: u32, value: u16, now: u64) {
-    timers.write_byte(addr, value as u8, now);
-    timers.write_byte(addr + 1, (value >> 8) as u8, now);
+/// A halfword write: bytes in ascending address order, as the bus splits it. Returns the mask of
+/// timers whose overflow event the write made stale.
+fn write16(timers: &mut Arm9Timers, addr: u32, value: u16, now: u64) -> u8 {
+    let low = timers.write_byte(addr, value as u8, now);
+    let high = timers.write_byte(addr + 1, (value >> 8) as u8, now);
+    low.reschedule | high.reschedule
 }
 
 /// A word write: four bytes in ascending address order (`timers.md`, "Writing a 32-bit word").
-fn write32(timers: &mut Arm9Timers, addr: u32, value: u32, now: u64) {
+/// Returns the mask of timers whose overflow event the write made stale.
+fn write32(timers: &mut Arm9Timers, addr: u32, value: u32, now: u64) -> u8 {
     value
         .to_le_bytes()
         .iter()
         .enumerate()
-        .for_each(|(i, &byte)| {
-            timers.write_byte(addr + i as u32, byte, now);
-        });
+        .fold(0, |mask, (i, &byte)| {
+            mask | timers.write_byte(addr + i as u32, byte, now).reschedule
+        })
 }
 
-/// Writes timer `index`'s reload, then its control, at `now`.
-fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) {
-    write16(timers, reload_addr(index), reload, now);
-    write16(timers, control_addr(index), control, now);
+/// Writes timer `index`'s reload, then its control, at `now`. Returns the reschedule mask.
+fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) -> u8 {
+    write16(timers, reload_addr(index), reload, now)
+        | write16(timers, control_addr(index), control, now)
 }
 
-/// One timer 0, started at `now`, with the dirty mask taken like the machine does.
+/// One timer 0, started at `now`.
 fn timer0(reload: u16, control: u16, now: u64) -> Arm9Timers {
     let mut timers = Arm9Timers::new();
     start(&mut timers, 0, reload, control, now);
-    timers.take_dirty();
     timers
 }
 
@@ -75,7 +77,6 @@ fn chain(irq: [bool; 4], reloads: [u16; 4]) -> Arm9Timers {
             0,
         );
     });
-    timers.take_dirty();
     timers
 }
 
@@ -194,8 +195,8 @@ fn given_a_reload_written_while_running_when_the_timer_overflows_then_the_counte
 #[test]
 fn given_a_reload_write_when_checked_then_the_overflow_event_is_not_marked_for_replacement() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, reload_addr(0), 0xFF00, 10);
-    assert_eq!(timers.take_dirty(), 0);
+    let mask = write16(&mut timers, reload_addr(0), 0xFF00, 10);
+    assert_eq!(mask, 0);
 }
 
 // -------------------------------------------------------------------- counter reads by time
@@ -419,7 +420,6 @@ fn given_a_count_up_timer_that_is_stopped_when_the_previous_timer_overflows_then
     start(&mut timers, 0, 0xFFF0, START | IRQ, 0);
     // Timer 1: count-up and IRQ enable but never started.
     start(&mut timers, 1, 0xFFFF, COUNT_UP | IRQ, 0);
-    timers.take_dirty();
     let requests = timers.overflow(0, 32);
     assert_eq!((requests, timers.counter(1, 32)), (IF0, 0));
 }
@@ -430,7 +430,6 @@ fn given_a_stopped_middle_timer_when_timer_0_overflows_then_the_chain_does_not_p
     start(&mut timers, 0, 0xFFF0, START | IRQ, 0);
     start(&mut timers, 1, 0xFFFF, COUNT_UP | IRQ, 0);
     start(&mut timers, 2, 0xFFFF, START | COUNT_UP | IRQ, 0);
-    timers.take_dirty();
     let requests = timers.overflow(0, 32);
     // Timer 2 would overflow on its first tick; it never gets one.
     assert_eq!((requests, timers.counter(2, 32)), (IF0, 0xFFFF));
@@ -441,7 +440,6 @@ fn given_a_clock_driven_next_timer_when_timer_0_overflows_then_it_is_not_ticked(
     let mut timers = Arm9Timers::new();
     start(&mut timers, 0, 0xFFF0, START | IRQ, 0);
     start(&mut timers, 1, 0xFFF0, START | IRQ, 0);
-    timers.take_dirty();
     let requests = timers.overflow(0, 32);
     assert_eq!(
         (requests, timers.counter(1, 0), timers.overflow_time(1)),
@@ -523,52 +521,41 @@ fn given_a_stopped_timer_when_the_reload_changes_and_it_restarts_then_the_new_re
 #[test]
 fn given_a_running_timer_when_start_is_written_again_then_the_counter_is_not_reloaded() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), START, 10);
+    let mask = write16(&mut timers, control_addr(0), START, 10);
     assert_eq!(
-        (
-            timers.counter(0, 10),
-            timers.overflow_time(0),
-            timers.take_dirty()
-        ),
+        (timers.counter(0, 10), timers.overflow_time(0), mask),
         (0xFFF5, Some(32), 0)
     );
 }
 
 #[test]
-fn given_a_timer_started_when_the_dirty_mask_is_taken_then_it_names_that_timer_and_clears() {
+fn given_a_timer_started_when_the_write_returns_then_the_mask_names_that_timer() {
     let mut timers = Arm9Timers::new();
-    start(&mut timers, 2, 0xFFF0, START, 0);
-    let first = timers.take_dirty();
-    let second = timers.take_dirty();
-    assert_eq!((first, second), (0b100, 0));
+    let mask = start(&mut timers, 2, 0xFFF0, START, 0);
+    assert_eq!(mask, 0b100);
 }
 
 #[test]
 fn given_a_running_timer_when_stopped_then_it_is_marked_for_replacement() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), 0, 10);
-    assert_eq!(timers.take_dirty(), 0b1);
+    let mask = write16(&mut timers, control_addr(0), 0, 10);
+    assert_eq!(mask, 0b1);
 }
 
 #[test]
 fn given_a_running_timer_when_the_prescaler_changes_then_it_is_marked_for_replacement() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), START | 1, 10);
-    assert_eq!(timers.take_dirty(), 0b1);
+    let mask = write16(&mut timers, control_addr(0), START | 1, 10);
+    assert_eq!(mask, 0b1);
 }
 
 #[test]
 fn given_a_running_clock_timer_when_count_up_is_set_then_its_event_goes_away_and_it_is_marked() {
     let mut timers = Arm9Timers::new();
     start(&mut timers, 1, 0xFFF0, START, 0);
-    timers.take_dirty();
-    write16(&mut timers, control_addr(1), START | COUNT_UP, 10);
+    let mask = write16(&mut timers, control_addr(1), START | COUNT_UP, 10);
     assert_eq!(
-        (
-            timers.has_event(1),
-            timers.overflow_time(1),
-            timers.take_dirty()
-        ),
+        (timers.has_event(1), timers.overflow_time(1), mask),
         (false, None, 0b10)
     );
 }
@@ -588,16 +575,16 @@ fn given_a_running_timer_when_the_prescaler_changes_then_the_counter_is_kept_and
 }
 
 #[test]
-fn given_irq_enable_changed_on_a_running_timer_when_written_then_the_counter_origin_and_dirty_mask_do_not_move()
+fn given_irq_enable_changed_on_a_running_timer_when_written_then_the_counter_origin_and_reschedule_mask_do_not_move()
  {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), START | IRQ, 10);
+    let mask = write16(&mut timers, control_addr(0), START | IRQ, 10);
     assert_eq!(
         (
             timers.counter(0, 10),
             timers.overflow_time(0),
             timers.control(0),
-            timers.take_dirty()
+            mask
         ),
         (0xFFF5, Some(32), START | IRQ, 0)
     );
@@ -723,12 +710,12 @@ fn given_a_byte_write_of_start_to_the_low_control_byte_when_checked_then_the_tim
 fn given_a_byte_write_to_the_high_control_byte_when_checked_then_nothing_changes_hw_unverified() {
     // TODO(hw-unverified): `timers.md`, "Unverified": the high byte of TMnCNT_H holds no bits.
     let mut timers = timer0(0xFFF0, START, 0);
-    timers.write_byte(control_addr(0) + 1, 0xFF, 10);
+    let outcome = timers.write_byte(control_addr(0) + 1, 0xFF, 10);
     assert_eq!(
         (
             timers.control(0),
             timers.overflow_time(0),
-            timers.take_dirty()
+            outcome.reschedule
         ),
         (START, Some(32), 0)
     );
@@ -798,7 +785,9 @@ fn given_writes_outside_the_block_when_applied_then_no_timer_changes() {
 /// Writes 0x1111, 0x2222, ... to timer 0, 1, ... and reads the four reloads back.
 fn reloads_after_distinct_writes() -> Vec<u16> {
     let mut timers = Arm9Timers::new();
-    (0..4u32).for_each(|n| write16(&mut timers, reload_addr(n), 0x1111 * (n as u16 + 1), 0));
+    (0..4u32).for_each(|n| {
+        write16(&mut timers, reload_addr(n), 0x1111 * (n as u16 + 1), 0);
+    });
     (0..4).map(|n| timers.reload(n)).collect()
 }
 
@@ -842,16 +831,8 @@ fn given_new_timers_when_checked_then_they_are_well_formed() {
 }
 
 #[test]
-fn given_timers_written_and_taken_when_checked_then_they_are_well_formed() {
+fn given_timers_written_when_checked_then_they_are_well_formed() {
     assert!(chain([true; 4], [0xFFF0; 4]).is_well_formed());
-}
-
-#[test]
-fn given_a_pending_dirty_mask_when_checked_then_they_are_not_well_formed() {
-    // A saved state has none: the machine takes it after every instruction.
-    let mut timers = Arm9Timers::new();
-    start(&mut timers, 0, 0xFFF0, START, 0);
-    assert!(!timers.is_well_formed());
 }
 
 #[test]

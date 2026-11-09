@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Inter Process Communication (IPC)" (IPCSYNC, IPCFIFOCNT, IPCFIFOSEND,
 IPCFIFORECV, "IPCFIFO Notes"); GBATEK "DS Interrupts" (the IF bit table, bits 16-18).
-Used by: `crates/core/src/ipc.rs`, `crates/core/src/bus/memory.rs`, `crates/core/src/irq.rs`   Phase: 3 (#24)
+Used by: `crates/core/src/ipc.rs`, `crates/core/src/io.rs`, `crates/core/src/irq.rs`   Phase: 3 (#24)
 
 The two CPUs talk through three things that both can reach at the same addresses: a 4-bit
 mailbox each way (IPCSYNC) and two 16-word FIFOs, one for each direction. Each CPU sees the same
@@ -147,11 +147,11 @@ or a trace against the reference oracle (AGENTS.md §6).
   disabled) — GBATEK states no reset values; `crates/core/src/ipc.rs`, `Ipc::new`.
 - 8-bit and 16-bit accesses to IPCFIFOSEND and IPCFIFORECV: the model ignores such a write
   (no word, no error) and answers such a read like a word read (one word received, the low
-  bytes of it selected by the address) — `crates/core/src/bus/memory.rs`, the IPC slow path.
+  bytes of it selected by the address) — `crates/core/src/io.rs`, the IPC slow path.
 - A read of IPCFIFORECV with the FIFO disabled and nothing in it: the model returns the last
   received word without setting the error bit — `crates/core/src/ipc.rs`, the receive path.
 - Whether IPCFIFORECV is mirrored over `0410_0000h`-`041F_FFFFh`: the model has it at
-  `0410_0000h` only — `crates/core/src/bus/memory.rs`.
+  `0410_0000h` only — `crates/core/src/io.rs`.
 - IPCFIFOCNT bit 3 is a write-only strobe and reads 0; bit 14 acknowledges on a 1 — taken from
   the access column of GBATEK's table, whose "R/W" for bit 14 is ambiguous —
   `crates/core/src/ipc.rs`, the IPCFIFOCNT write.

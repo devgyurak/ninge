@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25). Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask. Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -37,7 +37,7 @@
 //!
 //! # Checked on load
 //!
-//! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
+//! Memory buffer sizes and the register devices' values, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
 //! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
 //! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, at the later of the overflow time the timer's own counter gives and `now`, and not more than a slice behind it), and the ARM7 clock at `now` or one master cycle past it (booted machines).
@@ -59,7 +59,7 @@ use crate::timers::{TIMER_COUNT, Timers};
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 8;
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -201,12 +201,13 @@ impl Machine {
         if !rest.is_empty()
             || loaded.header.is_some() != !self.rom.is_empty()
             || !loaded.memory.is_well_formed()
+            || !loaded.io.is_well_formed()
             || !loaded.arm9.is_well_formed()
             || !loaded.arm7.is_well_formed()
             || !loaded.scheduler.is_well_formed()
             || !loaded.line_events_are_sane()
-            || !timer_events_are_sane(&loaded.scheduler, loaded.memory.timers9())
-            || !timer_events_are_sane(&loaded.scheduler, loaded.memory.timers7())
+            || !timer_events_are_sane(&loaded.scheduler, loaded.io.timers9())
+            || !timer_events_are_sane(&loaded.scheduler, loaded.io.timers7())
             // A booted machine is always settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up.
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())

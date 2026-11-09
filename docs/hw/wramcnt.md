@@ -85,10 +85,10 @@ their own contents (the "first" half is bytes 0-16383 of the 32 KiB, the "second
   fits the "(!)" GBATEK puts next to the ARM9 stack but is not stated. — `boot` in
   `crates/core/src/hle/direct_boot.rs` — verify by a test ROM on hardware reading WRAMCNT first.
 - **WRAMCNT read.** GBATEK's WRAM section says R/W, its I/O map says write-only. The model returns
-  the stored value to the ARM9. — `Memory::read_slow` — verify likewise.
+  the stored value to the ARM9. — `read_registers` in `bus/view.rs` — verify likewise.
 - **An empty ARM9 window** reads 0 and ignores writes; GBATEK says "undefined data". —
-  `Memory::read_slow` — verify likewise.
-- **WRAMSTAT** value is the stored 2-bit mode, upper bits 0. — `Memory::read_slow7` — verify likewise.
+  `read_registers` in `bus/view.rs` — verify likewise.
+- **WRAMSTAT** value is the stored 2-bit mode, upper bits 0. — `read_registers` in `bus/view.rs` — verify likewise.
 - **Mirroring through the 16 MiB / 8 MiB windows** is as written in GBATEK; the ARM7's repetition of
   its own WRAM through `0380_0000h`-`03FF_FFFFh` is GBATEK's general rule. — `Memory::build_wram_pages`
   — verify likewise.
@@ -96,4 +96,4 @@ their own contents (the "first" half is bytes 0-16383 of the 32 KiB, the "second
   programs commonly use mirrors at `037F_8000h` on both CPUs; the contiguity with `0380_0000h`
   is what the repetition rule gives, not a stated fact. — `Memory::build_wram_pages` — verify
   likewise.
-- **Other ARM7 addresses** (I/O, VRAM windows, BIOS) read 0. — `Memory::read_slow7`.
+- **Other ARM7 addresses** (I/O, VRAM windows, BIOS) read 0. — `read_registers` in `bus/view.rs`.

@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Timers" (the timer registers, prescaler and count-up bits, the overflow
 description); GBATEK "DS Interrupts" for the IF bits (see `interrupts.md`).
-Used by: `crates/core/src/timers.rs`, `crates/core/src/bus/memory.rs`, `crates/core/src/lib.rs`,
+Used by: `crates/core/src/timers.rs`, `crates/core/src/io.rs`, `crates/core/src/bus/view.rs`, `crates/core/src/lib.rs`,
 `crates/core/src/scheduler/mod.rs`   Phase: 3 (#25)
 
 Each CPU has four 16-bit timers. They sit at the same addresses on the ARM9 and the ARM7 but are
@@ -102,11 +102,22 @@ hardware behavior.
 - **Overflows are events.** One `TimerOverflow` event per running, non-count-up timer, at the
   master time of its next overflow. Count-up timers have no event: the overflow that feeds them
   adds to them. A write to `TMnCNT_H` that starts, stops, or changes the prescaler or count-up
-  mode replaces that timer's event.
-- **Event time is not before `now`.** A timer written by the ARM7 while it lags the master
-  clock can compute an overflow that is already past; its event is queued for `now`, and the next
-  overflow stays on the timer's own tick grid, so the count does not drift. Only the delivery of
-  the IRQ is late, by less than one slice.
+  mode replaces that timer's event, at the write itself: the bus view that carries the write holds
+  the scheduler, so the event is queued before the writing instruction retires and nothing looks
+  for changed timers afterwards. The write also replaces the event of any timer whose overdue
+  overflows it settled (see "A write in that gap settles first").
+- **Event time is not before the end of the writing instruction.** A timer written by the ARM7
+  while it lags the master clock can compute an overflow that is already past; its event is
+  queued for the master clock, which the ARM7's step leaves where it is. For the ARM9 the floor
+  is one instruction cost past the clock (`scheduler.md`, "Cost per instruction"), the master time
+  at which the writing instruction retires. An F/1 timer's shortest
+  period is 2 master cycles, so an ARM9 write that starts a timer is never raised to the floor; only
+  a long-overdue settle (see below) can be. The next overflow stays on the timer's own tick grid,
+  so the count does not drift. Only the delivery of the IRQ is late, by less than one slice.
+- **Events queued by one instruction keep the order they were written.** Two timers that overflow
+  at the same master time fire in the order they were scheduled (`scheduler.md`, "Events"). A
+  store-multiple writes ascending addresses, so timer 0 is queued before timer 1. A timer rewritten within the
+  instruction keeps one event, queued by its last write.
 - **An event settles all of its timer's due overflows.** A late event (see above) processes every
   overflow of its timer already due, at most `SLICE`, so the queue always moves forward. A saved
   state is refused unless each timer's event is at the later of its overflow time and `now`, and
@@ -139,7 +150,7 @@ hardware behavior.
 - A start or stop write by a byte access to the high byte of `TMnCNT_H` does nothing (no
   control bit lives there) — `timers.rs`.
 - A 32-bit write is split into bytes and the reload lands before the start, so a word that sets
-  both starts the timer with that reload — `bus/memory.rs` (`write_slow`), `timers.rs` — verify
+  both starts the timer with that reload — `bus/view.rs` (`Access::write_registers`), `timers.rs` — verify
   on hardware.
 - A count-up timer that is stopped ignores the previous timer's overflow — `timers.rs` — verify
   on hardware.

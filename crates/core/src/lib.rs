@@ -6,6 +6,7 @@ pub mod cart;
 pub mod cpu;
 pub mod gpu2d;
 mod hle;
+pub mod io;
 pub mod ipc;
 pub mod irq;
 pub mod savestate;
@@ -15,13 +16,14 @@ pub mod timers;
 use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use cart::Header;
 use cpu::Cpu;
+use io::Io;
 use irq::InterruptController;
 use scheduler::{
     ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, HBLANK_START_CYCLES,
     LINE_CYCLES, Participants, Scheduler,
 };
 use serde::{Deserialize, Serialize};
-use timers::{TIMER_COUNT, Timers};
+use timers::Timers;
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
 pub const SCREEN_WIDTH: usize = 256;
@@ -69,9 +71,11 @@ pub struct Machine {
     // Frames completed by `run_frame`; plain state, so it is serialized. A savestate
     // without it is refused, never half-loaded (AGENTS.md §2 rule 5).
     frame_count: u64,
-    // The ARM9 and the memory it sees. Plain data; a savestate lacking them is refused.
+    // The ARM9, the RAM both CPUs see and the register devices. Plain data; a savestate lacking
+    // them is refused.
     arm9: Cpu<true>,
     memory: Memory,
+    io: Io,
     // The ARM7 and its clock in master cycles; the scheduler (`docs/hw/scheduler.md`).
     arm7: Cpu<false>,
     arm7_clock: u64,
@@ -103,6 +107,7 @@ impl Machine {
             frame_count: 0,
             arm9: Cpu::new(),
             memory: Memory::new(),
+            io: Io::new(),
             arm7: Cpu::new(),
             arm7_clock: 0,
             scheduler,
@@ -127,6 +132,8 @@ impl Machine {
             &mut self.arm9,
             &mut self.arm7,
             &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
             &rom,
             &header,
         );
@@ -172,12 +179,12 @@ impl Machine {
     // TODO(phase3): per-scanline drawing replaces the whole-frame render; the line timing it
     // needs is in `docs/hw/display-timing.md` (#104).
     pub(crate) fn render_frame(&mut self) {
-        let (engine_a, engine_b) = if self.memory.gpu2d().engine_a_on_top() {
+        let (engine_a, engine_b) = if self.io.gpu2d().engine_a_on_top() {
             (&mut self.top, &mut self.bottom)
         } else {
             (&mut self.bottom, &mut self.top)
         };
-        self.memory
+        self.io
             .gpu2d()
             .render_engine_a(self.memory.vram_a_lcdc(), engine_a);
         engine_b.fill(gpu2d::BLACK);
@@ -186,25 +193,25 @@ impl Machine {
     /// VCOUNT: the current line, 0-262 (`docs/hw/display-timing.md`).
     // The debugger's IO register panel and the scheduler timeline (#59) will show it.
     pub fn vcount(&self) -> u16 {
-        self.memory.timing().vcount()
+        self.io.timing().vcount()
     }
 
     /// DISPSTAT as the ARM9 reads it.
     // The debugger's IO register panel will show it.
     pub fn dispstat9(&self) -> u16 {
-        self.memory.timing().dispstat::<true>()
+        self.io.timing().dispstat::<true>()
     }
 
     /// DISPSTAT as the ARM7 reads it.
     // The debugger's IO register panel will show it.
     pub fn dispstat7(&self) -> u16 {
-        self.memory.timing().dispstat::<false>()
+        self.io.timing().dispstat::<false>()
     }
 
     /// Engine A's display registers.
     // The debugger's IO register panel will show them.
     pub fn gpu2d(&self) -> &gpu2d::Gpu2d {
-        self.memory.gpu2d()
+        self.io.gpu2d()
     }
 
     /// Returns how many frames [`Machine::run_frame`] has completed.
@@ -235,10 +242,16 @@ impl Machine {
         &self.scheduler
     }
 
-    /// The ARM9-visible memory.
+    /// The RAM both CPUs see.
     // The debugger's memory viewer (#57) will show it.
     pub fn memory(&self) -> &Memory {
         &self.memory
+    }
+
+    /// The register devices: display, interrupt controllers, IPC and timers.
+    // The debugger's IO register panel will show them.
+    pub fn io(&self) -> &Io {
+        &self.io
     }
 
     /// VRAMCNT_A as decoded.
@@ -256,46 +269,34 @@ impl Machine {
     /// The ARM9's interrupt controller (IME, IE, IF).
     // The debugger's CPU panel (#56) shows it beside the ARM9's registers.
     pub fn irq9(&self) -> &InterruptController<true> {
-        self.memory.irq9()
+        self.io.irq9()
     }
 
     /// The ARM7's interrupt controller (IME, IE, IF).
     // The debugger's CPU panel (#56) shows it beside the ARM7's registers.
     pub fn irq7(&self) -> &InterruptController<false> {
-        self.memory.irq7()
+        self.io.irq7()
     }
 
     /// IPCSYNC and the two IPC FIFOs.
     // The debugger's IPC panel (#56 CPU panel until one exists) shows the sync nibbles, both
     // FIFOs' contents and the flags of both CPUs.
     pub fn ipc(&self) -> &ipc::Ipc {
-        self.memory.ipc()
+        self.io.ipc()
     }
 
     /// The ARM9's four timers.
     // The debugger's IO register panel (#56 CPU panel until one exists) shows each timer's
     // counter, reload and control; the scheduler timeline (#59) shows their overflow events.
     pub fn timers9(&self) -> &Timers<true> {
-        self.memory.timers9()
+        self.io.timers9()
     }
 
     /// The ARM7's four timers.
     // The debugger's IO register panel shows them with the ARM9's; the scheduler timeline (#59)
     // shows their overflow events.
     pub fn timers7(&self) -> &Timers<false> {
-        self.memory.timers7()
-    }
-
-    /// Raises the requests in `mask` on the ARM9's controller: IF latches them.
-    // The LCD (#104) and the timers (#25) use it; IPC (#24) goes through `Memory`, and DMA (#26) follows.
-    pub(crate) fn request_irq9(&mut self, mask: u32) {
-        self.memory.irq9_mut().request(mask);
-    }
-
-    /// Raises the requests in `mask` on the ARM7's controller: IF latches them.
-    // The LCD (#104) and the timers (#25) use it; IPC (#24) goes through `Memory`, and DMA (#26) follows.
-    pub(crate) fn request_irq7(&mut self, mask: u32) {
-        self.memory.irq7_mut().request(mask);
+        self.io.timers7()
     }
 
     /// Steps the ARM9 by one instruction and advances the master clock by its cost
@@ -306,7 +307,7 @@ impl Machine {
     /// counts the frame, and the clocks stay consistent for a savestate. A machine with no
     /// program steps only the ARM9.
     ///
-    /// The TCM registers are copied into the memory view first, so a CP15 write takes effect
+    /// The TCM registers are copied into the ARM9's bus view first, so a CP15 write takes effect
     /// from the next instruction (`docs/hw/arm9-memory-map.md`).
     ///
     /// A step that meets an asserted IRQ line with CPSR I clear only enters the IRQ vector; the
@@ -326,14 +327,20 @@ impl Machine {
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     fn step_arm9_instruction(&mut self) {
-        let irq = self.memory.irq9().line();
-        let tcm = TcmConfig::from_cp15(self.arm9.cp15()).at(self.scheduler.now());
-        let mut view = Arm9View::new(&mut self.memory, tcm);
+        let irq = self.io.irq9().line();
+        let now = self.scheduler.now();
+        let tcm = TcmConfig::from_cp15(self.arm9.cp15());
+        let mut view = Arm9View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            tcm,
+            now,
+        );
         if !self.arm9.take_interrupt(&mut view, irq, false) {
             self.arm9.step(&mut view);
         }
         self.scheduler.advance(ARM9_INSTRUCTION_COST);
-        self.sync_timer_events();
     }
 
     /// One ARM7 instruction and its cost, with nothing else; the IRQ entry takes its place as in
@@ -341,40 +348,47 @@ impl Machine {
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     fn step_arm7_instruction(&mut self) {
-        let irq = self.memory.irq7().line();
-        let mut view = Arm7View::new(&mut self.memory, self.arm7_clock);
+        let irq = self.io.irq7().line();
+        let mut view = Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            self.arm7_clock,
+        );
         if !self.arm7.take_interrupt(&mut view, irq, false) {
             self.arm7.step(&mut view);
         }
         self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
-        self.sync_timer_events();
+    }
+
+    /// Reads `N` bytes as the ARM9 data bus would, without side effects: IPCFIFORECV shows its
+    /// next word without taking it, and nothing needs the scheduler.
+    fn arm9_peek<const N: usize>(&self, addr: u32) -> [u8; N] {
+        bus::peek::<true, N>(
+            &self.memory,
+            &self.io,
+            &TcmConfig::from_cp15(self.arm9.cp15()),
+            self.scheduler.now(),
+            addr,
+        )
     }
 
     /// Reads a byte as the ARM9 data bus would, without side effects.
     // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
     pub fn arm9_peek8(&self, addr: u32) -> u8 {
-        self.memory.read8(
-            &TcmConfig::from_cp15(self.arm9.cp15()).at(self.scheduler.now()),
-            addr,
-        )
+        u8::from_le_bytes(self.arm9_peek(addr))
     }
 
     /// Reads a halfword as the ARM9 data bus would, without side effects.
     // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
     pub fn arm9_peek16(&self, addr: u32) -> u16 {
-        self.memory.read16(
-            &TcmConfig::from_cp15(self.arm9.cp15()).at(self.scheduler.now()),
-            addr,
-        )
+        u16::from_le_bytes(self.arm9_peek(addr))
     }
 
     /// Reads a word as the ARM9 data bus would, without side effects.
     // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
     pub fn arm9_peek32(&self, addr: u32) -> u32 {
-        self.memory.read32(
-            &TcmConfig::from_cp15(self.arm9.cp15()).at(self.scheduler.now()),
-            addr,
-        )
+        u32::from_le_bytes(self.arm9_peek(addr))
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.
@@ -407,7 +421,9 @@ impl Participants for Machine {
         match event.kind {
             EventKind::LineStart => self.line_started(event.time),
             EventKind::HBlankStart => self.hblank_started(event.time),
-            EventKind::TimerOverflow { arm9, index } => self.timer_overflowed(arm9, index),
+            EventKind::TimerOverflow { arm9, index } => {
+                self.io.timer_overflowed(&mut self.scheduler, arm9, index);
+            }
         }
     }
 }
@@ -419,10 +435,9 @@ impl Machine {
     /// The start of line 0 ends the frame: the screens are drawn and the frame is counted.
     // TODO(phase3): VBlank-start DMA (#26) and the IntrWait VBlank wait (#27) hook in here.
     fn line_started(&mut self, time: u64) {
-        let requests = self.memory.timing_mut().line_started();
-        self.request_irq9(requests.arm9);
-        self.request_irq7(requests.arm7);
-        if self.memory.timing().vcount() == 0 {
+        let requests = self.io.timing_mut().line_started();
+        self.io.request_irq(requests.arm9, requests.arm7);
+        if self.io.timing().vcount() == 0 {
             self.render_frame();
             self.frame_count = self.frame_count.wrapping_add(1);
         }
@@ -435,62 +450,11 @@ impl Machine {
     /// for it.
     // TODO(phase3): HBlank-start DMA (#26) hooks in here.
     fn hblank_started(&mut self, time: u64) {
-        let requests = self.memory.timing_mut().hblank_started();
-        self.request_irq9(requests.arm9);
-        self.request_irq7(requests.arm7);
+        let requests = self.io.timing_mut().hblank_started();
+        self.io.request_irq(requests.arm9, requests.arm7);
         self.scheduler
             .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
     }
-}
-
-impl Machine {
-    /// Replaces the overflow event of every timer whose schedule a register write changed
-    /// (`docs/hw/timers.md`, "Model"). `Memory` cannot reach the scheduler, so a write only marks
-    /// the timer and this runs after each instruction.
-    fn sync_timer_events(&mut self) {
-        let dirty9 = self.memory.timers9_mut().take_dirty();
-        let dirty7 = self.memory.timers7_mut().take_dirty();
-        schedule_timers(&mut self.scheduler, self.memory.timers9(), dirty9);
-        schedule_timers(&mut self.scheduler, self.memory.timers7(), dirty7);
-    }
-
-    /// A timer's overflow event fired: it reloads, its IRQ is requested, the timer it feeds ticks
-    /// and its next overflow is scheduled (`docs/hw/timers.md`, "Counting").
-    fn timer_overflowed(&mut self, arm9: bool, index: u8) {
-        let index = usize::from(index);
-        // Every overflow of this timer due by now is processed, not just one: an event queued late
-        // (an ARM7 write while it lagged) would otherwise catch up one overflow a round with
-        // the CPUs standing still. The timer is rescheduled whether or not one was due.
-        let now = self.scheduler.now();
-        if arm9 {
-            let requests = self.memory.timers9_mut().settle_timer(index, now);
-            self.request_irq9(requests);
-            let dirty = self.memory.timers9_mut().take_dirty() | 1 << index;
-            schedule_timers(&mut self.scheduler, self.memory.timers9(), dirty);
-        } else {
-            let requests = self.memory.timers7_mut().settle_timer(index, now);
-            self.request_irq7(requests);
-            let dirty = self.memory.timers7_mut().take_dirty() | 1 << index;
-            schedule_timers(&mut self.scheduler, self.memory.timers7(), dirty);
-        }
-    }
-}
-
-/// Replaces the overflow event of each timer in `dirty` (bit n = timer n) with one at its next
-/// overflow, if it has one. The event never lies before `now`: a timer an ARM7 write started
-/// while it lagged the master clock can compute a time already past, and the queue's invariant
-/// (`scheduler.md`, "Savestate checks") holds events at `now` or later. The timer keeps its own
-/// tick grid, so only the IRQ is late (`timers.md`, "Model").
-fn schedule_timers<const ARM9: bool>(scheduler: &mut Scheduler, timers: &Timers<ARM9>, dirty: u8) {
-    (0..TIMER_COUNT)
-        .filter(|&index| dirty & (1 << index) != 0)
-        .for_each(|index| {
-            let kind = Timers::<ARM9>::event_kind(index);
-            scheduler.cancel(kind);
-            if let Some(time) = timers.overflow_time(index) {
-                scheduler.schedule(time.max(scheduler.now()), kind);
-            }
-        });
 }
 
 impl Default for Machine {
@@ -641,6 +605,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod testing;
 #[cfg(test)]
 mod tests_arm9;
 #[cfg(test)]

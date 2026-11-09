@@ -62,7 +62,7 @@ holds the expected values.
   disabled and unmapped until software enables it. — `Memory::new` in
   `crates/core/src/bus/memory.rs` — verify by a test ROM on real hardware.
 - **Reads of VRAMCNT_A** return 0: the register is write-only and GBATEK does not say what a
-  read gives. — `Memory::read_slow` — verify likewise.
+  read gives. — `read_registers` in `bus/view.rs` — verify likewise.
 - **A disabled bank, or one with MST other than 0,** is unmapped at the LCDC address (reads 0,
   writes ignored). GBATEK describes the mapping only for the enabled case. —
   `Memory::build_page_table` — verify likewise. The `memmap` ROM records the disabled-bank read

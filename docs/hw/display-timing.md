@@ -104,9 +104,11 @@ The start of VBlank and the start of HBlank are where VBlank-start and HBlank-st
 
 - Software that writes 1 to a flag bit of DISPSTAT sees no change.
 - A VCount setting above 262 can never match: VCOUNT never reaches it.
-- GBATEK says VCOUNT is writable, "which allows linked consoles to synchronize". What it does
-  (and which values and bits are accepted) is not described. Writes are recorded here as
-  ignored and stubbed with `TODO(hw-unverified)`.
+- GBATEK says VCOUNT is writable, to synchronize linked consoles. Its guidance is to write a
+  new line value only in the range 202-212, and only while the old value is also in 202-212.
+  It does not say what the register does with a write outside that guidance, nor whether the
+  guidance is enforced. Writes are recorded here as ignored and stubbed with
+  `TODO(hw-unverified)`.
 - Reading DISPSTAT or VCOUNT is a plain read; it has no side effects.
 - The requests are level-free: a flag that stays 1 requests once, when it rises.
 
@@ -130,7 +132,8 @@ The start of VBlank and the start of HBlank are where VBlank-start and HBlank-st
 - **The VBlank IRQ is requested at the start of line 192**, not at some cycle into it. —
   `gpu2d/timing.rs` — verify as above.
 - **Reset values.** DISPSTAT is not stated at reset; 0. — `gpu2d/timing.rs` (`Timing::new`).
-- **VCOUNT writes.** Ignored. — `gpu2d/timing.rs` (`Timing::write_byte`) — verify by a hardware test
+- **VCOUNT writes.** Ignored, including the in-range (202-212) writes GBATEK describes for
+  console synchronization; what a write does is not stated. — `gpu2d/timing.rs` (`Timing::write_byte`) — verify by a hardware test
   ROM writing VCOUNT.
 - **DISPSTAT bit 6 and a write to the flag bits** read 0 and change nothing, from the
   register's description. — `gpu2d/timing.rs` (`Timing::write_byte`).

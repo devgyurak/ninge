@@ -72,8 +72,10 @@ Events due at the target fire in order, but only those queued when the dispatch 
 event a handler schedules waits for the next round. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Two kinds exist so far, `LineStart` (every 4,260 master cycles) and `HBlankStart` (once per
-line, 3,212 master cycles after it); see `display-timing.md`. The `LineStart` that begins line 0
+Three kinds exist so far, `LineStart` (every 4,260 master cycles), `HBlankStart` (once per
+line, 3,212 master cycles after it; see `display-timing.md`) and `TimerOverflow` (one per
+started, clock-driven timer of either CPU, so at most eight; see `timers.md`). A pending event of
+a kind can be cancelled, which a timer write uses to replace its overflow. The `LineStart` that begins line 0
 draws the screens and counts the frame, which ends `run_frame`: frames stay 1,120,380 master
 cycles apart. Each reschedules from its own time, so nothing drifts.
 
@@ -123,6 +125,9 @@ A saved machine is refused on load when:
 - the queue does not hold exactly one `LineStart` and one `HBlankStart`, or one is not due
   within one line (`LINE_CYCLES`) of `now`: two at the same time would fire in one round and
   skip a line, and one far ahead would take effectively forever;
+- a timer that is started and clock-driven does not have exactly one `TimerOverflow` event, any
+  other timer has one, or an event is before the overflow time the timer's own counter gives
+  (`timers.md`, "Model");
 - `now` or a queued event's time is above `MAX_TIME` (2^62 master cycles, about 2,180 years of
   emulated time, which no real run reaches). A smaller margin below `u64::MAX` cannot work: a
   frame end would eventually saturate at the maximum and stay due;

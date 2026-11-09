@@ -55,6 +55,7 @@ fn plain() -> TcmConfig {
     TcmConfig {
         itcm: off,
         dtcm: off,
+        now: 0,
     }
 }
 

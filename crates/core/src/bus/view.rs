@@ -5,13 +5,18 @@
 use super::Memory;
 use crate::cpu::{Bus, Cp15, Tcm};
 
-/// Both TCM regions as CP15 resolves them (`docs/hw/cp15.md`).
+/// Both TCM regions as CP15 resolves them (`docs/hw/cp15.md`), and the ARM9's clock.
+///
+/// The clock rides along because both are copied into the view just before a step: a timer
+/// register read or write needs the time of the access (`docs/hw/timers.md`, "Model").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TcmConfig {
     /// Instruction TCM.
     pub itcm: Tcm,
     /// Data TCM.
     pub dtcm: Tcm,
+    /// The ARM9's clock in master cycles, as of the access; 0 until [`TcmConfig::at`].
+    pub now: u64,
 }
 
 impl TcmConfig {
@@ -20,7 +25,13 @@ impl TcmConfig {
         Self {
             itcm: cp15.itcm(),
             dtcm: cp15.dtcm(),
+            now: 0,
         }
+    }
+
+    /// This configuration with the ARM9's clock set to `now`, in master cycles.
+    pub fn at(self, now: u64) -> Self {
+        Self { now, ..self }
     }
 }
 
@@ -70,38 +81,41 @@ impl Bus for Arm9View<'_> {
 /// table, not the ARM9's. Not state.
 pub struct Arm7View<'a> {
     memory: &'a mut Memory,
+    // The ARM7's clock in master cycles, copied in before the step like the ARM9's TCM
+    // configuration; timer registers read it (`docs/hw/timers.md`, "Model").
+    now: u64,
 }
 
 impl<'a> Arm7View<'a> {
-    /// Builds the view for one step.
-    pub fn new(memory: &'a mut Memory) -> Self {
-        Self { memory }
+    /// Builds the view for one step taken at the ARM7 clock `now`, in master cycles.
+    pub fn new(memory: &'a mut Memory, now: u64) -> Self {
+        Self { memory, now }
     }
 }
 
 impl Bus for Arm7View<'_> {
     fn fetch32(&mut self, addr: u32) -> u32 {
-        self.memory.fetch32_arm7(addr)
+        self.memory.fetch32_arm7(self.now, addr)
     }
     fn fetch16(&mut self, addr: u32) -> u16 {
-        self.memory.fetch16_arm7(addr)
+        self.memory.fetch16_arm7(self.now, addr)
     }
     fn read8(&mut self, addr: u32) -> u8 {
-        self.memory.read8_arm7_mut(addr)
+        self.memory.read8_arm7_mut(self.now, addr)
     }
     fn read16(&mut self, addr: u32) -> u16 {
-        self.memory.read16_arm7_mut(addr)
+        self.memory.read16_arm7_mut(self.now, addr)
     }
     fn read32(&mut self, addr: u32) -> u32 {
-        self.memory.read32_arm7_mut(addr)
+        self.memory.read32_arm7_mut(self.now, addr)
     }
     fn write8(&mut self, addr: u32, value: u8) {
-        self.memory.write8_arm7(addr, value);
+        self.memory.write8_arm7(self.now, addr, value);
     }
     fn write16(&mut self, addr: u32, value: u16) {
-        self.memory.write16_arm7(addr, value);
+        self.memory.write16_arm7(self.now, addr, value);
     }
     fn write32(&mut self, addr: u32, value: u32) {
-        self.memory.write32_arm7(addr, value);
+        self.memory.write32_arm7(self.now, addr, value);
     }
 }

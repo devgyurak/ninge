@@ -41,7 +41,7 @@ fn place(memory: &mut Memory, tcm: &TcmConfig, address: u32, bytes: &[u8]) {
 /// which lands in shared or ARM7 WRAM as WRAMCNT says (`wramcnt.md`).
 fn place7(memory: &mut Memory, address: u32, bytes: &[u8]) {
     bytes.iter().enumerate().for_each(|(index, &byte)| {
-        memory.write8_arm7(address.wrapping_add(index as u32), byte);
+        memory.write8_arm7(0, address.wrapping_add(index as u32), byte);
     });
 }
 
@@ -104,6 +104,6 @@ pub(crate) fn boot(
     regs7.set(LINK_REGISTER, entry7);
     regs7.set_banked(Bank::Irq, STACK_REGISTER, ARM7_SP_IRQ);
     regs7.set_banked(Bank::Supervisor, STACK_REGISTER, ARM7_SP_SUPERVISOR);
-    let mut view7 = Arm7View::new(memory);
+    let mut view7 = Arm7View::new(memory, 0);
     arm7.start_at(&mut view7, entry7);
 }

@@ -14,17 +14,18 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_140;
-const PINNED_HASH: u64 = 0xb554cb4b089183d2;
+const PINNED_LEN: usize = 4_473_174;
+const PINNED_HASH: u64 = 0x9299540be37ad475;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
 /// shared-WRAM contents); the length is unchanged. Version 6 (#104) added the display timing
 /// state and a second queued event, so both pins moved. Version 7 (#24) added the IPC block:
 /// 50 bytes at power-on (two FIFOs of 16 + 3 one-byte varints each, two ports of 6 one-byte fields),
-/// so both lengths grew by 50.
-const PINNED_BOOTED_LEN: usize = 4_473_227;
-const PINNED_BOOTED_HASH: u64 = 0x6ec43b44f6db29ff;
+/// so both lengths grew by 50. Version 8 (#25) added both CPUs' timers: 34 bytes at power-on
+/// (4 timers of 4 one-byte fields and a one-byte dirty mask, twice), so both lengths grew by 34.
+const PINNED_BOOTED_LEN: usize = 4_473_261;
+const PINNED_BOOTED_HASH: u64 = 0xcc80c670d3b0689a;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -157,7 +158,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &7u32.to_le_bytes(),
+        &8u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -192,13 +193,13 @@ fn given_a_state_with_a_wrong_magic_when_loaded_then_it_is_refused_as_bad_magic(
 #[test]
 fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &8u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &9u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
     assert_eq!(
         result,
         Err(SavestateError::VersionMismatch {
-            found: 8,
-            expected: 7
+            found: 9,
+            expected: 8
         })
     );
 }
@@ -206,12 +207,12 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
 #[test]
 fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &8u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &9u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 8 is not version 7")
+        .expect_err("version 9 is not version 8")
         .to_string();
-    assert!(message.contains("version 8") && message.contains("version 7"));
+    assert!(message.contains("version 9") && message.contains("version 8"));
 }
 
 #[test]
@@ -545,7 +546,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_7_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_8_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -553,14 +554,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_7
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 7
+            expected: 8
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_7_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_8_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -568,15 +569,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_7
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 7
+            expected: 8
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_7() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_8() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 7u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 8u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -805,6 +806,7 @@ const NO_TCM: crate::bus::TcmConfig = crate::bus::TcmConfig {
         enabled: false,
         load_mode: false,
     },
+    now: 0,
 };
 
 /// A machine whose WRAMCNT is `mode` and whose shared WRAM holds a word at the start of each
@@ -826,8 +828,8 @@ fn wram_reads(machine: &Machine) -> [u32; 4] {
     [
         machine.memory.read32(&NO_TCM, SHARED),
         machine.memory.read32(&NO_TCM, SHARED + 0x4000),
-        machine.memory.read32_arm7(SHARED),
-        machine.memory.read32_arm7(SHARED + 0x4000),
+        machine.memory.read32_arm7(0, SHARED),
+        machine.memory.read32_arm7(0, SHARED + 0x4000),
     ]
 }
 
@@ -871,7 +873,7 @@ fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() 
             target.memory.wramcnt().mode,
             // Mode 1 gives the ARM7 the first half, which repeats every 16 KiB; mode 3 would
             // show the second half here (0xB2B2_B2B2).
-            target.memory.read32_arm7(SHARED + 0x4000)
+            target.memory.read32_arm7(0, SHARED + 0x4000)
         ),
         (
             Ok(()),
@@ -931,7 +933,7 @@ fn with_irq_state(frames: u32) -> Machine {
     let tcm = crate::bus::TcmConfig::from_cp15(machine.arm9.cp15());
     machine.memory.write32(&tcm, IRQ_IME, 0xFFFF_FFFF);
     machine.memory.write32(&tcm, IRQ_IE, 0xFFFF_FFFF);
-    machine.memory.write32_arm7(IRQ_IE, 1 << 7 | 1 << 16);
+    machine.memory.write32_arm7(0, IRQ_IE, 1 << 7 | 1 << 16);
     machine.request_irq9(0b1001);
     machine.request_irq7(1 << 7 | 1 << 24);
     machine
@@ -1094,7 +1096,7 @@ fn with_words_in_flight(frames: u32) -> Machine {
     let mut machine = booted(&counter_rom(), frames);
     let tcm = crate::bus::TcmConfig::from_cp15(machine.arm9.cp15());
     machine.memory.write16(&tcm, IPC_CNT, 1 << 15);
-    machine.memory.write16_arm7(IPC_CNT, 1 << 15 | 1 << 10);
+    machine.memory.write16_arm7(0, IPC_CNT, 1 << 15 | 1 << 10);
     [0x11, 0x2222, 0x33_3333]
         .into_iter()
         .for_each(|word| machine.memory.write32(&tcm, IPC_SEND, word));
@@ -1103,8 +1105,8 @@ fn with_words_in_flight(frames: u32) -> Machine {
 
 /// The three words the ARM7 takes from `machine`, then the error flag of its IPCFIFOCNT.
 fn arm7_takes_three(machine: &mut Machine) -> ([u32; 3], u16) {
-    let words = std::array::from_fn(|_| machine.memory.read32_arm7_mut(IPC_RECV));
-    (words, machine.memory.read16_arm7(IPC_CNT) & (1 << 14))
+    let words = std::array::from_fn(|_| machine.memory.read32_arm7_mut(0, IPC_RECV));
+    (words, machine.memory.read16_arm7(0, IPC_CNT) & (1 << 14))
 }
 
 #[test]

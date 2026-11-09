@@ -114,9 +114,14 @@ impl Scheduler {
         self.now = self.now.saturating_add(cycles);
     }
 
-    /// Whether an event of `kind` is queued.
-    pub(crate) fn has_pending(&self, kind: EventKind) -> bool {
-        self.queue.0.iter().any(|Reverse(event)| event.kind == kind)
+    /// The times of the queued events of `kind`, in no particular order.
+    pub(crate) fn times_of(&self, kind: EventKind) -> Vec<u64> {
+        self.queue
+            .0
+            .iter()
+            .filter(|Reverse(event)| event.kind == kind)
+            .map(|Reverse(event)| event.time)
+            .collect()
     }
 
     /// Restores the queue's reserved capacity after a savestate load decoded it at its length.

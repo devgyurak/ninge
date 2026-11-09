@@ -92,9 +92,15 @@ fidelity and per-round overhead, not a hardware fact.
 
 ### Debugger single-step
 
-`Machine::step_arm9` advances the ARM9 by one instruction and `now` by its cost (1), without
-running the ARM7 or dispatching events. The next `run_frame` brings the ARM7 up to `now` and
-fires whatever became due.
+`Machine::step_arm9` advances the ARM9 by one instruction and `now` by its cost (1). With a
+program booted it then settles: the ARM7 runs up to `now` and every event that became due
+fires, so the queue never holds an event before `now` and a step across a frame end draws and
+counts the frame. A machine with no program steps only the ARM9.
+
+Stepping therefore catches the ARM7 up after every ARM9 instruction, where `run_frame` does it
+once per slice. A program whose two CPUs race over the same memory can behave differently when
+stepped than when run. Replay determinism is not affected: a given sequence of calls always
+gives the same result.
 
 ### No program loaded
 
@@ -103,9 +109,19 @@ the frame.
 
 ### Savestate checks
 
-A saved scheduler is refused on load when a queued event's time is before `now`, or when the
-sequence counter is not above every queued sequence number (the next event would tie-break
-before an existing one), or when a booted program has no frame end queued (`run_frame` would never finish). The ARM7's clock must be less than one ARM7 instruction (2 master cycles) ahead of `now`; it may lag behind, as after a debugger step.
+A saved machine is refused on load when:
+
+- a queued event's time is before `now`;
+- the sequence counter is not above every queued sequence number (the next event would
+  tie-break before an existing one);
+- the queue does not hold exactly one frame end, or that frame end is not due within one frame
+  (`FRAME_CYCLES`) of `now`: two at the same time would fire in one round and `run_frame` would
+  step over its frame, and one far ahead would take effectively forever;
+- `now` is within two frames of `u64::MAX`, where the next frame end would saturate and stay
+  due forever;
+- a program is booted and the ARM7 clock is behind `now` or two or more master cycles ahead of
+  it. A booted machine is always settled, so the ARM7 is at `now` or one master cycle past it.
+  (A machine with no program steps only the ARM9, so its ARM7 clock may lag.)
 
 ## Edge cases
 

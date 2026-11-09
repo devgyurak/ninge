@@ -670,3 +670,66 @@ fn given_a_booted_state_with_no_frame_end_queued_when_loaded_then_it_is_corrupt_
         (Err(SavestateError::Corrupt), true)
     );
 }
+
+/// A booted machine whose queue is `events` (time, kind) instead of its own, at clock `now`.
+fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
+    let mut machine = booted(rom, 1);
+    machine.scheduler.pop_due(u64::MAX);
+    machine.scheduler.now = now;
+    machine.arm7_clock = now;
+    events.iter().for_each(|&time| {
+        machine
+            .scheduler
+            .schedule(time, crate::scheduler::EventKind::FrameEnd)
+    });
+    machine
+}
+
+#[test]
+fn given_a_state_with_two_frame_ends_at_the_same_time_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    // Both would fire in one round and `run_frame` would step over the frame it waits for.
+    let rom = counter_rom();
+    let saver = with_queue(&rom, 100, &[5_000, 5_000]);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_clock_is_near_u64_max_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    // The next frame end would saturate at u64::MAX and stay due forever.
+    let rom = counter_rom();
+    let now = u64::MAX - 10;
+    let saver = with_queue(&rom, now, &[u64::MAX - 5]);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_frame_end_more_than_a_frame_ahead_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let saver = with_queue(&rom, 100, &[100 + (1 << 60)]);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_booted_state_whose_arm7_lags_the_clock_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    // A booted machine is always settled: the ARM7 is at or just past `now`.
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.arm7_clock = 0;
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}

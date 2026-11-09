@@ -39,8 +39,8 @@
 //!
 //! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
-//! `now`, `next_seq` above every queued sequence number, a frame end queued for a booted program, and the ARM7 clock no more than one
-//! ARM7 instruction ahead of `now`.
+//! `now`, `next_seq` above every queued sequence number, exactly one frame end due within a
+//! frame of `now`, and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -53,7 +53,7 @@
 //! frame is drawn. The memory page table is derived from VRAMCNT_A and is rebuilt on load.
 
 use crate::Machine;
-use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind};
+use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, FRAME_CYCLES};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
@@ -115,6 +115,19 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 impl Machine {
+    /// Whether the queue holds exactly one frame end, due within one frame of `now`, and `now`
+    /// leaves room for two more frames (`scheduler.md`, "Savestate checks"). Anything else
+    /// would make `run_frame` skip over its frame, wait on a far-off one, or spin on an event
+    /// that saturates at `u64::MAX`.
+    fn frame_end_is_sane(&self) -> bool {
+        let now = self.scheduler.now();
+        let room = u64::MAX - 2 * FRAME_CYCLES;
+        matches!(
+            self.scheduler.times_of(EventKind::FrameEnd).as_slice(),
+            [time] if now <= room && (now..=now + FRAME_CYCLES).contains(time)
+        )
+    }
+
     /// Serializes the whole machine, ROM excluded, into a savestate.
     ///
     /// Saving is not on the hot path, so it allocates.
@@ -169,9 +182,10 @@ impl Machine {
             || !loaded.arm9.is_well_formed()
             || !loaded.arm7.is_well_formed()
             || !loaded.scheduler.is_well_formed()
-            // A booted program always has its next frame end queued; without it `run_frame`
-            // would never see a frame finish.
-            || (loaded.header.is_some() && !loaded.scheduler.has_pending(EventKind::FrameEnd))
+            || !loaded.frame_end_is_sane()
+            // A booted machine is always settled: the ARM7 is at `now` or one master cycle
+            // past it. One that lags would spend the first round catching up.
+            || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())
             || loaded.arm7_clock >= loaded.scheduler.now().saturating_add(ARM7_INSTRUCTION_COST)
         {
             return Err(SavestateError::Corrupt);

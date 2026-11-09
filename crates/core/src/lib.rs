@@ -151,8 +151,8 @@ impl Machine {
             self.frame_count = self.frame_count.wrapping_add(1);
             return;
         }
-        let finished = self.frame_count.wrapping_add(1);
-        while self.frame_count != finished {
+        let started = self.frame_count;
+        while self.frame_count == started {
             scheduler::run_round(self);
         }
     }

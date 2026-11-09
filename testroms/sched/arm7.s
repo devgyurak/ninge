@@ -4,8 +4,10 @@
 @
 @ Instruction budget per frame (docs/hw/scheduler.md, "Cost per instruction"): the ARM7 runs
 @ 560,190 instructions. The prologue is 3 instructions and the loop 4 (the `mov r2, r2` is
-@ padding so the loop length differs from the ARM9's), so the counter after N frames follows
-@ from (N * 560,190 - 3) / 4 (expected values live in crates/runner/tests/scheduler.rs).
+@ padding so the loop length differs from the ARM9's). With L = N * 560,190 - 3 loop
+@ instructions after N frames, each full iteration stores once and a partial one stores only
+@ when it got past its `str` (2 or 3 instructions), so the counter is floor((L + 2) / 4)
+@ (expected values live in crates/runner/tests/scheduler.rs).
     .section .text, "ax"
     .arm
     .global _start

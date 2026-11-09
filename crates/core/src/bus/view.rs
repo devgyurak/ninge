@@ -65,8 +65,9 @@ impl Bus for Arm9View<'_> {
     }
 }
 
-/// The ARM7's bus: a short-lived view over `Memory`, which reaches main RAM and the ARM7 WRAM
-/// only (`docs/hw/scheduler.md`, "ARM7 memory seen by #21"). Not state.
+/// The ARM7's bus: a short-lived view over `Memory`, which reaches main RAM, the shared WRAM it
+/// owns, its own WRAM and WRAMSTAT (`docs/hw/wramcnt.md`). It goes through the ARM7's own page
+/// table, not the ARM9's. Not state.
 pub struct Arm7View<'a> {
     memory: &'a mut Memory,
 }

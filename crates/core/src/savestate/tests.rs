@@ -9,17 +9,19 @@
 //! FNV-1a 64 of the ROM (LE u64), `28..` the machine.
 
 use super::*;
-use crate::bus::VramBankState;
+use crate::bus::{Region, VramBankState};
 use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_440_302;
-const PINNED_HASH: u64 = 0x979d_138f_d0e5_722e;
+const PINNED_LEN: usize = 4_473_074;
+const PINNED_HASH: u64 = 0xc42b_6b4a_3887_d3a7;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
-const PINNED_BOOTED_LEN: usize = 4_440_383;
-const PINNED_BOOTED_HASH: u64 = 0x3c07_ebcd_f9ae_a149;
+/// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
+/// shared-WRAM contents); the length is unchanged.
+const PINNED_BOOTED_LEN: usize = 4_473_155;
+const PINNED_BOOTED_HASH: u64 = 0x01a7_f2f6_5dc9_fd05;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -152,7 +154,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &3u32.to_le_bytes(),
+        &4u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -193,7 +195,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 7,
-            expected: 3
+            expected: 4
         })
     );
 }
@@ -204,9 +206,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 7 is not version 3")
+        .expect_err("version 7 is not version 4")
         .to_string();
-    assert!(message.contains("version 7") && message.contains("version 3"));
+    assert!(message.contains("version 7") && message.contains("version 4"));
 }
 
 #[test]
@@ -540,7 +542,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_3_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_4_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -548,15 +550,30 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_3
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 3
+            expected: 4
+        })
+    );
+}
+
+/// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
+#[test]
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_4_is_expected() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 3,
+            expected: 4
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_3() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_4() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 3u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 4u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -759,4 +776,134 @@ fn given_a_state_with_a_clock_just_above_the_time_limit_when_loaded_then_it_is_c
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
     );
+}
+
+// ------------------------------------------------------ shared WRAM and WRAMCNT (#22)
+
+/// Where shared WRAM starts in both CPUs' windows (`wramcnt.md`, "Behavior").
+const SHARED: u32 = 0x0300_0000;
+/// WRAMCNT (`wramcnt.md`, "Registers").
+const WRAMCNT_ADDR: u32 = 0x0400_0247;
+/// A TCM-free configuration, so every access goes through the page table.
+const NO_TCM: crate::bus::TcmConfig = crate::bus::TcmConfig {
+    itcm: crate::cpu::Tcm {
+        base: 0,
+        size: 0,
+        enabled: false,
+        load_mode: false,
+    },
+    dtcm: crate::cpu::Tcm {
+        base: 0,
+        size: 0,
+        enabled: false,
+        load_mode: false,
+    },
+};
+
+/// A machine whose WRAMCNT is `mode` and whose shared WRAM holds a word at the start of each
+/// 16 KiB half. A booted machine is in mode 3 (direct boot, `wramcnt.md`), so the mode is first
+/// set to 0 (the whole 32 KiB is the ARM9's) for the writes, then to `mode`.
+fn with_wram(mode: u8) -> Machine {
+    let mut machine = booted(&counter_rom(), 0);
+    machine.memory.write8(&NO_TCM, WRAMCNT_ADDR, 0);
+    machine.memory.write32(&NO_TCM, SHARED, 0xA1A1_A1A1);
+    machine
+        .memory
+        .write32(&NO_TCM, SHARED + 0x4000, 0xB2B2_B2B2);
+    machine.memory.write8(&NO_TCM, WRAMCNT_ADDR, mode);
+    machine
+}
+
+/// What each CPU reads at the start of the window and of the second half.
+fn wram_reads(machine: &Machine) -> [u32; 4] {
+    [
+        machine.memory.read32(&NO_TCM, SHARED),
+        machine.memory.read32(&NO_TCM, SHARED + 0x4000),
+        machine.memory.read32_arm7(SHARED),
+        machine.memory.read32_arm7(SHARED + 0x4000),
+    ]
+}
+
+#[test]
+fn given_a_state_with_wramcnt_1_when_loaded_onto_a_mode_3_machine_then_the_mode_and_both_views_come_back()
+ {
+    let saved = with_wram(1);
+    let mut target = with_wram(3);
+    let before = (
+        target.memory.region(SHARED),
+        target.memory.region7(SHARED + 0x4000),
+    );
+    let result = target.load_state(&saved.save_state());
+    // Mode 1: the ARM9 owns the second half (offset 0x4000 of the 32 KiB, 0xB2B2_B2B2) and the
+    // ARM7 the first (0xA1A1_A1A1); each half repeats every 16 KiB through the window.
+    assert_eq!(
+        (result, before, wram_reads(&target)),
+        (
+            Ok(()),
+            (Region::Unmapped, Region::SharedWram),
+            [0xB2B2_B2B2, 0xB2B2_B2B2, 0xA1A1_A1A1, 0xA1A1_A1A1]
+        )
+    );
+}
+
+#[test]
+fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() {
+    let saved = with_wram(1);
+    let mut target = booted(&counter_rom(), 0);
+    let before = (target.memory.region(SHARED), target.memory.wramcnt().mode);
+    let result = target.load_state(&saved.save_state());
+    // Direct boot leaves mode 3: the ARM7 sees all of the shared WRAM at 0300_0000 and the ARM9
+    // none of it; mode 1 splits it, giving the ARM9 the second half.
+    assert_eq!(
+        (
+            result,
+            before,
+            target.memory.region(SHARED),
+            target.memory.region7(SHARED),
+            target.memory.region7(0x0380_0000),
+            target.memory.wramcnt().mode,
+            // Mode 1 gives the ARM7 the first half, which repeats every 16 KiB; mode 3 would
+            // show the second half here (0xB2B2_B2B2).
+            target.memory.read32_arm7(SHARED + 0x4000)
+        ),
+        (
+            Ok(()),
+            (Region::Unmapped, 3),
+            Region::SharedWram,
+            Region::SharedWram,
+            Region::Wram7,
+            1,
+            0xA1A1_A1A1
+        )
+    );
+}
+
+#[test]
+fn given_a_state_with_wramcnt_3_when_loaded_onto_a_mode_0_machine_then_the_arm9_window_is_empty() {
+    let saved = with_wram(3);
+    let mut target = with_wram(0);
+    let before = target.memory.region(SHARED);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!(
+        (
+            result,
+            before,
+            target.memory.region(SHARED),
+            wram_reads(&target)
+        ),
+        (
+            Ok(()),
+            Region::SharedWram,
+            Region::Unmapped,
+            [0, 0, 0xA1A1_A1A1, 0xB2B2_B2B2]
+        )
+    );
+}
+
+#[test]
+fn given_a_state_with_shared_wram_filled_when_saved_loaded_and_saved_again_then_the_bytes_match() {
+    let saved = with_wram(2).save_state();
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saved);
+    assert_eq!((result, target.save_state() == saved), (Ok(()), true));
 }

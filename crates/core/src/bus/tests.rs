@@ -191,11 +191,9 @@ fn given_a_write_at_the_first_address_after_the_mirror_block_when_main_ram_is_re
  {
     let mut m = Memory::new();
     let mut v = Arm9View::new(&mut m, plain());
+    // 0300_0000h is shared WRAM since #22 (`wramcnt.md`); main RAM must not see the write.
     v.write32(0x0300_0000, X);
-    assert_eq!(
-        (v.read32(0x0300_0000), v.read32(RAM), v.read32(0x02FF_FFFC)),
-        (0, 0, 0)
-    );
+    assert_eq!((v.read32(RAM), v.read32(0x02FF_FFFC)), (0, 0));
 }
 
 // ---------------------------------------------------------------- TCM
@@ -588,7 +586,8 @@ fn given_power_on_memory_when_regions_are_looked_up_then_only_main_ram_is_mapped
         (0x0240_0000, Region::MainRam),
         (0x0280_0000, Region::MainRam),
         (0x02FF_FFFF, Region::MainRam),
-        (0x0300_0000, Region::Unmapped),
+        // Shared WRAM, owned by the ARM9 at power-on (`wramcnt.md`).
+        (0x0300_0000, Region::SharedWram),
         (VRAMCNT_A, Region::Unmapped),
         (VRAM_A, Region::Unmapped),
         (0xFFFF_0000, Region::Unmapped),
@@ -629,9 +628,8 @@ fn given_vramcnt_a_enabled_then_set_to_mst_1_when_the_window_is_looked_up_then_i
 
 // ---------------------------------------------------------------- unmapped
 
-const UNMAPPED: [u32; 9] = [
+const UNMAPPED: [u32; 8] = [
     0x0000_0000,
-    0x0300_0000,
     // An I/O port no register occupies; 0x0400_0000 is DISPCNT since #20.
     0x0400_0090,
     0x0500_0000,
@@ -687,5 +685,627 @@ fn given_the_last_byte_of_the_address_space_when_read_and_written_then_it_reads_
             v.read32(0xFFFF_FFFF)
         ),
         (0, 0, 0)
+    );
+}
+
+// ------------------------------------------------------- shared WRAM and WRAMCNT (#22)
+//
+// Expected values come from `docs/hw/wramcnt.md` ("Registers", "Behavior", "Edge cases"), never
+// from running the code. A test that pins a line of its "Unverified" section says so in its name.
+
+const WRAM: u32 = 0x0300_0000;
+const WRAM7_START: u32 = 0x0380_0000;
+/// WRAMCNT, an ARM9 register (`wramcnt.md`, "Registers").
+const WRAMCNT: u32 = 0x0400_0247;
+/// WRAMSTAT, the ARM7's read-only view of it.
+const WRAMSTAT: u32 = 0x0400_0241;
+const MARK: u8 = 0x5A;
+
+/// Which CPU's view of the memory an access goes through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Who {
+    Nine,
+    Seven,
+}
+use Who::{Nine, Seven};
+
+fn read_as(m: &Memory, who: Who, addr: u32) -> u8 {
+    match who {
+        Nine => m.read8(&plain(), addr),
+        Seven => m.read8_arm7(addr),
+    }
+}
+
+fn write_as(m: &mut Memory, who: Who, addr: u32, value: u8) {
+    match who {
+        Nine => m.write8(&plain(), addr, value),
+        Seven => m.write8_arm7(addr, value),
+    }
+}
+
+/// WRAMCNT is written by the ARM9, as a byte at its own address.
+fn set_mode(m: &mut Memory, mode: u8) {
+    m.write8(&plain(), WRAMCNT, mode);
+}
+
+fn in_mode(mode: u8) -> Memory {
+    let mut m = Memory::new();
+    set_mode(&mut m, mode);
+    m
+}
+
+/// One scenario: (mode, writer, write address, reader, read address, whether the reader sees
+/// the marker). Each runs on a fresh memory, so a reader that sees the marker saw the same
+/// physical byte.
+type Visible = (u8, Who, u32, Who, u32, bool);
+
+/// The cases that differ from the expected visibility.
+fn visibility_failures(cases: &[Visible]) -> Vec<Visible> {
+    cases
+        .iter()
+        .copied()
+        .filter(|&(mode, writer, at, reader, from, seen)| {
+            let mut m = in_mode(mode);
+            write_as(&mut m, writer, at, MARK);
+            (read_as(&m, reader, from) == MARK) != seen
+        })
+        .collect()
+}
+
+#[test]
+fn given_mode_0_when_one_cpu_writes_then_only_the_arm9_and_the_arm7s_own_wram_see_it() {
+    let cases = [
+        // The ARM9 owns all 32 KiB and the window repeats it every 32 KiB.
+        (0, Nine, WRAM, Nine, WRAM, true),
+        (0, Nine, WRAM, Nine, WRAM + 0x8000, true),
+        (0, Nine, WRAM + 0x4000, Nine, WRAM + 0xC000, true),
+        (0, Nine, WRAM + 0x7FFF, Nine, WRAM + 0xFFFF, true),
+        (0, Nine, WRAM + 0x7FFF, Nine, WRAM + 0x8000, false),
+        (0, Nine, WRAM, Nine, 0x037F_8000, true),
+        (0, Nine, WRAM, Nine, 0x03FF_8000, true),
+        (0, Nine, WRAM, Nine, WRAM7_START, true),
+        // The ARM7 owns none of it: it sees its own WRAM there instead.
+        (0, Nine, WRAM, Seven, WRAM, false),
+        (0, Nine, WRAM, Seven, WRAM7_START, false),
+        (0, Seven, WRAM, Nine, WRAM, false),
+        (0, Seven, WRAM7_START, Nine, WRAM, false),
+        // 0300_0000h shows the ARM7's 64 KiB WRAM, which is also at 0380_0000h and repeats
+        // every 64 KiB through both ranges.
+        (0, Seven, WRAM, Seven, WRAM7_START, true),
+        (0, Seven, WRAM7_START, Seven, WRAM, true),
+        (0, Seven, WRAM, Seven, WRAM + 0x1_0000, true),
+        (0, Seven, WRAM, Seven, 0x037F_0000, true),
+        (0, Seven, WRAM7_START, Seven, 0x03FF_0000, true),
+        (0, Seven, WRAM, Seven, WRAM + 0x8000, false),
+        (0, Seven, 0x037F_8000, Seven, 0x0380_8000, true),
+        (0, Seven, 0x037F_8000, Seven, WRAM7_START, false),
+        (0, Seven, 0x037F_FFFF, Seven, 0x0380_FFFF, true),
+    ];
+    assert_eq!(visibility_failures(&cases), Vec::<Visible>::new());
+}
+
+#[test]
+fn given_mode_1_when_one_cpu_writes_then_each_cpu_stays_in_its_own_16_kib_half() {
+    let cases = [
+        // The ARM9 has the second half, the ARM7 the first; each repeats every 16 KiB.
+        (1, Nine, WRAM, Nine, WRAM + 0x4000, true),
+        (1, Nine, WRAM, Nine, 0x03FF_C000, true),
+        (1, Nine, WRAM + 0x3FFF, Nine, WRAM + 0x7FFF, true),
+        (1, Nine, WRAM + 0x3FFF, Nine, WRAM + 0x4000, false),
+        (1, Nine, WRAM, Seven, WRAM, false),
+        (1, Seven, WRAM, Nine, WRAM, false),
+        (1, Seven, WRAM, Seven, WRAM + 0x8000, true),
+        (1, Seven, WRAM + 0x4000, Seven, WRAM, true),
+        (1, Seven, 0x037F_8000, Seven, WRAM, true),
+        // 0380_0000h is the ARM7's own WRAM whatever the mode.
+        (1, Seven, WRAM, Seven, WRAM7_START, false),
+        (1, Seven, WRAM7_START, Nine, WRAM, false),
+    ];
+    assert_eq!(visibility_failures(&cases), Vec::<Visible>::new());
+}
+
+#[test]
+fn given_mode_2_when_one_cpu_writes_then_each_cpu_stays_in_its_own_16_kib_half() {
+    let cases = [
+        // The ARM9 has the first half, the ARM7 the second.
+        (2, Nine, WRAM, Nine, WRAM + 0xC000, true),
+        (2, Nine, WRAM + 0x3FFF, Nine, WRAM + 0x4000, false),
+        (2, Nine, WRAM, Seven, WRAM, false),
+        (2, Seven, WRAM, Nine, WRAM, false),
+        (2, Seven, WRAM + 0x3FFF, Seven, WRAM + 0x7FFF, true),
+        (2, Seven, WRAM + 0x3FFF, Seven, WRAM + 0x4000, false),
+    ];
+    assert_eq!(visibility_failures(&cases), Vec::<Visible>::new());
+}
+
+#[test]
+fn given_mode_3_when_one_cpu_writes_then_the_arm7_owns_all_32_kib_and_the_arm9_gets_nothing() {
+    let cases = [
+        (3, Seven, WRAM, Seven, WRAM + 0x8000, true),
+        (3, Seven, WRAM + 0x7FFF, Seven, 0x037F_FFFF, true),
+        (3, Seven, WRAM, Nine, WRAM, false),
+        // The ARM9's write is dropped, so the ARM7 never sees it.
+        (3, Nine, WRAM, Seven, WRAM, false),
+        (3, Nine, WRAM, Nine, WRAM, false),
+        // 0380_0000h stays the ARM7's separate 64 KiB WRAM.
+        (3, Seven, WRAM, Seven, WRAM7_START, false),
+        (3, Seven, WRAM7_START, Seven, 0x0381_0000, true),
+        (3, Seven, WRAM7_START, Seven, WRAM, false),
+    ];
+    assert_eq!(visibility_failures(&cases), Vec::<Visible>::new());
+}
+
+/// Offsets of the four marked bytes in the 32 KiB: the first and last byte of each half, so
+/// the `+3FFFh` / `+4000h` boundary decides which half a byte is in.
+const MARKED: [(u32, u8); 4] = [(0, 0xA1), (0x3FFF, 0xA2), (0x4000, 0xB1), (0x7FFF, 0xB2)];
+
+/// A mismatch: (mode, CPU, address, expected, got).
+type ReadDiff = (u8, Who, u32, u8, u8);
+
+/// Fills the four marked bytes under mode 0 through the ARM9, switches to each row's mode, and
+/// reads `addrs` through the row's CPU. Bytes keep their place across a mode change, so what a
+/// CPU reads is the half it now owns (`wramcnt.md`, "Changing the mode").
+fn read_failures(addrs: &[u32], rows: &[(u8, Who, &[u8])]) -> Vec<ReadDiff> {
+    rows.iter()
+        .flat_map(|&(mode, who, expected)| {
+            let mut m = Memory::new();
+            MARKED
+                .iter()
+                .for_each(|&(offset, value)| m.write8(&plain(), WRAM + offset, value));
+            set_mode(&mut m, mode);
+            addrs
+                .iter()
+                .zip(expected)
+                .filter_map(|(&addr, &want)| {
+                    let got = read_as(&m, who, addr);
+                    (got != want).then_some((mode, who, addr, want, got))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn given_bytes_written_under_mode_0_when_each_mode_is_set_then_each_cpu_reads_the_half_it_owns() {
+    // Addresses: the window start, the end of the first half, the start and end of the second,
+    // then the two repetitions at +8000h and +C000h.
+    let addrs = [
+        WRAM,
+        WRAM + 0x3FFF,
+        WRAM + 0x4000,
+        WRAM + 0x7FFF,
+        WRAM + 0x8000,
+        WRAM + 0xC000,
+    ];
+    let (a1, a2, b1, b2) = (0xA1, 0xA2, 0xB1, 0xB2);
+    let rows: [(u8, Who, &[u8]); 8] = [
+        (0, Nine, &[a1, a2, b1, b2, a1, b1]),
+        (0, Seven, &[0; 6]),
+        // Mode 1: the ARM9 has the second half (bytes 4000h..7FFFh of the 32 KiB).
+        (1, Nine, &[b1, b2, b1, b2, b1, b1]),
+        (1, Seven, &[a1, a2, a1, a2, a1, a1]),
+        (2, Nine, &[a1, a2, a1, a2, a1, a1]),
+        (2, Seven, &[b1, b2, b1, b2, b1, b1]),
+        (3, Nine, &[0; 6]),
+        (3, Seven, &[a1, a2, b1, b2, a1, b1]),
+    ];
+    assert_eq!(read_failures(&addrs, &rows), Vec::<ReadDiff>::new());
+}
+
+#[test]
+fn given_bytes_written_under_mode_0_when_each_mode_is_set_then_the_window_ends_show_the_same_halves()
+ {
+    // 037F_8000h is the ARM7's last repetition of the shared allocation; 0380_0000h is the
+    // ARM7's own WRAM but still the ARM9's shared window (`wramcnt.md`, "The 037F_8000h mirror").
+    let addrs = [0x037F_8000, 0x037F_FFFF, WRAM7_START, 0x03FF_FFFF];
+    let (a1, a2, b1, b2) = (0xA1, 0xA2, 0xB1, 0xB2);
+    let rows: [(u8, Who, &[u8]); 8] = [
+        (0, Nine, &[a1, b2, a1, b2]),
+        (0, Seven, &[0; 4]),
+        (1, Nine, &[b1, b2, b1, b2]),
+        (1, Seven, &[a1, a2, 0, 0]),
+        (2, Nine, &[a1, a2, a1, a2]),
+        (2, Seven, &[b1, b2, 0, 0]),
+        (3, Nine, &[0; 4]),
+        (3, Seven, &[a1, b2, 0, 0]),
+    ];
+    assert_eq!(read_failures(&addrs, &rows), Vec::<ReadDiff>::new());
+}
+
+/// A mismatch: (mode, the 16 KiB page address, ARM9 region, ARM7 region) as (expected, got).
+type RegionDiff = (u8, u32, (Region, Region), (Region, Region));
+
+/// The pages whose `region()` / `region7()` differ from the row.
+fn wram_region_failures(addrs: &[u32], rows: &[(u8, [Region; 6], [Region; 6])]) -> Vec<RegionDiff> {
+    rows.iter()
+        .flat_map(|&(mode, nine, seven)| {
+            let m = in_mode(mode);
+            addrs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &addr)| {
+                    let got = (m.region(addr), m.region7(addr));
+                    ((nine[i], seven[i]) != got).then_some((mode, addr, (nine[i], seven[i]), got))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn given_each_mode_when_regions_are_asked_then_both_views_report_the_page_owner() {
+    use Region::{SharedWram as S, Unmapped as U, Wram7 as W};
+    let addrs = [
+        WRAM,
+        WRAM + 0x4000,
+        0x037F_8000,
+        WRAM7_START,
+        0x03FF_C000,
+        0x0400_0000,
+    ];
+    let rows = [
+        (0, [S, S, S, S, S, U], [W, W, W, W, W, U]),
+        (1, [S, S, S, S, S, U], [S, S, S, W, W, U]),
+        (2, [S, S, S, S, S, U], [S, S, S, W, W, U]),
+        (3, [U, U, U, U, U, U], [S, S, S, W, W, U]),
+    ];
+    assert_eq!(
+        wram_region_failures(&addrs, &rows),
+        Vec::<RegionDiff>::new()
+    );
+}
+
+#[test]
+fn given_a_power_on_memory_when_main_ram_is_asked_for_its_region_then_both_views_say_main_ram() {
+    let m = Memory::new();
+    assert_eq!(
+        (
+            m.region(0x0200_0000),
+            m.region7(0x0200_0000),
+            m.region7(0x02FF_C000)
+        ),
+        (Region::MainRam, Region::MainRam, Region::MainRam)
+    );
+}
+
+#[test]
+fn given_a_power_on_memory_when_wramcnt_is_read_then_mode_0_gives_the_arm9_all_32_kib() {
+    // Power-on mode 0 is chosen, not stated (`wramcnt.md`, "Unverified").
+    let m = Memory::new();
+    assert_eq!(
+        (
+            m.wramcnt(),
+            m.read8(&plain(), WRAMCNT),
+            m.read8_arm7(WRAMSTAT)
+        ),
+        (
+            WramState {
+                mode: 0,
+                arm9: WramShare::All32,
+                arm7: WramShare::None
+            },
+            0,
+            0
+        )
+    );
+}
+
+/// The modes whose decoded shares differ from the table in `wramcnt.md`, "WRAMCNT bits".
+fn decode_failures() -> Vec<(u8, WramState)> {
+    use WramShare::{All32, First16, None as Nothing, Second16};
+    let table = [
+        (0, All32, Nothing),
+        (1, Second16, First16),
+        (2, First16, Second16),
+        (3, Nothing, All32),
+    ];
+    table
+        .iter()
+        .filter_map(|&(mode, arm9, arm7)| {
+            let got = in_mode(mode).wramcnt();
+            (got != WramState { mode, arm9, arm7 }).then_some((mode, got))
+        })
+        .collect()
+}
+
+#[test]
+fn given_each_mode_when_wramcnt_is_decoded_then_the_shares_match_the_allocation_table() {
+    assert_eq!(decode_failures(), Vec::<(u8, WramState)>::new());
+}
+
+/// (written value, expected mode) pairs whose three observers (ARM9 read of WRAMCNT, ARM7 read
+/// of WRAMSTAT, `wramcnt().mode`) do not all say the expected mode.
+fn readback_failures(rows: &[(u8, u8)]) -> Vec<(u8, u8, [u8; 3])> {
+    rows.iter()
+        .filter_map(|&(written, mode)| {
+            let m = in_mode(written);
+            let seen = [
+                m.read8(&plain(), WRAMCNT),
+                m.read8_arm7(WRAMSTAT),
+                m.wramcnt().mode,
+            ];
+            (seen != [mode; 3]).then_some((written, mode, seen))
+        })
+        .collect()
+}
+
+#[test]
+fn given_bits_2_to_7_set_in_a_write_when_read_back_then_only_the_mode_survives() {
+    let rows = [
+        (0x00, 0),
+        (0x01, 1),
+        (0x02, 2),
+        (0x03, 3),
+        (0x04, 0),
+        (0x07, 3),
+        (0x80, 0),
+        (0x81, 1),
+        (0xFC, 0),
+        (0xFE, 2),
+        (0xFF, 3),
+    ];
+    assert_eq!(readback_failures(&rows), Vec::<(u8, u8, [u8; 3])>::new());
+}
+
+#[test]
+fn given_wramcnt_set_by_the_arm9_when_the_arm7_writes_0400_0247_then_the_mode_is_unchanged() {
+    let mut m = in_mode(1);
+    m.write8_arm7(WRAMCNT, 3);
+    m.write16_arm7(WRAMCNT & !1, 0x0300);
+    m.write32_arm7(WRAMCNT & !3, 0x0300_0000);
+    assert_eq!((m.read8(&plain(), WRAMCNT), m.read8_arm7(WRAMSTAT)), (1, 1));
+}
+
+#[test]
+fn given_wramcnt_set_by_the_arm9_when_the_arm7_writes_wramstat_then_the_mode_is_unchanged() {
+    let mut m = in_mode(2);
+    m.write8_arm7(WRAMSTAT, 3);
+    assert_eq!((m.read8_arm7(WRAMSTAT), m.read8(&plain(), WRAMCNT)), (2, 2));
+}
+
+#[test]
+fn given_mode_1_when_a_byte_is_written_at_0400_0246_then_it_is_discarded_and_the_mode_stays() {
+    // 0400_0246h is VRAMCNT_G, a Phase 4 register (#35); the write is dropped here.
+    let mut m = in_mode(1);
+    m.write8(&plain(), 0x0400_0246, 3);
+    assert_eq!((m.read8(&plain(), WRAMCNT), m.vram_a().enabled), (1, false));
+}
+
+#[test]
+fn given_a_halfword_write_at_0400_0246_when_the_high_byte_is_2_then_wramcnt_becomes_2() {
+    // Low byte 03h is VRAMCNT_G (discarded), high byte 02h is WRAMCNT.
+    let mut m = Memory::new();
+    m.write16(&plain(), 0x0400_0246, 0x0203);
+    assert_eq!((m.read8(&plain(), WRAMCNT), m.wramcnt().mode), (2, 2));
+}
+
+#[test]
+fn given_a_halfword_write_at_0400_0246_when_the_low_byte_is_3_and_the_high_byte_0_then_wramcnt_is_0()
+ {
+    let mut m = in_mode(1);
+    m.write16(&plain(), 0x0400_0246, 0x0003);
+    assert_eq!(m.read8(&plain(), WRAMCNT), 0);
+}
+
+#[test]
+fn given_a_word_write_at_0400_0244_when_the_top_byte_is_3_then_wramcnt_becomes_3() {
+    // The four registers 0400_0244h..0400_0247h: only the top byte is WRAMCNT.
+    let mut m = Memory::new();
+    m.write32(&plain(), 0x0400_0244, 0x03FF_FFFF);
+    assert_eq!((m.read8(&plain(), WRAMCNT), m.vram_a().enabled), (3, false));
+}
+
+#[test]
+fn given_a_word_write_at_0400_0244_when_the_top_byte_is_0_then_wramcnt_is_cleared() {
+    let mut m = in_mode(2);
+    m.write32(&plain(), 0x0400_0244, 0x0000_0003);
+    assert_eq!(m.read8(&plain(), WRAMCNT), 0);
+}
+
+#[test]
+fn given_vramcnt_a_enabled_when_wramcnt_is_written_then_the_vram_bank_is_unchanged() {
+    let mut m = Memory::new();
+    m.write8(&plain(), 0x0400_0240, 0x80);
+    let before = m.vram_a();
+    set_mode(&mut m, 3);
+    assert_eq!((m.vram_a(), m.region(0x0680_0000)), (before, Region::VramA));
+}
+
+#[test]
+fn given_wramcnt_written_when_vramcnt_a_is_written_then_wramcnt_is_unchanged() {
+    let mut m = in_mode(2);
+    m.write8(&plain(), 0x0400_0240, 0x80);
+    assert_eq!(
+        (m.read8(&plain(), WRAMCNT), m.region(WRAM)),
+        (2, Region::SharedWram)
+    );
+}
+
+#[test]
+fn given_a_byte_in_the_arm9s_share_when_the_mode_moves_it_to_the_arm7_then_the_old_mapping_is_gone()
+{
+    let mut m = Memory::new();
+    m.write8(&plain(), WRAM, MARK);
+    let before = (m.region(WRAM), m.region7(WRAM), m.read8_arm7(WRAM));
+    set_mode(&mut m, 3);
+    // Mode 3: the ARM9 window is empty and the ARM7 now reads the byte at the same address.
+    let after = (
+        m.region(WRAM),
+        m.region7(WRAM),
+        m.read8(&plain(), WRAM),
+        m.read8_arm7(WRAM),
+    );
+    assert_eq!(
+        (before, after),
+        (
+            (Region::SharedWram, Region::Wram7, 0),
+            (Region::Unmapped, Region::SharedWram, 0, MARK)
+        )
+    );
+}
+
+#[test]
+fn given_mode_3_after_mode_0_when_mode_0_returns_then_the_arm9_byte_is_back_and_the_arm7_sees_its_own_wram()
+ {
+    let mut m = Memory::new();
+    m.write8(&plain(), WRAM, MARK);
+    set_mode(&mut m, 3);
+    m.write8_arm7(WRAM + 1, 0x33);
+    set_mode(&mut m, 0);
+    // The shared bytes did not move or clear; the ARM7 write at +1 went to the shared WRAM
+    // under mode 3, so the ARM9 reads it now.
+    assert_eq!(
+        (
+            m.read8(&plain(), WRAM),
+            m.read8(&plain(), WRAM + 1),
+            m.read8_arm7(WRAM),
+            m.read8_arm7(WRAM + 1),
+            m.region7(WRAM)
+        ),
+        (MARK, 0x33, 0, 0, Region::Wram7)
+    );
+}
+
+#[test]
+fn given_a_mode_cycle_0_1_2_3_when_each_cpu_reads_the_first_byte_then_the_contents_never_clear() {
+    let mut m = Memory::new();
+    m.write8(&plain(), WRAM, 0xA1);
+    let mut seen = Vec::new();
+    seen.push(m.read8(&plain(), WRAM));
+    set_mode(&mut m, 1);
+    seen.push(m.read8_arm7(WRAM));
+    set_mode(&mut m, 2);
+    seen.push(m.read8(&plain(), WRAM));
+    set_mode(&mut m, 3);
+    seen.push(m.read8_arm7(WRAM));
+    set_mode(&mut m, 0);
+    seen.push(m.read8(&plain(), WRAM));
+    assert_eq!(seen, [0xA1; 5]);
+}
+
+#[test]
+fn given_mode_3_when_the_arm9_writes_a_word_then_the_write_is_dropped_and_reads_are_zero_as_the_note_models_unverified()
+ {
+    // TODO(hw-unverified): GBATEK says "undefined data" for the empty window
+    // (`wramcnt.md`, "Unverified").
+    let mut m = in_mode(3);
+    m.write32(&plain(), WRAM, 0x1122_3344);
+    m.write16(&plain(), 0x03FF_FFFE, 0x5566);
+    m.write8(&plain(), WRAM + 0x4000, 0x77);
+    assert_eq!(
+        (
+            m.read32(&plain(), WRAM),
+            m.read16(&plain(), 0x03FF_FFFE),
+            m.read8(&plain(), WRAM + 0x4000),
+            m.read32_arm7(WRAM),
+            m.read8_arm7(WRAM + 0x4000)
+        ),
+        (0, 0, 0, 0, 0)
+    );
+}
+
+#[test]
+fn given_a_word_in_the_shared_wram_when_read_at_every_width_then_the_bytes_are_little_endian() {
+    let mut m = Memory::new();
+    m.write32(&plain(), WRAM + 0x7FFC, X);
+    // The last word of the 32 KiB, seen through the next repetition.
+    assert_eq!(
+        (
+            m.read32(&plain(), WRAM + 0xFFFC),
+            m.read16(&plain(), WRAM + 0xFFFC),
+            m.read16(&plain(), WRAM + 0xFFFE),
+            m.read8(&plain(), WRAM + 0xFFFF)
+        ),
+        (X, 0x3344, 0x1122, 0x11)
+    );
+}
+
+#[test]
+fn given_mode_3_when_the_arm7_writes_a_halfword_at_the_end_of_the_window_then_it_reads_back_at_the_start()
+ {
+    let mut m = in_mode(3);
+    m.write16_arm7(0x037F_FFFE, 0xBEEF);
+    assert_eq!(
+        (
+            m.read16_arm7(WRAM + 0x7FFE),
+            m.read32_arm7(0x037F_FFFC),
+            m.read8_arm7(0x037F_FFFF)
+        ),
+        (0xBEEF, 0xBEEF_0000, 0xBE)
+    );
+}
+
+#[test]
+fn given_mode_3_when_the_arm7_writes_across_the_96_kib_block_then_each_range_keeps_its_own_bytes() {
+    // 037F_8000h..037F_FFFFh is the shared WRAM, 0380_0000h..0380_FFFFh the ARM7's own: adjacent
+    // addresses, separate memories (`wramcnt.md`, "The 037F_8000h mirror").
+    let mut m = in_mode(3);
+    m.write8_arm7(0x037F_8000, 0x11);
+    m.write8_arm7(0x037F_FFFF, 0x22);
+    m.write8_arm7(WRAM7_START, 0x33);
+    m.write8_arm7(0x0380_FFFF, 0x44);
+    let seen = [
+        m.read8_arm7(0x037F_8000),
+        m.read8_arm7(WRAM),
+        m.read8_arm7(0x037F_FFFF),
+        m.read8_arm7(WRAM + 0x7FFF),
+        m.read8_arm7(WRAM7_START),
+        m.read8_arm7(0x0381_0000),
+        m.read8_arm7(0x0380_FFFF),
+        m.read8_arm7(0x03FF_FFFF),
+    ];
+    assert_eq!(seen, [0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44]);
+}
+
+#[test]
+fn given_the_arm7s_own_wram_when_every_mode_is_set_then_its_byte_never_moves() {
+    let mut m = Memory::new();
+    m.write8_arm7(WRAM7_START + 0x10, 0x77);
+    let mut seen = Vec::new();
+    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    set_mode(&mut m, 1);
+    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    set_mode(&mut m, 2);
+    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    set_mode(&mut m, 3);
+    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    assert_eq!(seen, [0x77; 4]);
+}
+
+#[test]
+fn given_mode_0_when_the_arm9_fetches_from_shared_wram_then_it_gets_the_stored_opcode() {
+    let mut m = Memory::new();
+    m.write32(&plain(), WRAM + 0x100, 0xE1A0_0000);
+    m.write16(&plain(), WRAM + 0x204, 0x46C0);
+    assert_eq!(
+        (
+            m.fetch32(&plain(), WRAM + 0x100),
+            m.fetch16(&plain(), WRAM + 0x204)
+        ),
+        (0xE1A0_0000, 0x46C0)
+    );
+}
+
+#[test]
+fn given_mode_3_when_the_arm9_fetches_from_the_empty_window_then_it_reads_zero() {
+    // TODO(hw-unverified): an empty ARM9 window reads 0 here (`wramcnt.md`, "Unverified").
+    let mut m = Memory::new();
+    m.write32(&plain(), WRAM + 0x100, 0xE1A0_0000);
+    set_mode(&mut m, 3);
+    assert_eq!(m.fetch32(&plain(), WRAM + 0x100), 0);
+}
+
+#[test]
+fn given_an_opcode_in_the_arm7s_share_when_the_arm9_changes_the_mode_then_the_next_arm7_fetch_sees_the_change()
+ {
+    // A mode change is seen by the ARM7 on its next instruction fetch (`wramcnt.md`, "Edge
+    // cases").
+    let mut m = in_mode(3);
+    m.write32_arm7(WRAM, 0xE1A0_1234);
+    let before = (m.fetch32_arm7(WRAM), m.fetch16_arm7(WRAM));
+    set_mode(&mut m, 0);
+    assert_eq!(
+        (before, m.fetch32_arm7(WRAM), m.fetch16_arm7(WRAM)),
+        ((0xE1A0_1234, 0x1234), 0, 0)
     );
 }

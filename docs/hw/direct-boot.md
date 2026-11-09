@@ -20,9 +20,9 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
    that is stored. Main RAM mirrors, so this is the top of the 4 MiB (`arm9-memory-map.md`). No
    binary can reach it: a binary ends at `023B_FE00h` at the latest.
 4. Copy the ARM9 binary: `size` bytes from its ROM offset to its RAM address, in main RAM.
-5. Copy the ARM7 binary the same way, only when its RAM address is in main RAM. An ARM7
-   destination in the `037F_8000h` range is accepted but not placed (`TODO(phase3)`, #22);
-   the ARM7 then starts on zeroed memory. Phase 2 does not execute the ARM7; from #21 it
+5. Set WRAMCNT to 3 (all of the shared WRAM to the ARM7; inferred, Unverified in `wramcnt.md`),
+   then copy the ARM7 binary the same way through the ARM7's view: its RAM address is in main RAM
+   or in the `037F_8000h` range (`wramcnt.md`). Phase 2 does not execute the ARM7; from #21 it
    starts at its entry point (see "ARM7 state at entry").
 
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not
@@ -51,11 +51,11 @@ Supervisor stacks, with the same zeros.
 
 The ARM7 is set up like the ARM9: R12, R14 and R15 hold its entry address, the three stack
 pointers above, every other register zero, and the same chosen CPSR (`0000_00DFh`). It has no
-CP15. Its pipeline is filled through the ARM7 bus view (`scheduler.md`, "ARM7 memory seen by
-#21"), which reaches main RAM and the 64 KiB ARM7 WRAM only. See "Unverified".
+CP15. Its pipeline is filled through the ARM7 bus view (`scheduler.md`, "ARM7 memory"),
+which reaches main RAM, shared WRAM and the 64 KiB ARM7 WRAM (`wramcnt.md`). See "Unverified".
 
-The stack pointers lie in shared WRAM, which Phase 2 does not map (`arm9-memory-map.md`); they
-are only register values here.
+The stack pointers lie in shared WRAM, which direct boot gives to the ARM7 (WRAMCNT = 3), so they are unbacked for the ARM9 until its
+program sets WRAMCNT (`wramcnt.md`, "Unverified").
 
 GBATEK does not give the processor mode, the I and F bits or the T bit at entry. The running
 mode's R13 is listed apart from the IRQ and Supervisor ones, so the mode is neither of them;

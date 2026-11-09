@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The memory the ARM9 sees: main RAM, the two TCMs, VRAM bank A as LCDC, and the page table
-//! that finds them (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`). It also holds the
-//! ARM7's own WRAM, which the ARM7 view reaches (`docs/hw/scheduler.md`, "ARM7 memory seen by #21").
+//! The memory both CPUs see: main RAM, the two TCMs, VRAM bank A as LCDC, the 32 KiB of shared
+//! WRAM that WRAMCNT hands out, and the ARM7's own WRAM. Each CPU has a page table of its own
+//! (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`, `docs/hw/wramcnt.md`).
 //!
-//! Access order: TCM, then the page table, then the slow path (I/O and unmapped). Guest
-//! addresses never panic: an address that nothing answers reads 0 and ignores a write.
+//! Access order: (ARM9 only) TCM, then the page table, then the slow path (I/O and unmapped).
+//! Guest addresses never panic: an address that nothing answers reads 0 and ignores a write.
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
@@ -27,15 +27,24 @@ const MAIN_RAM_BLOCK_SIZE: usize = 16 << 20;
 const ITCM_SIZE: usize = 32 << 10;
 const DTCM_SIZE: usize = 16 << 10;
 
-/// Main RAM repeats every 4 MiB through its block, so an address maps to `addr & MAIN_RAM_MASK`.
-const MAIN_RAM_MASK: u32 = (MAIN_RAM_SIZE - 1) as u32;
-/// The top byte of an address in the 16 MiB main RAM block (`0200_0000h`-`02FF_FFFFh`).
-const MAIN_RAM_BLOCK_TOP: u32 = 0x02;
 /// ARM7 WRAM: 64 KiB at `0380_0000h` (`memory-map.md`).
 const WRAM7_BASE: u32 = 0x0380_0000;
 const WRAM7_SIZE: usize = 64 << 10;
-/// The top byte of the ARM7's WRAM range, which also holds shared WRAM below `WRAM7_BASE`.
-const WRAM_BLOCK_TOP: u32 = 0x03;
+/// Shared WRAM: 32 KiB in two 16 KiB halves (`wramcnt.md`, "Registers").
+const SHARED_WRAM_SIZE: usize = 32 << 10;
+const WRAM_HALF_SIZE: usize = 16 << 10;
+/// The window shared WRAM repeats through: `0300_0000h`-`03FF_FFFFh` for the ARM9; the ARM7's
+/// shared part ends at `WRAM7_BASE` (`wramcnt.md`, "Behavior").
+const WRAM_WINDOW_BASE: u32 = 0x0300_0000;
+const WRAM_WINDOW_END: u32 = 0x0400_0000;
+/// WRAMCNT at `0400_0247h` (ARM9) and its ARM7 read-only copy WRAMSTAT at `0400_0241h`.
+const WRAMCNT_ADDR: u32 = 0x0400_0247;
+const WRAMSTAT_ADDR: u32 = 0x0400_0241;
+/// VRAMCNT_G at `0400_0246h`, between VRAMCNT_F and WRAMCNT; Phase 4 (#35) owns it, so a write
+/// is discarded for now.
+const VRAMCNT_G_ADDR: u32 = 0x0400_0246;
+/// WRAMCNT bits 0-1: the allocation mode. Bits 2-7 are not used.
+const WRAMCNT_MODE_MASK: u8 = 0x03;
 
 /// VRAM bank A, mapped as LCDC at `0680_0000h`, 128 KiB (`vram-banks.md`, "Behavior").
 const VRAM_A_BASE: u32 = 0x0680_0000;
@@ -64,6 +73,47 @@ pub enum Region {
     MainRam,
     /// VRAM bank A, mapped as LCDC.
     VramA,
+    /// The shared WRAM, as WRAMCNT allocates it to the CPU asking.
+    SharedWram,
+    /// The ARM7's own 64 KiB WRAM.
+    Wram7,
+}
+
+/// What share of the 32 KiB shared WRAM a CPU owns (`wramcnt.md`, "WRAMCNT bits").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WramShare {
+    /// Nothing.
+    None,
+    /// Bytes 0-16383 of the shared WRAM.
+    First16,
+    /// Bytes 16384-32767.
+    Second16,
+    /// All 32 KiB.
+    All32,
+}
+
+impl WramShare {
+    /// `(start, length)` inside the shared WRAM, or `None` when the CPU owns nothing.
+    fn span(self) -> Option<(usize, usize)> {
+        match self {
+            Self::None => None,
+            Self::First16 => Some((0, WRAM_HALF_SIZE)),
+            Self::Second16 => Some((WRAM_HALF_SIZE, WRAM_HALF_SIZE)),
+            Self::All32 => Some((0, SHARED_WRAM_SIZE)),
+        }
+    }
+}
+
+/// WRAMCNT as decoded (`wramcnt.md`, "WRAMCNT bits"). A debugger's memory view (#57) shows each
+/// CPU's window from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WramState {
+    /// Bits 0-1.
+    pub mode: u8,
+    /// What the ARM9 owns.
+    pub arm9: WramShare,
+    /// What the ARM7 owns.
+    pub arm7: WramShare,
 }
 
 /// VRAMCNT_A as decoded (`vram-banks.md`, "VRAMCNT_A bits").
@@ -100,13 +150,52 @@ pub struct Memory {
     vramcnt_a: u8,
     // The ARM7's own WRAM (64 KiB); only the ARM7 view reaches it.
     wram7: Vec<u8>,
+    // The shared WRAM (32 KiB) and the WRAMCNT mode (bits 0-1) that splits it (`wramcnt.md`).
+    shared_wram: Vec<u8>,
+    wramcnt: u8,
     // Engine A's display registers, reached through the I/O slow path.
     gpu2d: Gpu2d,
-    // Derived from `vramcnt_a`, so it is not saved; `build_page_table` rebuilds it. Empty after
-    // a load until then, which reads as all-unmapped rather than panicking. One entry per 16 KiB
-    // page (the page-table `decision` issue).
+    // Derived from `vramcnt_a` and `wramcnt`, so the tables are not saved; `build_page_table`
+    // rebuilds both. Empty after a load until then, which reads as all-unmapped rather than
+    // panicking. One entry per 16 KiB page, one table per CPU (the page-table decision is
+    // recorded in the PR that added #22).
     #[serde(skip)]
-    pages: Vec<Page>,
+    pages9: Vec<Page>,
+    #[serde(skip)]
+    pages7: Vec<Page>,
+}
+
+/// The entry for the page holding `addr`; an address outside a (not yet built) table is unmapped.
+fn page_of(pages: &[Page], addr: u32) -> Page {
+    pages
+        .get((addr >> PAGE_SHIFT) as usize)
+        .copied()
+        .unwrap_or(UNMAPPED_PAGE)
+}
+
+/// Points every page of `[base, end)` at `region`, repeating `span` (start, length in the
+/// region's buffer) through the window one page at a time; no span leaves them unmapped.
+fn map_window(
+    pages: &mut [Page],
+    base: u32,
+    end: u32,
+    region: Region,
+    span: Option<(usize, usize)>,
+) {
+    let first = (base >> PAGE_SHIFT) as usize;
+    let count = ((end - base) >> PAGE_SHIFT) as usize;
+    let Some(window) = pages.get_mut(first..first + count) else {
+        return;
+    };
+    for (i, page) in window.iter_mut().enumerate() {
+        *page = match span {
+            Some((start, len)) => Page {
+                region,
+                offset: (start + (i * PAGE_SIZE) % len) as u32,
+            },
+            None => UNMAPPED_PAGE,
+        };
+    }
 }
 
 /// The bytes of `buf` at `offset`, or zeros when the range is outside it (an invariant we
@@ -142,8 +231,9 @@ fn tcm_offset(tcm: &Tcm, physical: usize, addr: u32) -> Option<usize> {
 
 impl Memory {
     /// Memory in its power-on state.
-    // TODO(hw-unverified): all RAM starts at zero and VRAMCNT_A starts at 0, which GBATEK does
-    // not state (`arm9-memory-map.md`, "Unverified"; `vram-banks.md`, "Unverified").
+    // TODO(hw-unverified): all RAM starts at zero, and VRAMCNT_A and WRAMCNT start at 0, which
+    // GBATEK does not state (`arm9-memory-map.md`, "Unverified"; `vram-banks.md`, "Unverified";
+    // `wramcnt.md`, "Unverified").
     pub fn new() -> Self {
         let mut memory = Self {
             main_ram: vec![0; MAIN_RAM_SIZE],
@@ -152,42 +242,94 @@ impl Memory {
             vram_a: vec![0; VRAM_A_SIZE],
             vramcnt_a: 0,
             wram7: vec![0; WRAM7_SIZE],
+            shared_wram: vec![0; SHARED_WRAM_SIZE],
+            wramcnt: 0,
             gpu2d: Gpu2d::new(),
-            pages: Vec::new(),
+            pages9: Vec::new(),
+            pages7: Vec::new(),
         };
         memory.build_page_table();
         memory
     }
 
-    /// Rebuilds the page table from the mapping state. Called at construction, after every
-    /// mapping change (a VRAMCNT_A write), and after a savestate load (`savestate`).
-    // TODO(phase3): shared WRAM and the BIOS join the table (#22, #27).
-    // TODO(phase4): the other VRAM banks and MST values join it (#35).
+    /// Rebuilds both page tables from the mapping state. Called at construction, after a
+    /// VRAMCNT_A write, and after a savestate load (`savestate`); a WRAMCNT write rebuilds only
+    /// the shared WRAM block (`build_wram_pages`).
+    // Per-CPU tables: the decision is recorded in the PR that added #22.
+    // TODO(phase3): the BIOS joins the tables (#27).
+    // TODO(phase4): the other VRAM banks and MST values join them (#35).
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
     // rule; a disabled bank or MST other than 0 is unmapped; the LCDC window has no mirrors
     // (`arm9-memory-map.md`, `vram-banks.md`, "Unverified").
     pub(crate) fn build_page_table(&mut self) {
-        self.pages.clear();
-        self.pages.resize(PAGE_COUNT, UNMAPPED_PAGE);
-        let ram_pages = MAIN_RAM_SIZE / PAGE_SIZE;
-        let first = (MAIN_RAM_BASE >> PAGE_SHIFT) as usize;
-        for i in 0..MAIN_RAM_BLOCK_SIZE / PAGE_SIZE {
-            let offset = (i % ram_pages) * PAGE_SIZE;
-            self.pages[first + i] = Page {
-                region: Region::MainRam,
-                offset: offset as u32,
-            };
+        self.pages9.clear();
+        self.pages9.resize(PAGE_COUNT, UNMAPPED_PAGE);
+        self.pages7.clear();
+        self.pages7.resize(PAGE_COUNT, UNMAPPED_PAGE);
+        // Both CPUs see main RAM repeated through its 16 MiB block.
+        for pages in [&mut self.pages9, &mut self.pages7] {
+            map_window(
+                pages,
+                MAIN_RAM_BASE,
+                MAIN_RAM_BASE + MAIN_RAM_BLOCK_SIZE as u32,
+                Region::MainRam,
+                Some((0, MAIN_RAM_SIZE)),
+            );
         }
         let bank = self.vram_a();
         if bank.enabled && bank.mst == MST_LCDC {
-            let first = (VRAM_A_BASE >> PAGE_SHIFT) as usize;
-            for i in 0..VRAM_A_SIZE / PAGE_SIZE {
-                self.pages[first + i] = Page {
-                    region: Region::VramA,
-                    offset: (i * PAGE_SIZE) as u32,
-                };
-            }
+            map_window(
+                &mut self.pages9,
+                VRAM_A_BASE,
+                VRAM_A_BASE + VRAM_A_SIZE as u32,
+                Region::VramA,
+                Some((0, VRAM_A_SIZE)),
+            );
         }
+        self.build_wram_pages();
+    }
+
+    /// Rebuilds the `0300_0000h` block of both tables: the invalidation a WRAMCNT write needs
+    /// (`wramcnt.md`, "Changing the mode"). Everything outside that block is left alone.
+    // TODO(hw-unverified): the ARM7's contiguous 96 KiB at `037F_8000h` follows from the
+    // repetition rule, not from a GBATEK statement (`wramcnt.md`, "Unverified").
+    // TODO(hw-unverified): the repetition of the shared half and of the ARM7's WRAM through
+    // their windows is GBATEK's general rule (`wramcnt.md`, "Unverified").
+    fn build_wram_pages(&mut self) {
+        let state = self.wramcnt();
+        map_window(
+            &mut self.pages9,
+            WRAM_WINDOW_BASE,
+            WRAM_WINDOW_END,
+            Region::SharedWram,
+            state.arm9.span(),
+        );
+        // The ARM7 sees what it owns of the shared WRAM below `0380_0000h`, or its own WRAM when
+        // it owns none; above that it always sees its own WRAM.
+        let (region, span) = match state.arm7.span() {
+            Some(span) => (Region::SharedWram, Some(span)),
+            None => (Region::Wram7, Some((0, WRAM7_SIZE))),
+        };
+        map_window(&mut self.pages7, WRAM_WINDOW_BASE, WRAM7_BASE, region, span);
+        map_window(
+            &mut self.pages7,
+            WRAM7_BASE,
+            WRAM_WINDOW_END,
+            Region::Wram7,
+            Some((0, WRAM7_SIZE)),
+        );
+    }
+
+    /// WRAMCNT as decoded. The debugger's memory viewer (#57) shows each CPU's window from it.
+    pub fn wramcnt(&self) -> WramState {
+        let mode = self.wramcnt & WRAMCNT_MODE_MASK;
+        let (arm9, arm7) = match mode {
+            0 => (WramShare::All32, WramShare::None),
+            1 => (WramShare::Second16, WramShare::First16),
+            2 => (WramShare::First16, WramShare::Second16),
+            _ => (WramShare::None, WramShare::All32),
+        };
+        WramState { mode, arm9, arm7 }
     }
 
     /// Engine A's display registers.
@@ -202,9 +344,14 @@ impl Memory {
         (bank.enabled && bank.mst == MST_LCDC).then_some(self.vram_a.as_slice())
     }
 
-    /// The region backing the page that holds `addr`.
+    /// The region backing the page that holds `addr`, as the ARM9 sees it.
     pub fn region(&self, addr: u32) -> Region {
-        self.page(addr).region
+        page_of(&self.pages9, addr).region
+    }
+
+    /// The region backing the page that holds `addr`, as the ARM7 sees it.
+    pub fn region7(&self, addr: u32) -> Region {
+        page_of(&self.pages7, addr).region
     }
 
     /// VRAMCNT_A as decoded.
@@ -216,22 +363,26 @@ impl Memory {
         }
     }
 
-    fn page(&self, addr: u32) -> Page {
-        self.pages
-            .get((addr >> PAGE_SHIFT) as usize)
-            .copied()
-            .unwrap_or(UNMAPPED_PAGE)
+    /// The bytes of `region` at `offset`, or `None` for a region the page table does not back.
+    // TODO(hw-unverified): an empty ARM9 window (mode 3) falls through to the slow path, reads 0
+    // and drops writes (`wramcnt.md`, "Unverified").
+    fn region_bytes<const N: usize>(&self, region: Region, offset: usize) -> Option<[u8; N]> {
+        let buf = match region {
+            Region::MainRam => &self.main_ram,
+            Region::VramA => &self.vram_a,
+            Region::SharedWram => &self.shared_wram,
+            Region::Wram7 => &self.wram7,
+            Region::Unmapped => return None,
+        };
+        Some(bytes_at(buf, offset))
     }
 
-    /// The bytes behind the page table for an access of `N` bytes at the aligned `addr`.
+    /// The bytes behind the ARM9 page table for an access of `N` bytes at the aligned `addr`.
     fn read_page<const N: usize>(&self, addr: u32) -> [u8; N] {
-        let page = self.page(addr);
+        let page = page_of(&self.pages9, addr);
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
-        match page.region {
-            Region::MainRam => bytes_at(&self.main_ram, offset),
-            Region::VramA => bytes_at(&self.vram_a, offset),
-            Region::Unmapped => self.read_slow(addr),
-        }
+        self.region_bytes(page.region, offset)
+            .unwrap_or_else(|| self.read_slow(addr))
     }
 
     /// The slow path for a read: I/O ports and unmapped addresses. Each byte is read from the
@@ -243,9 +394,24 @@ impl Memory {
     // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
     fn read_slow<const N: usize>(&self, addr: u32) -> [u8; N] {
         std::array::from_fn(|i| {
-            self.gpu2d
-                .read_byte(addr.wrapping_add(i as u32))
-                .unwrap_or(0)
+            let at = addr.wrapping_add(i as u32);
+            // WRAMCNT is documented R/W in one place and write-only in another; it reads back.
+            // TODO(hw-unverified): `wramcnt.md`, "Unverified".
+            match at {
+                WRAMCNT_ADDR => self.wramcnt,
+                _ => self.gpu2d.read_byte(at).unwrap_or(0),
+            }
+        })
+    }
+
+    /// The slow path for an ARM7 read: WRAMSTAT; every other I/O port and unmapped address
+    /// reads 0 (`wramcnt.md`, "Unverified").
+    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#23-#26).
+    fn read_slow7<const N: usize>(&self, addr: u32) -> [u8; N] {
+        std::array::from_fn(|i| match addr.wrapping_add(i as u32) {
+            // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
+            WRAMSTAT_ADDR => self.wramcnt,
+            _ => 0,
         })
     }
 
@@ -290,15 +456,27 @@ impl Memory {
         if let Some(offset) = tcm_offset(&tcm.dtcm, DTCM_SIZE, addr) {
             return put_bytes(&mut self.dtcm, offset, bytes);
         }
-        let page = self.page(addr);
+        let page = page_of(&self.pages9, addr);
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
         match page.region {
-            Region::MainRam => put_bytes(&mut self.main_ram, offset, bytes),
             // VRAM takes 16-bit and 32-bit writes only; a byte write is ignored
             // (`vram-banks.md`, "Behavior").
-            Region::VramA if N > 1 => put_bytes(&mut self.vram_a, offset, bytes),
-            Region::VramA | Region::Unmapped => self.write_slow(addr, bytes),
+            Region::VramA if N == 1 => self.write_slow(addr, bytes),
+            Region::Unmapped => self.write_slow(addr, bytes),
+            region => self.put_region(region, offset, bytes),
         }
+    }
+
+    /// Writes `bytes` into the buffer behind `region`.
+    fn put_region<const N: usize>(&mut self, region: Region, offset: usize, bytes: [u8; N]) {
+        let buf = match region {
+            Region::MainRam => &mut self.main_ram,
+            Region::VramA => &mut self.vram_a,
+            Region::SharedWram => &mut self.shared_wram,
+            Region::Wram7 => &mut self.wram7,
+            Region::Unmapped => return,
+        };
+        put_bytes(buf, offset, bytes);
     }
 
     /// The slow path for a write: I/O ports; an unmapped address ignores the write.
@@ -311,10 +489,12 @@ impl Memory {
         // ignores it, as does a VRAM byte write that lands here.
         for (i, &value) in bytes.iter().enumerate() {
             let at = addr.wrapping_add(i as u32);
-            if at == VRAMCNT_A_ADDR {
-                self.write_vramcnt_a(value);
-            } else {
-                self.gpu2d.write_byte(at, value);
+            match at {
+                VRAMCNT_A_ADDR => self.write_vramcnt_a(value),
+                WRAMCNT_ADDR => self.write_wramcnt(value),
+                // TODO(phase4): VRAMCNT_G arrives with the other banks (#35).
+                VRAMCNT_G_ADDR => {}
+                _ => self.gpu2d.write_byte(at, value),
             }
         }
     }
@@ -328,7 +508,9 @@ impl Memory {
             && self.dtcm.len() == DTCM_SIZE
             && self.vram_a.len() == VRAM_A_SIZE
             && self.wram7.len() == WRAM7_SIZE
+            && self.shared_wram.len() == SHARED_WRAM_SIZE
             && self.vramcnt_a & !VRAMCNT_USED == 0
+            && self.wramcnt & !WRAMCNT_MODE_MASK == 0
     }
 
     /// Stores VRAMCNT_A and rebuilds the page table, since the write can move the bank.
@@ -338,34 +520,33 @@ impl Memory {
         self.build_page_table();
     }
 
-    /// The bytes an ARM7 access of `N` bytes at `addr` sees (aligned down to `N`): main RAM and
-    /// the ARM7 WRAM, open bus (0) elsewhere.
-    // TODO(hw-unverified): ARM7 WRAM repeats through `0380_0000h`-`03FF_FFFFh`, and the rest of
-    // the ARM7 bus reads 0 (`scheduler.md`, "Unverified").
-    // TODO(phase3): shared WRAM, WRAMCNT, the `037F_8000h` mirror and I/O arrive with #22; the
-    // ARM7 then gets a page table like the ARM9's.
+    /// Stores WRAMCNT (bits 2-7 dropped) and rebuilds the shared WRAM block of both page tables,
+    /// since the write moves ownership. ARM9 only: the ARM7's slow path never reaches it.
+    fn write_wramcnt(&mut self, value: u8) {
+        self.wramcnt = value & WRAMCNT_MODE_MASK;
+        self.build_wram_pages();
+    }
+
+    /// The bytes an ARM7 access of `N` bytes at `addr` sees (aligned down to `N`): main RAM,
+    /// shared WRAM and its own WRAM through the ARM7 page table; WRAMSTAT and open bus (0)
+    /// from the slow path.
+    // TODO(hw-unverified): the rest of the ARM7 bus reads 0 (`wramcnt.md`, "Unverified").
     fn load7<const N: usize>(&self, addr: u32) -> [u8; N] {
         let addr = addr & !(N as u32 - 1);
-        match (addr >> 24, addr >= WRAM7_BASE) {
-            (MAIN_RAM_BLOCK_TOP, _) => bytes_at(&self.main_ram, (addr & MAIN_RAM_MASK) as usize),
-            (WRAM_BLOCK_TOP, true) => bytes_at(&self.wram7, addr as usize % WRAM7_SIZE),
-            _ => [0; N],
-        }
+        let page = page_of(&self.pages7, addr);
+        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
+        self.region_bytes(page.region, offset)
+            .unwrap_or_else(|| self.read_slow7(addr))
     }
 
     /// Stores `N` bytes as the ARM7 (see [`Memory::load7`] for what it reaches); a store to
-    /// open bus is dropped.
+    /// open bus or an I/O port is dropped.
+    // TODO(phase3): ARM7 I/O writes arrive with their issues (#23-#26); WRAMCNT is ARM9-only.
     fn store7<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
         let addr = addr & !(N as u32 - 1);
-        match (addr >> 24, addr >= WRAM7_BASE) {
-            (MAIN_RAM_BLOCK_TOP, _) => {
-                put_bytes(&mut self.main_ram, (addr & MAIN_RAM_MASK) as usize, bytes);
-            }
-            (WRAM_BLOCK_TOP, true) => {
-                put_bytes(&mut self.wram7, addr as usize % WRAM7_SIZE, bytes);
-            }
-            _ => {}
-        }
+        let page = page_of(&self.pages7, addr);
+        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
+        self.put_region(page.region, offset, bytes);
     }
 
     /// Fetches an ARM opcode as the ARM7.
@@ -496,6 +677,34 @@ mod tests_well_formed {
     fn given_an_unused_vramcnt_a_bit_when_checked_then_it_is_not_well_formed() {
         let mut memory = Memory::new();
         memory.vramcnt_a = !VRAMCNT_USED;
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_wramcnt_with_bits_2_to_7_set_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.wramcnt = 0x04;
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_wramcnt_3_when_checked_then_it_is_well_formed() {
+        let mut memory = Memory::new();
+        memory.wramcnt = 3;
+        assert!(memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_a_short_shared_wram_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.shared_wram.pop();
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_a_long_shared_wram_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.shared_wram.push(0);
         assert!(!memory.is_well_formed());
     }
 }

@@ -35,11 +35,11 @@ The visible part is 192 lines of 256 dots; the rest is blanking. Which of the 26
 which, and the DISPSTAT / VCOUNT registers that report it, are not part of this note (no issue
 covers them yet).
 
-### ARM7 memory seen by #21
+### ARM7 memory
 
 The ARM7 sees main RAM (shared, same 4 MiB as the ARM9) and its own 64 KiB of WRAM at
-`0380_0000h` (`memory-map.md`). The rest of its map (shared WRAM, WRAMCNT, the `037F_8000h`
-mirror, I/O) belongs to #22.
+`0380_0000h` (`memory-map.md`). Shared WRAM, WRAMCNT and the `037F_8000h`
+mirror are in `wramcnt.md` (#22); the rest of its I/O is still unmodeled.
 
 ## Model (not hardware)
 
@@ -149,7 +149,7 @@ A saved machine is refused on load when:
   CPUs interleave (shared-memory races, IPC).
 - **ARM7 WRAM mirroring**: the 64 KiB block is modeled as repeating through
   `0380_0000h`-`03FF_FFFFh`, GBATEK's general mirroring rule. Anything else on the ARM7 bus is
-  open bus and reads 0. — `crates/core/src/bus/memory.rs` — revisit with the full ARM7 map (#22).
+  open bus and reads 0. The shared WRAM window now sits in front of it (`wramcnt.md`). — `crates/core/src/bus/memory.rs`
 - **ARM7 entry state**: R13 values come from `direct-boot.md`; the CPSR is chosen as for the
   ARM9 (System mode, ARM state, I and F set). — `crates/core/src/hle/direct_boot.rs` — verify
   as for the ARM9.

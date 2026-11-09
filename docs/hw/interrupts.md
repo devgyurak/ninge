@@ -103,12 +103,13 @@ HLE BIOS (#27). #23 stops at the exception entry: IRQ mode, R14_irq, SPSR_irq, a
 - IME bits 1-31 read 0, and IF latches whatever IE and IME say — `crates/core/src/irq.rs` —
   GBATEK says only "not used" for IME and the latch is not described on the DS page; verify
   with a test ROM on hardware.
-- Unused IE bits — `crates/core/src/irq.rs`, IE write and `request`. GBATEK's only stated read-back is "trying to set all IE bits gives
-  `FFFF_FFFFh` (DSi7) or `FFFF_FF7Fh` (DSi9)", which would mean IE stores unused bits and only
+- Unused IE bits — `crates/core/src/irq.rs`, IE write and `request`. GBATEK's only stated
+  read-back is "trying to set all IE bits gives `FFFF_FFFFh` (DSi7) or `FFFF_FF7Fh` (DSi9)", which would mean IE stores unused bits and only
   ARM9 bit 7 is missing. That is DSi mode; the DS-mode result is not stated. The model keeps
   the mask (IE holds only the bits in the table) because the table is the DS-mode statement and
   the DSi sentence may describe the extended DSi bits. It is a model, not a finding: the
-  maintainer may switch it, which changes `irq.rs`, its tests, and the test ROM's expected values. Verify with a test ROM that writes `FFFF_FFFFh` to IE on hardware.
+  maintainer may switch it, which changes `irq.rs`, its tests, and the test ROM's expected
+  values. Verify with a test ROM that writes `FFFF_FFFFh` to IE on hardware.
 - `0400_0218h` and `0400_021Ch` (IE2, IF2) are DSi7-only; on the DS they are undefined ports
   and read 0 here (no register).
 - GBATEK says "raw TCM-only IRQs may be processed during DMA(?)"; not modeled — revisit with

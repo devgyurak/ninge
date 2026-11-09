@@ -81,7 +81,8 @@ impl<const ARM9: bool> InterruptController<ARM9> {
 
     /// Latches the requests in `mask` into IF, whatever IME and IE say (`interrupts.md`,
     /// "Behavior"). A bit the CPU does not have is dropped.
-    // TODO(hw-unverified): a bit that does not exist is dropped (`interrupts.md`, "Unverified").
+    // TODO(hw-unverified): a bit that does not exist is dropped, and IF latches whatever IE and
+    // IME say (`interrupts.md`, "Unverified").
     // The sources that call it: IPC (#24), timers (#25), DMA (#26), the LCD (#104).
     #[cfg_attr(
         not(test),
@@ -98,6 +99,7 @@ impl<const ARM9: bool> InterruptController<ARM9> {
     pub(crate) fn read_byte(&self, addr: u32) -> Option<u8> {
         let (base, shift) = Self::locate(addr)?;
         let value = match base {
+            // TODO(hw-unverified): IME bits 1-31 read 0 (`interrupts.md`, "Unverified").
             IME_ADDR => u32::from(self.ime),
             IE_ADDR => self.ie,
             _ => self.if_,
@@ -114,12 +116,15 @@ impl<const ARM9: bool> InterruptController<ARM9> {
         let part = u32::from(value) << shift;
         match base {
             // Only bit 0 of the register exists, and it sits in byte 0.
+            // TODO(hw-unverified): the other IME bits are dropped and read 0
+            // (`interrupts.md`, "Unverified").
             IME_ADDR => {
                 if shift == 0 {
                     self.ime = part & 1 != 0;
                 }
             }
-            // TODO(hw-unverified): a bit that does not exist is dropped (`interrupts.md`, "Unverified").
+            // TODO(hw-unverified): a bit that does not exist is dropped
+            // (`interrupts.md`, "Unverified").
             IE_ADDR => {
                 let byte_mask = 0xFF << shift;
                 self.ie = (self.ie & !byte_mask) | (part & byte_mask & Self::valid_bits());

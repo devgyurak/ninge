@@ -243,7 +243,8 @@ impl Machine {
     }
 
     /// Raises the requests in `mask` on the ARM9's controller: IF latches them.
-    // The hook for the sources that arrive next: the LCD (#104), IPC (#24), timers (#25), DMA (#26).
+    // The hook for the sources that arrive next: IPC (#24), timers (#25), DMA (#26), the LCD
+    // (#104).
     #[cfg_attr(
         not(test),
         expect(
@@ -256,7 +257,8 @@ impl Machine {
     }
 
     /// Raises the requests in `mask` on the ARM7's controller: IF latches them.
-    // The hook for the sources that arrive next: the LCD (#104), IPC (#24), timers (#25), DMA (#26).
+    // The hook for the sources that arrive next: IPC (#24), timers (#25), DMA (#26), the LCD
+    // (#104).
     #[cfg_attr(
         not(test),
         expect(
@@ -278,6 +280,9 @@ impl Machine {
     ///
     /// The TCM registers are copied into the memory view first, so a CP15 write takes effect
     /// from the next instruction (`docs/hw/arm9-memory-map.md`).
+    ///
+    /// A step that meets an asserted IRQ line with CPSR I clear only enters the IRQ vector; the
+    /// instruction that would have run is not executed (`docs/hw/interrupts.md`, "Behavior").
     // TODO(hw-unverified): opcodes already in the pipeline keep the mapping they were fetched
     // under (`docs/hw/arm9-memory-map.md`, "Unverified").
     pub fn step_arm9(&mut self) {
@@ -287,9 +292,8 @@ impl Machine {
         }
     }
 
-    /// One ARM9 instruction and its cost, with nothing else. A debugger's single step that meets
-    /// an asserted line therefore enters the vector without executing an instruction. If the
-    /// controller's line was asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
+    /// One ARM9 instruction and its cost, with nothing else. If the controller's line was
+    /// asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
     /// costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ source.
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").

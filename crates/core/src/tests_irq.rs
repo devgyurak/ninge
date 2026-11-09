@@ -544,7 +544,8 @@ fn given_the_arm9_in_thumb_state_when_an_irq_is_taken_then_lr_is_the_next_instru
     m.step_arm9_instruction();
     // The Thumb code starts at ENTRY9 + 8; its first instruction did not run (r0 is still the
     // address `bx` jumped through), the CPSR is ARM state in IRQ mode with I set, SPSR_irq holds
-    // the Thumb CPSR, F is left as it was (set at boot, an IRQ does not touch it), and LR_irq = the next Thumb instruction's address + 4.
+    // the Thumb CPSR, F is left as it was (set at boot, an IRQ does not touch it), and
+    // LR_irq = the next Thumb instruction's address + 4.
     let (cpsr, lr, spsr, _, r0, _) = seen9(&m);
     assert_eq!(
         (cpsr, lr, spsr, r0),

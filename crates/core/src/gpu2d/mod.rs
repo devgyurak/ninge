@@ -4,6 +4,9 @@
 //!
 //! The whole frame is drawn at once from the registers and VRAM as they are when it is asked
 //! for. No allocation, formatting or collection happens while pixels are made.
+//!
+//! Engine A is wired to the ARM9 alone, so `Gpu2d` is a plain type with no CPU const generic: the
+//! "seen by one CPU" class of `AGENTS.md` §4 ("Per-CPU devices").
 
 use serde::{Deserialize, Serialize};
 

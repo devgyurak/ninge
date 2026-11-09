@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! One CPU's interrupt controller: IME, IE and IF (`docs/hw/interrupts.md`).
 //!
-//! Each CPU owns one; they sit at the same addresses and never see each other.
+//! Each CPU owns one; they sit at the same addresses and never see each other. That is the
+//! "an independent copy per CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two instances of
+//! `InterruptController<const ARM9: bool>`.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +43,40 @@ pub const RECV_NOT_EMPTY_IRQ: u32 = 1 << 18;
 pub const VALID_BITS_ARM9: u32 = 0x003F_3F7F;
 /// The IE and IF bits that exist on the ARM7 (`interrupts.md`, "IE and IF bits").
 pub const VALID_BITS_ARM7: u32 = 0x01DF_3FFF;
+
+/// The IF bits a device would raise, one mask for each CPU. A return value, not state: `Io`
+/// hands it to the controllers through `Io::request_irq`, the one path (`AGENTS.md` §4,
+/// "Per-CPU devices").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Requests {
+    pub(crate) arm9: u32,
+    pub(crate) arm7: u32,
+}
+
+impl Requests {
+    /// The requests of a device that serves one CPU: `mask` for the ARM9 when `ARM9`, else for
+    /// the ARM7.
+    pub(crate) fn for_cpu<const ARM9: bool>(mask: u32) -> Self {
+        match ARM9 {
+            true => Self {
+                arm9: mask,
+                arm7: 0,
+            },
+            false => Self {
+                arm9: 0,
+                arm7: mask,
+            },
+        }
+    }
+
+    /// Both sets of requests in one: each CPU's masks ORed.
+    pub(crate) fn merge(self, other: Self) -> Self {
+        Self {
+            arm9: self.arm9 | other.arm9,
+            arm7: self.arm7 | other.arm7,
+        }
+    }
+}
 
 /// IME, IE and IF of one CPU: the ARM9's when `ARM9` is true, the ARM7's otherwise. Plain data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

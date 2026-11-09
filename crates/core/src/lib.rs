@@ -436,7 +436,7 @@ impl Machine {
     // TODO(phase3): VBlank-start DMA (#26) and the IntrWait VBlank wait (#27) hook in here.
     fn line_started(&mut self, time: u64) {
         let requests = self.io.timing_mut().line_started();
-        self.io.request_irq(requests.arm9, requests.arm7);
+        self.io.request_irq(requests);
         if self.io.timing().vcount() == 0 {
             self.render_frame();
             self.frame_count = self.frame_count.wrapping_add(1);
@@ -451,7 +451,7 @@ impl Machine {
     // TODO(phase3): HBlank-start DMA (#26) hooks in here.
     fn hblank_started(&mut self, time: u64) {
         let requests = self.io.timing_mut().hblank_started();
-        self.io.request_irq(requests.arm9, requests.arm7);
+        self.io.request_irq(requests);
         self.scheduler
             .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
     }

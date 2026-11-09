@@ -264,6 +264,16 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
 - **Comments explain why.** Emulator code is full of deliberate oddities (open bus,
   mirroring, an off-by-one that the hardware really has). Cite the `docs/hw/` note so the next
   person does not "fix" it into a regression.
+- **Per-CPU devices.** A device is one of three kinds, by who sees it:
+  - *An independent copy for each CPU*: two instances of `Device<const ARM9: bool>`.
+    `InterruptController` and `Timers`; DMA too.
+  - *Seen by both CPUs*: one instance, with `fn x<const ARM9: bool>` accessors, even when
+    per-CPU registers sit inside it. `Ipc`, and `Timing` (DISPSTAT is per CPU, VCOUNT shared).
+  - *Seen by one CPU*: a plain type, no const generic. `Gpu2d` (engine A, ARM9 only); SPI, RTC
+    and SPU (ARM7 only) will be too.
+
+  Every device returns the IF bits it would raise as an `irq::Requests` (a device for one CPU
+  builds it with `Requests::for_cpu::<ARM9>`); only `Io::request_irq` hands them to a controller.
 - Visibility is `pub(crate)` by default; `pub` items carry a doc comment.
 - `#[inline]` / `#[inline(always)]` on the hot path only with a measurement.
 - **Adding a dependency** asks first (`cargo add` is an `ask` permission). It must be

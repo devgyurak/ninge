@@ -8,6 +8,7 @@
 use super::bench::Bench;
 use super::*;
 use crate::cpu::{Bus, Tcm};
+use crate::irq::Requests;
 
 const RAM: u32 = 0x0200_0000;
 const RAM_PERIOD: u32 = 0x0040_0000;
@@ -1504,8 +1505,14 @@ fn given_a_word_write_at_the_address_after_ime_when_read_then_it_reads_0_and_no_
 #[test]
 fn given_a_request_on_each_cpu_when_the_if_word_is_read_then_each_cpu_sees_only_its_own() {
     let mut m = Bench::new();
-    m.io.request_irq(0x0000_0001, 0);
-    m.io.request_irq(0, 0x0000_0100);
+    m.io.request_irq(Requests {
+        arm9: 0x0000_0001,
+        arm7: 0,
+    });
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 0x0000_0100,
+    });
     assert_eq!(
         (m.read32(&plain(), IF), m.read32_arm7(0, IF)),
         (0x0000_0001, 0x0000_0100)
@@ -1516,7 +1523,10 @@ fn given_a_request_on_each_cpu_when_the_if_word_is_read_then_each_cpu_sees_only_
 fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm9_then_it_clears_through_the_bus()
  {
     let mut m = Bench::new();
-    m.io.request_irq(0b111, 0);
+    m.io.request_irq(Requests {
+        arm9: 0b111,
+        arm7: 0,
+    });
     m.write8(&plain(), IF, 0x01);
     assert_eq!(m.read32(&plain(), IF), 0b110);
 }
@@ -1525,7 +1535,10 @@ fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm9_then_it_
 fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm7_then_it_clears_through_the_bus()
  {
     let mut m = Bench::new();
-    m.io.request_irq(0, 0b111);
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 0b111,
+    });
     m.write8_arm7(0, IF, 0x04);
     assert_eq!(m.read32_arm7(0, IF), 0b011);
 }
@@ -1534,7 +1547,10 @@ fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm7_then_it_
 fn given_latched_requests_when_a_halfword_write_to_the_low_half_of_if_is_made_then_the_high_half_stays()
  {
     let mut m = Bench::new();
-    m.io.request_irq(0x0003_0003, 0);
+    m.io.request_irq(Requests {
+        arm9: 0x0003_0003,
+        arm7: 0,
+    });
     m.write16(&plain(), IF, 0xFFFF);
     assert_eq!(m.read32(&plain(), IF), 0x0003_0000);
 }
@@ -1543,7 +1559,10 @@ fn given_latched_requests_when_a_halfword_write_to_the_low_half_of_if_is_made_th
 fn given_latched_requests_when_a_halfword_write_to_the_high_half_of_if_is_made_on_the_arm7_then_the_low_half_stays()
  {
     let mut m = Bench::new();
-    m.io.request_irq(0, 0x0003_0003);
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 0x0003_0003,
+    });
     m.write16_arm7(0, IF + 2, 0x0001);
     assert_eq!(m.read32_arm7(0, IF), 0x0002_0003);
 }
@@ -1551,8 +1570,14 @@ fn given_latched_requests_when_a_halfword_write_to_the_high_half_of_if_is_made_o
 #[test]
 fn given_latched_requests_when_a_zero_word_is_written_to_if_then_nothing_clears() {
     let mut m = Bench::new();
-    m.io.request_irq(0x0000_0007, 0);
-    m.io.request_irq(0, 0x0000_0007);
+    m.io.request_irq(Requests {
+        arm9: 0x0000_0007,
+        arm7: 0,
+    });
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 0x0000_0007,
+    });
     m.write32(&plain(), IF, 0);
     m.write32_arm7(0, IF, 0);
     assert_eq!((m.read32(&plain(), IF), m.read32_arm7(0, IF)), (7, 7));
@@ -1561,8 +1586,14 @@ fn given_latched_requests_when_a_zero_word_is_written_to_if_then_nothing_clears(
 #[test]
 fn given_the_same_request_on_both_cpus_when_the_arm9_acknowledges_it_then_the_arm7_if_keeps_it() {
     let mut m = Bench::new();
-    m.io.request_irq(0x0000_0001, 0);
-    m.io.request_irq(0, 0x0000_0001);
+    m.io.request_irq(Requests {
+        arm9: 0x0000_0001,
+        arm7: 0,
+    });
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 0x0000_0001,
+    });
     m.write32(&plain(), IF, 0xFFFF_FFFF);
     assert_eq!((m.read32(&plain(), IF), m.read32_arm7(0, IF)), (0, 1));
 }

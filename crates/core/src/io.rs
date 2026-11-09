@@ -6,12 +6,13 @@
 //! schedule schedules it on the spot.
 //!
 //! Every IF bit a device raises goes through [`Io::request_irq`], the one path to the two
-//! controllers.
+//! controllers. A device returns what it would raise as an [`Requests`]; it never reaches a
+//! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
 use crate::gpu2d::Gpu2d;
 use crate::gpu2d::timing::Timing;
 use crate::ipc::{IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, Ipc};
-use crate::irq::InterruptController;
+use crate::irq::{InterruptController, Requests};
 use crate::scheduler::Scheduler;
 use crate::timers::{TIMER_COUNT, Timers};
 use serde::{Deserialize, Serialize};
@@ -118,9 +119,9 @@ impl Io {
 
     /// Raises the requests in the two masks on the matching controllers: IF latches them. The
     /// one path every source uses: the LCD, IPC, the timers and (later) DMA.
-    pub(crate) fn request_irq(&mut self, arm9: u32, arm7: u32) {
-        self.irq9.request(arm9);
-        self.irq7.request(arm7);
+    pub(crate) fn request_irq(&mut self, requests: Requests) {
+        self.irq9.request(requests.arm9);
+        self.irq7.request(requests.arm7);
     }
 
     /// The byte of the register at `addr` as CPU `ARM9` reads it at master time `now`, if a
@@ -158,7 +159,7 @@ impl Io {
     ) -> Option<[u8; N]> {
         let offset = recv_offset(addr)?;
         let (word, requests) = self.ipc.receive::<ARM9>();
-        self.request_irq(requests.irq9, requests.irq7);
+        self.request_irq(requests);
         let bytes = word.to_le_bytes();
         // `addr` is aligned to `N` and the register is 4 bytes, so the access stays inside it.
         Some(std::array::from_fn(|i| bytes[(offset + i) & 3]))
@@ -177,7 +178,7 @@ impl Io {
         }
         if let Ok(word) = <[u8; 4]>::try_from(bytes.as_slice()) {
             let requests = self.ipc.send::<ARM9>(u32::from_le_bytes(word));
-            self.request_irq(requests.irq9, requests.irq7);
+            self.request_irq(requests);
         }
         true
     }
@@ -198,19 +199,19 @@ impl Io {
         if ARM9 {
             self.irq9.write_byte(addr, value);
             let requests = self.ipc.write_byte::<true>(addr, value);
-            self.request_irq(requests.irq9, requests.irq7);
+            self.request_irq(requests);
             self.gpu2d.write_byte(addr, value);
             self.timing.write_byte::<true>(addr, value);
             let outcome = self.timers9.write_byte(addr, value, now);
-            self.request_irq(outcome.requests, 0);
+            self.request_irq(outcome.requests);
             schedule_timers(scheduler, &self.timers9, outcome.reschedule, floor);
         } else {
             self.irq7.write_byte(addr, value);
             let requests = self.ipc.write_byte::<false>(addr, value);
-            self.request_irq(requests.irq9, requests.irq7);
+            self.request_irq(requests);
             self.timing.write_byte::<false>(addr, value);
             let outcome = self.timers7.write_byte(addr, value, now);
-            self.request_irq(0, outcome.requests);
+            self.request_irq(outcome.requests);
             schedule_timers(scheduler, &self.timers7, outcome.reschedule, floor);
         }
     }
@@ -225,7 +226,7 @@ impl Io {
         let now = scheduler.now();
         if arm9 {
             let outcome = self.timers9.settle_timer(index, now);
-            self.request_irq(outcome.requests, 0);
+            self.request_irq(outcome.requests);
             schedule_timers(
                 scheduler,
                 &self.timers9,
@@ -234,7 +235,7 @@ impl Io {
             );
         } else {
             let outcome = self.timers7.settle_timer(index, now);
-            self.request_irq(0, outcome.requests);
+            self.request_irq(outcome.requests);
             schedule_timers(
                 scheduler,
                 &self.timers7,
@@ -271,7 +272,7 @@ impl Default for Io {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::irq::InterruptController;
+    use crate::irq::{InterruptController, Requests};
 
     #[test]
     fn given_power_on_devices_when_checked_then_they_are_well_formed() {
@@ -288,7 +289,10 @@ mod tests {
     #[test]
     fn given_requests_for_each_cpu_when_raised_then_each_controller_latches_only_its_own() {
         let mut io = Io::new();
-        io.request_irq(0b01, 0b10);
+        io.request_irq(Requests {
+            arm9: 0b01,
+            arm7: 0b10,
+        });
         assert_eq!((io.irq9().if_(), io.irq7().if_()), (0b01, 0b10));
     }
 }

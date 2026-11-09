@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The two CPUs' mailbox: IPCSYNC and the two IPC FIFOs (`docs/hw/ipc.md`).
 //!
-//! Both CPUs see the same four addresses, each with its own point of view, so every accessor is
-//! generic over which CPU is asking (`ARM9`, as in `Timing`). The module has no way to reach a
+//! Both CPUs see the same four addresses, each with its own point of view, so there is one
+//! instance and every accessor is generic over which CPU is asking (`ARM9`): the "seen by both
+//! CPUs" class of `AGENTS.md` §4 ("Per-CPU devices"), as `Timing` is. The module has no way to reach a
 //! CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io` hands
 //! those to the two controllers.
 
-use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, SEND_EMPTY_IRQ};
+use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};
 
 /// IPCSYNC, at `0400_0180h` (`ipc.md`, "Registers").
@@ -44,22 +45,6 @@ const CNT_SEND_IRQ_ENABLE_BIT: u16 = 1 << 2;
 const CNT_RECV_IRQ_ENABLE_BIT: u16 = 1 << 10;
 const CNT_ERROR_BIT: u16 = 1 << 14;
 const CNT_ENABLE_BIT: u16 = 1 << 15;
-
-/// The IF bits an IPC event asks each CPU's controller to latch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Requests {
-    pub(crate) irq9: u32,
-    pub(crate) irq7: u32,
-}
-
-impl Requests {
-    fn merge(self, other: Self) -> Self {
-        Self {
-            irq9: self.irq9 | other.irq9,
-            irq7: self.irq7 | other.irq7,
-        }
-    }
-}
 
 /// One direction's FIFO: a ring of 16 words. Plain data (AGENTS.md §2 rule 5).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,8 +239,8 @@ impl Ipc {
             (false, false) => 0,
         };
         Requests {
-            irq9: mask(s9 && !before[0], r9 && !before[1]),
-            irq7: mask(s7 && !before[2], r7 && !before[3]),
+            arm9: mask(s9 && !before[0], r9 && !before[1]),
+            arm7: mask(s7 && !before[2], r7 && !before[3]),
         }
     }
 
@@ -326,12 +311,12 @@ impl Ipc {
         let remote_listens = self.other_port::<ARM9>().sync_irq;
         match (value & SYNC_SEND_IRQ != 0 && remote_listens, ARM9) {
             (true, true) => Requests {
-                irq9: 0,
-                irq7: IPCSYNC_IRQ,
+                arm9: 0,
+                arm7: IPCSYNC_IRQ,
             },
             (true, false) => Requests {
-                irq9: IPCSYNC_IRQ,
-                irq7: 0,
+                arm9: IPCSYNC_IRQ,
+                arm7: 0,
             },
             (false, _) => Requests::default(),
         }

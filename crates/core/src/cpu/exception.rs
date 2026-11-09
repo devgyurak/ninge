@@ -194,7 +194,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// IRQ if I is clear, and FIQ has the higher priority. True if one was taken.
     /// Call it between two instructions, when R15 reads the next instruction's address + 8 (ARM) or
     /// + 4 (Thumb).
-    // TODO(phase3): the interrupt controller (IE, IF, IME) drives these lines.
+    // The interrupt controller (`docs/hw/interrupts.md`) drives the IRQ line; nothing drives FIQ.
     pub fn take_interrupt<B: Bus>(&mut self, bus: &mut B, irq: bool, fiq: bool) -> bool {
         let cpsr = self.regs.cpsr();
         let exception = match (fiq && cpsr & FLAG_F == 0, irq && cpsr & FLAG_I == 0) {

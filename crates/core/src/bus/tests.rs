@@ -1309,3 +1309,267 @@ fn given_an_opcode_in_the_arm7s_share_when_the_arm9_changes_the_mode_then_the_ne
         ((0xE1A0_1234, 0x1234), 0, 0)
     );
 }
+
+// ---------------------------------------------------------------- interrupt controller registers
+//
+// Expected values come from `docs/hw/interrupts.md` ("Registers", "Behavior", "Wider and
+// narrower accesses", "Edge cases"): IME, IE and IF sit at 0400_0208h, 0400_0210h and
+// 0400_0214h on both CPUs, each CPU with its own registers.
+
+const IME: u32 = 0x0400_0208;
+const IE: u32 = 0x0400_0210;
+const IF: u32 = 0x0400_0214;
+
+/// The registers a CPU sees as words at IME, IE and IF.
+fn arm9_regs(m: &Memory) -> [u32; 3] {
+    [
+        m.read32(&plain(), IME),
+        m.read32(&plain(), IE),
+        m.read32(&plain(), IF),
+    ]
+}
+
+fn arm7_regs(m: &Memory) -> [u32; 3] {
+    [m.read32_arm7(IME), m.read32_arm7(IE), m.read32_arm7(IF)]
+}
+
+#[test]
+fn given_power_on_memory_when_the_interrupt_registers_are_read_then_both_cpus_see_zero() {
+    let m = Memory::new();
+    assert_eq!((arm9_regs(&m), arm7_regs(&m)), ([0; 3], [0; 3]));
+}
+
+#[test]
+fn given_all_ones_written_to_ime_and_ie_on_the_arm9_when_read_as_words_then_ime_is_1_and_ie_is_the_arm9_mask()
+ {
+    let mut m = Memory::new();
+    m.write32(&plain(), IME, 0xFFFF_FFFF);
+    m.write32(&plain(), IE, 0xFFFF_FFFF);
+    assert_eq!(arm9_regs(&m), [1, 0x003F_3F7F, 0]);
+}
+
+#[test]
+fn given_all_ones_written_to_ime_and_ie_on_the_arm7_when_read_as_words_then_ime_is_1_and_ie_is_the_arm7_mask()
+ {
+    let mut m = Memory::new();
+    m.write32_arm7(IME, 0xFFFF_FFFF);
+    m.write32_arm7(IE, 0xFFFF_FFFF);
+    assert_eq!(arm7_regs(&m), [1, 0x01DF_3FFF, 0]);
+}
+
+#[test]
+fn given_an_arm7_write_to_ie_when_the_controller_is_read_then_the_write_landed() {
+    // Before the controller existed every ARM7 I/O write was dropped.
+    let mut m = Memory::new();
+    m.write32_arm7(IE, 0x0000_0101);
+    assert_eq!(m.irq7().ie(), 0x0000_0101);
+}
+
+#[test]
+fn given_an_arm9_ie_write_when_the_arm7_reads_its_ie_then_it_sees_zero() {
+    let mut m = Memory::new();
+    m.write32(&plain(), IE, 0x0000_0001);
+    m.write32(&plain(), IME, 1);
+    assert_eq!(
+        (arm7_regs(&m), m.irq9().ie(), m.irq7().ie()),
+        ([0; 3], 1, 0)
+    );
+}
+
+#[test]
+fn given_an_arm7_ie_write_when_the_arm9_reads_its_ie_then_it_sees_zero() {
+    let mut m = Memory::new();
+    m.write32_arm7(IE, 0x0000_0080);
+    m.write32_arm7(IME, 1);
+    assert_eq!(
+        (arm9_regs(&m), m.irq9().ie(), m.irq7().ie()),
+        ([0; 3], 0, 0x80)
+    );
+}
+
+#[test]
+fn given_different_ie_values_on_the_two_cpus_when_each_reads_back_then_each_sees_its_own() {
+    let mut m = Memory::new();
+    m.write32(&plain(), IE, 0x0000_0011);
+    m.write32_arm7(IE, 0x0000_0022);
+    assert_eq!((m.read32(&plain(), IE), m.read32_arm7(IE)), (0x11, 0x22));
+}
+
+#[test]
+fn given_a_halfword_written_to_each_half_of_ie_on_the_arm9_when_read_as_a_word_then_the_halves_combine()
+ {
+    let mut m = Memory::new();
+    m.write16(&plain(), IE, 0x0102);
+    m.write16(&plain(), IE + 2, 0x0004);
+    assert_eq!(
+        (
+            m.read32(&plain(), IE),
+            m.read16(&plain(), IE),
+            m.read16(&plain(), IE + 2)
+        ),
+        (0x0004_0102, 0x0102, 0x0004)
+    );
+}
+
+#[test]
+fn given_a_halfword_written_to_each_half_of_ie_on_the_arm7_when_read_as_a_word_then_the_halves_combine()
+ {
+    let mut m = Memory::new();
+    m.write16_arm7(IE, 0x0182);
+    m.write16_arm7(IE + 2, 0x0104);
+    assert_eq!(
+        (m.read32_arm7(IE), m.read16_arm7(IE), m.read16_arm7(IE + 2)),
+        (0x0104_0182, 0x0182, 0x0104)
+    );
+}
+
+/// The four IE bytes the ARM9 reads back after byte writes of FF to each.
+fn arm9_ie_bytes_after_ff_writes() -> Vec<u8> {
+    let mut m = Memory::new();
+    (0..4).for_each(|i| m.write8(&plain(), IE + i, 0xFF));
+    (0..4).map(|i| m.read8(&plain(), IE + i)).collect()
+}
+
+/// The same for the ARM7.
+fn arm7_ie_bytes_after_ff_writes() -> Vec<u8> {
+    let mut m = Memory::new();
+    (0..4).for_each(|i| m.write8_arm7(IE + i, 0xFF));
+    (0..4).map(|i| m.read8_arm7(IE + i)).collect()
+}
+
+#[test]
+fn given_byte_writes_to_ie_on_the_arm9_when_read_back_then_each_byte_is_masked_to_the_arm9_bits() {
+    assert_eq!(
+        arm9_ie_bytes_after_ff_writes(),
+        vec![0x7F, 0x3F, 0x3F, 0x00]
+    );
+}
+
+#[test]
+fn given_byte_writes_to_ie_on_the_arm7_when_read_back_then_each_byte_is_masked_to_the_arm7_bits() {
+    assert_eq!(
+        arm7_ie_bytes_after_ff_writes(),
+        vec![0xFF, 0x3F, 0xDF, 0x01]
+    );
+}
+
+#[test]
+fn given_a_byte_write_of_ff_to_ime_byte_1_when_read_then_ime_is_off_and_the_byte_reads_0() {
+    let mut m = Memory::new();
+    m.write8(&plain(), IME + 1, 0xFF);
+    m.write8_arm7(IME + 1, 0xFF);
+    assert_eq!(
+        (
+            m.read8(&plain(), IME + 1),
+            m.read8_arm7(IME + 1),
+            m.irq9().ime(),
+            m.irq7().ime()
+        ),
+        (0, 0, false, false)
+    );
+}
+
+#[test]
+fn given_a_word_write_at_the_address_after_ime_when_read_then_it_reads_0_and_no_register_changed() {
+    // 0400_020Ch to 0400_020Fh belong to no interrupt register (`interrupts.md`, "Registers").
+    let mut m = Memory::new();
+    m.write32(&plain(), IME + 4, 0xFFFF_FFFF);
+    m.write32_arm7(IME + 4, 0xFFFF_FFFF);
+    assert_eq!(
+        (
+            m.read32(&plain(), IME + 4),
+            m.read32_arm7(IME + 4),
+            arm9_regs(&m),
+            arm7_regs(&m)
+        ),
+        (0, 0, [0; 3], [0; 3])
+    );
+}
+
+#[test]
+fn given_a_request_on_each_cpu_when_the_if_word_is_read_then_each_cpu_sees_only_its_own() {
+    let mut m = Memory::new();
+    m.irq9_mut().request(0x0000_0001);
+    m.irq7_mut().request(0x0000_0100);
+    assert_eq!(
+        (m.read32(&plain(), IF), m.read32_arm7(IF)),
+        (0x0000_0001, 0x0000_0100)
+    );
+}
+
+#[test]
+fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm9_then_it_clears_through_the_bus()
+ {
+    let mut m = Memory::new();
+    m.irq9_mut().request(0b111);
+    m.write8(&plain(), IF, 0x01);
+    assert_eq!(m.read32(&plain(), IF), 0b110);
+}
+
+#[test]
+fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm7_then_it_clears_through_the_bus()
+ {
+    let mut m = Memory::new();
+    m.irq7_mut().request(0b111);
+    m.write8_arm7(IF, 0x04);
+    assert_eq!(m.read32_arm7(IF), 0b011);
+}
+
+#[test]
+fn given_latched_requests_when_a_halfword_write_to_the_low_half_of_if_is_made_then_the_high_half_stays()
+ {
+    let mut m = Memory::new();
+    m.irq9_mut().request(0x0003_0003);
+    m.write16(&plain(), IF, 0xFFFF);
+    assert_eq!(m.read32(&plain(), IF), 0x0003_0000);
+}
+
+#[test]
+fn given_latched_requests_when_a_halfword_write_to_the_high_half_of_if_is_made_on_the_arm7_then_the_low_half_stays()
+ {
+    let mut m = Memory::new();
+    m.irq7_mut().request(0x0003_0003);
+    m.write16_arm7(IF + 2, 0x0001);
+    assert_eq!(m.read32_arm7(IF), 0x0002_0003);
+}
+
+#[test]
+fn given_latched_requests_when_a_zero_word_is_written_to_if_then_nothing_clears() {
+    let mut m = Memory::new();
+    m.irq9_mut().request(0x0000_0007);
+    m.irq7_mut().request(0x0000_0007);
+    m.write32(&plain(), IF, 0);
+    m.write32_arm7(IF, 0);
+    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(IF)), (7, 7));
+}
+
+#[test]
+fn given_the_same_request_on_both_cpus_when_the_arm9_acknowledges_it_then_the_arm7_if_keeps_it() {
+    let mut m = Memory::new();
+    m.irq9_mut().request(0x0000_0001);
+    m.irq7_mut().request(0x0000_0001);
+    m.write32(&plain(), IF, 0xFFFF_FFFF);
+    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(IF)), (0, 1));
+}
+
+#[test]
+fn given_ones_written_to_if_when_nothing_was_requested_then_if_stays_zero_on_both_cpus() {
+    let mut m = Memory::new();
+    m.write32(&plain(), IF, 0xFFFF_FFFF);
+    m.write32_arm7(IF, 0xFFFF_FFFF);
+    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(IF)), (0, 0));
+}
+
+#[test]
+fn given_an_arm9_ime_write_when_a_halfword_and_a_byte_are_read_then_they_are_the_low_parts() {
+    let mut m = Memory::new();
+    m.write32(&plain(), IME, 0xFFFF_FFFF);
+    assert_eq!(
+        (
+            m.read16(&plain(), IME),
+            m.read8(&plain(), IME),
+            m.read16(&plain(), IME + 2)
+        ),
+        (1, 1, 0)
+    );
+}

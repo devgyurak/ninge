@@ -6,12 +6,14 @@ pub mod cart;
 pub mod cpu;
 pub mod gpu2d;
 mod hle;
+pub mod irq;
 pub mod savestate;
 pub mod scheduler;
 
 use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use cart::Header;
 use cpu::Cpu;
+use irq::InterruptController;
 use scheduler::{
     ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, FRAME_CYCLES, Participants,
     Scheduler,
@@ -228,6 +230,44 @@ impl Machine {
         self.memory.wramcnt()
     }
 
+    /// The ARM9's interrupt controller (IME, IE, IF).
+    // The debugger's CPU panel (#56) shows it beside the ARM9's registers.
+    pub fn irq9(&self) -> &InterruptController {
+        self.memory.irq9()
+    }
+
+    /// The ARM7's interrupt controller (IME, IE, IF).
+    // The debugger's CPU panel (#56) shows it beside the ARM7's registers.
+    pub fn irq7(&self) -> &InterruptController {
+        self.memory.irq7()
+    }
+
+    /// Raises the requests in `mask` on the ARM9's controller: IF latches them.
+    // The hook for the sources that arrive next: the LCD (#104), timers (#24), DMA (#25), IPC (#26).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no interrupt source exists until #24-#26 and #104"
+        )
+    )]
+    pub(crate) fn request_irq9(&mut self, mask: u32) {
+        self.memory.irq9_mut().request(mask);
+    }
+
+    /// Raises the requests in `mask` on the ARM7's controller: IF latches them.
+    // The hook for the sources that arrive next: the LCD (#104), timers (#24), DMA (#25), IPC (#26).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no interrupt source exists until #24-#26 and #104"
+        )
+    )]
+    pub(crate) fn request_irq7(&mut self, mask: u32) {
+        self.memory.irq7_mut().request(mask);
+    }
+
     /// Steps the ARM9 by one instruction and advances the master clock by its cost
     /// (`docs/hw/scheduler.md`, "Debugger single-step").
     ///
@@ -247,17 +287,30 @@ impl Machine {
         }
     }
 
-    /// One ARM9 instruction and its cost, with nothing else.
+    /// One ARM9 instruction and its cost, with nothing else. If the controller's line was
+    /// asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
+    /// costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ source.
+    // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
+    // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     fn step_arm9_instruction(&mut self) {
+        let irq = self.memory.irq9().line();
         let mut view = Arm9View::new(&mut self.memory, TcmConfig::from_cp15(self.arm9.cp15()));
-        self.arm9.step(&mut view);
+        if !self.arm9.take_interrupt(&mut view, irq, false) {
+            self.arm9.step(&mut view);
+        }
         self.scheduler.advance(ARM9_INSTRUCTION_COST);
     }
 
-    /// One ARM7 instruction and its cost, with nothing else.
+    /// One ARM7 instruction and its cost, with nothing else; the IRQ entry takes its place as in
+    /// [`Machine::step_arm9_instruction`].
+    // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
+    // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     fn step_arm7_instruction(&mut self) {
+        let irq = self.memory.irq7().line();
         let mut view = Arm7View::new(&mut self.memory);
-        self.arm7.step(&mut view);
+        if !self.arm7.take_interrupt(&mut view, irq, false) {
+            self.arm7.step(&mut view);
+        }
         self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
     }
 
@@ -471,5 +524,7 @@ mod tests {
 
 #[cfg(test)]
 mod tests_arm9;
+#[cfg(test)]
+mod tests_irq;
 #[cfg(test)]
 mod tests_scheduler;

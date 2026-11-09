@@ -14,14 +14,14 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_074;
-const PINNED_HASH: u64 = 0xc42b_6b4a_3887_d3a7;
+const PINNED_LEN: usize = 4_473_082;
+const PINNED_HASH: u64 = 0x7ce7_4027_b274_ce65;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
 /// shared-WRAM contents); the length is unchanged.
-const PINNED_BOOTED_LEN: usize = 4_473_155;
-const PINNED_BOOTED_HASH: u64 = 0x01a7_f2f6_5dc9_fd05;
+const PINNED_BOOTED_LEN: usize = 4_473_163;
+const PINNED_BOOTED_HASH: u64 = 0xbebf_fbbc_2e1e_b2b1;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -154,7 +154,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &4u32.to_le_bytes(),
+        &5u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -195,7 +195,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 7,
-            expected: 4
+            expected: 5
         })
     );
 }
@@ -206,9 +206,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 7 is not version 4")
+        .expect_err("version 7 is not version 5")
         .to_string();
-    assert!(message.contains("version 7") && message.contains("version 4"));
+    assert!(message.contains("version 7") && message.contains("version 5"));
 }
 
 #[test]
@@ -542,7 +542,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_4_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_5_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -550,14 +550,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_4
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 4
+            expected: 5
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_4_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_5_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -565,15 +565,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_4
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 4
+            expected: 5
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_4() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_5() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 4u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 5u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -906,4 +906,118 @@ fn given_a_state_with_shared_wram_filled_when_saved_loaded_and_saved_again_then_
     let mut target = booted(&counter_rom(), 0);
     let result = target.load_state(&saved);
     assert_eq!((result, target.save_state() == saved), (Ok(()), true));
+}
+
+// ------------------------------------------------------------------- interrupt controllers
+//
+// Expected values come from `docs/hw/interrupts.md`: IE keeps only the CPU's valid bits
+// (ARM9 `003F_3F7Fh`, ARM7 `01DF_3FFFh`), IF latches only valid bits, IME keeps bit 0.
+
+const IRQ_IME: u32 = 0x0400_0208;
+const IRQ_IE: u32 = 0x0400_0210;
+
+/// A booted counter machine, `frames` frames in, with non-default IME, IE and IF on both CPUs:
+/// ARM9 IME 1, IE all ones (kept as the ARM9 mask), IF bits 0 and 3; ARM7 IME 0, IE bit 7 and
+/// bit 16, IF bit 7 and bit 24. The ARM9's I flag is set, so no IRQ is taken.
+fn with_irq_state(frames: u32) -> Machine {
+    let mut machine = booted(&counter_rom(), frames);
+    let tcm = crate::bus::TcmConfig::from_cp15(machine.arm9.cp15());
+    machine.memory.write32(&tcm, IRQ_IME, 0xFFFF_FFFF);
+    machine.memory.write32(&tcm, IRQ_IE, 0xFFFF_FFFF);
+    machine.memory.write32_arm7(IRQ_IE, 1 << 7 | 1 << 16);
+    machine.request_irq9(0b1001);
+    machine.request_irq7(1 << 7 | 1 << 24);
+    machine
+}
+
+/// (ARM9 IME, IE, IF, ARM7 IME, IE, IF).
+type IrqState = (bool, u32, u32, bool, u32, u32);
+
+fn irq_state(machine: &Machine) -> IrqState {
+    let (a9, a7) = (machine.irq9(), machine.irq7());
+    (a9.ime(), a9.ie(), a9.if_(), a7.ime(), a7.ie(), a7.if_())
+}
+
+const IRQ_STATE: IrqState = (
+    true,
+    0x003F_3F7F,
+    0b1001,
+    false,
+    1 << 7 | 1 << 16,
+    1 << 7 | 1 << 24,
+);
+
+#[test]
+fn given_non_default_interrupt_registers_when_set_up_then_both_controllers_hold_the_expected_values()
+ {
+    // Guards the round-trip tests below against a vacuous setup.
+    assert_eq!(irq_state(&with_irq_state(1)), IRQ_STATE);
+}
+
+#[test]
+fn given_non_default_interrupt_registers_when_saved_and_loaded_onto_a_fresh_machine_then_both_controllers_come_back()
+ {
+    let saved = with_irq_state(1);
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!((result, irq_state(&target)), (Ok(()), IRQ_STATE));
+}
+
+#[test]
+fn given_non_default_interrupt_registers_when_loaded_and_saved_again_then_the_bytes_are_identical()
+{
+    let first = with_irq_state(1).save_state();
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&first);
+    assert_eq!(
+        (result, target.save_state() == first, first.is_empty()),
+        (Ok(()), true, false)
+    );
+}
+
+#[test]
+fn given_a_state_with_interrupt_registers_when_loaded_over_a_machine_with_others_then_the_loaded_ones_win()
+ {
+    let saved = with_irq_state(1);
+    let mut target = booted(&counter_rom(), 0);
+    target.request_irq9(1 << 16);
+    target.request_irq7(1 << 8);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!((result, irq_state(&target)), (Ok(()), IRQ_STATE));
+}
+
+#[test]
+fn given_the_same_rom_and_interrupt_setup_when_run_twice_then_the_savestate_bytes_are_identical() {
+    let mut first = with_irq_state(1);
+    let mut second = with_irq_state(1);
+    run_frames(&mut first, 2);
+    run_frames(&mut second, 2);
+    assert_eq!(
+        (
+            first.save_state() == second.save_state(),
+            irq_state(&first),
+            irq_state(&second)
+        ),
+        (true, IRQ_STATE, IRQ_STATE)
+    );
+}
+
+#[test]
+fn given_a_state_with_interrupt_registers_saved_mid_run_when_loaded_and_continued_then_it_equals_an_uninterrupted_run()
+ {
+    let bytes = with_irq_state(1).save_state();
+    let mut resumed = booted(&counter_rom(), 0);
+    let result = resumed.load_state(&bytes);
+    run_frames(&mut resumed, 2);
+
+    let mut straight = with_irq_state(1);
+    run_frames(&mut straight, 2);
+    assert_eq!(
+        (
+            result,
+            resumed.save_state() == straight.save_state(),
+            irq_state(&resumed)
+        ),
+        (Ok(()), true, IRQ_STATE)
+    );
 }

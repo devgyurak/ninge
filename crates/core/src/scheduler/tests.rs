@@ -335,6 +335,29 @@ fn given_event_time_equal_to_now_when_checked_then_it_is_accepted() {
     assert!(scheduler.is_well_formed());
 }
 
+#[test]
+fn given_clock_at_max_time_with_event_at_max_time_when_checked_then_it_is_accepted() {
+    let mut scheduler = Scheduler::new();
+    scheduler.now = MAX_TIME;
+    schedule_all(&mut scheduler, &[MAX_TIME]);
+    assert!(scheduler.is_well_formed());
+}
+
+#[test]
+fn given_clock_at_max_time_with_event_past_max_time_when_checked_then_it_is_refused() {
+    let mut scheduler = Scheduler::new();
+    scheduler.now = MAX_TIME;
+    schedule_all(&mut scheduler, &[MAX_TIME + 5]);
+    assert!(!scheduler.is_well_formed());
+}
+
+#[test]
+fn given_clock_past_max_time_with_no_events_when_checked_then_it_is_refused() {
+    let mut scheduler = Scheduler::new();
+    scheduler.now = MAX_TIME + 1;
+    assert!(!scheduler.is_well_formed());
+}
+
 // ------------------------------------------------------------- the round
 
 #[test]
@@ -466,6 +489,62 @@ fn given_events_at_two_times_when_running_two_rounds_then_each_round_dispatches_
             Step::Dispatch(20, seqs[1])
         ]
     );
+}
+
+/// Participants whose dispatch schedules another event at the time it just fired, as a
+/// saturated clock would make a self-rescheduling handler do.
+struct SelfScheduling {
+    inner: Recorder,
+}
+
+impl Participants for SelfScheduling {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        self.inner.scheduler()
+    }
+    fn run_arm9_until(&mut self, target: u64) {
+        self.inner.run_arm9_until(target);
+    }
+    fn run_arm7_until(&mut self, target: u64) {
+        self.inner.run_arm7_until(target);
+    }
+    fn dispatch(&mut self, event: Event) {
+        self.inner.dispatch(event);
+        self.inner.scheduler.schedule(event.time, event.kind);
+    }
+}
+
+#[test]
+fn given_a_handler_scheduling_a_due_event_when_running_a_round_then_it_waits_for_the_next_round() {
+    let mut participants = SelfScheduling {
+        inner: Recorder::with_events(0, &[10]),
+    };
+    run_round(&mut participants);
+    let dispatched = participants
+        .inner
+        .log
+        .iter()
+        .filter(|step| matches!(step, Step::Dispatch(..)))
+        .count();
+    assert_eq!(
+        (dispatched, participants.inner.scheduler.pending().len()),
+        (1, 1)
+    );
+}
+
+#[test]
+fn given_a_handler_scheduling_a_due_event_when_running_two_rounds_then_each_round_dispatches_one() {
+    let mut participants = SelfScheduling {
+        inner: Recorder::with_events(0, &[10]),
+    };
+    run_round(&mut participants);
+    run_round(&mut participants);
+    let dispatched = participants
+        .inner
+        .log
+        .iter()
+        .filter(|step| matches!(step, Step::Dispatch(..)))
+        .count();
+    assert_eq!(dispatched, 2);
 }
 
 // ------------------------------------------------------------------- settle

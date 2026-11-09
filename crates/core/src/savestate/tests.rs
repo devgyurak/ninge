@@ -14,15 +14,17 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_090;
-const PINNED_HASH: u64 = 0xaa6b9367a3c5943f;
+const PINNED_LEN: usize = 4_473_144;
+const PINNED_HASH: u64 = 0x7121223c3a890582;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
 /// shared-WRAM contents); the length is unchanged. Version 6 (#104) added the display timing
-/// state and a second queued event, so both pins moved.
-const PINNED_BOOTED_LEN: usize = 4_473_177;
-const PINNED_BOOTED_HASH: u64 = 0xab4e471de9ccba8c;
+/// state and a second queued event, so both pins moved. Version 7 (#24) added the IPC block:
+/// 54 bytes at power-on (two FIFOs of 16 + 3 one-byte varints each, two ports of 8 one-byte fields),
+/// so both lengths grew by 54.
+const PINNED_BOOTED_LEN: usize = 4_473_231;
+const PINNED_BOOTED_HASH: u64 = 0x8b9ebb9dc37db03f;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -155,7 +157,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &6u32.to_le_bytes(),
+        &7u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -190,13 +192,13 @@ fn given_a_state_with_a_wrong_magic_when_loaded_then_it_is_refused_as_bad_magic(
 #[test]
 fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &8u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
     assert_eq!(
         result,
         Err(SavestateError::VersionMismatch {
-            found: 7,
-            expected: 6
+            found: 8,
+            expected: 7
         })
     );
 }
@@ -204,12 +206,12 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
 #[test]
 fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &8u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 7 is not version 6")
+        .expect_err("version 8 is not version 7")
         .to_string();
-    assert!(message.contains("version 7") && message.contains("version 6"));
+    assert!(message.contains("version 8") && message.contains("version 7"));
 }
 
 #[test]
@@ -543,7 +545,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_6_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_7_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -551,14 +553,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_6
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 6
+            expected: 7
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_6_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_7_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -566,15 +568,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_6
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 6
+            expected: 7
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_6() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_7() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 6u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 7u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -1076,6 +1078,134 @@ fn given_a_booted_state_with_no_hblank_start_queued_when_loaded_then_it_is_corru
         .pop_due(crate::scheduler::FRAME_CYCLES + crate::scheduler::HBLANK_START_CYCLES);
     assert_eq!(
         load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+// ------------------------------------------------------------------------- IPC (#24)
+
+const IPC_CNT: u32 = 0x0400_0184;
+const IPC_SEND: u32 = 0x0400_0188;
+const IPC_RECV: u32 = 0x0410_0000;
+
+/// A booted counter machine, `frames` frames in, with both FIFOs enabled and the ARM9 having sent
+/// three words (`ipc.md`, "Behavior"); the ARM7 has taken none, and has its receive IRQ on.
+fn with_words_in_flight(frames: u32) -> Machine {
+    let mut machine = booted(&counter_rom(), frames);
+    let tcm = crate::bus::TcmConfig::from_cp15(machine.arm9.cp15());
+    machine.memory.write16(&tcm, IPC_CNT, 1 << 15);
+    machine.memory.write16_arm7(IPC_CNT, 1 << 15 | 1 << 10);
+    [0x11, 0x2222, 0x33_3333]
+        .into_iter()
+        .for_each(|word| machine.memory.write32(&tcm, IPC_SEND, word));
+    machine
+}
+
+/// The three words the ARM7 takes from `machine`, then the error flag of its IPCFIFOCNT.
+fn arm7_takes_three(machine: &mut Machine) -> ([u32; 3], u16) {
+    let words = std::array::from_fn(|_| machine.memory.read32_arm7_mut(IPC_RECV));
+    (words, machine.memory.read16_arm7(IPC_CNT) & (1 << 14))
+}
+
+#[test]
+fn given_words_in_flight_when_saved_and_loaded_onto_a_fresh_machine_then_the_arm7_receives_them_in_order()
+ {
+    let saved = with_words_in_flight(1);
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!(
+        (result, arm7_takes_three(&mut target)),
+        (Ok(()), ([0x11, 0x2222, 0x33_3333], 0))
+    );
+}
+
+#[test]
+fn given_words_in_flight_when_loaded_and_saved_again_then_the_bytes_are_identical() {
+    let first = with_words_in_flight(1).save_state();
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&first);
+    assert_eq!((result, target.save_state() == first), (Ok(()), true));
+}
+
+#[test]
+fn given_words_in_flight_when_saved_mid_run_and_continued_then_it_equals_an_uninterrupted_run() {
+    let bytes = with_words_in_flight(1).save_state();
+    let mut resumed = booted(&counter_rom(), 0);
+    let result = resumed.load_state(&bytes);
+    run_frames(&mut resumed, 2);
+    let mut straight = with_words_in_flight(1);
+    run_frames(&mut straight, 2);
+    assert_eq!(
+        (result, resumed.save_state() == straight.save_state()),
+        (Ok(()), true)
+    );
+}
+
+#[test]
+fn given_the_same_rom_and_ipc_traffic_when_run_twice_then_the_savestate_bytes_are_identical() {
+    let mut first = with_words_in_flight(1);
+    let mut second = with_words_in_flight(1);
+    run_frames(&mut first, 2);
+    run_frames(&mut second, 2);
+    assert!(first.save_state() == second.save_state());
+}
+
+#[test]
+fn given_words_in_flight_when_the_state_loads_over_a_machine_with_an_empty_fifo_then_the_loaded_words_win()
+ {
+    let saved = with_words_in_flight(1);
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!(
+        (
+            result,
+            target.ipc().send_words::<true>().collect::<Vec<u32>>()
+        ),
+        (Ok(()), vec![0x11, 0x2222, 0x33_3333])
+    );
+}
+
+/// Loads a state whose ARM9 IPC block is `ipc` onto a fresh machine; returns the result and
+/// whether the target was left as it was.
+fn load_with_ipc(ipc: crate::ipc::Ipc) -> (Result<(), SavestateError>, bool) {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.memory.replace_ipc_for_test(ipc);
+    load_onto_fresh(&rom, &saver)
+}
+
+#[test]
+fn given_a_state_with_a_fifo_length_of_17_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    assert_eq!(
+        load_with_ipc(crate::ipc::Ipc::with_corrupt_fifo_len(17)),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_fifo_head_of_16_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+{
+    assert_eq!(
+        load_with_ipc(crate::ipc::Ipc::with_corrupt_fifo_head(16)),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_sync_output_above_15_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    assert_eq!(
+        load_with_ipc(crate::ipc::Ipc::with_corrupt_sync_out(0x10)),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_irq_edge_memory_disagrees_with_its_fifos_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    assert_eq!(
+        load_with_ipc(crate::ipc::Ipc::with_corrupt_edge_memory()),
         (Err(SavestateError::Corrupt), true)
     );
 }

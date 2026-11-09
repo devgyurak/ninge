@@ -6,6 +6,7 @@ pub mod cart;
 pub mod cpu;
 pub mod gpu2d;
 mod hle;
+pub mod ipc;
 pub mod irq;
 pub mod savestate;
 pub mod scheduler;
@@ -262,14 +263,21 @@ impl Machine {
         self.memory.irq7()
     }
 
+    /// IPCSYNC and the two IPC FIFOs.
+    // The debugger's IPC panel (#56 CPU panel until one exists) shows the sync nibbles, both
+    // FIFOs' contents and the flags of both CPUs.
+    pub fn ipc(&self) -> &ipc::Ipc {
+        self.memory.ipc()
+    }
+
     /// Raises the requests in `mask` on the ARM9's controller: IF latches them.
-    // The LCD (#104) uses it; IPC (#24), timers (#25) and DMA (#26) follow.
+    // The LCD (#104) uses it; IPC (#24) goes through `Memory`, and timers (#25) and DMA (#26) follow.
     pub(crate) fn request_irq9(&mut self, mask: u32) {
         self.memory.irq9_mut().request(mask);
     }
 
     /// Raises the requests in `mask` on the ARM7's controller: IF latches them.
-    // The LCD (#104) uses it; IPC (#24), timers (#25) and DMA (#26) follow.
+    // The LCD (#104) uses it; IPC (#24) goes through `Memory`, and timers (#25) and DMA (#26) follow.
     pub(crate) fn request_irq7(&mut self, mask: u32) {
         self.memory.irq7_mut().request(mask);
     }
@@ -559,6 +567,8 @@ mod tests {
 
 #[cfg(test)]
 mod tests_arm9;
+#[cfg(test)]
+mod tests_ipc;
 #[cfg(test)]
 mod tests_irq;
 #[cfg(test)]

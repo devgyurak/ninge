@@ -46,13 +46,13 @@ impl Bus for Arm9View<'_> {
         self.memory.fetch16(&self.tcm, addr)
     }
     fn read8(&mut self, addr: u32) -> u8 {
-        self.memory.read8(&self.tcm, addr)
+        self.memory.read8_mut(&self.tcm, addr)
     }
     fn read16(&mut self, addr: u32) -> u16 {
-        self.memory.read16(&self.tcm, addr)
+        self.memory.read16_mut(&self.tcm, addr)
     }
     fn read32(&mut self, addr: u32) -> u32 {
-        self.memory.read32(&self.tcm, addr)
+        self.memory.read32_mut(&self.tcm, addr)
     }
     fn write8(&mut self, addr: u32, value: u8) {
         self.memory.write8(&self.tcm, addr, value);
@@ -87,13 +87,13 @@ impl Bus for Arm7View<'_> {
         self.memory.fetch16_arm7(addr)
     }
     fn read8(&mut self, addr: u32) -> u8 {
-        self.memory.read8_arm7(addr)
+        self.memory.read8_arm7_mut(addr)
     }
     fn read16(&mut self, addr: u32) -> u16 {
-        self.memory.read16_arm7(addr)
+        self.memory.read16_arm7_mut(addr)
     }
     fn read32(&mut self, addr: u32) -> u32 {
-        self.memory.read32_arm7(addr)
+        self.memory.read32_arm7_mut(addr)
     }
     fn write8(&mut self, addr: u32, value: u8) {
         self.memory.write8_arm7(addr, value);

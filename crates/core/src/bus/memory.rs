@@ -10,6 +10,7 @@ use super::TcmConfig;
 use crate::cpu::Tcm;
 use crate::gpu2d::Gpu2d;
 use crate::gpu2d::timing::Timing;
+use crate::ipc::{IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, Ipc, Requests};
 use crate::irq::InterruptController;
 use serde::{Deserialize, Serialize};
 
@@ -162,6 +163,8 @@ pub struct Memory {
     // Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
     irq9: InterruptController<true>,
     irq7: InterruptController<false>,
+    // IPCSYNC and the two IPC FIFOs (`ipc.md`).
+    ipc: Ipc,
     // Derived from `vramcnt_a` and `wramcnt`, so the tables are not saved; `build_page_table`
     // rebuilds both. Empty after a load until then, which reads as all-unmapped rather than
     // panicking. One entry per 16 KiB page, one table per CPU (the page-table decision is
@@ -255,6 +258,7 @@ impl Memory {
             timing: Timing::new(),
             irq9: InterruptController::new(),
             irq7: InterruptController::new(),
+            ipc: Ipc::new(),
             pages9: Vec::new(),
             pages7: Vec::new(),
         };
@@ -395,6 +399,52 @@ impl Memory {
             .unwrap_or_else(|| self.read_slow(addr))
     }
 
+    /// Which byte of IPCFIFORECV `addr` is, if it is one.
+    fn recv_offset(addr: u32) -> Option<usize> {
+        addr.checked_sub(IPCFIFORECV_ADDR)
+            .filter(|&offset| offset < 4)
+            .map(|offset| offset as usize)
+    }
+
+    /// The byte of IPCFIFORECV at `at` that a read would show, without taking the word.
+    // TODO(hw-unverified): IPCFIFORECV is not mirrored (`ipc.md`, "Unverified").
+    fn peek_recv_byte<const ARM9: bool>(&self, at: u32) -> Option<u8> {
+        let offset = Self::recv_offset(at)?;
+        Some(self.ipc.peek_recv::<ARM9>().to_le_bytes()[offset])
+    }
+
+    /// A CPU's read of `N` bytes at `addr` when it lands on IPCFIFORECV: one word is taken from
+    /// the FIFO whatever the width, and the access sees the bytes at its own address.
+    // TODO(hw-unverified): a byte or halfword read takes a whole word (`ipc.md`, "Unverified").
+    fn receive_bytes<const ARM9: bool, const N: usize>(&mut self, addr: u32) -> Option<[u8; N]> {
+        let offset = Self::recv_offset(addr)?;
+        let (word, requests) = self.ipc.receive::<ARM9>();
+        self.apply(requests);
+        let bytes = word.to_le_bytes();
+        // `addr` is aligned to `N` and the register is 4 bytes, so the access stays inside it.
+        Some(std::array::from_fn(|i| bytes[(offset + i) & 3]))
+    }
+
+    /// A CPU's write of `N` bytes at the aligned `addr` when it lands on IPCFIFOSEND: a word
+    /// write sends one word. Returns whether the address was IPCFIFOSEND.
+    // TODO(hw-unverified): a byte or halfword write is ignored (`ipc.md`, "Unverified").
+    fn send_word<const ARM9: bool, const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> bool {
+        if addr & !3 != IPCFIFOSEND_ADDR {
+            return false;
+        }
+        if let Ok(word) = <[u8; 4]>::try_from(bytes.as_slice()) {
+            let requests = self.ipc.send::<ARM9>(u32::from_le_bytes(word));
+            self.apply(requests);
+        }
+        true
+    }
+
+    /// Hands the IF bits an IPC event raised to the two controllers.
+    fn apply(&mut self, requests: Requests) {
+        self.irq9.request(requests.irq9);
+        self.irq7.request(requests.irq7);
+    }
+
     /// The slow path for a read: I/O ports and unmapped addresses. Each byte is read from the
     /// register at its own address, so a wider read spans neighbouring registers.
     // TODO(hw-unverified): an undefined I/O port reads 0 (GBATEK says so); unmapped memory is
@@ -412,6 +462,8 @@ impl Memory {
                 _ => self
                     .irq9
                     .read_byte(at)
+                    .or_else(|| self.ipc.read_byte::<true>(at))
+                    .or_else(|| self.peek_recv_byte::<true>(at))
                     .or_else(|| self.gpu2d.read_byte(at))
                     .or_else(|| self.timing.read_byte::<true>(at))
                     .unwrap_or(0),
@@ -421,7 +473,7 @@ impl Memory {
 
     /// The slow path for an ARM7 read: WRAMSTAT; every other I/O port and unmapped address
     /// reads 0 (`wramcnt.md`, "Unverified").
-    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#24-#26).
+    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#25-#26).
     fn read_slow7<const N: usize>(&self, addr: u32) -> [u8; N] {
         std::array::from_fn(|i| match addr.wrapping_add(i as u32) {
             // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
@@ -429,27 +481,52 @@ impl Memory {
             at => self
                 .irq7
                 .read_byte(at)
+                .or_else(|| self.ipc.read_byte::<false>(at))
+                .or_else(|| self.peek_recv_byte::<false>(at))
                 .or_else(|| self.timing.read_byte::<false>(at))
                 .unwrap_or(0),
         })
     }
 
-    /// The bytes an ARM9 data read of `N` bytes at `addr` sees. `addr` is aligned down to `N`,
-    /// the way the memory system ignores the bits below the access width.
+    /// What an ARM9 data read of `N` bytes at the aligned `addr` finds in a TCM, if a TCM answers.
+    ///
+    /// The ITCM has priority over the DTCM; in load mode it claims the address but only
+    /// writes reach it, so the read goes underneath (`None`: the page table answers).
+    // TODO(hw-unverified): GBATEK says the ITCM "appears to have priority"; taken as certain.
+    // TODO(hw-unverified): a load-mode ITCM over an enabled DTCM reads underneath, not the
+    // DTCM (`arm9-memory-map.md`, "Unverified").
+    fn tcm_load<const N: usize>(&self, tcm: &TcmConfig, addr: u32) -> Option<[u8; N]> {
+        match tcm_offset(&tcm.itcm, ITCM_SIZE, addr) {
+            Some(offset) if !tcm.itcm.load_mode => Some(bytes_at(&self.itcm, offset)),
+            Some(_) => None,
+            None => match tcm_offset(&tcm.dtcm, DTCM_SIZE, addr) {
+                Some(offset) if !tcm.dtcm.load_mode => Some(bytes_at(&self.dtcm, offset)),
+                _ => None,
+            },
+        }
+    }
+
+    /// The bytes an ARM9 data read of `N` bytes at `addr` sees, with no side effect. `addr` is
+    /// aligned down to `N`, the way the memory system ignores the bits below the access width.
     fn load<const N: usize>(&self, tcm: &TcmConfig, addr: u32) -> [u8; N] {
         let addr = addr & !(N as u32 - 1);
-        // The ITCM has priority over the DTCM; in load mode it claims the address but only
-        // writes reach it, so the read goes underneath.
-        // TODO(hw-unverified): GBATEK says the ITCM "appears to have priority"; taken as certain.
-        // TODO(hw-unverified): a load-mode ITCM over an enabled DTCM reads underneath, not the
-        // DTCM (`arm9-memory-map.md`, "Unverified").
-        match tcm_offset(&tcm.itcm, ITCM_SIZE, addr) {
-            Some(offset) if !tcm.itcm.load_mode => bytes_at(&self.itcm, offset),
-            Some(_) => self.read_page(addr),
-            None => match tcm_offset(&tcm.dtcm, DTCM_SIZE, addr) {
-                Some(offset) if !tcm.dtcm.load_mode => bytes_at(&self.dtcm, offset),
-                _ => self.read_page(addr),
-            },
+        self.tcm_load(tcm, addr)
+            .unwrap_or_else(|| self.read_page(addr))
+    }
+
+    /// [`Memory::load`] as the CPU does it: a read of IPCFIFORECV takes a word out of the FIFO.
+    fn load_mut<const N: usize>(&mut self, tcm: &TcmConfig, addr: u32) -> [u8; N] {
+        let addr = addr & !(N as u32 - 1);
+        if let Some(bytes) = self.tcm_load(tcm, addr) {
+            return bytes;
+        }
+        let page = page_of(&self.pages9, addr);
+        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
+        match self.region_bytes(page.region, offset) {
+            Some(bytes) => bytes,
+            None => self
+                .receive_bytes::<true, N>(addr)
+                .unwrap_or_else(|| self.read_slow(addr)),
         }
     }
 
@@ -504,6 +581,10 @@ impl Memory {
     // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
     // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
     fn write_slow<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
+        // IPCFIFOSEND takes the access as one word; it is not split into bytes.
+        if self.send_word::<true, N>(addr, bytes) {
+            return;
+        }
         // Each byte goes to the register at its own address; an address no register holds
         // ignores it, as does a VRAM byte write that lands here.
         for (i, &value) in bytes.iter().enumerate() {
@@ -515,6 +596,8 @@ impl Memory {
                 VRAMCNT_G_ADDR => {}
                 _ => {
                     self.irq9.write_byte(at, value);
+                    let requests = self.ipc.write_byte::<true>(at, value);
+                    self.apply(requests);
                     self.gpu2d.write_byte(at, value);
                     self.timing.write_byte::<true>(at, value);
                 }
@@ -536,6 +619,7 @@ impl Memory {
             && self.wramcnt & !WRAMCNT_MODE_MASK == 0
             && self.irq9.is_well_formed()
             && self.irq7.is_well_formed()
+            && self.ipc.is_well_formed()
             && self.timing.is_well_formed()
     }
 
@@ -594,6 +678,19 @@ impl Memory {
             .unwrap_or_else(|| self.read_slow7(addr))
     }
 
+    /// [`Memory::load7`] as the CPU does it: a read of IPCFIFORECV takes a word out of the FIFO.
+    fn load7_mut<const N: usize>(&mut self, addr: u32) -> [u8; N] {
+        let addr = addr & !(N as u32 - 1);
+        let page = page_of(&self.pages7, addr);
+        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
+        match self.region_bytes(page.region, offset) {
+            Some(bytes) => bytes,
+            None => self
+                .receive_bytes::<false, N>(addr)
+                .unwrap_or_else(|| self.read_slow7(addr)),
+        }
+    }
+
     /// Stores `N` bytes as the ARM7 (see [`Memory::load7`] for what it reaches); a store to
     /// open bus or an I/O port is dropped.
     // WRAMCNT is ARM9-only.
@@ -609,11 +706,16 @@ impl Memory {
 
     /// The slow path for an ARM7 write: the interrupt controller; every other I/O port and
     /// unmapped address drops the write. Each byte goes to the register at its own address.
-    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#24-#26).
+    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#25-#26).
     fn write_slow7<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
+        if self.send_word::<false, N>(addr, bytes) {
+            return;
+        }
         for (i, &value) in bytes.iter().enumerate() {
             let at = addr.wrapping_add(i as u32);
             self.irq7.write_byte(at, value);
+            let requests = self.ipc.write_byte::<false>(at, value);
+            self.apply(requests);
             self.timing.write_byte::<false>(at, value);
         }
     }
@@ -628,7 +730,8 @@ impl Memory {
         u16::from_le_bytes(self.load7(addr))
     }
 
-    /// Reads a byte as the ARM7, without side effects.
+    /// Reads a byte as the ARM7, without side effects (the peek; the CPU reads through
+    /// [`Memory::read8_arm7_mut`]).
     pub fn read8_arm7(&self, addr: u32) -> u8 {
         u8::from_le_bytes(self.load7(addr))
     }
@@ -668,7 +771,8 @@ impl Memory {
         u16::from_le_bytes(self.fetch(tcm, addr))
     }
 
-    /// Reads a byte of data. Reads have no side effects, so the debugger uses them too.
+    /// Reads a byte of data without side effects: the peek the debugger and the runner use. The
+    /// CPUs read through [`Memory::read8_mut`] and its siblings.
     pub fn read8(&self, tcm: &TcmConfig, addr: u32) -> u8 {
         u8::from_le_bytes(self.load(tcm, addr))
     }
@@ -681,6 +785,48 @@ impl Memory {
     /// Reads a word of data.
     pub fn read32(&self, tcm: &TcmConfig, addr: u32) -> u32 {
         u32::from_le_bytes(self.load(tcm, addr))
+    }
+
+    /// Reads a byte of data as the CPU does: a read of IPCFIFORECV takes a word out of the
+    /// FIFO and can set the error flag. The plain [`Memory::read8`] is the peek.
+    pub fn read8_mut(&mut self, tcm: &TcmConfig, addr: u32) -> u8 {
+        u8::from_le_bytes(self.load_mut(tcm, addr))
+    }
+
+    /// Reads a halfword of data as the CPU does (see [`Memory::read8_mut`]).
+    pub fn read16_mut(&mut self, tcm: &TcmConfig, addr: u32) -> u16 {
+        u16::from_le_bytes(self.load_mut(tcm, addr))
+    }
+
+    /// Reads a word of data as the CPU does (see [`Memory::read8_mut`]).
+    pub fn read32_mut(&mut self, tcm: &TcmConfig, addr: u32) -> u32 {
+        u32::from_le_bytes(self.load_mut(tcm, addr))
+    }
+
+    /// Reads a byte as the ARM7 does (see [`Memory::read8_mut`]).
+    pub fn read8_arm7_mut(&mut self, addr: u32) -> u8 {
+        u8::from_le_bytes(self.load7_mut(addr))
+    }
+
+    /// Reads a halfword as the ARM7 does (see [`Memory::read8_mut`]).
+    pub fn read16_arm7_mut(&mut self, addr: u32) -> u16 {
+        u16::from_le_bytes(self.load7_mut(addr))
+    }
+
+    /// Reads a word as the ARM7 does (see [`Memory::read8_mut`]).
+    pub fn read32_arm7_mut(&mut self, addr: u32) -> u32 {
+        u32::from_le_bytes(self.load7_mut(addr))
+    }
+
+    /// Replaces the IPC block, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn replace_ipc_for_test(&mut self, ipc: Ipc) {
+        self.ipc = ipc;
+    }
+
+    /// IPCSYNC and the two IPC FIFOs, for the debugger.
+    pub fn ipc(&self) -> &Ipc {
+        &self.ipc
     }
 
     /// Writes a byte of data.

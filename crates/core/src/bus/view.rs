@@ -64,3 +64,43 @@ impl Bus for Arm9View<'_> {
         self.memory.write32(&self.tcm, addr, value);
     }
 }
+
+/// The ARM7's bus: a short-lived view over `Memory`, which reaches main RAM and the ARM7 WRAM
+/// only (`docs/hw/scheduler.md`, "ARM7 memory seen by #21"). Not state.
+pub struct Arm7View<'a> {
+    memory: &'a mut Memory,
+}
+
+impl<'a> Arm7View<'a> {
+    /// Builds the view for one step.
+    pub fn new(memory: &'a mut Memory) -> Self {
+        Self { memory }
+    }
+}
+
+impl Bus for Arm7View<'_> {
+    fn fetch32(&mut self, addr: u32) -> u32 {
+        self.memory.fetch32_arm7(addr)
+    }
+    fn fetch16(&mut self, addr: u32) -> u16 {
+        self.memory.fetch16_arm7(addr)
+    }
+    fn read8(&mut self, addr: u32) -> u8 {
+        self.memory.read8_arm7(addr)
+    }
+    fn read16(&mut self, addr: u32) -> u16 {
+        self.memory.read16_arm7(addr)
+    }
+    fn read32(&mut self, addr: u32) -> u32 {
+        self.memory.read32_arm7(addr)
+    }
+    fn write8(&mut self, addr: u32, value: u8) {
+        self.memory.write8_arm7(addr, value);
+    }
+    fn write16(&mut self, addr: u32, value: u16) {
+        self.memory.write16_arm7(addr, value);
+    }
+    fn write32(&mut self, addr: u32, value: u32) {
+        self.memory.write32_arm7(addr, value);
+    }
+}

@@ -7,10 +7,15 @@ pub mod cpu;
 pub mod gpu2d;
 mod hle;
 pub mod savestate;
+pub mod scheduler;
 
-use bus::{Arm9View, Memory, TcmConfig, VramBankState};
+use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState};
 use cart::Header;
 use cpu::Cpu;
+use scheduler::{
+    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, FRAME_CYCLES, Participants,
+    Scheduler,
+};
 use serde::{Deserialize, Serialize};
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
@@ -62,19 +67,16 @@ pub struct Machine {
     // The ARM9 and the memory it sees. Plain data; a savestate lacking them is refused.
     arm9: Cpu<true>,
     memory: Memory,
+    // The ARM7 and its clock in master cycles; the scheduler (`docs/hw/scheduler.md`).
+    arm7: Cpu<false>,
+    arm7_clock: u64,
+    scheduler: Scheduler,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
     header: Option<Header>,
 }
 
 /// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
 pub type RomError = cart::HeaderError;
-
-/// ARM9 instructions stepped per frame by [`Machine::run_frame`]: one per ARM9 cycle of a
-/// 263 x 355 dot frame at 6 bus cycles per dot, the ARM9 at twice the bus clock
-/// (`docs/hw/direct-boot.md`, "The per-frame ARM9 budget").
-// TODO(hw-unverified): an estimate, not a timing claim (`docs/hw/direct-boot.md`, "Unverified").
-// TODO(phase3): the scheduler (#21) replaces this approximation.
-const ARM9_STEPS_PER_FRAME: u32 = 263 * 355 * 6 * 2;
 
 /// A black screen of exactly `SCREEN_WIDTH * SCREEN_HEIGHT` pixels.
 fn blank_screen() -> Vec<u32> {
@@ -86,6 +88,8 @@ impl Machine {
     ///
     /// Black is a Phase 0 placeholder value, not the hardware power-on state.
     pub fn new() -> Self {
+        let mut scheduler = Scheduler::new();
+        scheduler.schedule(FRAME_CYCLES, EventKind::FrameEnd);
         Self {
             top: blank_screen(),
             bottom: blank_screen(),
@@ -93,6 +97,9 @@ impl Machine {
             frame_count: 0,
             arm9: Cpu::new(),
             memory: Memory::new(),
+            arm7: Cpu::new(),
+            arm7_clock: 0,
+            scheduler,
             header: None,
         }
     }
@@ -110,7 +117,13 @@ impl Machine {
     pub fn load_rom(&mut self, rom: Vec<u8>) -> Result<(), RomError> {
         *self = Self::new();
         let header = cart::parse(&rom)?;
-        hle::boot(&mut self.arm9, &mut self.memory, &rom, &header);
+        hle::boot(
+            &mut self.arm9,
+            &mut self.arm7,
+            &mut self.memory,
+            &rom,
+            &header,
+        );
         self.header = Some(header);
         self.rom = rom;
         Ok(())
@@ -127,19 +140,21 @@ impl Machine {
         &self.rom
     }
 
-    /// Runs the machine for one frame: steps the ARM9 [`ARM9_STEPS_PER_FRAME`] instructions,
-    /// then counts the frame.
+    /// Runs the machine for one frame: rounds of ARM9, ARM7, events until the frame-end event
+    /// fires, which draws the screens and counts the frame (`docs/hw/scheduler.md`).
     ///
-    /// A machine with no booted program (no ROM, or a refused one) does not step the ARM9 or
-    /// draw: the frame only advances the counter and leaves both screens black.
-    // TODO(hw-unverified): the step budget is an estimate (`docs/hw/direct-boot.md`).
-    // TODO(phase3): the scheduler (#21) replaces the fixed step budget.
+    /// A machine with no booted program (no ROM, or a refused one) runs no CPU and draws
+    /// nothing: the frame only advances the counter and leaves both screens black.
+    // TODO(hw-unverified): the per-frame instruction counts are a model (`docs/hw/scheduler.md`).
     pub fn run_frame(&mut self) {
-        if self.header.is_some() {
-            (0..ARM9_STEPS_PER_FRAME).for_each(|_| self.step_arm9());
-            self.render_frame();
+        if self.header.is_none() {
+            self.frame_count = self.frame_count.wrapping_add(1);
+            return;
         }
-        self.frame_count = self.frame_count.wrapping_add(1);
+        let finished = self.frame_count.wrapping_add(1);
+        while self.frame_count != finished {
+            scheduler::run_round(self);
+        }
     }
 
     /// Draws both screens from the registers and VRAM as they are now.
@@ -147,7 +162,8 @@ impl Machine {
     /// Engine A goes to the screen POWCNT1 bit 15 picks; the other screen is a black
     /// placeholder for engine B (`docs/hw/display-mode-vram.md`).
     // TODO(phase4): engine B draws its screen.
-    // TODO(phase3): per-scanline drawing replaces the whole-frame render (#21).
+    // TODO(phase3): per-scanline drawing replaces the whole-frame render; no issue covers the
+    // DISPSTAT/VCOUNT timing it needs yet.
     pub(crate) fn render_frame(&mut self) {
         let (engine_a, engine_b) = if self.memory.gpu2d().engine_a_on_top() {
             (&mut self.top, &mut self.bottom)
@@ -177,6 +193,23 @@ impl Machine {
         &self.arm9
     }
 
+    /// The ARM7 core.
+    // The debugger's scheduler event timeline (#59) will show it with the scheduler.
+    pub fn arm7(&self) -> &Cpu<false> {
+        &self.arm7
+    }
+
+    /// The ARM7's clock in master cycles (ARM9 cycles).
+    pub fn arm7_clock(&self) -> u64 {
+        self.arm7_clock
+    }
+
+    /// The master clock and the pending events.
+    // The debugger's scheduler event timeline (#59) will show it.
+    pub fn scheduler(&self) -> &scheduler::Scheduler {
+        &self.scheduler
+    }
+
     /// The ARM9-visible memory.
     // The debugger's memory viewer (#57) will show it.
     pub fn memory(&self) -> &Memory {
@@ -189,15 +222,37 @@ impl Machine {
         self.memory.vram_a()
     }
 
-    /// Steps the ARM9 by one instruction.
+    /// Steps the ARM9 by one instruction and advances the master clock by its cost
+    /// (`docs/hw/scheduler.md`, "Debugger single-step").
+    ///
+    /// On a machine with a booted program the ARM7 is then brought up to the new time and any
+    /// event that became due fires, so a debugger stepping across a frame end still draws and
+    /// counts the frame, and the clocks stay consistent for a savestate. A machine with no
+    /// program steps only the ARM9.
     ///
     /// The TCM registers are copied into the memory view first, so a CP15 write takes effect
     /// from the next instruction (`docs/hw/arm9-memory-map.md`).
     // TODO(hw-unverified): opcodes already in the pipeline keep the mapping they were fetched
     // under (`docs/hw/arm9-memory-map.md`, "Unverified").
     pub fn step_arm9(&mut self) {
+        self.step_arm9_instruction();
+        if self.header.is_some() {
+            scheduler::settle(self);
+        }
+    }
+
+    /// One ARM9 instruction and its cost, with nothing else.
+    fn step_arm9_instruction(&mut self) {
         let mut view = Arm9View::new(&mut self.memory, TcmConfig::from_cp15(self.arm9.cp15()));
         self.arm9.step(&mut view);
+        self.scheduler.advance(ARM9_INSTRUCTION_COST);
+    }
+
+    /// One ARM7 instruction and its cost, with nothing else.
+    fn step_arm7_instruction(&mut self) {
+        let mut view = Arm7View::new(&mut self.memory);
+        self.arm7.step(&mut view);
+        self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
     }
 
     /// Reads a byte as the ARM9 data bus would, without side effects.
@@ -226,6 +281,36 @@ impl Machine {
         match screen {
             Screen::Top => &self.top,
             Screen::Bottom => &self.bottom,
+        }
+    }
+}
+
+impl Participants for Machine {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        &mut self.scheduler
+    }
+
+    fn run_arm9_until(&mut self, target: u64) {
+        while self.scheduler.now() < target {
+            self.step_arm9_instruction();
+        }
+    }
+
+    fn run_arm7_until(&mut self, target: u64) {
+        while self.arm7_clock < target {
+            self.step_arm7_instruction();
+        }
+    }
+
+    fn dispatch(&mut self, event: Event) {
+        match event.kind {
+            EventKind::FrameEnd => {
+                self.render_frame();
+                self.frame_count = self.frame_count.wrapping_add(1);
+                // From the event's own time, not `now`, so the frame length never drifts.
+                self.scheduler
+                    .schedule(event.time.saturating_add(FRAME_CYCLES), EventKind::FrameEnd);
+            }
         }
     }
 }
@@ -380,3 +465,5 @@ mod tests {
 
 #[cfg(test)]
 mod tests_arm9;
+#[cfg(test)]
+mod tests_scheduler;

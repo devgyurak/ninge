@@ -4,7 +4,7 @@ Sources: GBATEK "DS Cartridge Header" (header copy); GBATEK "NDS BIOS RAM Usage"
 cartridge boot time, register settings at cartridge boot time); GBATEK "DS Memory Control -
 Cache and TCM"; GBATEK "DS Display Dimensions / Timings"; GBATEK "DS Memory Timings".
 Used by: `crates/core/src/hle/direct_boot.rs`, `crates/core/src/lib.rs` (`load_rom`,
-`run_frame`)   Phase: 2 (#17), ARM9 only
+`run_frame`)   Phase: 2 (#17), ARM9 only; Phase 3 (#21) starts the ARM7 too
 
 ninge boots without BIOS or firmware: it puts the machine in the state the BIOS and firmware
 would leave at the start of the cartridge's code and starts the ARM9 there. Nothing here comes
@@ -21,8 +21,9 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
    binary can reach it: a binary ends at `023B_FE00h` at the latest.
 4. Copy the ARM9 binary: `size` bytes from its ROM offset to its RAM address, in main RAM.
 5. Copy the ARM7 binary the same way, only when its RAM address is in main RAM. An ARM7
-   destination in the `037F_8000h` range is accepted but not placed (`TODO(phase3)`, #22).
-   Nothing executes the ARM7 in Phase 2.
+   destination in the `037F_8000h` range is accepted but not placed (`TODO(phase3)`, #22);
+   the ARM7 then starts on zeroed memory. Phase 2 does not execute the ARM7; from #21 it
+   starts at its entry point (see "ARM7 state at entry").
 
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not
 holding cartridge data is zero-filled. The values the BIOS and firmware write into `027FF800h`-
@@ -44,7 +45,14 @@ GBATEK, "register settings at cartridge boot time":
 | R14_irq, SPSR_irq, R14_svc, SPSR_svc | 0 |
 
 The ARM7's values are `0380_FD80h`, `0380_FF80h`, `0380_FFC0h` for the running mode, IRQ and
-Supervisor stacks, with the same zeros (Phase 3).
+Supervisor stacks, with the same zeros.
+
+### ARM7 state at entry (#21)
+
+The ARM7 is set up like the ARM9: R12, R14 and R15 hold its entry address, the three stack
+pointers above, every other register zero, and the same chosen CPSR (`0000_00DFh`). It has no
+CP15. Its pipeline is filled through the ARM7 bus view (`scheduler.md`, "ARM7 memory seen by
+#21"), which reaches main RAM and the 64 KiB ARM7 WRAM only. See "Unverified".
 
 The stack pointers lie in shared WRAM, which Phase 2 does not map (`arm9-memory-map.md`); they
 are only register values here.
@@ -74,23 +82,13 @@ Phase 2 programs none of it: CP15 stays at its power-on state (`cp15.md`), so bo
 disabled and the exception vectors are low. This is the answer to the default-DTCM-base question
 in `arm9-memory-map.md`. See "Unverified".
 
-## The per-frame ARM9 budget
+## The per-frame budget
 
-`run_frame` steps the ARM9 a fixed number of instructions. There is no scheduler until #21
-(Phase 3), so the number is an approximation:
-
-- One frame is 263 lines of 355 dots (GBATEK, display timings); a dot is 6 cycles of the 33.513982
-  MHz bus clock: 263 x 355 x 6 = 560,190 bus cycles.
-- The ARM9 runs at twice the bus clock: 1,120,380 ARM9 cycles per frame.
-- One instruction is stepped per ARM9 cycle, so the budget is **1,120,380 steps per frame**.
-
-This overstates the hardware. GBATEK says the 66 MHz clock only holds inside the cache and TCM,
-and other accesses wait for the bus (several wait cycles per nonsequential access), so a real
-instruction takes at least one cycle and often many. It is a placeholder for the scheduler
-(`TODO(phase3)`, #21), not a timing claim.
-
-A machine with no booted program (no ROM, or a refused one) does not step the ARM9: `run_frame`
-only advances the frame counter.
+Superseded by the scheduler (#21): `run_frame` runs until the frame-end event, 1,120,380 ARM9
+cycles after the previous one, and each CPU's instruction count follows from the cost model.
+The clocks, the frame length, the cost per instruction and the interleaving are in
+`scheduler.md`. A machine with no booted program does not run a CPU: `run_frame` only advances
+the frame counter.
 
 ## Edge cases
 
@@ -116,5 +114,7 @@ only advances the frame counter.
   first, then the ARM7's. GBATEK says nothing. — `boot` — verify likewise.
 - **The values the BIOS and firmware leave outside the header copy** (chip IDs, user settings,
   boot flags at `027FF800h` and up) are zero here. — `boot` — verify likewise; `TODO(phase3)`.
-- **The step budget** is an estimate (see above). — `Machine::run_frame` in
-  `crates/core/src/lib.rs` — replaced by the scheduler (#21).
+- **The per-frame instruction counts** are a model, not a timing claim; see `scheduler.md`,
+  "Unverified".
+- **ARM7 CPSR at entry** is chosen like the ARM9's. — `boot` in `hle/direct_boot.rs` — verify
+  likewise.

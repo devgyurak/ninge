@@ -21,7 +21,8 @@
 //!
 //! # Version policy
 //!
-//! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20). Before
+//! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
+//! clock and the scheduler (#21). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -36,7 +37,10 @@
 //!
 //! # Checked on load
 //!
-//! Memory buffer sizes, the header/ROM presence rule, and the CPU's bank against its CPSR mode.
+//! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
+//! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
+//! `now`, `next_seq` above every queued sequence number, a frame end queued for a booted program, and the ARM7 clock no more than one
+//! ARM7 instruction ahead of `now`.
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -49,11 +53,12 @@
 //! frame is drawn. The memory page table is derived from VRAMCNT_A and is rebuilt on load.
 
 use crate::Machine;
+use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -162,11 +167,18 @@ impl Machine {
             || loaded.header.is_some() != !self.rom.is_empty()
             || !loaded.memory.is_well_formed()
             || !loaded.arm9.is_well_formed()
+            || !loaded.arm7.is_well_formed()
+            || !loaded.scheduler.is_well_formed()
+            // A booted program always has its next frame end queued; without it `run_frame`
+            // would never see a frame finish.
+            || (loaded.header.is_some() && !loaded.scheduler.has_pending(EventKind::FrameEnd))
+            || loaded.arm7_clock >= loaded.scheduler.now().saturating_add(ARM7_INSTRUCTION_COST)
         {
             return Err(SavestateError::Corrupt);
         }
         loaded.rom = std::mem::take(&mut self.rom);
         loaded.memory.build_page_table();
+        loaded.scheduler.reserve();
         *self = loaded;
         Ok(())
     }

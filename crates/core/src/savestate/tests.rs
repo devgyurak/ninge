@@ -14,12 +14,12 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_374_665;
-const PINNED_HASH: u64 = 0x7d71_5869_eec5_edf6;
+const PINNED_LEN: usize = 4_440_302;
+const PINNED_HASH: u64 = 0x979d_138f_d0e5_722e;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
-const PINNED_BOOTED_LEN: usize = 4_374_726;
-const PINNED_BOOTED_HASH: u64 = 0x2aa1_fece_e5c1_7069;
+const PINNED_BOOTED_LEN: usize = 4_440_383;
+const PINNED_BOOTED_HASH: u64 = 0x3c07_ebcd_f9ae_a149;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -152,7 +152,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &2u32.to_le_bytes(),
+        &3u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -193,7 +193,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 7,
-            expected: 2
+            expected: 3
         })
     );
 }
@@ -204,9 +204,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 7 is not version 2")
+        .expect_err("version 7 is not version 3")
         .to_string();
-    assert!(message.contains("version 7") && message.contains("version 2"));
+    assert!(message.contains("version 7") && message.contains("version 3"));
 }
 
 #[test]
@@ -532,6 +532,141 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
     let result = target.load_state(&saver.save_state());
     assert_eq!(
         (result, target == before),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+// ------------------------------------------------- the scheduler and the ARM7 (#21)
+
+/// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
+#[test]
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_3_is_expected() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 2,
+            expected: 3
+        })
+    );
+}
+
+#[test]
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_3() {
+    let bytes = booted(&counter_rom(), 0).save_state();
+    assert_eq!(bytes[8..12], 3u32.to_le_bytes());
+}
+
+/// Steps the ARM9 `count` times.
+fn step_arm9_times(machine: &mut Machine, count: u32) {
+    (0..count).for_each(|_| machine.step_arm9());
+}
+
+/// Loads `saver`'s state onto a fresh machine with the same ROM; returns the result and whether
+/// the target was left exactly as it was.
+fn load_onto_fresh(rom: &[u8], saver: &Machine) -> (Result<(), SavestateError>, bool) {
+    let mut target = booted(rom, 0);
+    let before = target.clone();
+    let result = target.load_state(&saver.save_state());
+    (result, target == before)
+}
+
+#[test]
+fn given_a_state_whose_sequence_counter_is_not_above_a_queued_seq_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    let queued = saver.scheduler.pending()[0].seq;
+    saver.scheduler.next_seq = queued;
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_queued_event_before_now_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    // The queued FrameEnd lies at 2 frames; move the clock (and the ARM7 with it, so that
+    // only the event rule is broken) one cycle past it.
+    let past = 2 * crate::scheduler::FRAME_CYCLES + 1;
+    saver.scheduler.now = past;
+    saver.arm7_clock = past;
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_arm7_register_bank_disagrees_with_its_cpsr_mode_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.arm7.regs_mut().break_bank_for_test();
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_arm7_clock_is_3_cycles_ahead_of_now_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.arm7_clock = saver.scheduler.now + 3;
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_arm7_clock_is_one_cycle_ahead_of_now_when_loaded_then_it_is_accepted() {
+    // One ARM7 instruction that starts before `now` may end one master cycle past it.
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.arm7_clock = saver.scheduler.now + 1;
+    assert_eq!(load_onto_fresh(&rom, &saver).0, Ok(()));
+}
+
+#[test]
+fn given_a_machine_stopped_mid_frame_when_saved_and_loaded_then_the_clocks_and_queue_come_back() {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    step_arm9_times(&mut saver, 1001);
+    let mut target = booted(&rom, 0);
+    let result = target.load_state(&saver.save_state());
+    assert_eq!(
+        (
+            result,
+            target.scheduler().now(),
+            target.arm7_clock(),
+            target.scheduler().pending()
+        ),
+        (
+            Ok(()),
+            saver.scheduler().now(),
+            saver.arm7_clock(),
+            saver.scheduler().pending()
+        )
+    );
+}
+
+#[test]
+fn given_a_booted_state_with_no_frame_end_queued_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    // Without a FrameEnd, `run_frame` would never see a frame finish.
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.scheduler.pop_due(u64::MAX);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
     );
 }

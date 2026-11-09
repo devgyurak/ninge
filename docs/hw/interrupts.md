@@ -40,7 +40,7 @@ CPU:
 | 7 | Serial port / RCNT / RTC | no | yes |
 | 8-11 | DMA 0-3 | yes | yes |
 | 12 | Keypad | yes | yes |
-| 13 | Game Pak slot (IREQ_MC) | yes | yes |
+| 13 | GBA slot (external IRQ source) | yes | yes |
 | 14-15 | Not used | no | no |
 | 16 | IPC sync | yes | yes |
 | 17 | IPC send FIFO empty | yes | yes |
@@ -59,12 +59,14 @@ that does not exist does.
 
 ## Behavior
 
-**IME** keeps only bit 0; the other bits read 0.
+**IME** keeps only bit 0; GBATEK calls the other bits "not used" (what they read is under
+"Unverified").
 
 **IE** is an ordinary read/write register: a bit set enables that source.
 
-**IF** latches a request. A source that fires sets its IF bit, whether or not the source is
-enabled in IE and whether or not IME is set; IF records that the request happened. Software
+**IF** latches a request. A source that fires sets its IF bit; IF records that the request
+happened. GBATEK's DS page does not say whether the latch depends on IE or IME; this model
+latches regardless (see "Unverified"). Software
 acknowledges a request by writing 1 to the bit: a 1 in the written value clears that IF bit, a
 0 leaves the bit as it was. Software cannot set an IF bit by writing.
 
@@ -98,13 +100,22 @@ HLE BIOS (#27). #23 stops at the exception entry: IRQ mode, R14_irq, SPSR_irq, a
 
 ## Unverified
 
+- IME bits 1-31 read 0, and IF latches whatever IE and IME say — `crates/core/src/irq.rs` —
+  GBATEK says only "not used" for IME and the latch is not described on the DS page; verify
+  with a test ROM on hardware.
+- Unused IE bits — `crates/core/src/irq.rs`, IE write and `request`. GBATEK's only stated read-back is "trying to set all IE bits gives
+  `FFFF_FFFFh` (DSi7) or `FFFF_FF7Fh` (DSi9)", which would mean IE stores unused bits and only
+  ARM9 bit 7 is missing. That is DSi mode; the DS-mode result is not stated. The model keeps
+  the mask (IE holds only the bits in the table) because the table is the DS-mode statement and
+  the DSi sentence may describe the extended DSi bits. It is a model, not a finding: the
+  maintainer may switch it, which changes `irq.rs`, its tests, and the test ROM's expected values. Verify with a test ROM that writes `FFFF_FFFFh` to IE on hardware.
+- `0400_0218h` and `0400_021Ch` (IE2, IF2) are DSi7-only; on the DS they are undefined ports
+  and read 0 here (no register).
+- GBATEK says "raw TCM-only IRQs may be processed during DMA(?)"; not modeled — revisit with
+  DMA (#26).
 - Reset values of IME, IE and IF are not stated — `crates/core/src/irq.rs` — all 0, which is
   what a handoff by the BIOS expects; verify by reading the registers in a test ROM on
   hardware before any write.
-- A write to a bit that does not exist (the "no" cells above) — `crates/core/src/irq.rs`
-  — IE drops such a bit and a request cannot set it, so reads show 0 there; GBATEK marks the
-  bits "unused" without saying whether they store a value. Verify with a test ROM that writes
-  `FFFF_FFFFh` to IE on hardware and reads it back.
 - Bit 13 is listed for both CPUs, and bit 7 only for the ARM7 — `crates/core/src/irq.rs` —
   as in the GBATEK table; a DSi-mode difference is out of scope.
 - Whether an IME or IE write reaches the IRQ line instantly or a few cycles later — the model

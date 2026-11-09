@@ -243,7 +243,7 @@ impl Machine {
     }
 
     /// Raises the requests in `mask` on the ARM9's controller: IF latches them.
-    // The hook for the sources that arrive next: the LCD (#104), timers (#24), DMA (#25), IPC (#26).
+    // The hook for the sources that arrive next: the LCD (#104), IPC (#24), timers (#25), DMA (#26).
     #[cfg_attr(
         not(test),
         expect(
@@ -256,7 +256,7 @@ impl Machine {
     }
 
     /// Raises the requests in `mask` on the ARM7's controller: IF latches them.
-    // The hook for the sources that arrive next: the LCD (#104), timers (#24), DMA (#25), IPC (#26).
+    // The hook for the sources that arrive next: the LCD (#104), IPC (#24), timers (#25), DMA (#26).
     #[cfg_attr(
         not(test),
         expect(
@@ -287,7 +287,8 @@ impl Machine {
         }
     }
 
-    /// One ARM9 instruction and its cost, with nothing else. If the controller's line was
+    /// One ARM9 instruction and its cost, with nothing else. A debugger's single step that meets
+    /// an asserted line therefore enters the vector without executing an instruction. If the controller's line was
     /// asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
     /// costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ source.
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write

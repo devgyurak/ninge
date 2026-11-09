@@ -89,7 +89,7 @@ impl InterruptController {
     /// Latches the requests in `mask` into IF, whatever IME and IE say (`interrupts.md`,
     /// "Behavior"). A bit the CPU does not have is dropped.
     // TODO(hw-unverified): a bit that does not exist is dropped (`interrupts.md`, "Unverified").
-    // The sources that call it: timers (#24), DMA (#25), IPC (#26), the LCD (#104).
+    // The sources that call it: IPC (#24), timers (#25), DMA (#26), the LCD (#104).
     #[cfg_attr(
         not(test),
         expect(

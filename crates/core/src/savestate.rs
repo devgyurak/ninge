@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22). Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -58,7 +58,7 @@ use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, FRAME_CYCLES};
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;

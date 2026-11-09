@@ -9,6 +9,7 @@
 use super::TcmConfig;
 use crate::cpu::Tcm;
 use crate::gpu2d::Gpu2d;
+use crate::irq::InterruptController;
 use serde::{Deserialize, Serialize};
 
 /// Page size of the fast-path table: 16 KiB (AGENTS.md §2 rule 9).
@@ -155,6 +156,9 @@ pub struct Memory {
     wramcnt: u8,
     // Engine A's display registers, reached through the I/O slow path.
     gpu2d: Gpu2d,
+    // Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
+    irq9: InterruptController<true>,
+    irq7: InterruptController<false>,
     // Derived from `vramcnt_a` and `wramcnt`, so the tables are not saved; `build_page_table`
     // rebuilds both. Empty after a load until then, which reads as all-unmapped rather than
     // panicking. One entry per 16 KiB page, one table per CPU (the page-table decision is
@@ -245,6 +249,8 @@ impl Memory {
             shared_wram: vec![0; SHARED_WRAM_SIZE],
             wramcnt: 0,
             gpu2d: Gpu2d::new(),
+            irq9: InterruptController::new(),
+            irq7: InterruptController::new(),
             pages9: Vec::new(),
             pages7: Vec::new(),
         };
@@ -399,19 +405,23 @@ impl Memory {
             // TODO(hw-unverified): `wramcnt.md`, "Unverified".
             match at {
                 WRAMCNT_ADDR => self.wramcnt,
-                _ => self.gpu2d.read_byte(at).unwrap_or(0),
+                _ => self
+                    .irq9
+                    .read_byte(at)
+                    .or_else(|| self.gpu2d.read_byte(at))
+                    .unwrap_or(0),
             }
         })
     }
 
     /// The slow path for an ARM7 read: WRAMSTAT; every other I/O port and unmapped address
     /// reads 0 (`wramcnt.md`, "Unverified").
-    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#23-#26).
+    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#24-#26).
     fn read_slow7<const N: usize>(&self, addr: u32) -> [u8; N] {
         std::array::from_fn(|i| match addr.wrapping_add(i as u32) {
             // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
             WRAMSTAT_ADDR => self.wramcnt,
-            _ => 0,
+            at => self.irq7.read_byte(at).unwrap_or(0),
         })
     }
 
@@ -494,7 +504,10 @@ impl Memory {
                 WRAMCNT_ADDR => self.write_wramcnt(value),
                 // TODO(phase4): VRAMCNT_G arrives with the other banks (#35).
                 VRAMCNT_G_ADDR => {}
-                _ => self.gpu2d.write_byte(at, value),
+                _ => {
+                    self.irq9.write_byte(at, value);
+                    self.gpu2d.write_byte(at, value);
+                }
             }
         }
     }
@@ -511,6 +524,8 @@ impl Memory {
             && self.shared_wram.len() == SHARED_WRAM_SIZE
             && self.vramcnt_a & !VRAMCNT_USED == 0
             && self.wramcnt & !WRAMCNT_MODE_MASK == 0
+            && self.irq9.is_well_formed()
+            && self.irq7.is_well_formed()
     }
 
     /// Stores VRAMCNT_A and rebuilds the page table, since the write can move the bank.
@@ -518,6 +533,26 @@ impl Memory {
     fn write_vramcnt_a(&mut self, value: u8) {
         self.vramcnt_a = value & VRAMCNT_USED;
         self.build_page_table();
+    }
+
+    /// The ARM9's interrupt controller.
+    pub fn irq9(&self) -> &InterruptController<true> {
+        &self.irq9
+    }
+
+    /// The ARM7's interrupt controller.
+    pub fn irq7(&self) -> &InterruptController<false> {
+        &self.irq7
+    }
+
+    /// The ARM9's interrupt controller, for a source to raise a request.
+    pub(crate) fn irq9_mut(&mut self) -> &mut InterruptController<true> {
+        &mut self.irq9
+    }
+
+    /// The ARM7's interrupt controller, for a source to raise a request.
+    pub(crate) fn irq7_mut(&mut self) -> &mut InterruptController<false> {
+        &mut self.irq7
     }
 
     /// Stores WRAMCNT (bits 2-7 dropped) and rebuilds the shared WRAM block of both page tables,
@@ -541,12 +576,24 @@ impl Memory {
 
     /// Stores `N` bytes as the ARM7 (see [`Memory::load7`] for what it reaches); a store to
     /// open bus or an I/O port is dropped.
-    // TODO(phase3): ARM7 I/O writes arrive with their issues (#23-#26); WRAMCNT is ARM9-only.
+    // WRAMCNT is ARM9-only.
     fn store7<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
         let addr = addr & !(N as u32 - 1);
         let page = page_of(&self.pages7, addr);
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
-        self.put_region(page.region, offset, bytes);
+        match page.region {
+            Region::Unmapped => self.write_slow7(addr, bytes),
+            region => self.put_region(region, offset, bytes),
+        }
+    }
+
+    /// The slow path for an ARM7 write: the interrupt controller; every other I/O port and
+    /// unmapped address drops the write. Each byte goes to the register at its own address.
+    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#24-#26).
+    fn write_slow7<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
+        for (i, &value) in bytes.iter().enumerate() {
+            self.irq7.write_byte(addr.wrapping_add(i as u32), value);
+        }
     }
 
     /// Fetches an ARM opcode as the ARM7.
@@ -677,6 +724,13 @@ mod tests_well_formed {
     fn given_an_unused_vramcnt_a_bit_when_checked_then_it_is_not_well_formed() {
         let mut memory = Memory::new();
         memory.vramcnt_a = !VRAMCNT_USED;
+        assert!(!memory.is_well_formed());
+    }
+
+    #[test]
+    fn given_an_ie_bit_outside_the_arm9_mask_when_checked_then_it_is_not_well_formed() {
+        let mut memory = Memory::new();
+        memory.irq9 = InterruptController::with_unchecked_ie(1 << 7);
         assert!(!memory.is_well_formed());
     }
 

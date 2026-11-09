@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Direct boot: places the binaries and starts the ARM9 at its entry point. Note:
+//! Direct boot: places the binaries and starts both CPUs at their entry points. Note:
 //! `docs/hw/direct-boot.md`.
 
-use crate::bus::{Arm9View, Memory, TcmConfig};
+use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::{BinarySpec, HEADER_LEN, Header};
 use crate::cpu::{Bank, Cpu};
 
@@ -20,6 +20,10 @@ const SP_SUPERVISOR: u32 = 0x0300_3FC0;
 /// state it.
 // TODO(hw-unverified): see `direct-boot.md`, "Unverified".
 const CPSR_AT_ENTRY: u32 = 0x0000_00DF;
+/// The ARM7's stacks (`direct-boot.md`, "ARM9 state at entry"; "ARM7 state at entry").
+const ARM7_SP_SYSTEM: u32 = 0x0380_FD80;
+const ARM7_SP_IRQ: u32 = 0x0380_FF80;
+const ARM7_SP_SUPERVISOR: u32 = 0x0380_FFC0;
 
 const STACK_REGISTER: usize = 13;
 const LINK_REGISTER: usize = 14;
@@ -48,8 +52,15 @@ fn place_binary(memory: &mut Memory, tcm: &TcmConfig, rom: &[u8], spec: &BinaryS
 // TODO(hw-unverified): CPSR at entry, CP15 left at power-on, the other register banks at zero,
 // the ARM9-then-ARM7 placement order, and no BIOS/firmware values in `027FF800h` and up
 // (`direct-boot.md`, "Unverified").
-// TODO(phase3): the ARM7 and the BIOS/firmware values arrive with their phases.
-pub(crate) fn boot(arm9: &mut Cpu<true>, memory: &mut Memory, rom: &[u8], header: &Header) {
+// TODO(hw-unverified): the ARM7's CPSR at entry is chosen like the ARM9's (`direct-boot.md`).
+// TODO(phase3): the BIOS/firmware values arrive with their phases.
+pub(crate) fn boot(
+    arm9: &mut Cpu<true>,
+    arm7: &mut Cpu<false>,
+    memory: &mut Memory,
+    rom: &[u8],
+    header: &Header,
+) {
     // TODO(hw-unverified): CP15 is left at power-on, so both TCMs are disabled here
     // (`direct-boot.md`, "CP15 state at entry").
     let tcm = TcmConfig::from_cp15(arm9.cp15());
@@ -70,4 +81,15 @@ pub(crate) fn boot(arm9: &mut Cpu<true>, memory: &mut Memory, rom: &[u8], header
     regs.set_banked(Bank::Supervisor, STACK_REGISTER, SP_SUPERVISOR);
     let mut view = Arm9View::new(memory, tcm);
     arm9.start_at(&mut view, entry);
+
+    let entry7 = header.arm7.entry;
+    let regs7 = arm7.regs_mut();
+    regs7.set_cpsr(CPSR_AT_ENTRY);
+    regs7.set(STACK_REGISTER, ARM7_SP_SYSTEM);
+    regs7.set(IP_REGISTER, entry7);
+    regs7.set(LINK_REGISTER, entry7);
+    regs7.set_banked(Bank::Irq, STACK_REGISTER, ARM7_SP_IRQ);
+    regs7.set_banked(Bank::Supervisor, STACK_REGISTER, ARM7_SP_SUPERVISOR);
+    let mut view7 = Arm7View::new(memory);
+    arm7.start_at(&mut view7, entry7);
 }

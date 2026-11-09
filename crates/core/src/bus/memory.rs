@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The memory the ARM9 sees: main RAM, the two TCMs, VRAM bank A as LCDC, and the page table
-//! that finds them (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`).
+//! that finds them (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`). It also holds the
+//! ARM7's own WRAM, which the ARM7 view reaches (`docs/hw/scheduler.md`, "ARM7 memory seen by #21").
 //!
 //! Access order: TCM, then the page table, then the slow path (I/O and unmapped). Guest
 //! addresses never panic: an address that nothing answers reads 0 and ignores a write.
@@ -25,6 +26,16 @@ const MAIN_RAM_BLOCK_SIZE: usize = 16 << 20;
 /// Physical TCM sizes: 32 KiB ITCM, 16 KiB DTCM (`cp15.md`, "C0,C0,0 / 1 / 2").
 const ITCM_SIZE: usize = 32 << 10;
 const DTCM_SIZE: usize = 16 << 10;
+
+/// Main RAM repeats every 4 MiB through its block, so an address maps to `addr & MAIN_RAM_MASK`.
+const MAIN_RAM_MASK: u32 = (MAIN_RAM_SIZE - 1) as u32;
+/// The top byte of an address in the 16 MiB main RAM block (`0200_0000h`-`02FF_FFFFh`).
+const MAIN_RAM_BLOCK_TOP: u32 = 0x02;
+/// ARM7 WRAM: 64 KiB at `0380_0000h` (`memory-map.md`).
+const WRAM7_BASE: u32 = 0x0380_0000;
+const WRAM7_SIZE: usize = 64 << 10;
+/// The top byte of the ARM7's WRAM range, which also holds shared WRAM below `WRAM7_BASE`.
+const WRAM_BLOCK_TOP: u32 = 0x03;
 
 /// VRAM bank A, mapped as LCDC at `0680_0000h`, 128 KiB (`vram-banks.md`, "Behavior").
 const VRAM_A_BASE: u32 = 0x0680_0000;
@@ -87,6 +98,8 @@ pub struct Memory {
     dtcm: Vec<u8>,
     vram_a: Vec<u8>,
     vramcnt_a: u8,
+    // The ARM7's own WRAM (64 KiB); only the ARM7 view reaches it.
+    wram7: Vec<u8>,
     // Engine A's display registers, reached through the I/O slow path.
     gpu2d: Gpu2d,
     // Derived from `vramcnt_a`, so it is not saved; `build_page_table` rebuilds it. Empty after
@@ -138,6 +151,7 @@ impl Memory {
             dtcm: vec![0; DTCM_SIZE],
             vram_a: vec![0; VRAM_A_SIZE],
             vramcnt_a: 0,
+            wram7: vec![0; WRAM7_SIZE],
             gpu2d: Gpu2d::new(),
             pages: Vec::new(),
         };
@@ -313,6 +327,7 @@ impl Memory {
             && self.itcm.len() == ITCM_SIZE
             && self.dtcm.len() == DTCM_SIZE
             && self.vram_a.len() == VRAM_A_SIZE
+            && self.wram7.len() == WRAM7_SIZE
             && self.vramcnt_a & !VRAMCNT_USED == 0
     }
 
@@ -321,6 +336,76 @@ impl Memory {
     fn write_vramcnt_a(&mut self, value: u8) {
         self.vramcnt_a = value & VRAMCNT_USED;
         self.build_page_table();
+    }
+
+    /// The bytes an ARM7 access of `N` bytes at `addr` sees (aligned down to `N`): main RAM and
+    /// the ARM7 WRAM, open bus (0) elsewhere.
+    // TODO(hw-unverified): ARM7 WRAM repeats through `0380_0000h`-`03FF_FFFFh`, and the rest of
+    // the ARM7 bus reads 0 (`scheduler.md`, "Unverified").
+    // TODO(phase3): shared WRAM, WRAMCNT, the `037F_8000h` mirror and I/O arrive with #22; the
+    // ARM7 then gets a page table like the ARM9's.
+    fn load7<const N: usize>(&self, addr: u32) -> [u8; N] {
+        let addr = addr & !(N as u32 - 1);
+        match (addr >> 24, addr >= WRAM7_BASE) {
+            (MAIN_RAM_BLOCK_TOP, _) => bytes_at(&self.main_ram, (addr & MAIN_RAM_MASK) as usize),
+            (WRAM_BLOCK_TOP, true) => bytes_at(&self.wram7, addr as usize % WRAM7_SIZE),
+            _ => [0; N],
+        }
+    }
+
+    /// Stores `N` bytes as the ARM7 (see [`Memory::load7`] for what it reaches); a store to
+    /// open bus is dropped.
+    fn store7<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
+        let addr = addr & !(N as u32 - 1);
+        match (addr >> 24, addr >= WRAM7_BASE) {
+            (MAIN_RAM_BLOCK_TOP, _) => {
+                put_bytes(&mut self.main_ram, (addr & MAIN_RAM_MASK) as usize, bytes);
+            }
+            (WRAM_BLOCK_TOP, true) => {
+                put_bytes(&mut self.wram7, addr as usize % WRAM7_SIZE, bytes);
+            }
+            _ => {}
+        }
+    }
+
+    /// Fetches an ARM opcode as the ARM7.
+    pub fn fetch32_arm7(&self, addr: u32) -> u32 {
+        u32::from_le_bytes(self.load7(addr))
+    }
+
+    /// Fetches a Thumb opcode as the ARM7.
+    pub fn fetch16_arm7(&self, addr: u32) -> u16 {
+        u16::from_le_bytes(self.load7(addr))
+    }
+
+    /// Reads a byte as the ARM7, without side effects.
+    pub fn read8_arm7(&self, addr: u32) -> u8 {
+        u8::from_le_bytes(self.load7(addr))
+    }
+
+    /// Reads a halfword as the ARM7, without side effects.
+    pub fn read16_arm7(&self, addr: u32) -> u16 {
+        u16::from_le_bytes(self.load7(addr))
+    }
+
+    /// Reads a word as the ARM7, without side effects.
+    pub fn read32_arm7(&self, addr: u32) -> u32 {
+        u32::from_le_bytes(self.load7(addr))
+    }
+
+    /// Writes a byte as the ARM7.
+    pub fn write8_arm7(&mut self, addr: u32, value: u8) {
+        self.store7(addr, value.to_le_bytes());
+    }
+
+    /// Writes a halfword as the ARM7.
+    pub fn write16_arm7(&mut self, addr: u32, value: u16) {
+        self.store7(addr, value.to_le_bytes());
+    }
+
+    /// Writes a word as the ARM7.
+    pub fn write32_arm7(&mut self, addr: u32, value: u32) {
+        self.store7(addr, value.to_le_bytes());
     }
 
     /// Fetches an ARM opcode.

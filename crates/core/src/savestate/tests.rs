@@ -14,14 +14,15 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_080;
-const PINNED_HASH: u64 = 0x4371_235a_29b3_6dce;
+const PINNED_LEN: usize = 4_473_090;
+const PINNED_HASH: u64 = 0xaa6b9367a3c5943f;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
-/// shared-WRAM contents); the length is unchanged.
-const PINNED_BOOTED_LEN: usize = 4_473_161;
-const PINNED_BOOTED_HASH: u64 = 0x1651_6f32_95e7_c55e;
+/// shared-WRAM contents); the length is unchanged. Version 6 (#104) added the display timing
+/// state and a second queued event, so both pins moved.
+const PINNED_BOOTED_LEN: usize = 4_473_177;
+const PINNED_BOOTED_HASH: u64 = 0xab4e471de9ccba8c;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -154,7 +155,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &5u32.to_le_bytes(),
+        &6u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -195,7 +196,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 7,
-            expected: 5
+            expected: 6
         })
     );
 }
@@ -206,9 +207,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &7u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 7 is not version 5")
+        .expect_err("version 7 is not version 6")
         .to_string();
-    assert!(message.contains("version 7") && message.contains("version 5"));
+    assert!(message.contains("version 7") && message.contains("version 6"));
 }
 
 #[test]
@@ -542,7 +543,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_5_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_6_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -550,14 +551,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_5
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 5
+            expected: 6
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_5_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_6_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -565,15 +566,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_5
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 5
+            expected: 6
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_5() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_6() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 5u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 6u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -608,9 +609,9 @@ fn given_a_state_with_a_queued_event_before_now_when_loaded_then_it_is_corrupt_a
  {
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
-    // The queued FrameEnd lies at 2 frames; move the clock (and the ARM7 with it, so that
-    // only the event rule is broken) one cycle past it.
-    let past = 2 * crate::scheduler::FRAME_CYCLES + 1;
+    // The queued line events lie just past one frame; move the clock (and the ARM7 with it, so
+    // that only the event rule is broken) one cycle past them.
+    let past = crate::scheduler::FRAME_CYCLES + crate::scheduler::LINE_CYCLES + 1;
     saver.scheduler.now = past;
     saver.arm7_clock = past;
     assert_eq!(
@@ -676,9 +677,9 @@ fn given_a_machine_stopped_mid_frame_when_saved_and_loaded_then_the_clocks_and_q
 }
 
 #[test]
-fn given_a_booted_state_with_no_frame_end_queued_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+fn given_a_booted_state_with_no_line_start_queued_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
-    // Without a FrameEnd, `run_frame` would never see a frame finish.
+    // Without a LineStart, `run_frame` would never see a frame finish.
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
     saver.scheduler.pop_due(u64::MAX);
@@ -688,24 +689,28 @@ fn given_a_booted_state_with_no_frame_end_queued_when_loaded_then_it_is_corrupt_
     );
 }
 
-/// A booted machine whose queue holds only frame ends at `events` (times), at clock `now`.
+/// A booted machine whose queue holds an HBlank start at `now` and line starts at `events`
+/// (times), at clock `now`.
 fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
     let mut machine = booted(rom, 1);
     machine.scheduler.pop_due(u64::MAX);
     machine.scheduler.now = now;
     machine.arm7_clock = now;
+    machine
+        .scheduler
+        .schedule(now, crate::scheduler::EventKind::HBlankStart);
     events.iter().for_each(|&time| {
         machine
             .scheduler
-            .schedule(time, crate::scheduler::EventKind::FrameEnd)
+            .schedule(time, crate::scheduler::EventKind::LineStart)
     });
     machine
 }
 
 #[test]
-fn given_a_state_with_two_frame_ends_at_the_same_time_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+fn given_a_state_with_two_line_starts_at_the_same_time_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
-    // Both would fire in one round and `run_frame` would step over the frame it waits for.
+    // Both would fire in one round and a line would be skipped.
     let rom = counter_rom();
     let saver = with_queue(&rom, 100, &[5_000, 5_000]);
     assert_eq!(
@@ -717,7 +722,7 @@ fn given_a_state_with_two_frame_ends_at_the_same_time_when_loaded_then_it_is_cor
 #[test]
 fn given_a_state_whose_clock_is_near_u64_max_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
-    // The next frame end would saturate at u64::MAX and stay due forever.
+    // The next line start would saturate at u64::MAX and stay due forever.
     let rom = counter_rom();
     let now = u64::MAX - 10;
     let saver = with_queue(&rom, now, &[u64::MAX - 5]);
@@ -728,7 +733,7 @@ fn given_a_state_whose_clock_is_near_u64_max_when_loaded_then_it_is_corrupt_and_
 }
 
 #[test]
-fn given_a_state_with_a_frame_end_more_than_a_frame_ahead_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+fn given_a_state_with_a_line_start_more_than_a_line_ahead_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
     let rom = counter_rom();
     let saver = with_queue(&rom, 100, &[100 + (1 << 60)]);
@@ -754,7 +759,7 @@ fn given_a_booted_state_whose_arm7_lags_the_clock_when_loaded_then_it_is_corrupt
 #[test]
 fn given_the_latest_state_the_old_margin_allowed_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
-    // now = MAX - 2F with the frame end at MAX - F passed the first margin check; the frame
+    // now = MAX - 2F with the line start at MAX - F passed the first margin check; the line
     // after it saturates at u64::MAX and stays due.
     let rom = counter_rom();
     let frame = crate::scheduler::FRAME_CYCLES;
@@ -1019,5 +1024,58 @@ fn given_a_state_with_interrupt_registers_saved_mid_run_when_loaded_and_continue
             irq_state(&resumed)
         ),
         (Ok(()), true, IRQ_STATE)
+    );
+}
+
+// ------------------------------------------------------------------ display timing (#104)
+
+#[test]
+fn given_a_state_with_vcount_263_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged() {
+    // `docs/hw/display-timing.md`: there are 263 lines, 0-262.
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.memory.timing_mut().set_vcount_for_test(263);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_vblank_flag_disagrees_with_vcount_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.memory.timing_mut().set_vblank_for_test(true);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_dispstat_bit_that_does_not_exist_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    // Bit 0 (the VBlank flag) is derived, never stored: only `FFB8h` can be written.
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.memory.timing_mut().set_arm7_control_for_test(0x0001);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_booted_state_with_no_hblank_start_queued_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver
+        .scheduler
+        .pop_due(crate::scheduler::FRAME_CYCLES + crate::scheduler::HBLANK_START_CYCLES);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
     );
 }

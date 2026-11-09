@@ -8,8 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-/// ARM9 cycles per frame: 263 lines x 355 dots x 6 bus cycles x 2 (`scheduler.md`, "Frame timing").
-pub const FRAME_CYCLES: u64 = 263 * 355 * 6 * 2;
+/// ARM9 cycles per line: 355 dots x 6 bus cycles x 2 (`display-timing.md`, "Frame layout").
+pub const LINE_CYCLES: u64 = 355 * 6 * 2;
+/// ARM9 cycles from the start of a line to its HBlank: 1,606 bus cycles x 2
+/// (`display-timing.md`, "Flags").
+// TODO(hw-unverified): one point for both CPUs (`display-timing.md`, "Unverified").
+pub const HBLANK_START_CYCLES: u64 = 1_606 * 2;
+/// ARM9 cycles per frame: 263 lines (`scheduler.md`, "Frame timing").
+pub const FRAME_CYCLES: u64 = 263 * LINE_CYCLES;
 /// Longest stretch one CPU runs before the other catches up, in master cycles (`scheduler.md`,
 /// "Interleaving"). A model choice, not a hardware fact.
 // TODO(hw-unverified): see `scheduler.md`, "Unverified". Decided in #102.
@@ -25,14 +31,17 @@ pub const ARM7_INSTRUCTION_COST: u64 = 2;
 const EVENT_CAPACITY: usize = 16;
 
 /// The latest time the clock or an event may hold, about 2,180 years of emulated time. A
-/// savestate beyond it is refused, so frame ends never reach the saturation point of `u64`.
+/// savestate beyond it is refused, so line starts never reach the saturation point of `u64`.
 pub const MAX_TIME: u64 = 1 << 62;
 
 /// What an event does when it fires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EventKind {
-    /// The end of a frame: the screens are drawn and the next frame end is scheduled.
-    FrameEnd,
+    /// A line begins: VCOUNT advances and the next line start is scheduled. The start of line 0
+    /// ends the frame, which draws the screens (`display-timing.md`).
+    LineStart,
+    /// HBlank begins in the current line and the next one is scheduled.
+    HBlankStart,
 }
 
 /// One scheduled event, ordered by `(time, seq)`.

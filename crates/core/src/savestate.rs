@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23). Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -39,8 +39,8 @@
 //!
 //! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
-//! `now`, `next_seq` above every queued sequence number, exactly one frame end due within a
-//! frame of `now`, and the ARM7 clock at `now` or one master cycle past it (booted machines).
+//! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
+//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -53,12 +53,12 @@
 //! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load.
 
 use crate::Machine;
-use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, FRAME_CYCLES};
+use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -115,16 +115,20 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 impl Machine {
-    /// Whether the queue holds exactly one frame end, due within one frame of `now`
-    /// (`scheduler.md`, "Savestate checks"). Anything else would make `run_frame` skip over its
-    /// frame or wait on a far-off one. The time limit is checked with the scheduler
-    /// (`Scheduler::is_well_formed`), which keeps `now + FRAME_CYCLES` from overflowing.
-    fn frame_end_is_sane(&self) -> bool {
+    /// Whether the queue holds exactly one line start and one HBlank start, each due within one
+    /// line of `now` (`scheduler.md`, "Savestate checks"). Anything else would skip a line or
+    /// wait on a far-off one. The time limit is checked with the scheduler
+    /// (`Scheduler::is_well_formed`), which keeps `now + LINE_CYCLES` from overflowing.
+    fn line_events_are_sane(&self) -> bool {
         let now = self.scheduler.now();
-        matches!(
-            self.scheduler.times_of(EventKind::FrameEnd).as_slice(),
-            [time] if now.checked_add(FRAME_CYCLES).is_some_and(|end| (now..=end).contains(time))
-        )
+        [EventKind::LineStart, EventKind::HBlankStart]
+            .into_iter()
+            .all(|kind| {
+                matches!(
+                    self.scheduler.times_of(kind).as_slice(),
+                    [time] if now.checked_add(LINE_CYCLES).is_some_and(|end| (now..=end).contains(time))
+                )
+            })
     }
 
     /// Serializes the whole machine, ROM excluded, into a savestate.
@@ -181,7 +185,7 @@ impl Machine {
             || !loaded.arm9.is_well_formed()
             || !loaded.arm7.is_well_formed()
             || !loaded.scheduler.is_well_formed()
-            || !loaded.frame_end_is_sane()
+            || !loaded.line_events_are_sane()
             // A booted machine is always settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up.
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())

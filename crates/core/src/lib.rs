@@ -15,8 +15,8 @@ use cart::Header;
 use cpu::Cpu;
 use irq::InterruptController;
 use scheduler::{
-    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, FRAME_CYCLES, Participants,
-    Scheduler,
+    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, HBLANK_START_CYCLES,
+    LINE_CYCLES, Participants, Scheduler,
 };
 use serde::{Deserialize, Serialize};
 
@@ -91,7 +91,8 @@ impl Machine {
     /// Black is a Phase 0 placeholder value, not the hardware power-on state.
     pub fn new() -> Self {
         let mut scheduler = Scheduler::new();
-        scheduler.schedule(FRAME_CYCLES, EventKind::FrameEnd);
+        scheduler.schedule(HBLANK_START_CYCLES, EventKind::HBlankStart);
+        scheduler.schedule(LINE_CYCLES, EventKind::LineStart);
         Self {
             top: blank_screen(),
             bottom: blank_screen(),
@@ -142,8 +143,9 @@ impl Machine {
         &self.rom
     }
 
-    /// Runs the machine for one frame: rounds of ARM9, ARM7, events until the frame-end event
-    /// fires, which draws the screens and counts the frame (`docs/hw/scheduler.md`).
+    /// Runs the machine for one frame: rounds of ARM9, ARM7, events until VCOUNT wraps to line
+    /// 0, which draws the screens and counts the frame (`docs/hw/scheduler.md`,
+    /// `docs/hw/display-timing.md`).
     ///
     /// A machine with no booted program (no ROM, or a refused one) runs no CPU and draws
     /// nothing: the frame only advances the counter and leaves both screens black.
@@ -164,8 +166,8 @@ impl Machine {
     /// Engine A goes to the screen POWCNT1 bit 15 picks; the other screen is a black
     /// placeholder for engine B (`docs/hw/display-mode-vram.md`).
     // TODO(phase4): engine B draws its screen.
-    // TODO(phase3): per-scanline drawing replaces the whole-frame render; no issue covers the
-    // DISPSTAT/VCOUNT timing it needs yet.
+    // TODO(phase3): per-scanline drawing replaces the whole-frame render; the line timing it
+    // needs is in `docs/hw/display-timing.md` (#104).
     pub(crate) fn render_frame(&mut self) {
         let (engine_a, engine_b) = if self.memory.gpu2d().engine_a_on_top() {
             (&mut self.top, &mut self.bottom)
@@ -176,6 +178,24 @@ impl Machine {
             .gpu2d()
             .render_engine_a(self.memory.vram_a_lcdc(), engine_a);
         engine_b.fill(gpu2d::BLACK);
+    }
+
+    /// VCOUNT: the current line, 0-262 (`docs/hw/display-timing.md`).
+    // The debugger's IO register panel and the scheduler timeline (#59) will show it.
+    pub fn vcount(&self) -> u16 {
+        self.memory.timing().vcount()
+    }
+
+    /// DISPSTAT as the ARM9 reads it.
+    // The debugger's IO register panel will show it.
+    pub fn dispstat9(&self) -> u16 {
+        self.memory.timing().dispstat::<true>()
+    }
+
+    /// DISPSTAT as the ARM7 reads it.
+    // The debugger's IO register panel will show it.
+    pub fn dispstat7(&self) -> u16 {
+        self.memory.timing().dispstat::<false>()
     }
 
     /// Engine A's display registers.
@@ -243,29 +263,13 @@ impl Machine {
     }
 
     /// Raises the requests in `mask` on the ARM9's controller: IF latches them.
-    // The hook for the sources that arrive next: IPC (#24), timers (#25), DMA (#26), the LCD
-    // (#104).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no interrupt source exists until #24-#26 and #104"
-        )
-    )]
+    // The LCD (#104) uses it; IPC (#24), timers (#25) and DMA (#26) follow.
     pub(crate) fn request_irq9(&mut self, mask: u32) {
         self.memory.irq9_mut().request(mask);
     }
 
     /// Raises the requests in `mask` on the ARM7's controller: IF latches them.
-    // The hook for the sources that arrive next: IPC (#24), timers (#25), DMA (#26), the LCD
-    // (#104).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no interrupt source exists until #24-#26 and #104"
-        )
-    )]
+    // The LCD (#104) uses it; IPC (#24), timers (#25) and DMA (#26) follow.
     pub(crate) fn request_irq7(&mut self, mask: u32) {
         self.memory.irq7_mut().request(mask);
     }
@@ -368,14 +372,40 @@ impl Participants for Machine {
 
     fn dispatch(&mut self, event: Event) {
         match event.kind {
-            EventKind::FrameEnd => {
-                self.render_frame();
-                self.frame_count = self.frame_count.wrapping_add(1);
-                // From the event's own time, not `now`, so the frame length never drifts.
-                self.scheduler
-                    .schedule(event.time.saturating_add(FRAME_CYCLES), EventKind::FrameEnd);
-            }
+            EventKind::LineStart => self.line_started(event.time),
+            EventKind::HBlankStart => self.hblank_started(event.time),
         }
+    }
+}
+
+impl Machine {
+    /// A line begins at `time` (`docs/hw/display-timing.md`). VBlank starts here too, when the
+    /// line is the first blank one; this is the one place for it.
+    ///
+    /// The start of line 0 ends the frame: the screens are drawn and the frame is counted.
+    // TODO(phase3): VBlank-start DMA (#26) and the IntrWait VBlank wait (#27) hook in here.
+    fn line_started(&mut self, time: u64) {
+        let requests = self.memory.timing_mut().line_started();
+        self.request_irq9(requests.arm9);
+        self.request_irq7(requests.arm7);
+        if self.memory.timing().vcount() == 0 {
+            self.render_frame();
+            self.frame_count = self.frame_count.wrapping_add(1);
+        }
+        // From the event's own time, not `now`, so a line's length never drifts.
+        self.scheduler
+            .schedule(time.saturating_add(LINE_CYCLES), EventKind::LineStart);
+    }
+
+    /// HBlank begins at `time` in the current line (`docs/hw/display-timing.md`); the one place
+    /// for it.
+    // TODO(phase3): HBlank-start DMA (#26) hooks in here.
+    fn hblank_started(&mut self, time: u64) {
+        let requests = self.memory.timing_mut().hblank_started();
+        self.request_irq9(requests.arm9);
+        self.request_irq7(requests.arm7);
+        self.scheduler
+            .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
     }
 }
 
@@ -533,3 +563,5 @@ mod tests_arm9;
 mod tests_irq;
 #[cfg(test)]
 mod tests_scheduler;
+#[cfg(test)]
+mod tests_timing;

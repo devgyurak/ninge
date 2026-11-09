@@ -64,7 +64,7 @@ impl Participants for Recorder {
 fn schedule_all(scheduler: &mut Scheduler, times: &[u64]) {
     times
         .iter()
-        .for_each(|&time| scheduler.schedule(time, EventKind::FrameEnd));
+        .for_each(|&time| scheduler.schedule(time, EventKind::LineStart));
 }
 
 /// Pops everything due at `now`, as `(time, seq)`.
@@ -164,9 +164,9 @@ fn given_popped_event_when_popping_again_then_it_does_not_come_back() {
 #[test]
 fn given_an_event_when_scheduled_then_it_keeps_its_time_and_kind() {
     let mut scheduler = Scheduler::new();
-    scheduler.schedule(77, EventKind::FrameEnd);
+    scheduler.schedule(77, EventKind::LineStart);
     let event = scheduler.pop_due(77).expect("due");
-    assert_eq!((event.time, event.kind), (77, EventKind::FrameEnd));
+    assert_eq!((event.time, event.kind), (77, EventKind::LineStart));
 }
 
 #[test]

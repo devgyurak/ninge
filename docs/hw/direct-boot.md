@@ -84,8 +84,8 @@ in `arm9-memory-map.md`. See "Unverified".
 
 ## The per-frame budget
 
-Superseded by the scheduler (#21): `run_frame` runs until the frame-end event, 1,120,380 ARM9
-cycles after the previous one, and each CPU's instruction count follows from the cost model.
+Superseded by the scheduler (#21): `run_frame` runs until VCOUNT wraps to line 0 (`display-timing.md`), 1,120,380 ARM9
+cycles after the previous wrap, and each CPU's instruction count follows from the cost model.
 The clocks, the frame length, the cost per instruction and the interleaving are in
 `scheduler.md`. A machine with no booted program does not run a CPU: `run_frame` only advances
 the frame counter.

@@ -84,7 +84,7 @@ screen it is routed to stays a black placeholder.
 
 The hardware draws the screen line by line while the CPU runs. Phase 2 renders the whole frame
 at once at the end of each frame, from the registers and VRAM as they are then.
-`TODO(phase3)`: scanline timing arrives with the scheduler (#21).
+`TODO(phase3)`: per-scanline drawing needs the line timing of `display-timing.md` (#104); until then the frame is drawn when VCOUNT wraps to line 0.
 
 ## Colour expansion (host choice, not hardware)
 

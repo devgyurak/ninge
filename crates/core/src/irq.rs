@@ -12,6 +12,13 @@ pub const IE_ADDR: u32 = 0x0400_0210;
 /// IF, at `0400_0214h` (`interrupts.md`, "Registers").
 pub const IF_ADDR: u32 = 0x0400_0214;
 
+/// IF bit 0: LCD VBlank (`interrupts.md`, "IE and IF bits").
+pub const VBLANK_IRQ: u32 = 1 << 0;
+/// IF bit 1: LCD HBlank.
+pub const HBLANK_IRQ: u32 = 1 << 1;
+/// IF bit 2: LCD VCount match.
+pub const VCOUNT_IRQ: u32 = 1 << 2;
+
 // TODO(hw-unverified): bit 7 ARM7-only and bit 13 on both CPUs follow GBATEK's table as read
 // (`interrupts.md`, "Unverified").
 /// The IE and IF bits that exist on the ARM9 (`interrupts.md`, "IE and IF bits").
@@ -83,14 +90,7 @@ impl<const ARM9: bool> InterruptController<ARM9> {
     /// "Behavior"). A bit the CPU does not have is dropped.
     // TODO(hw-unverified): a bit that does not exist is dropped, and IF latches whatever IE and
     // IME say (`interrupts.md`, "Unverified").
-    // The sources that call it: IPC (#24), timers (#25), DMA (#26), the LCD (#104).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no interrupt source exists until #24-#26 and #104"
-        )
-    )]
+    // The LCD (#104) calls it; IPC (#24), timers (#25) and DMA (#26) follow.
     pub(crate) fn request(&mut self, mask: u32) {
         self.if_ |= mask & Self::valid_bits();
     }

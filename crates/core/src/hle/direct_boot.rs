@@ -6,6 +6,9 @@ use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::{BinarySpec, HEADER_LEN, Header};
 use crate::cpu::{Bank, Cpu};
 
+/// WRAMCNT, and the mode that gives all of the shared WRAM to the ARM7 (`wramcnt.md`).
+const WRAMCNT_ADDR: u32 = 0x0400_0247;
+const WRAMCNT_ARM7_ALL: u8 = 3;
 /// Where the loader keeps the header copy (`direct-boot.md`, "Placement").
 const HEADER_COPY_ADDRESS: u32 = 0x027F_FE00;
 
@@ -72,9 +75,12 @@ pub(crate) fn boot(
     if let Some(bytes) = binary_bytes(rom, &header.arm9) {
         place(memory, &tcm, header.arm9.ram_address, bytes);
     }
-    // WRAMCNT is left at its power-on value, so a binary in the `037F_8000h` range lands in the
-    // ARM7's own WRAM.
-    // TODO(hw-unverified): WRAMCNT after direct boot is not stated (`wramcnt.md`, "Unverified").
+    // All 32 KiB of shared WRAM go to the ARM7 first, so the boot area at `037F_8000h`, its stacks
+    // at `0380_FD80h` and the IRQ vector at `0380_FFFCh` are different memory; with mode 0 they
+    // would overlap through the ARM7's 64 KiB repetition (`wramcnt.md`, "Behavior").
+    // TODO(hw-unverified): the value after boot is inferred, not stated, and leaves the ARM9
+    // stacks at `0300_2F7Ch` unbacked (`wramcnt.md`, "Unverified").
+    memory.write8(&tcm, WRAMCNT_ADDR, WRAMCNT_ARM7_ALL);
     if let Some(bytes) = binary_bytes(rom, &header.arm7) {
         place7(memory, header.arm7.ram_address, bytes);
     }

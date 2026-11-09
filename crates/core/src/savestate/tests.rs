@@ -18,8 +18,10 @@ const PINNED_LEN: usize = 4_473_074;
 const PINNED_HASH: u64 = 0xc42b_6b4a_3887_d3a7;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
+/// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
+/// shared-WRAM contents); the length is unchanged.
 const PINNED_BOOTED_LEN: usize = 4_473_155;
-const PINNED_BOOTED_HASH: u64 = 0xac44_ef5f_7dd5_172e;
+const PINNED_BOOTED_HASH: u64 = 0x01a7_f2f6_5dc9_fd05;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -799,10 +801,11 @@ const NO_TCM: crate::bus::TcmConfig = crate::bus::TcmConfig {
 };
 
 /// A machine whose WRAMCNT is `mode` and whose shared WRAM holds a word at the start of each
-/// 16 KiB half. The writes go in under mode 0 (the whole 32 KiB is the ARM9's), then the mode
-/// is set.
+/// 16 KiB half. A booted machine is in mode 3 (direct boot, `wramcnt.md`), so the mode is first
+/// set to 0 (the whole 32 KiB is the ARM9's) for the writes, then to `mode`.
 fn with_wram(mode: u8) -> Machine {
     let mut machine = booted(&counter_rom(), 0);
+    machine.memory.write8(&NO_TCM, WRAMCNT_ADDR, 0);
     machine.memory.write32(&NO_TCM, SHARED, 0xA1A1_A1A1);
     machine
         .memory
@@ -847,9 +850,10 @@ fn given_a_state_with_wramcnt_1_when_loaded_onto_a_mode_3_machine_then_the_mode_
 fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() {
     let saved = with_wram(1);
     let mut target = booted(&counter_rom(), 0);
-    let before = (target.memory.region7(SHARED), target.memory.wramcnt().mode);
+    let before = (target.memory.region(SHARED), target.memory.wramcnt().mode);
     let result = target.load_state(&saved.save_state());
-    // Power-on mode 0: the ARM7 sees its own WRAM at 0300_0000; mode 1 gives it shared WRAM.
+    // Direct boot leaves mode 3: the ARM7 sees all of the shared WRAM at 0300_0000 and the ARM9
+    // none of it; mode 1 splits it, giving the ARM9 the second half.
     assert_eq!(
         (
             result,
@@ -861,7 +865,7 @@ fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() 
         ),
         (
             Ok(()),
-            (Region::Wram7, 0),
+            (Region::Unmapped, 3),
             Region::SharedWram,
             Region::SharedWram,
             Region::Wram7,

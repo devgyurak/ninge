@@ -73,11 +73,17 @@ their own contents (the "first" half is bytes 0-16383 of the 32 KiB, the "second
 ## Unverified
 
 - **WRAMCNT after reset.** GBATEK's WRAM section gives no value. Power-on state is 0 (all to the
-  ARM9), chosen so the ARM9's direct-boot stacks (`0300_2F7Ch` and up) are backed. — `Memory::new`
+  ARM9), a plain reset choice; direct boot then sets 3 (below). — `Memory::new`
   in `crates/core/src/bus/memory.rs` — verify by a test ROM on hardware reading it first.
-- **WRAMCNT after direct boot** is left at the power-on value; the real boot value is not stated
-  (`direct-boot.md`). An ARM7 binary at `037F_8000h` lands in the ARM7's own WRAM under mode 0
-  and is where the ARM7 finds it. — `crates/core/src/hle/direct_boot.rs` — verify likewise.
+- **WRAMCNT after direct boot** is set to 3 (all 32 KiB to the ARM7); GBATEK does not state the
+  value. It is inferred: GBATEK's "NDS BIOS RAM Usage" lists, at cartridge boot, the ARM7 boot
+  area `037F_8000h`-`0380_7DFFh`, the ARM7 stacks `0380_FD80h`/`0380_FF80h`/`0380_FFC0h` and the
+  IRQ vector `0380_FFF8h`/`0380_FFFCh` as separate things. With mode 0 the ARM7's 64 KiB WRAM
+  repeats through the `037F_8000h` window, so `037F_FD80h` and `0380_FD80h` would be the same
+  byte and a first push would overwrite the tail of a binary larger than `7D80h` bytes; mode 3
+  keeps them apart. The cost: the ARM9 stacks (`0300_2F7Ch` and up) are unbacked after boot, which
+  fits the "(!)" GBATEK puts next to the ARM9 stack but is not stated. — `boot` in
+  `crates/core/src/hle/direct_boot.rs` — verify by a test ROM on hardware reading WRAMCNT first.
 - **WRAMCNT read.** GBATEK's WRAM section says R/W, its I/O map says write-only. The model returns
   the stored value to the ARM9. — `Memory::read_slow` — verify likewise.
 - **An empty ARM9 window** reads 0 and ignores writes; GBATEK says "undefined data". —

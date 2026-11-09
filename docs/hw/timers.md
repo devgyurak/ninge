@@ -117,7 +117,9 @@ hardware behavior.
 - **Events queued by one instruction keep the order they were written.** Two timers that overflow
   at the same master time fire in the order they were scheduled (`scheduler.md`, "Events"). A
   store-multiple writes ascending addresses, so timer 0 is queued before timer 1. A timer rewritten within the
-  instruction keeps one event, queued by its last write.
+  instruction keeps one event, queued by its last write. A store-multiple that settles a lagging
+  ARM7 timer in an earlier write and retimes a lower-numbered one in a later write queues them in
+  that write order; both fire together at the same dispatch, so only the sequence numbers differ.
 - **An event settles all of its timer's due overflows.** A late event (see above) processes every
   overflow of its timer already due, at most `SLICE`, so the queue always moves forward. A saved
   state is refused unless each timer's event is at the later of its overflow time and `now`, and

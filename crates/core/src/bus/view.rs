@@ -127,6 +127,8 @@ impl<const ARM9: bool> Access<'_, ARM9> {
         // An overflow event never lies before the end of the instruction that scheduled it: on the
         // ARM9 that is one instruction cost past the clock; the ARM7's step leaves the master
         // clock where it is (`timers.md`, "Model").
+        // TODO(#115): this assumes every ARM9 access is one fixed-cost instruction; a step that
+        // returns its own cost, or a DMA write (#26), must hand the floor in instead.
         let floor = if ARM9 {
             self.scheduler.now().saturating_add(ARM9_INSTRUCTION_COST)
         } else {

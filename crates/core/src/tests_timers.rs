@@ -325,7 +325,7 @@ fn given_an_arm7_timer_when_read_at_two_arm7_clocks_then_the_counter_follows_the
 // ------------------------------------------------------------- events: cancel and replace
 
 #[test]
-fn given_a_timer_rewritten_three_times_between_looks_when_the_machine_looks_then_exactly_one_event_remains()
+fn given_a_timer_rewritten_three_times_in_one_run_when_the_event_is_checked_then_exactly_one_event_remains()
  {
     let mut m = machine();
     m.bus9().write16(reload_addr(0), RELOAD_16_TICKS);
@@ -369,7 +369,7 @@ fn given_a_count_up_timer_when_started_then_it_has_no_event_while_the_clock_time
 }
 
 #[test]
-fn given_a_running_timer_switched_to_count_up_when_the_machine_looks_then_its_event_is_removed() {
+fn given_a_running_timer_switched_to_count_up_when_the_write_lands_then_its_event_is_removed() {
     let mut m = machine();
     set9(&mut m, 1, RELOAD_16_TICKS, START);
     set9(&mut m, 1, RELOAD_16_TICKS, START | COUNT_UP);
@@ -384,7 +384,7 @@ fn given_an_arm7_timer_when_started_then_its_event_belongs_to_the_arm7_and_the_a
 }
 
 #[test]
-fn given_an_irq_enable_only_change_when_the_machine_looks_then_the_event_is_the_same_one() {
+fn given_an_irq_enable_only_change_when_the_write_lands_then_the_event_is_the_same_one() {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, START);
     let before = m.scheduler.pending();
@@ -393,7 +393,7 @@ fn given_an_irq_enable_only_change_when_the_machine_looks_then_the_event_is_the_
 }
 
 #[test]
-fn given_a_reload_write_only_when_the_machine_looks_then_the_event_is_the_same_one() {
+fn given_a_reload_write_only_when_the_write_lands_then_the_event_is_the_same_one() {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, START);
     let before = m.scheduler.pending();
@@ -520,7 +520,7 @@ fn lagging_arm7_timer(control: u16) -> Machine {
 }
 
 #[test]
-fn given_an_arm7_write_that_computes_an_overflow_already_past_when_the_machine_looks_then_the_event_is_queued_at_now()
+fn given_an_arm7_write_that_computes_an_overflow_already_past_when_the_write_lands_then_the_event_is_queued_at_now()
  {
     let m = lagging_arm7_timer(START | IRQ);
     assert_eq!(timer_events(&m), vec![(1000, kind7(0))]);

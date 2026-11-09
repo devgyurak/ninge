@@ -46,7 +46,7 @@ fn loading(base: u32, size: u64) -> Tcm {
 }
 
 fn cfg(itcm: Tcm, dtcm: Tcm) -> TcmConfig {
-    TcmConfig { itcm, dtcm }
+    TcmConfig { itcm, dtcm, now: 0 }
 }
 
 fn plain() -> TcmConfig {
@@ -712,14 +712,14 @@ use Who::{Nine, Seven};
 fn read_as(m: &Memory, who: Who, addr: u32) -> u8 {
     match who {
         Nine => m.read8(&plain(), addr),
-        Seven => m.read8_arm7(addr),
+        Seven => m.read8_arm7(0, addr),
     }
 }
 
 fn write_as(m: &mut Memory, who: Who, addr: u32, value: u8) {
     match who {
         Nine => m.write8(&plain(), addr, value),
-        Seven => m.write8_arm7(addr, value),
+        Seven => m.write8_arm7(0, addr, value),
     }
 }
 
@@ -976,7 +976,7 @@ fn given_a_power_on_memory_when_wramcnt_is_read_then_mode_0_gives_the_arm9_all_3
         (
             m.wramcnt(),
             m.read8(&plain(), WRAMCNT),
-            m.read8_arm7(WRAMSTAT)
+            m.read8_arm7(0, WRAMSTAT)
         ),
         (
             WramState {
@@ -1021,7 +1021,7 @@ fn readback_failures(rows: &[(u8, u8)]) -> Vec<(u8, u8, [u8; 3])> {
             let m = in_mode(written);
             let seen = [
                 m.read8(&plain(), WRAMCNT),
-                m.read8_arm7(WRAMSTAT),
+                m.read8_arm7(0, WRAMSTAT),
                 m.wramcnt().mode,
             ];
             (seen != [mode; 3]).then_some((written, mode, seen))
@@ -1050,17 +1050,23 @@ fn given_bits_2_to_7_set_in_a_write_when_read_back_then_only_the_mode_survives()
 #[test]
 fn given_wramcnt_set_by_the_arm9_when_the_arm7_writes_0400_0247_then_the_mode_is_unchanged() {
     let mut m = in_mode(1);
-    m.write8_arm7(WRAMCNT, 3);
-    m.write16_arm7(WRAMCNT & !1, 0x0300);
-    m.write32_arm7(WRAMCNT & !3, 0x0300_0000);
-    assert_eq!((m.read8(&plain(), WRAMCNT), m.read8_arm7(WRAMSTAT)), (1, 1));
+    m.write8_arm7(0, WRAMCNT, 3);
+    m.write16_arm7(0, WRAMCNT & !1, 0x0300);
+    m.write32_arm7(0, WRAMCNT & !3, 0x0300_0000);
+    assert_eq!(
+        (m.read8(&plain(), WRAMCNT), m.read8_arm7(0, WRAMSTAT)),
+        (1, 1)
+    );
 }
 
 #[test]
 fn given_wramcnt_set_by_the_arm9_when_the_arm7_writes_wramstat_then_the_mode_is_unchanged() {
     let mut m = in_mode(2);
-    m.write8_arm7(WRAMSTAT, 3);
-    assert_eq!((m.read8_arm7(WRAMSTAT), m.read8(&plain(), WRAMCNT)), (2, 2));
+    m.write8_arm7(0, WRAMSTAT, 3);
+    assert_eq!(
+        (m.read8_arm7(0, WRAMSTAT), m.read8(&plain(), WRAMCNT)),
+        (2, 2)
+    );
 }
 
 #[test]
@@ -1126,14 +1132,14 @@ fn given_a_byte_in_the_arm9s_share_when_the_mode_moves_it_to_the_arm7_then_the_o
 {
     let mut m = Memory::new();
     m.write8(&plain(), WRAM, MARK);
-    let before = (m.region(WRAM), m.region7(WRAM), m.read8_arm7(WRAM));
+    let before = (m.region(WRAM), m.region7(WRAM), m.read8_arm7(0, WRAM));
     set_mode(&mut m, 3);
     // Mode 3: the ARM9 window is empty and the ARM7 now reads the byte at the same address.
     let after = (
         m.region(WRAM),
         m.region7(WRAM),
         m.read8(&plain(), WRAM),
-        m.read8_arm7(WRAM),
+        m.read8_arm7(0, WRAM),
     );
     assert_eq!(
         (before, after),
@@ -1150,7 +1156,7 @@ fn given_mode_3_after_mode_0_when_mode_0_returns_then_the_arm9_byte_is_back_and_
     let mut m = Memory::new();
     m.write8(&plain(), WRAM, MARK);
     set_mode(&mut m, 3);
-    m.write8_arm7(WRAM + 1, 0x33);
+    m.write8_arm7(0, WRAM + 1, 0x33);
     set_mode(&mut m, 0);
     // The shared bytes did not move or clear; the ARM7 write at +1 went to the shared WRAM
     // under mode 3, so the ARM9 reads it now.
@@ -1158,8 +1164,8 @@ fn given_mode_3_after_mode_0_when_mode_0_returns_then_the_arm9_byte_is_back_and_
         (
             m.read8(&plain(), WRAM),
             m.read8(&plain(), WRAM + 1),
-            m.read8_arm7(WRAM),
-            m.read8_arm7(WRAM + 1),
+            m.read8_arm7(0, WRAM),
+            m.read8_arm7(0, WRAM + 1),
             m.region7(WRAM)
         ),
         (MARK, 0x33, 0, 0, Region::Wram7)
@@ -1173,11 +1179,11 @@ fn given_a_mode_cycle_0_1_2_3_when_each_cpu_reads_the_first_byte_then_the_conten
     let mut seen = Vec::new();
     seen.push(m.read8(&plain(), WRAM));
     set_mode(&mut m, 1);
-    seen.push(m.read8_arm7(WRAM));
+    seen.push(m.read8_arm7(0, WRAM));
     set_mode(&mut m, 2);
     seen.push(m.read8(&plain(), WRAM));
     set_mode(&mut m, 3);
-    seen.push(m.read8_arm7(WRAM));
+    seen.push(m.read8_arm7(0, WRAM));
     set_mode(&mut m, 0);
     seen.push(m.read8(&plain(), WRAM));
     assert_eq!(seen, [0xA1; 5]);
@@ -1197,8 +1203,8 @@ fn given_mode_3_when_the_arm9_writes_a_word_then_the_write_is_dropped_and_reads_
             m.read32(&plain(), WRAM),
             m.read16(&plain(), 0x03FF_FFFE),
             m.read8(&plain(), WRAM + 0x4000),
-            m.read32_arm7(WRAM),
-            m.read8_arm7(WRAM + 0x4000)
+            m.read32_arm7(0, WRAM),
+            m.read8_arm7(0, WRAM + 0x4000)
         ),
         (0, 0, 0, 0, 0)
     );
@@ -1224,12 +1230,12 @@ fn given_a_word_in_the_shared_wram_when_read_at_every_width_then_the_bytes_are_l
 fn given_mode_3_when_the_arm7_writes_a_halfword_at_the_end_of_the_window_then_it_reads_back_at_the_start()
  {
     let mut m = in_mode(3);
-    m.write16_arm7(0x037F_FFFE, 0xBEEF);
+    m.write16_arm7(0, 0x037F_FFFE, 0xBEEF);
     assert_eq!(
         (
-            m.read16_arm7(WRAM + 0x7FFE),
-            m.read32_arm7(0x037F_FFFC),
-            m.read8_arm7(0x037F_FFFF)
+            m.read16_arm7(0, WRAM + 0x7FFE),
+            m.read32_arm7(0, 0x037F_FFFC),
+            m.read8_arm7(0, 0x037F_FFFF)
         ),
         (0xBEEF, 0xBEEF_0000, 0xBE)
     );
@@ -1240,19 +1246,19 @@ fn given_mode_3_when_the_arm7_writes_across_the_96_kib_block_then_each_range_kee
     // 037F_8000h..037F_FFFFh is the shared WRAM, 0380_0000h..0380_FFFFh the ARM7's own: adjacent
     // addresses, separate memories (`wramcnt.md`, "The 037F_8000h mirror").
     let mut m = in_mode(3);
-    m.write8_arm7(0x037F_8000, 0x11);
-    m.write8_arm7(0x037F_FFFF, 0x22);
-    m.write8_arm7(WRAM7_START, 0x33);
-    m.write8_arm7(0x0380_FFFF, 0x44);
+    m.write8_arm7(0, 0x037F_8000, 0x11);
+    m.write8_arm7(0, 0x037F_FFFF, 0x22);
+    m.write8_arm7(0, WRAM7_START, 0x33);
+    m.write8_arm7(0, 0x0380_FFFF, 0x44);
     let seen = [
-        m.read8_arm7(0x037F_8000),
-        m.read8_arm7(WRAM),
-        m.read8_arm7(0x037F_FFFF),
-        m.read8_arm7(WRAM + 0x7FFF),
-        m.read8_arm7(WRAM7_START),
-        m.read8_arm7(0x0381_0000),
-        m.read8_arm7(0x0380_FFFF),
-        m.read8_arm7(0x03FF_FFFF),
+        m.read8_arm7(0, 0x037F_8000),
+        m.read8_arm7(0, WRAM),
+        m.read8_arm7(0, 0x037F_FFFF),
+        m.read8_arm7(0, WRAM + 0x7FFF),
+        m.read8_arm7(0, WRAM7_START),
+        m.read8_arm7(0, 0x0381_0000),
+        m.read8_arm7(0, 0x0380_FFFF),
+        m.read8_arm7(0, 0x03FF_FFFF),
     ];
     assert_eq!(seen, [0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44]);
 }
@@ -1260,15 +1266,15 @@ fn given_mode_3_when_the_arm7_writes_across_the_96_kib_block_then_each_range_kee
 #[test]
 fn given_the_arm7s_own_wram_when_every_mode_is_set_then_its_byte_never_moves() {
     let mut m = Memory::new();
-    m.write8_arm7(WRAM7_START + 0x10, 0x77);
+    m.write8_arm7(0, WRAM7_START + 0x10, 0x77);
     let mut seen = Vec::new();
-    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    seen.push(m.read8_arm7(0, WRAM7_START + 0x10));
     set_mode(&mut m, 1);
-    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    seen.push(m.read8_arm7(0, WRAM7_START + 0x10));
     set_mode(&mut m, 2);
-    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    seen.push(m.read8_arm7(0, WRAM7_START + 0x10));
     set_mode(&mut m, 3);
-    seen.push(m.read8_arm7(WRAM7_START + 0x10));
+    seen.push(m.read8_arm7(0, WRAM7_START + 0x10));
     assert_eq!(seen, [0x77; 4]);
 }
 
@@ -1301,11 +1307,11 @@ fn given_an_opcode_in_the_arm7s_share_when_the_arm9_changes_the_mode_then_the_ne
     // A mode change is seen by the ARM7 on its next instruction fetch (`wramcnt.md`, "Edge
     // cases").
     let mut m = in_mode(3);
-    m.write32_arm7(WRAM, 0xE1A0_1234);
-    let before = (m.fetch32_arm7(WRAM), m.fetch16_arm7(WRAM));
+    m.write32_arm7(0, WRAM, 0xE1A0_1234);
+    let before = (m.fetch32_arm7(0, WRAM), m.fetch16_arm7(0, WRAM));
     set_mode(&mut m, 0);
     assert_eq!(
-        (before, m.fetch32_arm7(WRAM), m.fetch16_arm7(WRAM)),
+        (before, m.fetch32_arm7(0, WRAM), m.fetch16_arm7(0, WRAM)),
         ((0xE1A0_1234, 0x1234), 0, 0)
     );
 }
@@ -1330,7 +1336,11 @@ fn arm9_regs(m: &Memory) -> [u32; 3] {
 }
 
 fn arm7_regs(m: &Memory) -> [u32; 3] {
-    [m.read32_arm7(IME), m.read32_arm7(IE), m.read32_arm7(IF)]
+    [
+        m.read32_arm7(0, IME),
+        m.read32_arm7(0, IE),
+        m.read32_arm7(0, IF),
+    ]
 }
 
 #[test]
@@ -1352,8 +1362,8 @@ fn given_all_ones_written_to_ime_and_ie_on_the_arm9_when_read_as_words_then_ime_
 fn given_all_ones_written_to_ime_and_ie_on_the_arm7_when_read_as_words_then_ime_is_1_and_ie_is_the_arm7_mask()
  {
     let mut m = Memory::new();
-    m.write32_arm7(IME, 0xFFFF_FFFF);
-    m.write32_arm7(IE, 0xFFFF_FFFF);
+    m.write32_arm7(0, IME, 0xFFFF_FFFF);
+    m.write32_arm7(0, IE, 0xFFFF_FFFF);
     assert_eq!(arm7_regs(&m), [1, 0x01DF_3FFF, 0]);
 }
 
@@ -1361,7 +1371,7 @@ fn given_all_ones_written_to_ime_and_ie_on_the_arm7_when_read_as_words_then_ime_
 fn given_an_arm7_write_to_ie_when_the_controller_is_read_then_the_write_landed() {
     // Before the controller existed every ARM7 I/O write was dropped.
     let mut m = Memory::new();
-    m.write32_arm7(IE, 0x0000_0101);
+    m.write32_arm7(0, IE, 0x0000_0101);
     assert_eq!(m.irq7().ie(), 0x0000_0101);
 }
 
@@ -1379,8 +1389,8 @@ fn given_an_arm9_ie_write_when_the_arm7_reads_its_ie_then_it_sees_zero() {
 #[test]
 fn given_an_arm7_ie_write_when_the_arm9_reads_its_ie_then_it_sees_zero() {
     let mut m = Memory::new();
-    m.write32_arm7(IE, 0x0000_0080);
-    m.write32_arm7(IME, 1);
+    m.write32_arm7(0, IE, 0x0000_0080);
+    m.write32_arm7(0, IME, 1);
     assert_eq!(
         (arm9_regs(&m), m.irq9().ie(), m.irq7().ie()),
         ([0; 3], 0, 0x80)
@@ -1391,8 +1401,8 @@ fn given_an_arm7_ie_write_when_the_arm9_reads_its_ie_then_it_sees_zero() {
 fn given_different_ie_values_on_the_two_cpus_when_each_reads_back_then_each_sees_its_own() {
     let mut m = Memory::new();
     m.write32(&plain(), IE, 0x0000_0011);
-    m.write32_arm7(IE, 0x0000_0022);
-    assert_eq!((m.read32(&plain(), IE), m.read32_arm7(IE)), (0x11, 0x22));
+    m.write32_arm7(0, IE, 0x0000_0022);
+    assert_eq!((m.read32(&plain(), IE), m.read32_arm7(0, IE)), (0x11, 0x22));
 }
 
 #[test]
@@ -1415,10 +1425,14 @@ fn given_a_halfword_written_to_each_half_of_ie_on_the_arm9_when_read_as_a_word_t
 fn given_a_halfword_written_to_each_half_of_ie_on_the_arm7_when_read_as_a_word_then_the_halves_combine()
  {
     let mut m = Memory::new();
-    m.write16_arm7(IE, 0x0182);
-    m.write16_arm7(IE + 2, 0x0104);
+    m.write16_arm7(0, IE, 0x0182);
+    m.write16_arm7(0, IE + 2, 0x0104);
     assert_eq!(
-        (m.read32_arm7(IE), m.read16_arm7(IE), m.read16_arm7(IE + 2)),
+        (
+            m.read32_arm7(0, IE),
+            m.read16_arm7(0, IE),
+            m.read16_arm7(0, IE + 2)
+        ),
         (0x0104_0182, 0x0182, 0x0104)
     );
 }
@@ -1433,8 +1447,8 @@ fn arm9_ie_bytes_after_ff_writes() -> Vec<u8> {
 /// The same for the ARM7.
 fn arm7_ie_bytes_after_ff_writes() -> Vec<u8> {
     let mut m = Memory::new();
-    (0..4).for_each(|i| m.write8_arm7(IE + i, 0xFF));
-    (0..4).map(|i| m.read8_arm7(IE + i)).collect()
+    (0..4).for_each(|i| m.write8_arm7(0, IE + i, 0xFF));
+    (0..4).map(|i| m.read8_arm7(0, IE + i)).collect()
 }
 
 #[test]
@@ -1457,11 +1471,11 @@ fn given_byte_writes_to_ie_on_the_arm7_when_read_back_then_each_byte_is_masked_t
 fn given_a_byte_write_of_ff_to_ime_byte_1_when_read_then_ime_is_off_and_the_byte_reads_0() {
     let mut m = Memory::new();
     m.write8(&plain(), IME + 1, 0xFF);
-    m.write8_arm7(IME + 1, 0xFF);
+    m.write8_arm7(0, IME + 1, 0xFF);
     assert_eq!(
         (
             m.read8(&plain(), IME + 1),
-            m.read8_arm7(IME + 1),
+            m.read8_arm7(0, IME + 1),
             m.irq9().ime(),
             m.irq7().ime()
         ),
@@ -1474,11 +1488,11 @@ fn given_a_word_write_at_the_address_after_ime_when_read_then_it_reads_0_and_no_
     // 0400_020Ch to 0400_020Fh belong to no interrupt register (`interrupts.md`, "Registers").
     let mut m = Memory::new();
     m.write32(&plain(), IME + 4, 0xFFFF_FFFF);
-    m.write32_arm7(IME + 4, 0xFFFF_FFFF);
+    m.write32_arm7(0, IME + 4, 0xFFFF_FFFF);
     assert_eq!(
         (
             m.read32(&plain(), IME + 4),
-            m.read32_arm7(IME + 4),
+            m.read32_arm7(0, IME + 4),
             arm9_regs(&m),
             arm7_regs(&m)
         ),
@@ -1492,7 +1506,7 @@ fn given_a_request_on_each_cpu_when_the_if_word_is_read_then_each_cpu_sees_only_
     m.irq9_mut().request(0x0000_0001);
     m.irq7_mut().request(0x0000_0100);
     assert_eq!(
-        (m.read32(&plain(), IF), m.read32_arm7(IF)),
+        (m.read32(&plain(), IF), m.read32_arm7(0, IF)),
         (0x0000_0001, 0x0000_0100)
     );
 }
@@ -1511,8 +1525,8 @@ fn given_a_latched_request_when_1_is_written_to_its_if_byte_on_the_arm7_then_it_
  {
     let mut m = Memory::new();
     m.irq7_mut().request(0b111);
-    m.write8_arm7(IF, 0x04);
-    assert_eq!(m.read32_arm7(IF), 0b011);
+    m.write8_arm7(0, IF, 0x04);
+    assert_eq!(m.read32_arm7(0, IF), 0b011);
 }
 
 #[test]
@@ -1529,8 +1543,8 @@ fn given_latched_requests_when_a_halfword_write_to_the_high_half_of_if_is_made_o
  {
     let mut m = Memory::new();
     m.irq7_mut().request(0x0003_0003);
-    m.write16_arm7(IF + 2, 0x0001);
-    assert_eq!(m.read32_arm7(IF), 0x0002_0003);
+    m.write16_arm7(0, IF + 2, 0x0001);
+    assert_eq!(m.read32_arm7(0, IF), 0x0002_0003);
 }
 
 #[test]
@@ -1539,8 +1553,8 @@ fn given_latched_requests_when_a_zero_word_is_written_to_if_then_nothing_clears(
     m.irq9_mut().request(0x0000_0007);
     m.irq7_mut().request(0x0000_0007);
     m.write32(&plain(), IF, 0);
-    m.write32_arm7(IF, 0);
-    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(IF)), (7, 7));
+    m.write32_arm7(0, IF, 0);
+    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(0, IF)), (7, 7));
 }
 
 #[test]
@@ -1549,15 +1563,15 @@ fn given_the_same_request_on_both_cpus_when_the_arm9_acknowledges_it_then_the_ar
     m.irq9_mut().request(0x0000_0001);
     m.irq7_mut().request(0x0000_0001);
     m.write32(&plain(), IF, 0xFFFF_FFFF);
-    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(IF)), (0, 1));
+    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(0, IF)), (0, 1));
 }
 
 #[test]
 fn given_ones_written_to_if_when_nothing_was_requested_then_if_stays_zero_on_both_cpus() {
     let mut m = Memory::new();
     m.write32(&plain(), IF, 0xFFFF_FFFF);
-    m.write32_arm7(IF, 0xFFFF_FFFF);
-    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(IF)), (0, 0));
+    m.write32_arm7(0, IF, 0xFFFF_FFFF);
+    assert_eq!((m.read32(&plain(), IF), m.read32_arm7(0, IF)), (0, 0));
 }
 
 #[test]

@@ -594,3 +594,135 @@ fn given_two_events_due_when_settling_then_they_dispatch_in_scheduling_order() {
         ]
     );
 }
+
+// ------------------------------------------------------------------------- cancel
+// `cancel` is the scheduler half of "a write to TMnCNT_H replaces that timer's event"
+// (`docs/hw/timers.md`, "Model"): it drops every pending event of one kind and nothing else.
+
+const ARM9_TIMER0: EventKind = EventKind::TimerOverflow {
+    arm9: true,
+    index: 0,
+};
+const ARM9_TIMER1: EventKind = EventKind::TimerOverflow {
+    arm9: true,
+    index: 1,
+};
+const ARM7_TIMER0: EventKind = EventKind::TimerOverflow {
+    arm9: false,
+    index: 0,
+};
+
+/// The `(time, kind)` of every pending event, in firing order.
+fn pending_pairs(scheduler: &Scheduler) -> Vec<(u64, EventKind)> {
+    scheduler
+        .pending()
+        .iter()
+        .map(|event| (event.time, event.kind))
+        .collect()
+}
+
+#[test]
+fn given_one_timer_event_when_cancelled_then_nothing_is_pending() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(100, ARM9_TIMER0);
+    scheduler.cancel(ARM9_TIMER0);
+    assert_eq!(pending_pairs(&scheduler), vec![]);
+}
+
+#[test]
+fn given_two_events_of_one_kind_when_cancelled_then_both_are_removed() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(100, ARM9_TIMER0);
+    scheduler.schedule(200, ARM9_TIMER0);
+    scheduler.cancel(ARM9_TIMER0);
+    assert_eq!(pending_pairs(&scheduler), vec![]);
+}
+
+#[test]
+fn given_events_of_other_kinds_when_one_kind_is_cancelled_then_the_others_stay_in_order() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(30, EventKind::LineStart);
+    scheduler.schedule(10, ARM9_TIMER0);
+    scheduler.schedule(20, ARM9_TIMER1);
+    scheduler.schedule(25, ARM7_TIMER0);
+    scheduler.schedule(40, EventKind::HBlankStart);
+    scheduler.cancel(ARM9_TIMER0);
+    assert_eq!(
+        pending_pairs(&scheduler),
+        vec![
+            (20, ARM9_TIMER1),
+            (25, ARM7_TIMER0),
+            (30, EventKind::LineStart),
+            (40, EventKind::HBlankStart)
+        ]
+    );
+}
+
+#[test]
+fn given_the_same_timer_index_on_both_cpus_when_the_arm9_one_is_cancelled_then_the_arm7_one_stays()
+{
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(10, ARM9_TIMER0);
+    scheduler.schedule(10, ARM7_TIMER0);
+    scheduler.cancel(ARM9_TIMER0);
+    assert_eq!(pending_pairs(&scheduler), vec![(10, ARM7_TIMER0)]);
+}
+
+#[test]
+fn given_no_event_of_the_kind_when_cancelled_then_the_queue_is_unchanged() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(10, EventKind::LineStart);
+    let before = scheduler.pending();
+    scheduler.cancel(ARM9_TIMER0);
+    assert_eq!(scheduler.pending(), before);
+}
+
+#[test]
+fn given_an_empty_queue_when_cancelled_then_it_is_still_empty_and_the_counter_is_unchanged() {
+    let mut scheduler = Scheduler::new();
+    let seq = scheduler.next_seq;
+    scheduler.cancel(ARM9_TIMER0);
+    assert_eq!((scheduler.pending(), scheduler.next_seq), (vec![], seq));
+}
+
+#[test]
+fn given_events_cancelled_when_scheduling_again_then_the_sequence_counter_kept_going_up() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(10, ARM9_TIMER0);
+    let after_first = scheduler.next_seq;
+    scheduler.cancel(ARM9_TIMER0);
+    scheduler.schedule(10, ARM9_TIMER0);
+    let seqs: Vec<u64> = scheduler.pending().iter().map(|event| event.seq).collect();
+    assert_eq!(seqs, vec![after_first]);
+}
+
+#[test]
+fn given_a_cancelled_event_when_popping_due_then_it_does_not_fire() {
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(10, ARM9_TIMER0);
+    scheduler.schedule(10, EventKind::LineStart);
+    scheduler.cancel(ARM9_TIMER0);
+    let fired: Vec<EventKind> = std::iter::from_fn(|| scheduler.pop_due(10))
+        .map(|event| event.kind)
+        .collect();
+    assert_eq!(fired, vec![EventKind::LineStart]);
+}
+
+#[test]
+fn given_a_cancel_and_a_reschedule_when_listing_pending_then_exactly_one_event_of_the_kind_remains()
+{
+    let mut scheduler = Scheduler::new();
+    scheduler.schedule(10, ARM9_TIMER0);
+    scheduler.cancel(ARM9_TIMER0);
+    scheduler.schedule(50, ARM9_TIMER0);
+    assert_eq!(scheduler.times_of(ARM9_TIMER0), vec![50]);
+}
+
+#[test]
+fn given_a_cancel_when_checked_then_the_queue_is_still_well_formed() {
+    let mut scheduler = Scheduler::new();
+    schedule_all(&mut scheduler, &[10, 20]);
+    scheduler.schedule(15, ARM9_TIMER0);
+    scheduler.cancel(ARM9_TIMER0);
+    assert!(scheduler.is_well_formed());
+}

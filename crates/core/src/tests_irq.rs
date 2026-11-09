@@ -65,8 +65,8 @@ fn enable9(m: &mut Machine, ime: u32, ie: u32) {
 
 /// Writes IME and IE of the ARM7 through the bus.
 fn enable7(m: &mut Machine, ime: u32, ie: u32) {
-    m.memory.write32_arm7(IME, ime);
-    m.memory.write32_arm7(IE, ie);
+    m.memory.write32_arm7(0, IME, ime);
+    m.memory.write32_arm7(0, IE, ie);
 }
 
 /// What a test needs to see of a CPU: (CPSR, R14_irq, SPSR_irq, R15, r0, r1).

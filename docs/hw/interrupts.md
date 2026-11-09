@@ -7,7 +7,7 @@ Used by: `crates/core/src/irq.rs`, `crates/core/src/bus/memory.rs`, `crates/core
 Each CPU has its own interrupt controller: three registers that sit at the same addresses on
 both CPUs but are separate hardware. A write by one CPU never shows on the other. This note
 covers the registers, which bits exist, and when the CPU is interrupted. The sources that raise
-the bits (timers, DMA, IPC, the cartridge, the LCD, ...) arrive with their own issues and notes.
+the bits (timers (`timers.md`), DMA, IPC, the cartridge, the LCD, ...) arrive with their own issues and notes.
 
 ## Registers
 

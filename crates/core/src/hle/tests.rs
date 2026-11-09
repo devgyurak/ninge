@@ -453,7 +453,7 @@ fn arm7_byte_mismatches(
     expected: impl Fn(usize) -> u8,
 ) -> Vec<usize> {
     (0..len)
-        .filter(|&i| m.memory().read8_arm7(base + i as u32) != expected(i))
+        .filter(|&i| m.memory().read8_arm7(0, base + i as u32) != expected(i))
         .collect()
 }
 
@@ -496,7 +496,7 @@ fn given_an_arm7_binary_that_crosses_0380_0000_when_loading_then_it_continues_in
 #[test]
 fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_byte_after_it_is_zero() {
     let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
-    assert_eq!(machine.memory().read8_arm7(0x037F_8080), 0);
+    assert_eq!(machine.memory().read8_arm7(0, 0x037F_8080), 0);
 }
 
 #[test]
@@ -533,8 +533,8 @@ fn given_an_arm7_binary_larger_than_7d80_bytes_at_037f_8000_when_loading_then_ev
             arm7_byte_mismatches(&machine, 0x037F_8000, 0x100, arm7_byte),
             arm7_byte_mismatches(&machine, 0x037F_FF80, 0x80, |i| arm7_byte(0x7F80 + i)),
             arm7_byte_mismatches(&machine, 0x0380_0000, 0x100, seam),
-            machine.memory().read8_arm7(0x037F_FD80),
-            machine.memory().read8_arm7(0x0380_FD80),
+            machine.memory().read8_arm7(0, 0x037F_FD80),
+            machine.memory().read8_arm7(0, 0x0380_FD80),
         ),
         (
             Vec::<usize>::new(),

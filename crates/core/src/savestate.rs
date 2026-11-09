@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24). Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -40,7 +40,7 @@
 //! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
 //! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
-//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
+//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, never before the overflow time the timer's own counter gives), and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -53,12 +53,13 @@
 //! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load.
 
 use crate::Machine;
-use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES};
+use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES, Scheduler};
+use crate::timers::{TIMER_COUNT, Timers};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -112,6 +113,21 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
         .get(offset..offset + 8)
         .and_then(|b| b.try_into().ok())
         .map(u64::from_le_bytes)
+}
+
+/// Whether the queue holds an overflow event for exactly the timers of `timers` that have one,
+/// each at or after the overflow time the timer itself gives (`timers.md`, "Model"). An event
+/// before it would fire a period early; one for a stopped or count-up timer would count a
+/// phantom overflow.
+fn timer_events_are_sane<const ARM9: bool>(scheduler: &Scheduler, timers: &Timers<ARM9>) -> bool {
+    (0..TIMER_COUNT).all(|index| {
+        let times = scheduler.times_of(Timers::<ARM9>::event_kind(index));
+        match (timers.overflow_time(index), times.as_slice()) {
+            (Some(due), [time]) => *time >= due,
+            (None, []) => true,
+            _ => false,
+        }
+    })
 }
 
 impl Machine {
@@ -186,6 +202,8 @@ impl Machine {
             || !loaded.arm7.is_well_formed()
             || !loaded.scheduler.is_well_formed()
             || !loaded.line_events_are_sane()
+            || !timer_events_are_sane(&loaded.scheduler, loaded.memory.timers9())
+            || !timer_events_are_sane(&loaded.scheduler, loaded.memory.timers7())
             // A booted machine is always settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up.
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())

@@ -19,6 +19,15 @@ pub const HBLANK_IRQ: u32 = 1 << 1;
 /// IF bit 2: LCD VCount match.
 pub const VCOUNT_IRQ: u32 = 1 << 2;
 
+/// IF bit 3: timer 0 overflow (`interrupts.md`, "IE and IF bits"; `timers.md`).
+pub const TIMER0_IRQ: u32 = 1 << 3;
+/// IF bit 4: timer 1 overflow.
+pub const TIMER1_IRQ: u32 = 1 << 4;
+/// IF bit 5: timer 2 overflow.
+pub const TIMER2_IRQ: u32 = 1 << 5;
+/// IF bit 6: timer 3 overflow.
+pub const TIMER3_IRQ: u32 = 1 << 6;
+
 /// IF bit 16: IPC sync, from the other CPU's IPCSYNC bit 13 (`ipc.md`, "Behavior").
 pub const IPCSYNC_IRQ: u32 = 1 << 16;
 /// IF bit 17: IPC send FIFO empty (`ipc.md`, "Interrupts").
@@ -97,7 +106,7 @@ impl<const ARM9: bool> InterruptController<ARM9> {
     /// "Behavior"). A bit the CPU does not have is dropped.
     // TODO(hw-unverified): a bit that does not exist is dropped, and IF latches whatever IE and
     // IME say (`interrupts.md`, "Unverified").
-    // The LCD (#104) and IPC (#24) call it; timers (#25) and DMA (#26) follow.
+    // The LCD (#104), IPC (#24) and the timers (#25) call it; DMA (#26) follows.
     pub(crate) fn request(&mut self, mask: u32) {
         self.if_ |= mask & Self::valid_bits();
     }

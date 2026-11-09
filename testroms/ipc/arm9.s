@@ -55,13 +55,13 @@
     strh r0, [r6]
     .endm
 
-    @ Waits until the IRQ handler's count (r2 = 0x02006000) reaches n, with I still clear. The IRQ
+    @ Waits until the IRQ handler's count (r2 = 0x02006000) is at least n, with I still clear. The IRQ
     @ may be taken a few instructions after the ARM7's post is seen, so the count is the only
     @ reliable sign that the handler ran.
     .macro WAIT_COUNT n
 1:  ldr r0, [r2]
     cmp r0, #\n
-    bne 1b
+    blo 1b                     @ n or more: an extra IRQ shows in the record, not as a hang
     .endm
 
     .macro RECORD slot, reg

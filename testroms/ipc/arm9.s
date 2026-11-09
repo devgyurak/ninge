@@ -55,6 +55,15 @@
     strh r0, [r6]
     .endm
 
+    @ Waits until the IRQ handler's count (r2 = 0x02006000) reaches n, with I still clear. The IRQ
+    @ may be taken a few instructions after the ARM7's post is seen, so the count is the only
+    @ reliable sign that the handler ran.
+    .macro WAIT_COUNT n
+1:  ldr r0, [r2]
+    cmp r0, #\n
+    bne 1b
+    .endm
+
     .macro RECORD slot, reg
     str \reg, [r8, #(\slot * 4)]
     .endm
@@ -144,14 +153,15 @@ copy_handler:
     msr cpsr_c, r0             @ I clear, System mode
 
     @ ---- step 7: the ARM7's IRQ was taken by the handler (during this wait)
+    ldr r2, =0x02006000
     WAIT 6
+    WAIT_COUNT 1
     mov r0, #0x9F
     msr cpsr_c, r0             @ I set again
     mov r0, #0
     str r0, [r9, #0x208]
     ldr r0, [r9, #0x214]
     RECORD 5, r0
-    ldr r2, =0x02006000
     ldr r0, [r2]
     RECORD 6, r0
     ldr r0, [r2, #4]
@@ -273,8 +283,9 @@ fill:
     DONE 30
 
     @ ---- step 32: the ARM7 took the word, so IF.17 came: taken by the handler during this wait
-    WAIT 31
     ldr r2, =0x02006000
+    WAIT 31
+    WAIT_COUNT 2
     ldr r0, [r2]
     RECORD 20, r0
     ldr r0, [r2, #4]
@@ -283,6 +294,7 @@ fill:
 
     @ ---- step 34: the ARM7 sent a word, so IF.18 came: taken by the handler as well
     WAIT 33
+    WAIT_COUNT 3
     mov r0, #0x9F
     msr cpsr_c, r0             @ I set again
     mov r0, #0

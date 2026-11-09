@@ -141,10 +141,6 @@ struct Port {
     recv_irq: bool,
     error: bool,
     enabled: bool,
-    // The two IRQ conditions as they were at the last change, for edge detection
-    // (`ipc.md`, "Interrupts"). Always equal to the current conditions once an operation ends.
-    send_edge: bool,
-    recv_edge: bool,
 }
 
 impl Port {
@@ -156,8 +152,6 @@ impl Port {
             recv_irq: false,
             error: false,
             enabled: false,
-            send_edge: false,
-            recv_edge: false,
         }
     }
 
@@ -169,22 +163,6 @@ impl Port {
     /// IF.18's condition: `IPCFIFOCNT.10 AND NOT IPCFIFOCNT.8`.
     fn recv_condition(&self, recv: &Fifo) -> bool {
         self.recv_irq && !recv.is_empty()
-    }
-
-    /// The IF bits for conditions that rose since the last call (`ipc.md`, "Interrupts").
-    // TODO(hw-unverified): the edge detector watches the whole condition, enable bit included,
-    // so enabling an IRQ while its condition holds raises the flag (`ipc.md`, "Unverified").
-    fn edges(&mut self, send: &Fifo, recv: &Fifo) -> u32 {
-        let (send_now, recv_now) = (self.send_condition(send), self.recv_condition(recv));
-        let mask = match (send_now && !self.send_edge, recv_now && !self.recv_edge) {
-            (true, true) => SEND_EMPTY_IRQ | RECV_NOT_EMPTY_IRQ,
-            (true, false) => SEND_EMPTY_IRQ,
-            (false, true) => RECV_NOT_EMPTY_IRQ,
-            (false, false) => 0,
-        };
-        self.send_edge = send_now;
-        self.recv_edge = recv_now;
-        mask
     }
 
     /// IPCFIFOCNT as this CPU reads it.
@@ -252,12 +230,32 @@ impl Ipc {
         }
     }
 
-    /// Latches the IRQ conditions of both CPUs and returns what rose. Run after every change
+    /// Both CPUs' IRQ conditions: (ARM9 IF.17, ARM9 IF.18, ARM7 IF.17, ARM7 IF.18). They are
+    /// derived from the FIFOs and the enable bits, so nothing is stored (`ipc.md`, "Interrupts").
+    fn conditions(&self) -> [bool; 4] {
+        [
+            self.port9.send_condition(&self.fifo9),
+            self.port9.recv_condition(&self.fifo7),
+            self.port7.send_condition(&self.fifo7),
+            self.port7.recv_condition(&self.fifo9),
+        ]
+    }
+
+    /// The IF bits for conditions that went from 0 to 1 since `before`. Taken after every change
     /// to a FIFO or an enable bit, so a change by one CPU shows on the other's conditions.
-    fn settle(&mut self) -> Requests {
+    // TODO(hw-unverified): the edge detector watches the whole condition, enable bit included,
+    // so enabling an IRQ while its condition holds raises the flag (`ipc.md`, "Unverified").
+    fn rises(&self, before: [bool; 4]) -> Requests {
+        let [s9, r9, s7, r7] = self.conditions();
+        let mask = |send: bool, recv: bool| match (send, recv) {
+            (true, true) => SEND_EMPTY_IRQ | RECV_NOT_EMPTY_IRQ,
+            (true, false) => SEND_EMPTY_IRQ,
+            (false, true) => RECV_NOT_EMPTY_IRQ,
+            (false, false) => 0,
+        };
         Requests {
-            irq9: self.port9.edges(&self.fifo9, &self.fifo7),
-            irq7: self.port7.edges(&self.fifo7, &self.fifo9),
+            irq9: mask(s9 && !before[0], r9 && !before[1]),
+            irq7: mask(s7 && !before[2], r7 && !before[3]),
         }
     }
 
@@ -301,6 +299,7 @@ impl Ipc {
     /// The fields of both registers sit in single bytes, so a wider write is the same as its
     /// bytes in turn: the IRQ conditions can only fall between them, never rise and fall.
     pub(crate) fn write_byte<const ARM9: bool>(&mut self, addr: u32, value: u8) -> Requests {
+        let before = self.conditions();
         let sent = match addr {
             0x0400_0181 => self.write_sync_high::<ARM9>(value),
             IPCFIFOCNT_ADDR => {
@@ -314,7 +313,7 @@ impl Ipc {
             // IPCSYNC bits 0-7 hold nothing writable.
             _ => return Requests::default(),
         };
-        sent.merge(self.settle())
+        sent.merge(self.rises(before))
     }
 
     /// IPCSYNC bits 8-15. Bit 13 sends the IRQ.
@@ -370,6 +369,7 @@ impl Ipc {
     // TODO(hw-unverified): a disabled FIFO that is empty answers with the last word and no error
     // (`ipc.md`, "Unverified").
     pub(crate) fn receive<const ARM9: bool>(&mut self) -> (u32, Requests) {
+        let before = self.conditions();
         let (port, _, recv) = self.own_mut::<ARM9>();
         if !port.enabled {
             // A disabled FIFO shows its oldest word and keeps it (`ipc.md`, "Disabled FIFO").
@@ -380,7 +380,7 @@ impl Ipc {
             return (recv.last, Requests::default());
         }
         let word = recv.pop();
-        (word, self.settle())
+        (word, self.rises(before))
     }
 
     /// A CPU's write to IPCFIFOSEND; returns what it asks the controllers to latch.
@@ -388,6 +388,7 @@ impl Ipc {
     // (`ipc.md`, "Unverified").
     // TODO(hw-unverified): a word sent to a full FIFO is dropped (`ipc.md`, "Unverified").
     pub(crate) fn send<const ARM9: bool>(&mut self, word: u32) -> Requests {
+        let before = self.conditions();
         let (port, send, _) = self.own_mut::<ARM9>();
         if !port.enabled {
             return Requests::default();
@@ -397,24 +398,16 @@ impl Ipc {
             return Requests::default();
         }
         send.push(word);
-        self.settle()
+        self.rises(before)
     }
 
-    /// Whether the state holds only what the hardware can: FIFO lengths and heads in range, a
-    /// 4-bit output nibble, and edge memory that matches the conditions. A savestate that decodes
-    /// to anything else is corrupt (`savestate`).
+    /// Whether the state holds only what the hardware can: FIFO lengths and heads in range and
+    /// 4-bit output nibbles. A savestate that decodes to anything else is corrupt (`savestate`).
     pub(crate) fn is_well_formed(&self) -> bool {
-        let ports = [
-            (&self.port9, &self.fifo9, &self.fifo7),
-            (&self.port7, &self.fifo7, &self.fifo9),
-        ];
         self.fifo9.is_well_formed()
             && self.fifo7.is_well_formed()
-            && ports.into_iter().all(|(port, send, recv)| {
-                port.sync_out <= SYNC_OUT_MASK
-                    && port.send_edge == port.send_condition(send)
-                    && port.recv_edge == port.recv_condition(recv)
-            })
+            && self.port9.sync_out <= SYNC_OUT_MASK
+            && self.port7.sync_out <= SYNC_OUT_MASK
     }
 }
 
@@ -438,14 +431,6 @@ impl Ipc {
     pub(crate) fn with_corrupt_sync_out(out: u8) -> Self {
         let mut ipc = Self::new();
         ipc.port9.sync_out = out;
-        ipc
-    }
-
-    /// An IPC whose ARM9 remembers an IF.17 condition that its empty FIFO and disabled IRQ
-    /// do not give.
-    pub(crate) fn with_corrupt_edge_memory() -> Self {
-        let mut ipc = Self::new();
-        ipc.port9.send_edge = true;
         ipc
     }
 }

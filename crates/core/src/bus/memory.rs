@@ -393,10 +393,17 @@ impl Memory {
 
     /// The bytes behind the ARM9 page table for an access of `N` bytes at the aligned `addr`.
     fn read_page<const N: usize>(&self, addr: u32) -> [u8; N] {
-        let page = page_of(&self.pages9, addr);
+        self.page_bytes(&self.pages9, addr)
+            .unwrap_or_else(|| self.read_slow(addr))
+    }
+
+    /// The bytes `pages` map for an access of `N` bytes at the aligned `addr`, or `None` when
+    /// the page is I/O or unmapped and the slow path answers. The bus stage CPU reads share;
+    /// the CPU-only TCM stage sits in front of it.
+    fn page_bytes<const N: usize>(&self, pages: &[Page], addr: u32) -> Option<[u8; N]> {
+        let page = page_of(pages, addr);
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
         self.region_bytes(page.region, offset)
-            .unwrap_or_else(|| self.read_slow(addr))
     }
 
     /// Which byte of IPCFIFORECV `addr` is, if it is one.
@@ -520,9 +527,7 @@ impl Memory {
         if let Some(bytes) = self.tcm_load(tcm, addr) {
             return bytes;
         }
-        let page = page_of(&self.pages9, addr);
-        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
-        match self.region_bytes(page.region, offset) {
+        match self.page_bytes(&self.pages9, addr) {
             Some(bytes) => bytes,
             None => self
                 .receive_bytes::<true, N>(addr)
@@ -672,18 +677,14 @@ impl Memory {
     // TODO(hw-unverified): the rest of the ARM7 bus reads 0 (`wramcnt.md`, "Unverified").
     fn load7<const N: usize>(&self, addr: u32) -> [u8; N] {
         let addr = addr & !(N as u32 - 1);
-        let page = page_of(&self.pages7, addr);
-        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
-        self.region_bytes(page.region, offset)
+        self.page_bytes(&self.pages7, addr)
             .unwrap_or_else(|| self.read_slow7(addr))
     }
 
     /// [`Memory::load7`] as the CPU does it: a read of IPCFIFORECV takes a word out of the FIFO.
     fn load7_mut<const N: usize>(&mut self, addr: u32) -> [u8; N] {
         let addr = addr & !(N as u32 - 1);
-        let page = page_of(&self.pages7, addr);
-        let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
-        match self.region_bytes(page.region, offset) {
+        match self.page_bytes(&self.pages7, addr) {
             Some(bytes) => bytes,
             None => self
                 .receive_bytes::<false, N>(addr)

@@ -741,8 +741,3 @@ fn given_a_fifo_head_of_16_when_checked_then_it_is_not_well_formed() {
 fn given_a_sync_output_above_15_when_checked_then_it_is_not_well_formed() {
     assert!(!Ipc::with_corrupt_sync_out(0x10).is_well_formed());
 }
-
-#[test]
-fn given_an_edge_memory_that_disagrees_with_the_fifos_when_checked_then_it_is_not_well_formed() {
-    assert!(!Ipc::with_corrupt_edge_memory().is_well_formed());
-}

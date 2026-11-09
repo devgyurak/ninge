@@ -14,17 +14,17 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_144;
-const PINNED_HASH: u64 = 0x7121223c3a890582;
+const PINNED_LEN: usize = 4_473_140;
+const PINNED_HASH: u64 = 0xb554cb4b089183d2;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
 /// shared-WRAM contents); the length is unchanged. Version 6 (#104) added the display timing
 /// state and a second queued event, so both pins moved. Version 7 (#24) added the IPC block:
-/// 54 bytes at power-on (two FIFOs of 16 + 3 one-byte varints each, two ports of 8 one-byte fields),
-/// so both lengths grew by 54.
-const PINNED_BOOTED_LEN: usize = 4_473_231;
-const PINNED_BOOTED_HASH: u64 = 0x8b9ebb9dc37db03f;
+/// 50 bytes at power-on (two FIFOs of 16 + 3 one-byte varints each, two ports of 6 one-byte fields),
+/// so both lengths grew by 50.
+const PINNED_BOOTED_LEN: usize = 4_473_227;
+const PINNED_BOOTED_HASH: u64 = 0x6ec43b44f6db29ff;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -1197,15 +1197,6 @@ fn given_a_state_with_a_sync_output_above_15_when_loaded_then_it_is_corrupt_and_
  {
     assert_eq!(
         load_with_ipc(crate::ipc::Ipc::with_corrupt_sync_out(0x10)),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_whose_irq_edge_memory_disagrees_with_its_fifos_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    assert_eq!(
-        load_with_ipc(crate::ipc::Ipc::with_corrupt_edge_memory()),
         (Err(SavestateError::Corrupt), true)
     );
 }

@@ -40,7 +40,7 @@
 //! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
 //! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
-//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range with its IRQ edge memory agreeing with the FIFOs (`docs/hw/ipc.md`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
+//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.

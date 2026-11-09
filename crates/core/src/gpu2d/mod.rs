@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod timing;
+
 /// DISPCNT of engine A, at `0400_0000h` (`display-mode-vram.md`, "Registers").
 pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;
 /// POWCNT1, at `0400_0304h` (`display-mode-vram.md`, "Registers").
@@ -130,7 +132,7 @@ impl Gpu2d {
 
     /// Draws engine A's picture into `out` (`SCREEN_WIDTH * SCREEN_HEIGHT` pixels, from the crate root), given the
     /// bytes of bank A when the CPU can see it as LCDC VRAM.
-    // TODO(phase3): mode 1 draws the text backgrounds (#21 brings scanline timing).
+    // TODO(phase3): mode 1 draws the text backgrounds (#104 brings the line timing).
     // TODO(phase4): mode 1 completes, mode 3 draws the main-memory bitmap, and blocks 1-3
     // (banks B-D) join mode 2 (#35).
     // TODO(phase4): master brightness applies to the output of modes 2 and 3 (#34).

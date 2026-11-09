@@ -9,6 +9,7 @@
 use super::TcmConfig;
 use crate::cpu::Tcm;
 use crate::gpu2d::Gpu2d;
+use crate::gpu2d::timing::Timing;
 use crate::irq::InterruptController;
 use serde::{Deserialize, Serialize};
 
@@ -156,6 +157,8 @@ pub struct Memory {
     wramcnt: u8,
     // Engine A's display registers, reached through the I/O slow path.
     gpu2d: Gpu2d,
+    // VCOUNT and each CPU's DISPSTAT (`display-timing.md`).
+    timing: Timing,
     // Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
     irq9: InterruptController<true>,
     irq7: InterruptController<false>,
@@ -249,6 +252,7 @@ impl Memory {
             shared_wram: vec![0; SHARED_WRAM_SIZE],
             wramcnt: 0,
             gpu2d: Gpu2d::new(),
+            timing: Timing::new(),
             irq9: InterruptController::new(),
             irq7: InterruptController::new(),
             pages9: Vec::new(),
@@ -409,6 +413,7 @@ impl Memory {
                     .irq9
                     .read_byte(at)
                     .or_else(|| self.gpu2d.read_byte(at))
+                    .or_else(|| self.timing.read_byte::<true>(at))
                     .unwrap_or(0),
             }
         })
@@ -421,7 +426,11 @@ impl Memory {
         std::array::from_fn(|i| match addr.wrapping_add(i as u32) {
             // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
             WRAMSTAT_ADDR => self.wramcnt,
-            at => self.irq7.read_byte(at).unwrap_or(0),
+            at => self
+                .irq7
+                .read_byte(at)
+                .or_else(|| self.timing.read_byte::<false>(at))
+                .unwrap_or(0),
         })
     }
 
@@ -507,6 +516,7 @@ impl Memory {
                 _ => {
                     self.irq9.write_byte(at, value);
                     self.gpu2d.write_byte(at, value);
+                    self.timing.write_byte::<true>(at, value);
                 }
             }
         }
@@ -526,6 +536,7 @@ impl Memory {
             && self.wramcnt & !WRAMCNT_MODE_MASK == 0
             && self.irq9.is_well_formed()
             && self.irq7.is_well_formed()
+            && self.timing.is_well_formed()
     }
 
     /// Stores VRAMCNT_A and rebuilds the page table, since the write can move the bank.
@@ -533,6 +544,15 @@ impl Memory {
     fn write_vramcnt_a(&mut self, value: u8) {
         self.vramcnt_a = value & VRAMCNT_USED;
         self.build_page_table();
+    }
+
+    /// VCOUNT and each CPU's DISPSTAT.
+    pub fn timing(&self) -> &Timing {
+        &self.timing
+    }
+
+    pub(crate) fn timing_mut(&mut self) -> &mut Timing {
+        &mut self.timing
     }
 
     /// The ARM9's interrupt controller.
@@ -592,7 +612,9 @@ impl Memory {
     // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#24-#26).
     fn write_slow7<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
         for (i, &value) in bytes.iter().enumerate() {
-            self.irq7.write_byte(addr.wrapping_add(i as u32), value);
+            let at = addr.wrapping_add(i as u32);
+            self.irq7.write_byte(at, value);
+            self.timing.write_byte::<false>(at, value);
         }
     }
 

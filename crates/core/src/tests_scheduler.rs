@@ -9,7 +9,7 @@
 use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
-use crate::scheduler::{EventKind, FRAME_CYCLES};
+use crate::scheduler::{EventKind, FRAME_CYCLES, HBLANK_START_CYCLES, LINE_CYCLES};
 
 /// Where the ARM9 counting loop keeps its counter, and the ARM7's.
 const ARM9_COUNTER: u32 = 0x0200_1000;
@@ -241,10 +241,11 @@ fn given_machine_without_rom_when_running_three_frames_then_the_clock_stays_zero
     assert_eq!((machine.scheduler().now(), machine.frame_count()), (0, 3));
 }
 
-// ----------------------------------------------------------- FrameEnd event
+// ----------------------------------------------------------- line events
 
 #[test]
-fn given_a_booted_machine_when_nothing_ran_then_a_frame_end_is_pending_at_one_frame() {
+fn given_a_booted_machine_when_nothing_ran_then_hblank_and_the_next_line_start_are_pending_in_line_0()
+ {
     let machine = booted(&counting_rom());
     let pending: Vec<(u64, EventKind)> = machine
         .scheduler()
@@ -252,11 +253,17 @@ fn given_a_booted_machine_when_nothing_ran_then_a_frame_end_is_pending_at_one_fr
         .iter()
         .map(|event| (event.time, event.kind))
         .collect();
-    assert_eq!(pending, vec![(FRAME_CYCLES, EventKind::FrameEnd)]);
+    assert_eq!(
+        pending,
+        vec![
+            (HBLANK_START_CYCLES, EventKind::HBlankStart),
+            (LINE_CYCLES, EventKind::LineStart)
+        ]
+    );
 }
 
 #[test]
-fn given_one_frame_run_when_listing_pending_then_the_next_frame_end_is_at_two_frames() {
+fn given_one_frame_run_when_listing_pending_then_the_next_line_events_follow_the_frame_end_time() {
     let mut machine = booted(&counting_rom());
     machine.run_frame();
     let pending: Vec<(u64, EventKind)> = machine
@@ -265,11 +272,17 @@ fn given_one_frame_run_when_listing_pending_then_the_next_frame_end_is_at_two_fr
         .iter()
         .map(|event| (event.time, event.kind))
         .collect();
-    assert_eq!(pending, vec![(2 * FRAME_CYCLES, EventKind::FrameEnd)]);
+    assert_eq!(
+        pending,
+        vec![
+            (FRAME_CYCLES + HBLANK_START_CYCLES, EventKind::HBlankStart),
+            (FRAME_CYCLES + LINE_CYCLES, EventKind::LineStart)
+        ]
+    );
 }
 
 #[test]
-fn given_two_frames_run_when_listing_pending_then_the_next_frame_end_is_at_three_frames() {
+fn given_two_frames_run_when_listing_pending_then_the_next_line_events_follow_two_frames() {
     let mut machine = booted(&counting_rom());
     run_frames(&mut machine, 2);
     let times: Vec<u64> = machine
@@ -278,7 +291,13 @@ fn given_two_frames_run_when_listing_pending_then_the_next_frame_end_is_at_three
         .iter()
         .map(|event| event.time)
         .collect();
-    assert_eq!(times, vec![3 * FRAME_CYCLES]);
+    assert_eq!(
+        times,
+        vec![
+            2 * FRAME_CYCLES + HBLANK_START_CYCLES,
+            2 * FRAME_CYCLES + LINE_CYCLES
+        ]
+    );
 }
 
 // -------------------------------------------------------------- single step
@@ -346,7 +365,7 @@ fn given_debug_steps_crossing_the_frame_end_time_when_stepping_then_the_frame_en
 }
 
 #[test]
-fn given_debug_steps_crossing_the_frame_end_time_when_listing_pending_then_the_next_frame_end_is_at_two_frames()
+fn given_debug_steps_crossing_the_frame_end_time_when_listing_pending_then_the_next_line_events_follow_the_frame()
  {
     let mut machine = booted(&counting_rom());
     step(&mut machine, FRAME_CYCLES);
@@ -356,7 +375,13 @@ fn given_debug_steps_crossing_the_frame_end_time_when_listing_pending_then_the_n
         .iter()
         .map(|event| event.time)
         .collect();
-    assert_eq!(times, vec![2 * FRAME_CYCLES]);
+    assert_eq!(
+        times,
+        vec![
+            FRAME_CYCLES + HBLANK_START_CYCLES,
+            FRAME_CYCLES + LINE_CYCLES
+        ]
+    );
 }
 
 #[test]
@@ -535,7 +560,7 @@ fn frames_counted_at_the_edge_of_time() -> u64 {
     machine.arm7_clock = machine.scheduler.now;
     machine
         .scheduler
-        .schedule(u64::MAX - FRAME_CYCLES, EventKind::FrameEnd);
+        .schedule(u64::MAX - FRAME_CYCLES, EventKind::LineStart);
     machine.run_frame();
     machine.run_frame();
     machine.frame_count()

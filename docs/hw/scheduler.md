@@ -31,9 +31,9 @@ A frame is 263 scanlines of 355 dots, and a dot lasts 6 bus cycles:
 - 263 x 355 x 6 = 560,190 bus (ARM7) cycles per frame;
 - x 2 = 1,120,380 ARM9 cycles per frame.
 
-The visible part is 192 lines of 256 dots; the rest is blanking. Which of the 263 lines is
-which, and the DISPSTAT / VCOUNT registers that report it, are not part of this note (no issue
-covers them yet).
+The visible part is 192 lines of 256 dots; the rest is blanking. The line layout, when VBlank
+and HBlank start, and the DISPSTAT / VCOUNT registers that report them are in
+`display-timing.md` (#104).
 
 ### ARM7 memory
 
@@ -72,8 +72,10 @@ Events due at the target fire in order, but only those queued when the dispatch 
 event a handler schedules waits for the next round. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Only one kind exists so far, `FrameEnd`, scheduled 1,120,380 master cycles apart. It ends
-`run_frame`.
+Two kinds exist so far, `LineStart` (every 4,260 master cycles) and `HBlankStart` (once per
+line, 3,212 master cycles after it); see `display-timing.md`. The `LineStart` that begins line 0
+draws the screens and counts the frame, which ends `run_frame`: frames stay 1,120,380 master
+cycles apart. Each reschedules from its own time, so nothing drifts.
 
 ### Interleaving
 
@@ -118,9 +120,9 @@ A saved machine is refused on load when:
 - a queued event's time is before `now`;
 - the sequence counter is not above every queued sequence number (the next event would
   tie-break before an existing one);
-- the queue does not hold exactly one frame end, or that frame end is not due within one frame
-  (`FRAME_CYCLES`) of `now`: two at the same time would fire in one round and `run_frame` would
-  step over its frame, and one far ahead would take effectively forever;
+- the queue does not hold exactly one `LineStart` and one `HBlankStart`, or one is not due
+  within one line (`LINE_CYCLES`) of `now`: two at the same time would fire in one round and
+  skip a line, and one far ahead would take effectively forever;
 - `now` or a queued event's time is above `MAX_TIME` (2^62 master cycles, about 2,180 years of
   emulated time, which no real run reaches). A smaller margin below `u64::MAX` cannot work: a
   frame end would eventually saturate at the maximum and stay due;

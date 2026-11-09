@@ -861,7 +861,10 @@ fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() 
             target.memory.region(SHARED),
             target.memory.region7(SHARED),
             target.memory.region7(0x0380_0000),
-            target.memory.wramcnt().mode
+            target.memory.wramcnt().mode,
+            // Mode 1 gives the ARM7 the first half, which repeats every 16 KiB; mode 3 would
+            // show the second half here (0xB2B2_B2B2).
+            target.memory.read32_arm7(SHARED + 0x4000)
         ),
         (
             Ok(()),
@@ -869,7 +872,8 @@ fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() 
             Region::SharedWram,
             Region::SharedWram,
             Region::Wram7,
-            1
+            1,
+            0xA1A1_A1A1
         )
     );
 }

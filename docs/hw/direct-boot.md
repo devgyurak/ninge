@@ -20,9 +20,9 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
    that is stored. Main RAM mirrors, so this is the top of the 4 MiB (`arm9-memory-map.md`). No
    binary can reach it: a binary ends at `023B_FE00h` at the latest.
 4. Copy the ARM9 binary: `size` bytes from its ROM offset to its RAM address, in main RAM.
-5. Copy the ARM7 binary the same way, only when its RAM address is in main RAM. An ARM7
-   destination in the `037F_8000h` range is placed through the ARM7's view (`wramcnt.md`); WRAMCNT is set to 3, all of the shared
-   WRAM to the ARM7, before the binaries are placed (inferred, Unverified in `wramcnt.md`). Phase 2 does not execute the ARM7; from #21 it
+5. Set WRAMCNT to 3 (all of the shared WRAM to the ARM7; inferred, Unverified in `wramcnt.md`),
+   then copy the ARM7 binary the same way through the ARM7's view: its RAM address is in main RAM
+   or in the `037F_8000h` range (`wramcnt.md`). Phase 2 does not execute the ARM7; from #21 it
    starts at its entry point (see "ARM7 state at entry").
 
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not

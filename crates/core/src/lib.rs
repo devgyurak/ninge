@@ -458,20 +458,20 @@ impl Machine {
     /// and its next overflow is scheduled (`docs/hw/timers.md`, "Counting").
     fn timer_overflowed(&mut self, arm9: bool, index: u8) {
         let index = usize::from(index);
+        // Every overflow of this timer due by now is processed, not just one: an event queued late
+        // (an ARM7 write while it lagged) would otherwise catch up one overflow a round with
+        // the CPUs standing still. The timer is rescheduled whether or not one was due.
+        let now = self.scheduler.now();
         if arm9 {
-            let Some(at) = self.memory.timers9().overflow_time(index) else {
-                return;
-            };
-            let requests = self.memory.timers9_mut().overflow(index, at);
+            let requests = self.memory.timers9_mut().settle_timer(index, now);
             self.request_irq9(requests);
-            schedule_timers(&mut self.scheduler, self.memory.timers9(), 1 << index);
+            let dirty = self.memory.timers9_mut().take_dirty() | 1 << index;
+            schedule_timers(&mut self.scheduler, self.memory.timers9(), dirty);
         } else {
-            let Some(at) = self.memory.timers7().overflow_time(index) else {
-                return;
-            };
-            let requests = self.memory.timers7_mut().overflow(index, at);
+            let requests = self.memory.timers7_mut().settle_timer(index, now);
             self.request_irq7(requests);
-            schedule_timers(&mut self.scheduler, self.memory.timers7(), 1 << index);
+            let dirty = self.memory.timers7_mut().take_dirty() | 1 << index;
+            schedule_timers(&mut self.scheduler, self.memory.timers7(), dirty);
         }
     }
 }

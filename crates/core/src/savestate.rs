@@ -40,7 +40,7 @@
 //! Memory buffer sizes, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
 //! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
-//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, never before the overflow time the timer's own counter gives), and the ARM7 clock at `now` or one master cycle past it (booted machines).
+//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, at the later of the overflow time the timer's own counter gives and `now`, and not more than a slice behind it), and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -53,7 +53,7 @@
 //! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load.
 
 use crate::Machine;
-use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES, Scheduler};
+use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES, SLICE, Scheduler};
 use crate::timers::{TIMER_COUNT, Timers};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
@@ -116,14 +116,17 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 /// Whether the queue holds an overflow event for exactly the timers of `timers` that have one,
-/// each at or after the overflow time the timer itself gives (`timers.md`, "Model"). An event
-/// before it would fire a period early; one for a stopped or count-up timer would count a
-/// phantom overflow.
+/// each at the later of the overflow time the timer itself gives and `now` (`timers.md`,
+/// "Model"), and that time no more than one slice behind `now`. An event before it would fire a
+/// period early, one after it would drop an IRQ and a cascade, and an overflow time further
+/// behind than a slice cannot arise and would take the run loop forever to catch up. An event
+/// for a stopped or count-up timer would count a phantom overflow.
 fn timer_events_are_sane<const ARM9: bool>(scheduler: &Scheduler, timers: &Timers<ARM9>) -> bool {
+    let now = scheduler.now();
     (0..TIMER_COUNT).all(|index| {
         let times = scheduler.times_of(Timers::<ARM9>::event_kind(index));
         match (timers.overflow_time(index), times.as_slice()) {
-            (Some(due), [time]) => *time >= due,
+            (Some(due), [time]) => *time == due.max(now) && now.saturating_sub(due) <= SLICE,
             (None, []) => true,
             _ => false,
         }

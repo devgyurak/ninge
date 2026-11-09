@@ -497,7 +497,10 @@ fn given_an_arm7_write_that_computes_an_overflow_already_past_when_the_machine_l
 #[test]
 fn given_an_event_queued_at_now_for_a_lagging_arm7_when_the_state_is_saved_and_loaded_then_it_loads()
  {
-    let m = lagging_arm7_timer(START | IRQ);
+    // A lag of 40 cycles, within one slice (a lag past it cannot arise and is refused).
+    let mut m = machine();
+    step(&mut m, 40);
+    set7_at(&mut m, 0, 0, 0xFFFF, START | IRQ);
     let mut target = machine();
     assert_eq!(target.load_state(&m.save_state()), Ok(()));
 }
@@ -506,10 +509,11 @@ fn given_an_event_queued_at_now_for_a_lagging_arm7_when_the_state_is_saved_and_l
 fn given_a_late_event_when_it_fires_then_the_next_overflow_is_on_the_timers_own_tick_grid() {
     let mut m = lagging_arm7_timer(START | IRQ);
     step(&mut m, 1);
-    // The overflow was at 2, so the next is 2 + 1 tick = 4, not late-based.
+    // Overflows were due at 2, 4, ... 128 (one event settles at most SLICE of them), so the
+    // next is 130 on the timer's own grid, not late-based.
     assert_eq!(
         (m.irq7().if_(), m.timers7().overflow_time(0)),
-        (IF_TIMER0, Some(4))
+        (IF_TIMER0, Some(130))
     );
 }
 
@@ -538,6 +542,36 @@ fn given_a_stop_written_in_the_gap_before_the_late_event_fires_when_it_is_writte
     m.memory.write16_arm7(3, control_addr(0), 0);
     m.sync_timer_events();
     assert_eq!((m.irq7().if_(), timer_events(&m)), (IF_TIMER0, vec![]));
+}
+
+#[test]
+fn given_an_arm7_timer_whose_overflows_are_all_past_when_its_event_fires_then_every_one_is_processed_at_once()
+ {
+    // Due at 2, 4, ... while the master clock is at 40: one dispatch settles them all, so the
+    // next one is the first after `now` and the queue makes progress.
+    let mut m = machine();
+    step(&mut m, 39);
+    set7_at(&mut m, 0, 0, 0xFFFF, START | IRQ);
+    step(&mut m, 1);
+    assert_eq!(
+        (m.irq7().if_(), m.timers7().overflow_time(0)),
+        (IF_TIMER0, Some(42))
+    );
+}
+
+#[test]
+fn given_a_running_timer_0_when_only_its_ignored_count_up_bit_is_set_then_its_overflow_time_does_not_move()
+ {
+    // `timers.md`, "Count-up": timer 0's bit 2 has no effect, so it must not restart the phase.
+    let mut m = machine();
+    set9(&mut m, 0, 0, START | 3);
+    step(&mut m, 1000);
+    let before = m.timers9().overflow_time(0);
+    let tcm = tcm_now(&m);
+    m.memory
+        .write16(&tcm, control_addr(0), START | 3 | COUNT_UP);
+    m.sync_timer_events();
+    assert_eq!(m.timers9().overflow_time(0), before);
 }
 
 // ---------------------------------------------------------- ARM9 IRQ reaches the CPU
@@ -731,6 +765,39 @@ fn given_a_timer_event_earlier_than_the_overflow_when_loaded_then_it_is_refused_
         load_after(|m| {
             m.scheduler.cancel(kind9(0));
             m.scheduler.schedule(5, kind9(0));
+        }),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_timer_origin_long_before_now_when_loaded_then_it_is_refused_as_corrupt() {
+    // Timer 0's event sits at `now` but its own overflow time is 2^40 cycles in the past: a
+    // dispatch would fire it once per round without the CPU advancing, practically forever.
+    const FAR: u64 = 1 << 40;
+    let mut m = machine();
+    set9(&mut m, 0, 0xFFFF, START);
+    m.scheduler.now = FAR;
+    m.arm7_clock = FAR;
+    m.scheduler.cancel(EventKind::LineStart);
+    m.scheduler.cancel(EventKind::HBlankStart);
+    m.scheduler.schedule(FAR + 50, EventKind::HBlankStart);
+    m.scheduler.schedule(FAR + 100, EventKind::LineStart);
+    m.scheduler.cancel(kind9(0));
+    m.scheduler.schedule(FAR, kind9(0));
+    assert_eq!(
+        machine().load_state(&m.save_state()),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_timer_event_far_later_than_the_overflow_when_loaded_then_it_is_refused_as_corrupt() {
+    // Timer 0's overflow is at 32; an event at 1,000,000 would drop its IRQ and its cascade.
+    assert_eq!(
+        load_after(|m| {
+            m.scheduler.cancel(kind9(0));
+            m.scheduler.schedule(1_000_000, kind9(0));
         }),
         Err(SavestateError::Corrupt)
     );

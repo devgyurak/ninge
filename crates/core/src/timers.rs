@@ -257,15 +257,20 @@ impl<const ARM9: bool> Timers<ARM9> {
     /// The gap is under one slice, so a timer overflows at most `SLICE / 2` times in it; the bound
     /// also keeps a hand-made state with a far-off origin from looping for ages.
     fn settle(&mut self, now: u64) -> u32 {
+        (0..TIMER_COUNT).fold(0, |requests, index| {
+            requests | self.settle_timer(index, now)
+        })
+    }
+
+    /// [`Timers::settle`] for timer `index` alone: what its event does when it fires.
+    pub(crate) fn settle_timer(&mut self, index: usize, now: u64) -> u32 {
         let mut requests = 0;
-        for index in 0..TIMER_COUNT {
-            for _ in 0..SLICE {
-                let Some(due) = self.overflow_time(index).filter(|&due| due <= now) else {
-                    break;
-                };
-                requests |= self.overflow(index, due);
-                self.dirty |= 1 << index;
-            }
+        for _ in 0..SLICE {
+            let Some(due) = self.overflow_time(index).filter(|&due| due <= now) else {
+                break;
+            };
+            requests |= self.overflow(index, due);
+            self.dirty |= 1 << index;
         }
         requests
     }
@@ -284,8 +289,10 @@ impl<const ARM9: bool> Timers<ARM9> {
         let old = timer.control;
         let new = u16::from(value) & CONTROL_MASK;
         timer.control = new;
-        // An IRQ-enable change leaves the counter and the overflow time alone.
-        if old & !CONTROL_IRQ_ENABLE == new & !CONTROL_IRQ_ENABLE {
+        // An IRQ-enable change leaves the counter and the overflow time alone, and so does a
+        // change of timer 0's count-up bit, which has no effect (`counts_up`).
+        let inert = CONTROL_IRQ_ENABLE | if index == 0 { CONTROL_COUNT_UP } else { 0 };
+        if old & !inert == new & !inert {
             return;
         }
         timer.counter = match (was_running, new & CONTROL_START != 0) {

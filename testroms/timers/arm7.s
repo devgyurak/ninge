@@ -72,9 +72,9 @@ spin_irq:
     bne spin_irq
     ldr r0, [r9, #0x214]
     RECORD 5, r0
+    TM 0x02, 0                 @ stop first, or it could latch IF again after the acknowledge
     mov r0, #0x08
     str r0, [r9, #0x214]       @ acknowledge
-    TM 0x02, 0
     ldr r0, [r9, #0x214]
     RECORD 6, r0
     ldrh r0, [r6, #2]

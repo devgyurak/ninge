@@ -107,13 +107,20 @@ hardware behavior.
   clock can compute an overflow that is already past; its event is queued for `now`, and the next
   overflow stays on the timer's own tick grid, so the count does not drift. Only the delivery of
   the IRQ is late, by less than one slice.
+- **An event settles all of its timer's due overflows.** A late event (see above) processes every
+  overflow of its timer already due, at most `SLICE`, so the queue always moves forward. A saved
+  state is refused unless each timer's event is at the later of its overflow time and `now`, and
+  that overflow time is at most one slice behind `now`.
 - **A write in that gap settles first.** An event fires at the end of a round, so a register
   write can land after an overflow's time but before its event. Any write to a timer register
   first processes the overflows already due at the write's time, with the settings they
   happened under: their IF bits are raised and a count-up timer behind them ticks. A reload or
   control change then applies to what follows. The gap is under one slice, so at most `SLICE / 2`
-  overflows are settled this way. A read in the gap computes the counter from time and is right;
-  a count-up timer read there is one tick behind until the event fires.
+  overflows are settled this way. A read in the gap computes a clock-driven counter from time and is
+  right; a count-up timer read there is behind by the overflows of the timer feeding it that
+  are due but not yet fired, at most one slice's worth (`SLICE` divided by that timer's period,
+  so for a fast feeder several ticks) until the event fires. A feeder with a period longer
+  than a slice is never late this way.
 
 ## Unverified
 

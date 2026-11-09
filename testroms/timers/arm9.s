@@ -159,9 +159,9 @@ wait_irqs:
     SPIN 100
     ldr r0, [r9, #0x214]
     RECORD 11, r0
+    TM 0x06, 0                 @ stop first, or it could latch IF again after the acknowledge
     mov r0, #0x10
     str r0, [r9, #0x214]       @ acknowledge
-    TM 0x06, 0
 
     @ ---- timer 0 has no previous timer: its count-up bit is ignored
     TM 0x00, 0xFFF0
@@ -169,9 +169,9 @@ wait_irqs:
     SPIN 100
     ldr r0, [r9, #0x214]
     RECORD 12, r0
+    TM 0x02, 0                 @ stop first, then acknowledge
     mov r0, #0x08
     str r0, [r9, #0x214]
-    TM 0x02, 0
 
     @ ---- the reload is loaded at the start; a later write does not touch the counter
     ldr r0, =0x00801000        @ control 80h in the high half, reload 1000h in the low

@@ -11,8 +11,12 @@ use serde::{Deserialize, Serialize};
 
 /// DISPSTAT, at `0400_0004h` (`display-timing.md`, "Registers").
 pub const DISPSTAT_ADDR: u32 = 0x0400_0004;
+/// DISPSTAT's high byte (the VCount setting's low byte).
+const DISPSTAT_HIGH_ADDR: u32 = DISPSTAT_ADDR + 1;
 /// VCOUNT, at `0400_0006h` (`display-timing.md`, "Registers").
 pub const VCOUNT_ADDR: u32 = 0x0400_0006;
+/// VCOUNT's high byte (bit 8 of the line).
+const VCOUNT_HIGH_ADDR: u32 = VCOUNT_ADDR + 1;
 
 /// Lines in a frame (`display-timing.md`, "Frame layout").
 pub const LINES: u16 = 263;
@@ -191,8 +195,8 @@ impl Timing {
     /// The byte of DISPSTAT or VCOUNT at `addr` for the ARM9 when `ARM9`, else the ARM7.
     pub(crate) fn read_byte<const ARM9: bool>(&self, addr: u32) -> Option<u8> {
         let (value, base) = match addr {
-            DISPSTAT_ADDR | 0x0400_0005 => (self.dispstat::<ARM9>(), DISPSTAT_ADDR),
-            VCOUNT_ADDR | 0x0400_0007 => (self.vcount, VCOUNT_ADDR),
+            DISPSTAT_ADDR | DISPSTAT_HIGH_ADDR => (self.dispstat::<ARM9>(), DISPSTAT_ADDR),
+            VCOUNT_ADDR | VCOUNT_HIGH_ADDR => (self.vcount, VCOUNT_ADDR),
             _ => return None,
         };
         Some((value >> (8 * (addr - base))) as u8)
@@ -210,7 +214,7 @@ impl Timing {
             DISPSTAT_ADDR => {
                 stat.control = (stat.control & 0xFF00) | (u16::from(value) & WRITABLE & 0x00FF);
             }
-            0x0400_0005 => {
+            DISPSTAT_HIGH_ADDR => {
                 stat.control = (stat.control & 0x00FF) | (u16::from(value) << SETTING_LOW_SHIFT);
             }
             _ => {}

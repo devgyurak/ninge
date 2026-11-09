@@ -671,7 +671,7 @@ fn given_a_booted_state_with_no_frame_end_queued_when_loaded_then_it_is_corrupt_
     );
 }
 
-/// A booted machine whose queue is `events` (time, kind) instead of its own, at clock `now`.
+/// A booted machine whose queue holds only frame ends at `events` (times), at clock `now`.
 fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
     let mut machine = booted(rom, 1);
     machine.scheduler.pop_due(u64::MAX);
@@ -728,6 +728,33 @@ fn given_a_booted_state_whose_arm7_lags_the_clock_when_loaded_then_it_is_corrupt
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
     saver.arm7_clock = 0;
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_the_latest_state_the_old_margin_allowed_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    // now = MAX - 2F with the frame end at MAX - F passed the first margin check; the frame
+    // after it saturates at u64::MAX and stays due.
+    let rom = counter_rom();
+    let frame = crate::scheduler::FRAME_CYCLES;
+    let now = u64::MAX - 2 * frame;
+    let saver = with_queue(&rom, now, &[u64::MAX - frame]);
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_clock_just_above_the_time_limit_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let now = crate::scheduler::MAX_TIME + 1;
+    let saver = with_queue(&rom, now, &[now + 10]);
     assert_eq!(
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)

@@ -115,16 +115,15 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 impl Machine {
-    /// Whether the queue holds exactly one frame end, due within one frame of `now`, and `now`
-    /// leaves room for two more frames (`scheduler.md`, "Savestate checks"). Anything else
-    /// would make `run_frame` skip over its frame, wait on a far-off one, or spin on an event
-    /// that saturates at `u64::MAX`.
+    /// Whether the queue holds exactly one frame end, due within one frame of `now`
+    /// (`scheduler.md`, "Savestate checks"). Anything else would make `run_frame` skip over its
+    /// frame or wait on a far-off one. The time limit is checked with the scheduler
+    /// (`Scheduler::is_well_formed`), which keeps `now + FRAME_CYCLES` from overflowing.
     fn frame_end_is_sane(&self) -> bool {
         let now = self.scheduler.now();
-        let room = u64::MAX - 2 * FRAME_CYCLES;
         matches!(
             self.scheduler.times_of(EventKind::FrameEnd).as_slice(),
-            [time] if now <= room && (now..=now + FRAME_CYCLES).contains(time)
+            [time] if now.checked_add(FRAME_CYCLES).is_some_and(|end| (now..=end).contains(time))
         )
     }
 

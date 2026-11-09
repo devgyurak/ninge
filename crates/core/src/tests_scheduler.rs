@@ -525,3 +525,25 @@ fn given_arm7_stores_to_main_ram_when_the_arm9_peeks_it_then_both_cpus_see_the_s
     machine.run_frame();
     assert_eq!(machine.arm9_peek32(RECORD + 0x100), 0xA5);
 }
+
+/// Runs two frames of a machine whose clock sits at the very edge of `u64`, as only a
+/// hand-made machine can; returns the frames counted.
+fn frames_counted_at_the_edge_of_time() -> u64 {
+    let mut machine = booted(&counting_rom());
+    machine.scheduler.pop_due(u64::MAX);
+    machine.scheduler.now = u64::MAX - 2 * FRAME_CYCLES;
+    machine.arm7_clock = machine.scheduler.now;
+    machine
+        .scheduler
+        .schedule(u64::MAX - FRAME_CYCLES, EventKind::FrameEnd);
+    machine.run_frame();
+    machine.run_frame();
+    machine.frame_count()
+}
+
+#[test]
+fn given_a_clock_at_the_edge_of_u64_when_two_frames_run_then_both_return() {
+    // The second frame end saturates at u64::MAX and is due again at once; each `run_frame`
+    // must still return instead of popping it forever.
+    assert_eq!(frames_counted_at_the_edge_of_time(), 2);
+}

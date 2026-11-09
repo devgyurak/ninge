@@ -24,6 +24,10 @@ pub const ARM7_INSTRUCTION_COST: u64 = 2;
 /// does not allocate.
 const EVENT_CAPACITY: usize = 16;
 
+/// The latest time the clock or an event may hold, about 2,180 years of emulated time. A
+/// savestate beyond it is refused, so frame ends never reach the saturation point of `u64`.
+pub const MAX_TIME: u64 = 1 << 62;
+
 /// What an event does when it fires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EventKind {
@@ -130,14 +134,24 @@ impl Scheduler {
         self.queue.0.reserve(spare);
     }
 
+    /// Like [`Scheduler::pop_due`], but only an event scheduled before the sequence number
+    /// `before_seq`. An event a handler schedules waits for the next round.
+    pub(crate) fn pop_due_before(&mut self, now: u64, before_seq: u64) -> Option<Event> {
+        match self.queue.0.peek() {
+            Some(Reverse(event)) if event.time <= now && event.seq < before_seq => {
+                self.queue.0.pop().map(|Reverse(event)| event)
+            }
+            _ => None,
+        }
+    }
+
     /// Whether decoded state keeps the invariants the run loop relies on: every queued event is
     /// not before `now`, and `next_seq` is above every queued sequence number (`scheduler.md`,
     /// "Savestate checks"). A savestate that decodes to anything else is corrupt.
     pub(crate) fn is_well_formed(&self) -> bool {
-        self.queue
-            .0
-            .iter()
-            .all(|Reverse(event)| event.time >= self.now && event.seq < self.next_seq)
+        self.queue.0.iter().all(|Reverse(event)| {
+            (self.now..=MAX_TIME).contains(&event.time) && event.seq < self.next_seq
+        }) && self.now <= MAX_TIME
     }
 }
 
@@ -159,9 +173,13 @@ pub(crate) trait Participants {
     fn dispatch(&mut self, event: Event);
 }
 
-/// Fires every event due at `at`, in `(time, seq)` order, including ones a handler schedules.
+/// Fires every event due at `at` that was queued when this started, in `(time, seq)` order.
+///
+/// An event a handler schedules waits for the next round. If a clock ever saturated, an event
+/// that reschedules itself into the past would otherwise be popped forever and hang the host.
 fn dispatch_due<P: Participants>(participants: &mut P, at: u64) {
-    while let Some(event) = participants.scheduler().pop_due(at) {
+    let before_seq = participants.scheduler().next_seq;
+    while let Some(event) = participants.scheduler().pop_due_before(at, before_seq) {
         participants.dispatch(event);
     }
 }

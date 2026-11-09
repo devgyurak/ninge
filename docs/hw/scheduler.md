@@ -68,6 +68,10 @@ heap. Order is **(timestamp, sequence number)**, where the sequence number is as
 counter that only goes up, so two events with the same timestamp fire in the order they were
 scheduled. The heap's internal order is never relied on.
 
+Events due at the target fire in order, but only those queued when the dispatch began: an
+event a handler schedules waits for the next round. This keeps a handler that reschedules itself
+from being popped forever if the clock ever saturated; the machine would stall, not the host.
+
 Only one kind exists so far, `FrameEnd`, scheduled 1,120,380 master cycles apart. It ends
 `run_frame`.
 
@@ -117,8 +121,9 @@ A saved machine is refused on load when:
 - the queue does not hold exactly one frame end, or that frame end is not due within one frame
   (`FRAME_CYCLES`) of `now`: two at the same time would fire in one round and `run_frame` would
   step over its frame, and one far ahead would take effectively forever;
-- `now` is within two frames of `u64::MAX`, where the next frame end would saturate and stay
-  due forever;
+- `now` or a queued event's time is above `MAX_TIME` (2^62 master cycles, about 2,180 years of
+  emulated time, which no real run reaches). A smaller margin below `u64::MAX` cannot work: a
+  frame end would eventually saturate at the maximum and stay due;
 - a program is booted and the ARM7 clock is behind `now` or two or more master cycles ahead of
   it. A booted machine is always settled, so the ARM7 is at `now` or one master cycle past it.
   (A machine with no program steps only the ARM9, so its ARM7 clock may lag.)
@@ -128,6 +133,8 @@ A saved machine is refused on load when:
 - Two events at the same time fire in scheduling order.
 - Events scheduled out of timestamp order fire in timestamp order.
 - An event in the future is not returned when popping at an earlier time.
+- A machine with no program that is stepped past its frame end with `step_arm9` has an event
+  before `now`, so its savestate is refused on load. It has no program to save.
 - A sequence counter is a `u64` and cannot realistically wrap; it uses wrapping arithmetic so
   that a hand-made state cannot panic.
 

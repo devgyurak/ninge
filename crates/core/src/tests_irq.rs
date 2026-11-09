@@ -37,6 +37,8 @@ const SYSTEM_I_SET: u32 = 0x9F;
 /// IRQ mode, I set, ARM state, flags clear.
 const IRQ_ENTRY_CPSR: u32 = 0x92;
 const IRQ_MODE: u32 = 0x12;
+/// The F flag, which an IRQ entry leaves alone.
+const F_FLAG: u32 = 0x40;
 const VECTOR_PC: u32 = 0x18 + 8;
 
 /// `mov r0, #0x55`, `mov r1, #0x66`, `b .`.
@@ -455,9 +457,10 @@ fn given_a_request_on_the_arm7_when_both_cpus_run_then_the_arm9_is_never_interru
     let mut m = prepared7(ALL_ON);
     enable9(&mut m, 1, TIMER0);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
-    m.step_arm9();
+    // Only the bare steps: `step_arm9` would also run the ARM7 up to the ARM9's time.
     m.step_arm7_instruction();
-    m.step_arm9();
+    m.step_arm9_instruction();
+    m.step_arm9_instruction();
     assert_eq!(
         (
             in_irq_mode(m.arm7().regs().cpsr()),
@@ -485,5 +488,71 @@ fn given_the_same_request_on_both_cpus_with_only_the_arm9_enabled_when_both_run_
             m.irq7().if_()
         ),
         (true, false, TIMER0)
+    );
+}
+
+// ---------------------------------------------------------------- the scheduler's own loop
+
+#[test]
+fn given_a_pending_enabled_request_on_each_cpu_when_a_frame_runs_then_both_enter_irq_mode_at_the_start()
+ {
+    let mut m = machine();
+    enable9(&mut m, 1, TIMER0);
+    enable7(&mut m, 1, TIMER0);
+    m.request_irq9(TIMER0);
+    m.request_irq7(TIMER0);
+    m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
+    m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
+    m.run_frame();
+    // The entry replaced the first instruction (r0 stays 0), LR_irq = start + 4, and the
+    // unacknowledged request is still latched.
+    let (s9, s7) = (seen9(&m), seen7(&m));
+    assert_eq!(
+        (
+            (s9.0, s9.1, s9.4),
+            (s7.0, s7.1, s7.4),
+            (m.irq9().if_(), m.irq7().if_())
+        ),
+        (
+            (IRQ_ENTRY_CPSR, ENTRY9 + 4, 0),
+            (IRQ_ENTRY_CPSR, ENTRY7 + 4, 0),
+            (TIMER0, TIMER0)
+        )
+    );
+}
+
+// ---------------------------------------------------------------- Thumb state
+
+/// `add r0, pc, #1`, `bx r0` (to the Thumb code at +8), then Thumb `movs r0, #0x55`,
+/// `movs r1, #0x66`, `b .`.
+const THUMB_PROGRAM: [u32; 4] = [0xE28F_0001, 0xE12F_FF10, 0x2166_2055, 0x0000_E7FE];
+
+#[test]
+fn given_the_arm9_in_thumb_state_when_an_irq_is_taken_then_lr_is_the_next_instruction_plus_4_and_the_entry_is_arm_state()
+ {
+    let mut image = Image::valid();
+    image.arm9_code = words(&THUMB_PROGRAM);
+    image.arm7_code = words(&PROGRAM);
+    let mut m = Machine::new();
+    m.load_rom(image.build()).expect("synthetic image");
+    enable9(&mut m, 1, TIMER0);
+    m.step_arm9_instruction();
+    m.step_arm9_instruction();
+    let thumb_cpsr = m.arm9().regs().cpsr() & !0x80;
+    m.arm9.regs_mut().set_cpsr(thumb_cpsr);
+    m.request_irq9(TIMER0);
+    m.step_arm9_instruction();
+    // The Thumb code starts at ENTRY9 + 8; its first instruction did not run (r0 is still the
+    // address `bx` jumped through), the CPSR is ARM state in IRQ mode with I set, SPSR_irq holds
+    // the Thumb CPSR, F is left as it was (set at boot, an IRQ does not touch it), and LR_irq = the next Thumb instruction's address + 4.
+    let (cpsr, lr, spsr, _, r0, _) = seen9(&m);
+    assert_eq!(
+        (cpsr, lr, spsr, r0),
+        (
+            IRQ_ENTRY_CPSR | F_FLAG,
+            ENTRY9 + 8 + 4,
+            Some(thumb_cpsr),
+            ENTRY9 + 9
+        )
     );
 }

@@ -232,13 +232,13 @@ impl Machine {
 
     /// The ARM9's interrupt controller (IME, IE, IF).
     // The debugger's CPU panel (#56) shows it beside the ARM9's registers.
-    pub fn irq9(&self) -> &InterruptController {
+    pub fn irq9(&self) -> &InterruptController<true> {
         self.memory.irq9()
     }
 
     /// The ARM7's interrupt controller (IME, IE, IF).
     // The debugger's CPU panel (#56) shows it beside the ARM7's registers.
-    pub fn irq7(&self) -> &InterruptController {
+    pub fn irq7(&self) -> &InterruptController<false> {
         self.memory.irq7()
     }
 
@@ -288,8 +288,8 @@ impl Machine {
     }
 
     /// One ARM9 instruction and its cost, with nothing else. A debugger's single step that meets
-    /// an asserted line therefore enters the vector without executing an instruction. If the controller's line was
-    /// asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
+    /// an asserted line therefore enters the vector without executing an instruction. If the
+    /// controller's line was asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
     /// costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ source.
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").

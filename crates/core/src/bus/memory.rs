@@ -9,7 +9,7 @@
 use super::TcmConfig;
 use crate::cpu::Tcm;
 use crate::gpu2d::Gpu2d;
-use crate::irq::{InterruptController, IrqCpu};
+use crate::irq::InterruptController;
 use serde::{Deserialize, Serialize};
 
 /// Page size of the fast-path table: 16 KiB (AGENTS.md §2 rule 9).
@@ -157,8 +157,8 @@ pub struct Memory {
     // Engine A's display registers, reached through the I/O slow path.
     gpu2d: Gpu2d,
     // Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
-    irq9: InterruptController,
-    irq7: InterruptController,
+    irq9: InterruptController<true>,
+    irq7: InterruptController<false>,
     // Derived from `vramcnt_a` and `wramcnt`, so the tables are not saved; `build_page_table`
     // rebuilds both. Empty after a load until then, which reads as all-unmapped rather than
     // panicking. One entry per 16 KiB page, one table per CPU (the page-table decision is
@@ -249,8 +249,8 @@ impl Memory {
             shared_wram: vec![0; SHARED_WRAM_SIZE],
             wramcnt: 0,
             gpu2d: Gpu2d::new(),
-            irq9: InterruptController::new(IrqCpu::Arm9),
-            irq7: InterruptController::new(IrqCpu::Arm7),
+            irq9: InterruptController::new(),
+            irq7: InterruptController::new(),
             pages9: Vec::new(),
             pages7: Vec::new(),
         };
@@ -524,8 +524,8 @@ impl Memory {
             && self.shared_wram.len() == SHARED_WRAM_SIZE
             && self.vramcnt_a & !VRAMCNT_USED == 0
             && self.wramcnt & !WRAMCNT_MODE_MASK == 0
-            && self.irq9.is_well_formed(IrqCpu::Arm9)
-            && self.irq7.is_well_formed(IrqCpu::Arm7)
+            && self.irq9.is_well_formed()
+            && self.irq7.is_well_formed()
     }
 
     /// Stores VRAMCNT_A and rebuilds the page table, since the write can move the bank.
@@ -536,22 +536,22 @@ impl Memory {
     }
 
     /// The ARM9's interrupt controller.
-    pub fn irq9(&self) -> &InterruptController {
+    pub fn irq9(&self) -> &InterruptController<true> {
         &self.irq9
     }
 
     /// The ARM7's interrupt controller.
-    pub fn irq7(&self) -> &InterruptController {
+    pub fn irq7(&self) -> &InterruptController<false> {
         &self.irq7
     }
 
     /// The ARM9's interrupt controller, for a source to raise a request.
-    pub(crate) fn irq9_mut(&mut self) -> &mut InterruptController {
+    pub(crate) fn irq9_mut(&mut self) -> &mut InterruptController<true> {
         &mut self.irq9
     }
 
     /// The ARM7's interrupt controller, for a source to raise a request.
-    pub(crate) fn irq7_mut(&mut self) -> &mut InterruptController {
+    pub(crate) fn irq7_mut(&mut self) -> &mut InterruptController<false> {
         &mut self.irq7
     }
 
@@ -730,14 +730,7 @@ mod tests_well_formed {
     #[test]
     fn given_an_ie_bit_outside_the_arm9_mask_when_checked_then_it_is_not_well_formed() {
         let mut memory = Memory::new();
-        memory.irq9.ie = 1 << 7;
-        assert!(!memory.is_well_formed());
-    }
-
-    #[test]
-    fn given_the_two_controllers_swapped_when_checked_then_it_is_not_well_formed() {
-        let mut memory = Memory::new();
-        std::mem::swap(&mut memory.irq9, &mut memory.irq7);
+        memory.irq9 = InterruptController::with_unchecked_ie(1 << 7);
         assert!(!memory.is_well_formed());
     }
 

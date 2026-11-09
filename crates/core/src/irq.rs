@@ -19,31 +19,19 @@ pub const VALID_BITS_ARM9: u32 = 0x003F_3F7F;
 /// The IE and IF bits that exist on the ARM7 (`interrupts.md`, "IE and IF bits").
 pub const VALID_BITS_ARM7: u32 = 0x01DF_3FFF;
 
-/// Which CPU a controller belongs to: it decides the valid bits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IrqCpu {
-    /// The ARM9.
-    Arm9,
-    /// The ARM7.
-    Arm7,
-}
-
-/// IME, IE and IF of one CPU. Plain data.
+/// IME, IE and IF of one CPU: the ARM9's when `ARM9` is true, the ARM7's otherwise. Plain data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InterruptController {
-    cpu: IrqCpu,
+pub struct InterruptController<const ARM9: bool> {
     ime: bool,
-    // `pub(crate)` so the memory's well-formedness test can corrupt it.
-    pub(crate) ie: u32,
+    ie: u32,
     if_: u32,
 }
 
-impl InterruptController {
+impl<const ARM9: bool> InterruptController<ARM9> {
     /// A controller in its power-on state: everything 0.
     // TODO(hw-unverified): the reset values are not stated (`interrupts.md`, "Unverified").
-    pub fn new(cpu: IrqCpu) -> Self {
+    pub fn new() -> Self {
         Self {
-            cpu,
             ime: false,
             ie: 0,
             if_: 0,
@@ -71,18 +59,23 @@ impl InterruptController {
         self.ime && self.ie & self.if_ != 0
     }
 
-    /// Whether this controller belongs to `cpu` and holds only bits that exist there. A savestate
-    /// that decodes to anything else is corrupt (`savestate`).
-    pub(crate) fn is_well_formed(&self, cpu: IrqCpu) -> bool {
-        let outside = !self.valid_bits();
-        self.cpu == cpu && (self.ie | self.if_) & outside == 0
+    /// Whether IE and IF hold only bits that exist on this CPU. A savestate that decodes to
+    /// anything else is corrupt (`savestate`).
+    pub(crate) fn is_well_formed(&self) -> bool {
+        (self.ie | self.if_) & !Self::valid_bits() == 0
+    }
+
+    /// A controller with IE set as given, unmasked, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn with_unchecked_ie(ie: u32) -> Self {
+        Self { ie, ..Self::new() }
     }
 
     /// The IE and IF bits that exist on this CPU.
-    fn valid_bits(&self) -> u32 {
-        match self.cpu {
-            IrqCpu::Arm9 => VALID_BITS_ARM9,
-            IrqCpu::Arm7 => VALID_BITS_ARM7,
+    fn valid_bits() -> u32 {
+        match ARM9 {
+            true => VALID_BITS_ARM9,
+            false => VALID_BITS_ARM7,
         }
     }
 
@@ -98,7 +91,7 @@ impl InterruptController {
         )
     )]
     pub(crate) fn request(&mut self, mask: u32) {
-        self.if_ |= mask & self.valid_bits();
+        self.if_ |= mask & Self::valid_bits();
     }
 
     /// The byte of the register at `addr`, if one of the three holds it.
@@ -129,7 +122,7 @@ impl InterruptController {
             // TODO(hw-unverified): a bit that does not exist is dropped (`interrupts.md`, "Unverified").
             IE_ADDR => {
                 let byte_mask = 0xFF << shift;
-                self.ie = (self.ie & !byte_mask) | (part & byte_mask & self.valid_bits());
+                self.ie = (self.ie & !byte_mask) | (part & byte_mask & Self::valid_bits());
             }
             _ => self.if_ &= !part,
         }
@@ -141,6 +134,12 @@ impl InterruptController {
             let offset = addr.checked_sub(base).filter(|&o| o < 4)?;
             Some((base, offset * 8))
         })
+    }
+}
+
+impl<const ARM9: bool> Default for InterruptController<ARM9> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

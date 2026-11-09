@@ -14,14 +14,14 @@ use crate::cart::test_image::{Image, words};
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_082;
-const PINNED_HASH: u64 = 0x7ce7_4027_b274_ce65;
+const PINNED_LEN: usize = 4_473_080;
+const PINNED_HASH: u64 = 0x4371_235a_29b3_6dce;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
 /// shared-WRAM contents); the length is unchanged.
-const PINNED_BOOTED_LEN: usize = 4_473_163;
-const PINNED_BOOTED_HASH: u64 = 0xbebf_fbbc_2e1e_b2b1;
+const PINNED_BOOTED_LEN: usize = 4_473_161;
+const PINNED_BOOTED_HASH: u64 = 0x1651_6f32_95e7_c55e;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

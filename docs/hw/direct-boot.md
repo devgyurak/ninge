@@ -28,7 +28,7 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not
 holding cartridge data is zero-filled. The values the BIOS and firmware write into `027FF800h`-
 `027FFC41h`, the user settings and the firmware boot-code fragments are not modeled
-(`TODO(phase3)`: shared state and IPC need them). Binaries go through `Memory::write8`, so
+(`TODO(phase3)`: shared state and IPC need them). Binaries go through the bus views' `write8`, so
 they land only in main RAM.
 
 ## ARM9 state at entry

@@ -4,7 +4,7 @@ Sources: GBATEK "DS Video" display dimensions and timings (dot clock, dots and l
 frame); GBATEK "LCD I/O Display Status and Interrupt Control" (DISPSTAT, VCOUNT) with its DS
 notes; GBATEK "DS Interrupts" for the three IE/IF bits (see `interrupts.md`).
 Used by: `crates/core/src/gpu2d/timing.rs`, `crates/core/src/scheduler/`,
-`crates/core/src/bus/memory.rs`, `crates/core/src/lib.rs`   Phase: 3 (#104)
+`crates/core/src/io.rs`, `crates/core/src/lib.rs`   Phase: 3 (#104)
 
 The screens are drawn line by line. Each line has a visible part and a blanking part, and the
 frame ends with a block of lines that are not shown. Two registers report where the display is

@@ -5,7 +5,7 @@
 //! `(c << 3) | (c >> 2)` is the note's host choice; table cases hold literal results.
 
 use super::*;
-use crate::bus::TcmConfig;
+use crate::cpu::Bus;
 use crate::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 
 /// VRAMCNT_A (`docs/hw/vram-banks.md`).
@@ -22,31 +22,24 @@ const POWCNT1_ON_TOP: u16 = 0x820F;
 const POWCNT1_ON_BOTTOM: u16 = 0x020F;
 const PIXELS: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 
-fn tcm(m: &Machine) -> TcmConfig {
-    TcmConfig::from_cp15(m.arm9.cp15())
-}
-
 fn w8(m: &mut Machine, addr: u32, v: u8) {
-    let t = tcm(m);
-    m.memory.write8(&t, addr, v);
+    m.bus9().write8(addr, v);
 }
 
 fn w16(m: &mut Machine, addr: u32, v: u16) {
-    let t = tcm(m);
-    m.memory.write16(&t, addr, v);
+    m.bus9().write16(addr, v);
 }
 
 fn w32(m: &mut Machine, addr: u32, v: u32) {
-    let t = tcm(m);
-    m.memory.write32(&t, addr, v);
+    m.bus9().write32(addr, v);
 }
 
 fn r16(m: &Machine, addr: u32) -> u16 {
-    m.memory.read16(&tcm(m), addr)
+    m.arm9_peek16(addr)
 }
 
 fn r32(m: &Machine, addr: u32) -> u32 {
-    m.memory.read32(&tcm(m), addr)
+    m.arm9_peek32(addr)
 }
 
 /// A machine with bank A mapped at the LCDC window, mode 2 block 0, engine A on top.

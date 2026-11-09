@@ -4,7 +4,9 @@
 
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::{BinarySpec, HEADER_LEN, Header};
-use crate::cpu::{Bank, Cpu};
+use crate::cpu::{Bank, Bus, Cpu};
+use crate::io::Io;
+use crate::scheduler::Scheduler;
 
 /// WRAMCNT, and the mode that gives all of the shared WRAM to the ARM7 (`wramcnt.md`).
 const WRAMCNT_ADDR: u32 = 0x0400_0247;
@@ -31,17 +33,17 @@ const IP_REGISTER: usize = 12;
 
 /// Copies `bytes` to `address` through the ARM9 data bus, so they land where the ARM9 would see
 /// them.
-fn place(memory: &mut Memory, tcm: &TcmConfig, address: u32, bytes: &[u8]) {
+fn place(view: &mut Arm9View, address: u32, bytes: &[u8]) {
     bytes.iter().enumerate().for_each(|(index, &byte)| {
-        memory.write8(tcm, address.wrapping_add(index as u32), byte);
+        view.write8(address.wrapping_add(index as u32), byte);
     });
 }
 
 /// Copies `bytes` to `address` through the ARM7 data bus: main RAM, or the `037F_8000h` range,
 /// which lands in shared or ARM7 WRAM as WRAMCNT says (`wramcnt.md`).
-fn place7(memory: &mut Memory, address: u32, bytes: &[u8]) {
+fn place7(view: &mut Arm7View, address: u32, bytes: &[u8]) {
     bytes.iter().enumerate().for_each(|(index, &byte)| {
-        memory.write8_arm7(0, address.wrapping_add(index as u32), byte);
+        view.write8(address.wrapping_add(index as u32), byte);
     });
 }
 
@@ -62,27 +64,34 @@ pub(crate) fn boot(
     arm9: &mut Cpu<true>,
     arm7: &mut Cpu<false>,
     memory: &mut Memory,
+    io: &mut Io,
+    scheduler: &mut Scheduler,
     rom: &[u8],
     header: &Header,
 ) {
     // TODO(hw-unverified): CP15 is left at power-on, so both TCMs are disabled here
     // (`direct-boot.md`, "CP15 state at entry").
     let tcm = TcmConfig::from_cp15(arm9.cp15());
+    let mut view = Arm9View::new(memory, io, scheduler, tcm, 0);
     if let Some(copy) = rom.get(..HEADER_LEN) {
-        place(memory, &tcm, HEADER_COPY_ADDRESS, copy);
+        place(&mut view, HEADER_COPY_ADDRESS, copy);
     }
     // TODO(hw-unverified): the ARM9 binary is placed before the ARM7's; GBATEK gives no order.
     if let Some(bytes) = binary_bytes(rom, &header.arm9) {
-        place(memory, &tcm, header.arm9.ram_address, bytes);
+        place(&mut view, header.arm9.ram_address, bytes);
     }
     // All 32 KiB of shared WRAM go to the ARM7 first, so the boot area at `037F_8000h`, its stacks
     // at `0380_FD80h` and the IRQ vector at `0380_FFFCh` are different memory; with mode 0 they
     // would overlap through the ARM7's 64 KiB repetition (`wramcnt.md`, "Behavior").
     // TODO(hw-unverified): the value after boot is inferred, not stated, and leaves the ARM9
     // stacks at `0300_2F7Ch` unbacked (`wramcnt.md`, "Unverified").
-    memory.write8(&tcm, WRAMCNT_ADDR, WRAMCNT_ARM7_ALL);
+    view.write8(WRAMCNT_ADDR, WRAMCNT_ARM7_ALL);
     if let Some(bytes) = binary_bytes(rom, &header.arm7) {
-        place7(memory, header.arm7.ram_address, bytes);
+        place7(
+            &mut Arm7View::new(memory, io, scheduler, 0),
+            header.arm7.ram_address,
+            bytes,
+        );
     }
 
     let entry = header.arm9.entry;
@@ -93,7 +102,7 @@ pub(crate) fn boot(
     regs.set(LINK_REGISTER, entry);
     regs.set_banked(Bank::Irq, STACK_REGISTER, SP_IRQ);
     regs.set_banked(Bank::Supervisor, STACK_REGISTER, SP_SUPERVISOR);
-    let mut view = Arm9View::new(memory, tcm);
+    let mut view = Arm9View::new(memory, io, scheduler, tcm, 0);
     arm9.start_at(&mut view, entry);
 
     let entry7 = header.arm7.entry;
@@ -104,6 +113,6 @@ pub(crate) fn boot(
     regs7.set(LINK_REGISTER, entry7);
     regs7.set_banked(Bank::Irq, STACK_REGISTER, ARM7_SP_IRQ);
     regs7.set_banked(Bank::Supervisor, STACK_REGISTER, ARM7_SP_SUPERVISOR);
-    let mut view7 = Arm7View::new(memory, 0);
+    let mut view7 = Arm7View::new(memory, io, scheduler, 0);
     arm7.start_at(&mut view7, entry7);
 }

@@ -13,6 +13,7 @@
 
 use super::*;
 use crate::cart::test_image::{Image, words};
+use crate::cpu::Bus;
 use crate::scheduler::{EventKind, FRAME_CYCLES, SLICE, run_round};
 
 const LINE: u64 = 4_260;
@@ -32,10 +33,6 @@ const ENABLE_VBLANK: u16 = 1 << 3;
 const ENABLE_HBLANK: u16 = 1 << 4;
 const ENABLE_VCOUNT: u16 = 1 << 5;
 const IRQ_MODE: u32 = 0x12;
-
-fn plain() -> TcmConfig {
-    TcmConfig::from_cp15(Machine::new().arm9.cp15())
-}
 
 fn machine() -> Machine {
     let mut image = Image::valid();
@@ -58,11 +55,11 @@ fn run_to(m: &mut Machine, time: u64) {
 }
 
 fn write9(m: &mut Machine, addr: u32, value: u16) {
-    m.memory.write16(&plain(), addr, value);
+    m.bus9().write16(addr, value);
 }
 
 fn read9(m: &Machine, addr: u32) -> u16 {
-    m.memory.read16(&plain(), addr)
+    m.arm9_peek16(addr)
 }
 
 /// A line number's start time.
@@ -229,7 +226,7 @@ fn given_a_vblank_flag_set_when_the_arm7_reads_dispstat_then_it_sees_the_same_fl
     let mut m = machine();
     run_to(&mut m, line_start(200) + HBLANK_AT);
     assert_eq!(
-        (m.memory.read16_arm7(0, DISPSTAT), m.dispstat7()),
+        (m.arm7_peek16(0, DISPSTAT), m.dispstat7()),
         (VBLANK_FLAG | HBLANK_FLAG, VBLANK_FLAG | HBLANK_FLAG)
     );
 }
@@ -246,8 +243,8 @@ fn given_the_arm9_when_writing_ffff_to_dispstat_then_only_the_enables_and_the_se
 #[test]
 fn given_the_arm7_when_writing_ffff_to_dispstat_then_only_the_enables_and_the_setting_stay() {
     let mut m = machine();
-    m.memory.write16_arm7(0, DISPSTAT, 0xFFFF);
-    assert_eq!(m.memory.read16_arm7(0, DISPSTAT), 0xFFB8);
+    m.bus7(0).write16(DISPSTAT, 0xFFFF);
+    assert_eq!(m.arm7_peek16(0, DISPSTAT), 0xFFB8);
 }
 
 #[test]
@@ -261,20 +258,20 @@ fn given_the_arm9_when_writing_ones_to_the_flag_bits_and_bit_6_then_dispstat_sta
 fn given_the_arm9_when_writing_dispstat_then_the_arm7_register_is_unchanged() {
     let mut m = machine();
     write9(&mut m, DISPSTAT, 0xFFFF);
-    assert_eq!(m.memory.read16_arm7(0, DISPSTAT), 0);
+    assert_eq!(m.arm7_peek16(0, DISPSTAT), 0);
 }
 
 #[test]
 fn given_the_arm7_when_writing_dispstat_then_the_arm9_register_is_unchanged() {
     let mut m = machine();
-    m.memory.write16_arm7(0, DISPSTAT, 0xFFFF);
+    m.bus7(0).write16(DISPSTAT, 0xFFFF);
     assert_eq!(read9(&m, DISPSTAT), 0);
 }
 
 #[test]
 fn given_a_byte_write_to_the_high_byte_when_reading_dispstat_then_it_holds_the_low_setting_bits() {
     let mut m = machine();
-    m.memory.write8(&plain(), DISPSTAT + 1, 0xAB);
+    m.bus9().write8(DISPSTAT + 1, 0xAB);
     assert_eq!(read9(&m, DISPSTAT), 0xAB00);
 }
 
@@ -291,20 +288,14 @@ fn given_a_setting_of_262_when_written_as_bit_7_and_the_low_byte_then_dispstat_r
 fn given_line_200_when_each_cpu_reads_vcount_then_both_see_200() {
     let mut m = machine();
     run_to(&mut m, line_start(200));
-    assert_eq!(
-        (read9(&m, VCOUNT), m.memory.read16_arm7(0, VCOUNT)),
-        (200, 200)
-    );
+    assert_eq!((read9(&m, VCOUNT), m.arm7_peek16(0, VCOUNT)), (200, 200));
 }
 
 #[test]
 fn given_line_262_when_each_cpu_reads_vcount_then_the_ninth_bit_shows_on_both() {
     let mut m = machine();
     run_to(&mut m, line_start(262));
-    assert_eq!(
-        (read9(&m, VCOUNT), m.memory.read16_arm7(0, VCOUNT)),
-        (262, 262)
-    );
+    assert_eq!((read9(&m, VCOUNT), m.arm7_peek16(0, VCOUNT)), (262, 262));
 }
 
 #[test]
@@ -312,7 +303,7 @@ fn given_line_3_when_each_cpu_writes_vcount_then_it_is_ignored_as_the_note_stubs
     let mut m = machine();
     run_to(&mut m, line_start(3));
     write9(&mut m, VCOUNT, 100);
-    m.memory.write16_arm7(0, VCOUNT, 50);
+    m.bus7(0).write16(VCOUNT, 50);
     assert_eq!(m.vcount(), 3);
 }
 
@@ -337,7 +328,7 @@ fn given_the_arm9_vblank_enable_when_line_192_starts_then_only_the_arm9_latches_
 fn given_the_arm7_vblank_enable_when_line_192_starts_then_only_the_arm7_latches_the_vblank_request()
 {
     let ifs = ifs_at(line_start(192), |m| {
-        m.memory.write16_arm7(0, DISPSTAT, ENABLE_VBLANK);
+        m.bus7(0).write16(DISPSTAT, ENABLE_VBLANK);
     });
     assert_eq!(ifs, (0, VBLANK_IRQ));
 }
@@ -359,7 +350,7 @@ fn given_the_vblank_enable_when_a_whole_frame_runs_then_the_request_is_latched_o
     let mut m = machine();
     write9(&mut m, DISPSTAT, ENABLE_VBLANK);
     run_to(&mut m, line_start(192));
-    m.memory.irq9_mut().write_byte(0x0400_0214, 0x01);
+    m.bus9().write8(0x0400_0214, 0x01);
     run_to(&mut m, line_start(263));
     assert_eq!(m.irq9().if_(), 0);
 }
@@ -369,7 +360,7 @@ fn given_the_hblank_enable_when_line_0_reaches_its_hblank_then_both_cpus_with_th
 {
     let ifs = ifs_at(HBLANK_AT, |m| {
         write9(m, DISPSTAT, ENABLE_HBLANK);
-        m.memory.write16_arm7(0, DISPSTAT, ENABLE_HBLANK);
+        m.bus7(0).write16(DISPSTAT, ENABLE_HBLANK);
     });
     assert_eq!(ifs, (HBLANK_IRQ, HBLANK_IRQ));
 }
@@ -435,9 +426,9 @@ fn given_the_setting_0_and_the_vcount_enable_when_the_frame_wraps_to_line_0_then
 #[test]
 fn given_the_arm7_vblank_request_with_ime_and_ie_when_the_arm7_runs_on_then_it_enters_irq_mode() {
     let mut m = machine();
-    m.memory.write16_arm7(0, DISPSTAT, ENABLE_VBLANK);
-    m.memory.write32_arm7(0, IE, VBLANK_IRQ);
-    m.memory.write32_arm7(0, IME, 1);
+    m.bus7(0).write16(DISPSTAT, ENABLE_VBLANK);
+    m.bus7(0).write32(IE, VBLANK_IRQ);
+    m.bus7(0).write32(IME, 1);
     m.arm7.regs_mut().set_cpsr(0x1F);
     run_to(&mut m, line_start(192));
     run_round(&mut m);
@@ -448,8 +439,8 @@ fn given_the_arm7_vblank_request_with_ime_and_ie_when_the_arm7_runs_on_then_it_e
 fn given_the_arm9_vblank_request_with_ime_and_ie_when_the_arm9_runs_on_then_it_enters_irq_mode() {
     let mut m = machine();
     write9(&mut m, DISPSTAT, ENABLE_VBLANK);
-    m.memory.write32(&plain(), IE, VBLANK_IRQ);
-    m.memory.write32(&plain(), IME, 1);
+    m.bus9().write32(IE, VBLANK_IRQ);
+    m.bus9().write32(IME, 1);
     m.arm9.regs_mut().set_cpsr(0x1F);
     run_to(&mut m, line_start(192));
     run_round(&mut m);

@@ -3,8 +3,8 @@
 //!
 //! Both CPUs see the same four addresses, each with its own point of view, so every accessor is
 //! generic over which CPU is asking (`ARM9`, as in `Timing`). The module has no way to reach a
-//! CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Memory`
-//! hands those to the two controllers.
+//! CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io` hands
+//! those to the two controllers.
 
 use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};

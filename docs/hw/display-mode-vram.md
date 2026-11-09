@@ -3,7 +3,7 @@
 Sources: GBATEK "DS Video BG Modes / Control" (`4000000h` DISPCNT for engine A, display mode and
 VRAM block fields); GBATEK "DS Power Control" (`4000304h` POWCNT1); GBATEK "DS Video - Color
 Format" (15-bit colour); GBATEK "DS Memory Control - VRAM" (LCDC mapping of bank A).
-Used by: `crates/core/src/gpu2d/`, `crates/core/src/bus/memory.rs` (the I/O slow path)   Phase: 2 (#20)
+Used by: `crates/core/src/gpu2d/`, `crates/core/src/io.rs` (the I/O slow path)   Phase: 2 (#20)
 
 Phase 2 draws one thing: a 256x192 bitmap that the CPU wrote into VRAM bank A, shown by
 graphics engine A. Everything else DISPCNT and POWCNT1 control is a later phase.

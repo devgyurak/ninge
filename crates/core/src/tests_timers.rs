@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::cart::test_image::{Image, words};
+use crate::cpu::Bus;
 use crate::savestate::SavestateError;
 use crate::scheduler::{EventKind, LINE_CYCLES};
 use crate::timers::TM0CNT_L_ADDR;
@@ -89,25 +90,16 @@ fn run_frames(m: &mut Machine, frames: u32) {
     (0..frames).for_each(|_| m.run_frame());
 }
 
-/// The ARM9's data view at the machine's current master time.
-fn tcm_now(m: &Machine) -> TcmConfig {
-    TcmConfig::from_cp15(m.arm9.cp15()).at(m.scheduler.now())
-}
-
-/// Writes timer `index` of the ARM9 (reload, then control) at the current time and lets the
-/// machine look at what changed, as it does after every instruction.
+/// Writes timer `index` of the ARM9 (reload, then control) at the current time.
 fn set9(m: &mut Machine, index: u32, reload: u16, control: u16) {
-    let tcm = tcm_now(m);
-    m.memory.write16(&tcm, reload_addr(index), reload);
-    m.memory.write16(&tcm, control_addr(index), control);
-    m.sync_timer_events();
+    m.bus9().write16(reload_addr(index), reload);
+    m.bus9().write16(control_addr(index), control);
 }
 
 /// The same for the ARM7, at the ARM7 clock `at`.
 fn set7_at(m: &mut Machine, at: u64, index: u32, reload: u16, control: u16) {
-    m.memory.write16_arm7(at, reload_addr(index), reload);
-    m.memory.write16_arm7(at, control_addr(index), control);
-    m.sync_timer_events();
+    m.bus7(at).write16(reload_addr(index), reload);
+    m.bus7(at).write16(control_addr(index), control);
 }
 
 fn set7(m: &mut Machine, index: u32, reload: u16, control: u16) {
@@ -254,7 +246,7 @@ fn given_the_arm9_writes_a_reload_when_the_arm7_reads_the_same_address_then_it_r
     assert_eq!(
         (
             m.arm9_peek16(reload_addr(0)),
-            m.memory.read16_arm7(0, reload_addr(0))
+            m.arm7_peek16(0, reload_addr(0))
         ),
         (0, 0)
     );
@@ -310,7 +302,7 @@ fn given_equal_timers_on_both_cpus_when_read_after_21_arm9_steps_then_the_arm7_r
             m.scheduler().now(),
             arm7_now,
             m.arm9_peek16(reload_addr(0)),
-            m.memory.read16_arm7(arm7_now, reload_addr(0))
+            m.arm7_peek16(arm7_now, reload_addr(0))
         ),
         (21, 22, 0xFFFA, 0xFFFB)
     );
@@ -322,9 +314,9 @@ fn given_an_arm7_timer_when_read_at_two_arm7_clocks_then_the_counter_follows_the
     set7_at(&mut m, 0, 0, RELOAD_16_TICKS, START);
     assert_eq!(
         (
-            m.memory.read16_arm7(0, reload_addr(0)),
-            m.memory.read16_arm7(10, reload_addr(0)),
-            m.memory.read16_arm7(11, reload_addr(0))
+            m.arm7_peek16(0, reload_addr(0)),
+            m.arm7_peek16(10, reload_addr(0)),
+            m.arm7_peek16(11, reload_addr(0))
         ),
         (0xFFF0, 0xFFF5, 0xFFF5)
     );
@@ -333,21 +325,19 @@ fn given_an_arm7_timer_when_read_at_two_arm7_clocks_then_the_counter_follows_the
 // ------------------------------------------------------------- events: cancel and replace
 
 #[test]
-fn given_a_timer_rewritten_three_times_between_looks_when_the_machine_looks_then_exactly_one_event_remains()
+fn given_a_timer_rewritten_three_times_at_the_same_clock_when_the_event_is_checked_then_exactly_one_event_remains()
  {
     let mut m = machine();
-    let tcm = tcm_now(&m);
-    m.memory.write16(&tcm, reload_addr(0), RELOAD_16_TICKS);
-    m.memory.write16(&tcm, control_addr(0), START);
-    m.memory.write16(&tcm, control_addr(0), START | 1);
-    m.memory.write16(&tcm, control_addr(0), START | 2);
-    m.sync_timer_events();
+    m.bus9().write16(reload_addr(0), RELOAD_16_TICKS);
+    m.bus9().write16(control_addr(0), START);
+    m.bus9().write16(control_addr(0), START | 1);
+    m.bus9().write16(control_addr(0), START | 2);
     // F/256 is the last setting: 16 ticks at 512 cycles.
     assert_eq!(timer_events(&m), vec![(16 * 512, kind9(0))]);
 }
 
 #[test]
-fn given_a_timer_rewritten_after_each_look_when_the_prescaler_changes_then_the_old_event_is_replaced()
+fn given_a_timer_rewritten_after_each_write_when_the_prescaler_changes_then_the_old_event_is_replaced()
  {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, START);
@@ -379,7 +369,7 @@ fn given_a_count_up_timer_when_started_then_it_has_no_event_while_the_clock_time
 }
 
 #[test]
-fn given_a_running_timer_switched_to_count_up_when_the_machine_looks_then_its_event_is_removed() {
+fn given_a_running_timer_switched_to_count_up_when_the_write_lands_then_its_event_is_removed() {
     let mut m = machine();
     set9(&mut m, 1, RELOAD_16_TICKS, START);
     set9(&mut m, 1, RELOAD_16_TICKS, START | COUNT_UP);
@@ -394,7 +384,7 @@ fn given_an_arm7_timer_when_started_then_its_event_belongs_to_the_arm7_and_the_a
 }
 
 #[test]
-fn given_an_irq_enable_only_change_when_the_machine_looks_then_the_event_is_the_same_one() {
+fn given_an_irq_enable_only_change_when_the_write_lands_then_the_event_is_the_same_one() {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, START);
     let before = m.scheduler.pending();
@@ -403,13 +393,11 @@ fn given_an_irq_enable_only_change_when_the_machine_looks_then_the_event_is_the_
 }
 
 #[test]
-fn given_a_reload_write_only_when_the_machine_looks_then_the_event_is_the_same_one() {
+fn given_a_reload_write_only_when_the_write_lands_then_the_event_is_the_same_one() {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, START);
     let before = m.scheduler.pending();
-    let tcm = tcm_now(&m);
-    m.memory.write16(&tcm, reload_addr(0), 0x8000);
-    m.sync_timer_events();
+    m.bus9().write16(reload_addr(0), 0x8000);
     assert_eq!(m.scheduler.pending(), before);
 }
 
@@ -463,17 +451,61 @@ fn given_two_timers_with_events_at_the_same_time_when_they_fire_then_they_fire_i
     assert_eq!(timer_events(&m), vec![(64, kind9(1)), (64, kind9(0))]);
 }
 
+/// Six setup instructions, then `stmia r0, {r1, r2}`: r0 = `0400_0100h`, r1 = r2 = `00C0_FFF0h`,
+/// so one instruction writes TM0CNT_L/TM0CNT_H and then TM1CNT_L/TM1CNT_H, starting both timers
+/// at F/1 with IRQ enable and 16 ticks to go (the store is the seventh instruction, index 6).
+const STM_STARTS_TWO: [u32; 8] = [
+    0xE3A0_0404, // mov r0, #0x04 ror 8          r0 = 0x0400_0000
+    0xE280_0C01, // add r0, r0, #0x01 ror 24     r0 = 0x0400_0100
+    0xE3A0_18C0, // mov r1, #0xC0 ror 16         r1 = 0x00C0_0000
+    0xE381_1CFF, // orr r1, r1, #0xFF ror 24     r1 |= 0xFF00
+    0xE381_10F0, // orr r1, r1, #0xF0
+    0xE1A0_2001, // mov r2, r1
+    0xE880_0006, // stmia r0, {r1, r2}
+    B_SELF,
+];
+
 #[test]
-fn given_two_timers_started_between_the_same_two_looks_when_the_machine_looks_then_the_lower_index_is_scheduled_first()
+fn given_one_stm_that_starts_timers_0_and_1_with_the_same_period_when_it_retires_then_timer_0_is_queued_before_timer_1()
  {
+    // Both timers overflow at the same master time, so only the queue's tie-break orders them. A
+    // store-multiple writes ascending addresses, so timer 0 is scheduled first (`scheduler.md`,
+    // "Events"): the order the machine gave when it replaced events once per instruction, in
+    // index order.
+    let mut m = booted(&rom_with(&STM_STARTS_TWO, &SPIN));
+    step(&mut m, 6);
+    let at = m.scheduler.now();
+    step(&mut m, 1);
+    assert_eq!(
+        timer_events(&m),
+        vec![(at + 32, kind9(0)), (at + 32, kind9(1))]
+    );
+}
+
+/// What the ARM9 starting timer 0 at F/1 with reload `FFFFh` leaves behind: the write time, the
+/// queued events right after the write, and IF after one step and after two.
+fn arm9_one_tick_timer() -> (u64, Vec<(u64, EventKind)>, [u32; 2]) {
     let mut m = machine();
-    let tcm = tcm_now(&m);
-    m.memory.write16(&tcm, reload_addr(1), RELOAD_16_TICKS);
-    m.memory.write16(&tcm, control_addr(1), START);
-    m.memory.write16(&tcm, reload_addr(0), RELOAD_16_TICKS);
-    m.memory.write16(&tcm, control_addr(0), START);
-    m.sync_timer_events();
-    assert_eq!(timer_events(&m), vec![(32, kind9(0)), (32, kind9(1))]);
+    let at = m.scheduler.now();
+    set9(&mut m, 0, 0xFFFF, START | IRQ);
+    let queued = timer_events(&m);
+    step(&mut m, 1);
+    let after_one = m.irq9().if_();
+    step(&mut m, 1);
+    (at, queued, [after_one, m.irq9().if_()])
+}
+
+#[test]
+fn given_the_arm9_starts_a_one_tick_timer_when_it_runs_then_the_event_is_two_cycles_after_the_write_and_the_irq_comes_with_it()
+ {
+    // One tick at F/1 is 2 master cycles (`timers.md`, "Clock"), and an ARM9 instruction costs 1
+    // (`scheduler.md`, "Cost per instruction"): the overflow lies past the end of the writing
+    // instruction, so the queue clamp (no event before the end of the instruction) never moves it.
+    let (at, queued, if_after) = arm9_one_tick_timer();
+    assert_eq!(
+        (queued, if_after),
+        (vec![(at + 2, kind9(0))], [0, IF_TIMER0])
+    );
 }
 
 // ---------------------------------------------------------- a lagging ARM7 and the queue
@@ -488,7 +520,7 @@ fn lagging_arm7_timer(control: u16) -> Machine {
 }
 
 #[test]
-fn given_an_arm7_write_that_computes_an_overflow_already_past_when_the_machine_looks_then_the_event_is_queued_at_now()
+fn given_an_arm7_write_that_computes_an_overflow_already_past_when_the_write_lands_then_the_event_is_queued_at_now()
  {
     let m = lagging_arm7_timer(START | IRQ);
     assert_eq!(timer_events(&m), vec![(1000, kind7(0))]);
@@ -522,8 +554,7 @@ fn given_a_reload_written_in_the_gap_before_the_late_event_fires_when_it_is_writ
  {
     // The overflow was due at 2; the write at 3 lands before the event (queued for 1000) fires.
     let mut m = lagging_arm7_timer(START | IRQ);
-    m.memory.write16_arm7(3, reload_addr(0), 0xFF00);
-    m.sync_timer_events();
+    m.bus7(3).write16(reload_addr(0), 0xFF00);
     // It latched IF with the reload it happened under, and the next one is one tick on (4).
     assert_eq!(
         (
@@ -539,8 +570,7 @@ fn given_a_reload_written_in_the_gap_before_the_late_event_fires_when_it_is_writ
 fn given_a_stop_written_in_the_gap_before_the_late_event_fires_when_it_is_written_then_the_overflow_already_due_still_raises_its_irq()
  {
     let mut m = lagging_arm7_timer(START | IRQ);
-    m.memory.write16_arm7(3, control_addr(0), 0);
-    m.sync_timer_events();
+    m.bus7(3).write16(control_addr(0), 0);
     assert_eq!((m.irq7().if_(), timer_events(&m)), (IF_TIMER0, vec![]));
 }
 
@@ -567,10 +597,7 @@ fn given_a_running_timer_0_when_only_its_ignored_count_up_bit_is_set_then_its_ov
     set9(&mut m, 0, 0, START | 3);
     step(&mut m, 1000);
     let before = m.timers9().overflow_time(0);
-    let tcm = tcm_now(&m);
-    m.memory
-        .write16(&tcm, control_addr(0), START | 3 | COUNT_UP);
-    m.sync_timer_events();
+    m.bus9().write16(control_addr(0), START | 3 | COUNT_UP);
     assert_eq!(m.timers9().overflow_time(0), before);
 }
 
@@ -580,9 +607,8 @@ fn given_a_running_timer_0_when_only_its_ignored_count_up_bit_is_set_then_its_ov
 fn given_a_timer_irq_enabled_in_ie_and_ime_when_the_timer_overflows_then_the_arm9_enters_irq_mode_on_the_next_step()
  {
     let mut m = machine();
-    let tcm = tcm_now(&m);
-    m.memory.write32(&tcm, IME, 1);
-    m.memory.write32(&tcm, IE, IF_TIMER0);
+    m.bus9().write32(IME, 1);
+    m.bus9().write32(IE, IF_TIMER0);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     set9(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 33);
@@ -596,9 +622,8 @@ fn given_a_timer_irq_enabled_in_ie_and_ime_when_the_timer_overflows_then_the_arm
 fn given_a_timer_irq_enabled_in_ie_when_one_cycle_before_the_overflow_then_the_arm9_has_not_entered_irq_mode()
  {
     let mut m = machine();
-    let tcm = tcm_now(&m);
-    m.memory.write32(&tcm, IME, 1);
-    m.memory.write32(&tcm, IE, IF_TIMER0);
+    m.bus9().write32(IME, 1);
+    m.bus9().write32(IE, IF_TIMER0);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     set9(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 31);
@@ -609,8 +634,7 @@ fn given_a_timer_irq_enabled_in_ie_when_one_cycle_before_the_overflow_then_the_a
 fn given_a_timer_irq_with_ime_off_when_the_timer_overflows_then_if_is_set_but_the_arm9_keeps_running()
  {
     let mut m = machine();
-    let tcm = tcm_now(&m);
-    m.memory.write32(&tcm, IE, IF_TIMER0);
+    m.bus9().write32(IE, IF_TIMER0);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     set9(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 40);
@@ -695,9 +719,8 @@ fn given_the_same_rom_and_timer_setup_when_run_twice_then_the_savestate_bytes_ar
 fn given_timers_running_when_the_arm9_irq_is_taken_in_two_runs_then_the_states_are_identical() {
     let run = || {
         let mut m = machine_with_timers();
-        let tcm = tcm_now(&m);
-        m.memory.write32(&tcm, IME, 1);
-        m.memory.write32(&tcm, IE, IF_TIMER0);
+        m.bus9().write32(IME, 1);
+        m.bus9().write32(IE, IF_TIMER0);
         m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
         step(&mut m, 5000);
         m.save_state()

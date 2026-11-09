@@ -3,9 +3,9 @@
 //!
 //! Both CPUs see the same four addresses, each with its own point of view, so there is one
 //! instance and every accessor is generic over which CPU is asking (`ARM9`): the "seen by both
-//! CPUs" class of `AGENTS.md` §4 ("Per-CPU devices"), as `Timing` is. The module has no way to reach a
-//! CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io` hands
-//! those to the two controllers.
+//! CPUs" class of `AGENTS.md` §4 ("Per-CPU devices"), as `Timing` is. The module has no way to
+//! reach a CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io`
+//! hands those to the two controllers.
 
 use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};

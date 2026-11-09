@@ -325,7 +325,7 @@ fn given_an_arm7_timer_when_read_at_two_arm7_clocks_then_the_counter_follows_the
 // ------------------------------------------------------------- events: cancel and replace
 
 #[test]
-fn given_a_timer_rewritten_three_times_in_one_run_when_the_event_is_checked_then_exactly_one_event_remains()
+fn given_a_timer_rewritten_three_times_at_the_same_clock_when_the_event_is_checked_then_exactly_one_event_remains()
  {
     let mut m = machine();
     m.bus9().write16(reload_addr(0), RELOAD_16_TICKS);
@@ -337,7 +337,7 @@ fn given_a_timer_rewritten_three_times_in_one_run_when_the_event_is_checked_then
 }
 
 #[test]
-fn given_a_timer_rewritten_after_each_look_when_the_prescaler_changes_then_the_old_event_is_replaced()
+fn given_a_timer_rewritten_after_each_write_when_the_prescaler_changes_then_the_old_event_is_replaced()
  {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, START);

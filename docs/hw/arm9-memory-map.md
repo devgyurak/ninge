@@ -7,7 +7,7 @@ Regions); GBATEK "DS Memory Control - Cache and TCM"; GBATEK "ARM CP15 Tightly C
 Used by: `crates/core/src/bus/`   Phase: 2 (#18), ARM9 view only
 
 This note is the address decoding the ARM9 sees. The TCM registers are in `cp15.md`; VRAM bank A
-is in `vram-banks.md`. The ARM7's view, shared WRAM and WRAMCNT are Phase 3 (#22); the other
+is in `vram-banks.md`. The ARM7's view, shared WRAM and WRAMCNT are in `wramcnt.md` (#22); the other
 VRAM banks are Phase 4 (#35); the BIOS at `FFFF0000h` is Phase 3 (#27). Until those land the
 regions below are simply unmapped.
 
@@ -18,7 +18,7 @@ regions below are simply unmapped.
 | `0000_0000h` | 32 KiB physical | Instruction TCM, mirrored over its virtual size | mapped |
 | `0xxx_x000h` | 16 KiB physical | Data TCM, base from CP15 | mapped |
 | `0200_0000h` | 4 MiB | Main RAM, repeated through the 16 MiB block | mapped |
-| `0300_0000h` | 0, 16 or 32 KiB | Shared WRAM | unmapped, `TODO(phase3)` (#22) |
+| `0300_0000h` | 0, 16 or 32 KiB | Shared WRAM | mapped by WRAMCNT (`wramcnt.md`); empty when the ARM9 owns none |
 | `0400_0000h` | | I/O ports | only VRAMCNT_A; the rest reads 0 |
 | `0500_0000h`, `0700_0000h` | | palettes, OAM | unmapped, `TODO(phase4)` |
 | `0600_0000h`..`067F_FFFFh` | | BG/OBJ VRAM windows | unmapped, `TODO(phase4)` (#35) |

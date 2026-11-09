@@ -8,9 +8,6 @@ use crate::cpu::{Bank, Cpu};
 
 /// Where the loader keeps the header copy (`direct-boot.md`, "Placement").
 const HEADER_COPY_ADDRESS: u32 = 0x027F_FE00;
-/// The end of main RAM; a binary destination below it is main RAM. Only the ARM7 can have a
-/// destination above it (the 0x037F_8000 range); every validated ARM9 address is below.
-const MAIN_RAM_END: u32 = 0x0240_0000;
 
 /// Register values at cartridge boot time (`direct-boot.md`, "ARM9 state at entry").
 const SP_SYSTEM: u32 = 0x0300_2F7C;
@@ -37,14 +34,18 @@ fn place(memory: &mut Memory, tcm: &TcmConfig, address: u32, bytes: &[u8]) {
     });
 }
 
-/// Copies one binary to its RAM address when that is main RAM.
-// TODO(phase3): an ARM7 destination in the 0x037F_8000 range is placed with WRAMCNT (#22).
-fn place_binary(memory: &mut Memory, tcm: &TcmConfig, rom: &[u8], spec: &BinarySpec) {
+/// Copies `bytes` to `address` through the ARM7 data bus: main RAM, or the `037F_8000h` range,
+/// which lands in shared or ARM7 WRAM as WRAMCNT says (`wramcnt.md`).
+fn place7(memory: &mut Memory, address: u32, bytes: &[u8]) {
+    bytes.iter().enumerate().for_each(|(index, &byte)| {
+        memory.write8_arm7(address.wrapping_add(index as u32), byte);
+    });
+}
+
+/// The bytes of one binary in the image, or `None` when its range is not inside it.
+fn binary_bytes<'a>(rom: &'a [u8], spec: &BinarySpec) -> Option<&'a [u8]> {
     let start = spec.rom_offset as usize;
-    let source = rom.get(start..start.saturating_add(spec.size as usize));
-    if let (Some(bytes), true) = (source, spec.ram_address < MAIN_RAM_END) {
-        place(memory, tcm, spec.ram_address, bytes);
-    }
+    rom.get(start..start.saturating_add(spec.size as usize))
 }
 
 /// Places the binaries and sets the ARM9 up at its entry point. `header` has been validated by
@@ -68,8 +69,15 @@ pub(crate) fn boot(
         place(memory, &tcm, HEADER_COPY_ADDRESS, copy);
     }
     // TODO(hw-unverified): the ARM9 binary is placed before the ARM7's; GBATEK gives no order.
-    place_binary(memory, &tcm, rom, &header.arm9);
-    place_binary(memory, &tcm, rom, &header.arm7);
+    if let Some(bytes) = binary_bytes(rom, &header.arm9) {
+        place(memory, &tcm, header.arm9.ram_address, bytes);
+    }
+    // WRAMCNT is left at its power-on value, so a binary in the `037F_8000h` range lands in the
+    // ARM7's own WRAM.
+    // TODO(hw-unverified): WRAMCNT after direct boot is not stated (`wramcnt.md`, "Unverified").
+    if let Some(bytes) = binary_bytes(rom, &header.arm7) {
+        place7(memory, header.arm7.ram_address, bytes);
+    }
 
     let entry = header.arm9.entry;
     let regs = arm9.regs_mut();

@@ -82,7 +82,7 @@ A header is refused, with a variant that names the field and the value, when:
   beyond `0380_7E00h` in the ARM7 range).
 
 Nothing is clamped, masked or guessed. An ARM7 destination in the `037F_8000h` range is accepted
-and parsed; it is not placed in Phase 2 (`TODO(phase3)`, #22).
+and parsed; it is placed through the ARM7 view by direct boot (`wramcnt.md`, #22).
 
 ## Edge cases
 

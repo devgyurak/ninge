@@ -9,7 +9,7 @@ mod hle;
 pub mod savestate;
 pub mod scheduler;
 
-use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState};
+use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use cart::Header;
 use cpu::Cpu;
 use scheduler::{
@@ -220,6 +220,12 @@ impl Machine {
     // The debugger's VRAM bank map (#58) will show it.
     pub fn vram_a(&self) -> VramBankState {
         self.memory.vram_a()
+    }
+
+    /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.
+    // The debugger's memory viewer (#57) shows each CPU's window from it.
+    pub fn wramcnt(&self) -> WramState {
+        self.memory.wramcnt()
     }
 
     /// Steps the ARM9 by one instruction and advances the master clock by its cost

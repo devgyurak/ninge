@@ -27,8 +27,8 @@ memory, so neither depends on the WRAMCNT allocation. Nothing in Phase 0 impleme
 ## Edge cases
 
 The ARM9 view (main RAM mirroring, TCM placement and priority, unmapped addresses) is in
-`arm9-memory-map.md`; VRAM bank A as LCDC is in `vram-banks.md`. WRAMCNT, the ARM7 view and
-the other VRAM banks are deferred (#22, #35).
+`arm9-memory-map.md`; VRAM bank A as LCDC is in `vram-banks.md`. The shared WRAM split and the ARM7 view are in
+`wramcnt.md` (#22); the other VRAM banks are deferred (#35).
 
 ## Unverified
 
@@ -36,8 +36,7 @@ the other VRAM banks are deferred (#22, #35).
   as the default but not whether it is a reset value; CP15 starts at zero (`cp15.md`).
 - The ARM7 has no TCM, cache, or CP15 — GBATEK "DS Memory Control - Cache and TCM" says so ("The
   NDS7 doesn't have any TCM, Cache, or CP15"); verified.
-- Shared WRAM mirroring and default ownership at reset — deferred to #22 (WRAMCNT, Phase 3);
-  GBATEK's "DS Memory Control - WRAM" is read there.
+- Shared WRAM mirroring and ownership — moved to `wramcnt.md`; the reset value is Unverified there.
 - Whether main memory mirrors above 4 MiB inside its 16 MiB block — moved to
   `arm9-memory-map.md`: GBATEK's general rule ("typically" mirrored) is applied and recorded as
   Unverified there.

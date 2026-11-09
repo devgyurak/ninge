@@ -2,7 +2,7 @@
 //! The scheduler driving both CPUs through `Machine`. Expected values come from
 //! `docs/hw/scheduler.md` ("Cost per instruction": ARM9 1 master cycle, ARM7 2; "Frame timing":
 //! 1,120,380 master cycles per frame; "Interleaving"; "Debugger single-step"; "No program
-//! loaded"; "ARM7 memory seen by #21") and `docs/hw/direct-boot.md` ("ARM7 state at entry"),
+//! loaded"; "ARM7 memory") and `docs/hw/direct-boot.md` ("ARM7 state at entry"),
 //! never from running the code. Opcodes are encoded by hand from the ARM ARM, "A3 The ARM
 //! Instruction Set" (data-processing and single-data-transfer formats, condition AL).
 
@@ -500,7 +500,7 @@ fn given_arm7_reads_the_io_area_when_it_is_unmapped_then_it_reads_zero_as_the_no
     assert_eq!(record(&machine, 2), 0x100);
 }
 
-// TODO(hw-unverified): as above, for the VRAM window that the ARM7 does not see yet (#22).
+// TODO(hw-unverified): as above, for the VRAM window that the ARM7 does not see yet (#35).
 #[test]
 fn given_arm7_reads_the_vram_window_when_it_is_unmapped_then_it_reads_zero_as_the_note_models_unverified()
  {
@@ -510,7 +510,7 @@ fn given_arm7_reads_the_vram_window_when_it_is_unmapped_then_it_reads_zero_as_th
 }
 
 // TODO(hw-unverified): main RAM repeating every 4 MiB inside its 16 MiB block
-// (arm9-memory-map.md "Unverified"; scheduler.md "ARM7 memory seen by #21").
+// (arm9-memory-map.md "Unverified"; scheduler.md "ARM7 memory").
 #[test]
 fn given_arm7_stores_to_main_ram_when_it_reads_at_plus_4_mib_then_it_reads_the_mirror_as_the_note_models_unverified()
  {

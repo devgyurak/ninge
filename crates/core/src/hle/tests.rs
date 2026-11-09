@@ -433,3 +433,93 @@ fn given_a_booted_program_when_cloned_after_one_frame_then_both_copies_agree_aft
         (true, 1_120_380)
     );
 }
+
+// ------------------------------------------------ an ARM7 binary in WRAM (`wramcnt.md`, #22)
+
+/// An image whose ARM7 binary is `size` bytes placed at `ram_address` in the WRAM range.
+fn arm7_in_wram(ram_address: u32, size: u32) -> Image {
+    let mut image = Image::valid();
+    image.arm7.ram_address = ram_address;
+    image.arm7.entry = ram_address;
+    image.arm7.size = size;
+    image
+}
+
+/// Byte offsets (in `0..len`) where the ARM7's view at `base` differs from `expected(offset)`.
+fn arm7_byte_mismatches(
+    m: &Machine,
+    base: u32,
+    len: usize,
+    expected: impl Fn(usize) -> u8,
+) -> Vec<usize> {
+    (0..len)
+        .filter(|&i| m.memory().read8_arm7(base + i as u32) != expected(i))
+        .collect()
+}
+
+#[test]
+fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm7_reads_it_there() {
+    // WRAMCNT stays at its power-on value 0, so the ARM7 sees its own WRAM at 037F_8000h
+    // (`wramcnt.md`, "The 037F_8000h mirror").
+    let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
+    assert_eq!(
+        arm7_byte_mismatches(&machine, 0x037F_8000, 0x80, arm7_byte),
+        Vec::<usize>::new()
+    );
+}
+
+#[test]
+fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm7_also_reads_it_in_the_64_kib_repetition()
+ {
+    // The ARM7's WRAM repeats every 64 KiB, so 037F_8000h is also 0380_8000h.
+    let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
+    assert_eq!(
+        arm7_byte_mismatches(&machine, 0x0380_8000, 0x80, arm7_byte),
+        Vec::<usize>::new()
+    );
+}
+
+#[test]
+fn given_an_arm7_binary_that_crosses_0380_0000_when_loading_then_it_continues_in_the_next_range() {
+    // 0x40 bytes end at 037F_FFFFh and the rest start at 0380_0000h; both are the ARM7's WRAM.
+    let machine = booted(&arm7_in_wram(0x037F_FFC0, 0x100));
+    let tail = |i: usize| arm7_byte(0x40 + i);
+    assert_eq!(
+        (
+            arm7_byte_mismatches(&machine, 0x037F_FFC0, 0x40, arm7_byte),
+            arm7_byte_mismatches(&machine, 0x0380_0000, 0xC0, tail),
+        ),
+        (Vec::<usize>::new(), Vec::<usize>::new())
+    );
+}
+
+#[test]
+fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_byte_after_it_is_zero() {
+    let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
+    assert_eq!(machine.memory().read8_arm7(0x037F_8080), 0);
+}
+
+#[test]
+fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm9_shared_wram_is_untouched() {
+    // Mode 0 hands the shared WRAM to the ARM9; the ARM7 binary went to the ARM7's own WRAM.
+    let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
+    assert_eq!(
+        (
+            machine.arm9_peek32(0x037F_8000),
+            machine.arm9_peek32(0x0300_0000),
+            machine.memory().wramcnt().mode
+        ),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm7_starts_on_its_first_opcode() {
+    // The ARM7's pipeline is filled through its own view at the entry point, so r15 reads
+    // entry + 8 (two opcodes ahead) and the first opcode is the one the binary holds.
+    let mut image = arm7_in_wram(0x037F_8000, 0x80);
+    image.arm7_code = words(&[ADD_R0_1, ADD_R0_1, B_BACK_ONE]);
+    let mut machine = booted(&image);
+    machine.step_arm7_instruction();
+    assert_eq!(machine.arm7().regs().get(0), 1);
+}

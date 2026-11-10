@@ -23,3 +23,5 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
+# A module with children is `dir/mod.rs`, never `dir.rs` beside `dir/` (AGENTS.md §4).
+self_named_module_files = "deny"

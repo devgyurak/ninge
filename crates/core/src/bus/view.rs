@@ -161,6 +161,8 @@ impl<const ARM9: bool> Access<'_, ARM9> {
     /// event never lies before the end of the instruction that scheduled it: on the ARM9 that is
     /// one instruction cost past the clock; the ARM7's step leaves the master clock where it is
     /// (`timers.md`, "Model").
+    // TODO(hw-unverified): an ARM7 event is floored at the master clock, which the ARM9 has
+    // already carried to the round's stop (`scheduler.md`, "Unverified").
     // TODO(#115): this assumes every ARM9 access is one fixed-cost instruction; a step that
     // returns its own cost, or a DMA write (#26), must hand the floor in instead.
     fn at(&self) -> At {

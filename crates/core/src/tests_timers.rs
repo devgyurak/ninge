@@ -14,7 +14,7 @@ use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::savestate::SavestateError;
-use crate::scheduler::{ARM9_INSTRUCTION_COST, EventKind, LINE_CYCLES, run_round};
+use crate::scheduler::{EventKind, LINE_CYCLES, SLICE, run_round};
 use crate::timers::TM0CNT_L_ADDR;
 
 const IME: u32 = 0x0400_0208;
@@ -660,10 +660,10 @@ const ONE_TICK_WRITER: [u32; 7] = [
 /// The store is the sixth instruction, so it runs at master time 5; the overflow is 2 later.
 const ONE_TICK_OVERFLOW_AT: u64 = 5 + 2;
 
-/// How far past `overflow_at` the ARM9 enters IRQ mode, driving the machine with whole rounds
+/// The master time at which the ARM9 enters IRQ mode, driving the machine with whole rounds
 /// until the overflow event has fired (IF set), then single steps until the mode is IRQ. `None`
 /// when either does not happen within a bounded number of tries.
-fn irq_entry_lag(m: &mut Machine, overflow_at: u64) -> Option<u64> {
+fn irq_entry_time(m: &mut Machine) -> Option<u64> {
     (0..8).for_each(|_| {
         if m.irq9().if_() & IF_TIMER0 == 0 {
             run_round(m);
@@ -676,24 +676,44 @@ fn irq_entry_lag(m: &mut Machine, overflow_at: u64) -> Option<u64> {
             (before, m.arm9().regs().cpsr() & 0x1F)
         })
         .find(|&(_, mode)| mode == IRQ_MODE_BITS)
-        .map(|(before, _)| before.saturating_sub(overflow_at))
+        .map(|(before, _)| before)
 }
 
 #[test]
-fn given_the_arm9_starts_a_one_tick_timer_mid_round_when_rounds_run_then_the_irq_is_entered_within_one_instruction_of_the_overflow()
+fn given_the_arm9_starts_a_one_tick_timer_mid_round_when_rounds_run_then_the_irq_is_entered_exactly_at_the_overflow()
  {
-    // `scheduler.md`, "Interleaving": the ARM9 must not run past an event it queued. The overflow
-    // is at 7; an ARM9 instruction costs 1 (`scheduler.md`, "Cost per instruction"), so the IRQ
-    // entry (`interrupts.md`, "Behavior") follows within one instruction of it.
+    // `scheduler.md`, "Interleaving": the ARM9 stops at the event it queued, at the first
+    // instruction boundary at or after it. The overflow is at 7 and an ARM9 instruction costs 1
+    // (`scheduler.md`, "Cost per instruction"), so the boundary is 7 itself: the IRQ entry
+    // (`interrupts.md`, "Behavior") is the instruction that starts there, neither earlier nor later.
     let mut m = booted(&rom_with(&ONE_TICK_WRITER, &SPIN));
     m.bus9().write32(IME, 1);
     m.bus9().write32(IE, IF_TIMER0);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
-    let lag = irq_entry_lag(&mut m, ONE_TICK_OVERFLOW_AT);
-    assert!(
-        lag.is_some_and(|late| late <= ARM9_INSTRUCTION_COST),
-        "IRQ entry lag was {lag:?}"
-    );
+    assert_eq!(irq_entry_time(&mut m), Some(ONE_TICK_OVERFLOW_AT));
+}
+
+/// `TIMER_WRITER` with reload `0xFFFF` and prescaler F/1024: the overflow is one tick of 2,048
+/// master cycles after the store, far past one slice (`timers.md`, "Clock").
+const SLOW_TICK_WRITER: [u32; 7] = [
+    TIMER_WRITER[0],
+    TIMER_WRITER[1],
+    0xE3A0_18C3, // mov r1, #0xC3 ror 16         r1 = 0x00C3_0000
+    TIMER_WRITER[3],
+    0xE381_10FF, // orr r1, r1, #0xFF            r1 = 0x00C3_FFFF
+    TIMER_WRITER[5],
+    B_SELF,
+];
+
+#[test]
+fn given_the_arm9_queues_an_event_past_the_target_when_a_round_runs_then_both_cpus_still_advance_a_full_slice()
+ {
+    // The store at time 5 queues an overflow far past `now + SLICE`, so the ARM9 does not stop
+    // early; it must not stop merely because the queue holds something (`scheduler.md`,
+    // "Interleaving").
+    let mut m = booted(&rom_with(&SLOW_TICK_WRITER, &SPIN));
+    run_round(&mut m);
+    assert_eq!((m.scheduler.now(), m.arm7_clock()), (SLICE, SLICE));
 }
 
 /// An ARM7 program that counts: `mov r0, #0`, then 40 `add r0, r0, #1`, then `b .`.

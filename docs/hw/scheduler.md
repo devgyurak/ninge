@@ -102,10 +102,11 @@ One round works like this:
 the effects of every instruction either CPU ran before T, and no instruction that starts at or
 after T.
 
-**The exception is the ARM7.** An event the ARM7 queues is not checked mid-round: the ARM7 runs
-to `stop` regardless, and an event it queues behind the master clock is floored at `now`
-(`timers.md`, "Model"). That lag is a known, bounded approximation (under one slice) and is not
-changed by the early ARM9 stop.
+**The exception is the ARM7.** The ARM9 runs ahead to `stop` before the ARM7 starts, so an event
+the ARM7 queues is floored at `now`, which is already `stop` (`timers.md`, "Model"). A timer
+whose computed overflow lies before `now` therefore fires at the end of the round instead of
+at its time. That lag is a known, bounded approximation (under one slice) and is not changed by
+the early ARM9 stop; an overflow that lies after `now` is queued at its time and fires on time.
 
 SLICE bounds how far one CPU runs ahead of the other. It is a trade-off between interleaving
 fidelity and per-round overhead, not a hardware fact.
@@ -166,10 +167,10 @@ A saved machine is refused on load when:
 - **SLICE = 64 master cycles** is a model choice. — `crates/core/src/scheduler/mod.rs`
   (`SLICE`) — not a hardware quantity; revisit when a test ROM depends on how closely the two
   CPUs interleave (shared-memory races, IPC).
-- **ARM7 does not stop at an event it queues.** The ARM7 runs to the ARM9's `stop`, so an event
-  it queues behind the master clock fires up to one slice late (floored at `now`,
-  `timers.md`, "Model"). A model choice, not a hardware quantity. — `crates/core/src/lib.rs`
-  (`run_arm7_until`) — revisit with the ARM7 own-timer lag when a test ROM depends on it.
+- **An ARM7 event is floored at the ARM9's clock.** The ARM9 reaches `stop` before the ARM7
+  runs, so an ARM7 event computed behind it is raised to `now` and fires up to one slice late
+  (`timers.md`, "Model"). A model choice, not a hardware quantity. — `crates/core/src/bus/view.rs`
+  (`at`) — revisit with the ARM7 own-timer lag when a test ROM depends on it.
 - **ARM7 WRAM mirroring**: the 64 KiB block is modeled as repeating through
   `0380_0000h`-`03FF_FFFFh`, GBATEK's general mirroring rule. Anything else on the ARM7 bus is
   open bus and reads 0. The shared WRAM window now sits in front of it (`wramcnt.md`). — `crates/core/src/bus/memory.rs`

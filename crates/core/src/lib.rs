@@ -419,8 +419,6 @@ impl Participants for Machine {
         }
     }
 
-    // TODO(hw-unverified): an event the ARM7 queues is not checked mid-run (`scheduler.md`,
-    // "Unverified").
     fn run_arm7_until(&mut self, target: u64) {
         while self.arm7_clock < target {
             self.step_arm7_instruction();

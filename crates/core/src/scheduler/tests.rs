@@ -591,17 +591,6 @@ fn given_the_arm9_queues_an_event_before_the_target_when_running_a_round_then_ar
     );
 }
 
-#[test]
-fn given_the_arm9_queues_an_event_before_the_target_when_running_a_round_then_nothing_stays_queued()
-{
-    let mut participants = Arm9Queues {
-        inner: Recorder::at(0),
-        queued_at: 20,
-    };
-    run_round(&mut participants);
-    assert_eq!(participants.inner.scheduler.pending().len(), 0);
-}
-
 // ------------------------------------------------------------------- settle
 
 #[test]

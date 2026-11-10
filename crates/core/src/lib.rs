@@ -472,6 +472,8 @@ impl Machine {
                 &mut self.memory,
                 &mut self.io,
                 &mut self.scheduler,
+                // TODO(hw-unverified): DMA sees the address behind a TCM window, not a hole
+                // (`docs/hw/dma.md`, "Unverified").
                 TcmConfig::NONE,
                 now,
             );

@@ -129,6 +129,12 @@ struct Channel {
     // A `DmaStart` event is queued for this channel. Enable stays set while it is true and
     // while the transfer runs, so a polling CPU waits (`dma.md`, "Enabling").
     pending: bool,
+    // The channel's transfer is running (between `begin` and `finish`), and its own enable went
+    // 0 -> 1 meanwhile. Neither outlives the atomic transfer, so a savestate never holds them.
+    #[serde(skip)]
+    running: bool,
+    #[serde(skip)]
+    rearmed: bool,
 }
 
 /// The four channels of one CPU: the ARM9's when `ARM9` is true, the ARM7's otherwise. Plain data.
@@ -288,6 +294,8 @@ impl<const ARM9: bool> Dma<ARM9> {
             .get_mut(index)
             .filter(|channel| channel.pending)?;
         channel.pending = false;
+        channel.running = true;
+        channel.rearmed = false;
         let word = channel.control & CONTROL_WORD != 0;
         // Addresses are aligned down to the unit (`dma.md`, "Transferring").
         let align = !(if word { 3 } else { 1 });
@@ -320,20 +328,23 @@ impl<const ARM9: bool> Dma<ARM9> {
         // TODO(hw-unverified): the live control register decides the repeat and the IRQ, so a
         // write to the channel's own registers mid-transfer, or an enable cleared then, changes
         // the outcome (`dma.md`, "Unverified").
+        let control = channel.control;
         // A transfer can write its own channel's registers through the bus. If it cleared and set
-        // enable again, the channel was re-armed and its new start is queued: leave it alone, or
-        // the start would run on a channel finish had just disabled.
+        // enable again, the channel was re-armed with new latched copies (and a queued start, for
+        // Immediate): the repeat and disable rules must not touch it, or they would overwrite the
+        // copies or disable a channel with a start queued, whatever its start timing.
         // TODO(hw-unverified): a channel re-armed by its own transfer keeps the new start
         // (`dma.md`, "Unverified").
-        if channel.pending {
-            return Effect::default();
-        }
-        let control = channel.control;
+        let rearmed = channel.rearmed;
+        channel.running = false;
+        channel.rearmed = false;
         // TODO(hw-unverified): repeat is ignored for an Immediate start (`dma.md`, "Unverified").
         let repeats = control & CONTROL_REPEAT != 0
             && control & CONTROL_ENABLE != 0
             && Self::start_of(control) != Start::Immediate;
-        if repeats {
+        if rearmed {
+            // Nothing to change: the new start stands.
+        } else if repeats {
             channel.count_now = Self::count_of(control, index);
             channel.source_now = end.source;
             channel.destination_now = if transfer.destination_reload {
@@ -438,6 +449,7 @@ impl<const ARM9: bool> Dma<ARM9> {
         };
         match (old & CONTROL_ENABLE != 0, new & CONTROL_ENABLE != 0) {
             (false, true) => {
+                channel.rearmed = channel.running;
                 channel.source_now = channel.source;
                 channel.destination_now = channel.destination;
                 channel.count_now = Self::count_of(new, index);

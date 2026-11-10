@@ -184,13 +184,17 @@ hardware behavior.
   atomic transfer cannot be pre-empted — `crates/core/src/lib.rs` — same fix as above.
 - **ARM7 start lag** (see "Model") — `crates/core/src/lib.rs` — the same bounded approximation as
   the ARM7 timer lag (#118).
-- **ARM7 address widths** (the table in "Registers") are as GBATEK gives them for the GBA's
-  channels and are carried over for the ARM7 here — `crates/core/src/dma.rs` — verify with a
-  test ROM that writes `FFFF_FFFFh` to each address register and reads it back.
-- **Address registers read back what was written**, masked. GBATEK lists them as write-only for
-  some CPUs — `crates/core/src/dma.rs` — verify the same way.
-- **HBlank start in the blank lines (192-262).** The model starts nothing there —
-  `crates/core/src/lib.rs` — verify with a test ROM that counts HBlank transfers over a frame.
+- **Bit 0 of an address register.** GBATEK gives the ranges as ending in an even address
+  (`0FFFFFFEh`, `07FFFFFEh`) and lists the registers as readable. The model stores bit 0 and reads
+  it back; the transfer aligns it away — `crates/core/src/dma.rs` — verify with a test ROM that
+  writes `FFFF_FFFFh` to each address register and reads it back.
+- **ARM7 address widths** (the table in "Registers") follow GBATEK's statement that the ARM7's
+  channels keep the GBA's limits; the exact bit that is cut for each channel is as read, not
+  tested — `crates/core/src/dma.rs` — verify with the same test ROM on each ARM7 channel.
+- **HBlank start in the blank lines (192-262).** GBATEK marks the ARM9's HBlank start as paused
+  during VBlank, which is what the model does. Whether the first blank line's HBlank counts is
+  not stated — `crates/core/src/lib.rs` — verify with a test ROM that counts HBlank transfers
+  over a frame.
 - **Repeat with Immediate.** The model ignores repeat for Immediate: the channel ends and enable
   clears — `crates/core/src/dma.rs` — verify with a test ROM.
 - **Source control 3** acts as increment — `crates/core/src/dma.rs`.
@@ -205,8 +209,9 @@ hardware behavior.
 - **Writes to the channel's own registers during its transfer.** The transfer works on its
   latched copies; at its end enable is cleared or kept by the repeat rule above, whatever the
   register held — `crates/core/src/dma.rs`.
-- **A channel re-armed by its own transfer.** If the transfer clears and sets its own enable, the
-  new start is kept and the end-of-transfer rules do not touch the channel —
+- **A channel re-armed by its own transfer.** If the transfer clears and sets its own enable, for
+  any start timing, the new latched copies and start are kept and the end-of-transfer rules do not
+  touch the channel; the transfer's IRQ is still raised from the live control —
   `crates/core/src/dma.rs`.
 - **Half and byte accesses** to a register split into bytes in ascending address order, and the
   enable edge is seen when the byte holding bit 31 is written (`arm9-memory-map.md`,

@@ -581,7 +581,7 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_1
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_9() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_10() {
     let bytes = booted(&counter_rom(), 0).save_state();
     assert_eq!(bytes[8..12], 10u32.to_le_bytes());
 }

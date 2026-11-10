@@ -1487,3 +1487,33 @@ fn given_a_transfer_that_clears_and_sets_its_own_enable_when_it_finishes_then_th
         (Effect::default(), true, 1, true)
     );
 }
+
+#[test]
+fn given_a_vblank_transfer_that_re_arms_its_own_channel_when_it_finishes_then_the_new_copies_wait_for_the_next_trigger_unverified()
+ {
+    let mut dma = Arm9Dma::new();
+    let control = ENABLE | REPEAT | timing9(1) | 4;
+    let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::VBlank);
+    write32(&mut dma, sad(0), MAIN + 0x40);
+    write32(&mut dma, cnt(0), 0);
+    write32(&mut dma, cnt(0), control);
+    dma.finish(&t, END);
+    let relatched = dma.begin(0);
+    let next = dma.trigger(Trigger::VBlank);
+    let t2 = dma.begin(0).map(|t| t.source);
+    assert_eq!(
+        (relatched, dma.control(0) >> 31, next, t2),
+        (None, 1, 1, Some(MAIN + 0x40))
+    );
+}
+
+#[test]
+fn given_a_transfer_that_re_arms_its_own_channel_with_the_irq_bit_when_it_finishes_then_the_irq_is_still_raised_unverified()
+ {
+    let mut dma = Arm9Dma::new();
+    let t = started(&mut dma, 1, MAIN, OTHER, ENABLE | IRQ | 4);
+    write32(&mut dma, cnt(1), 0);
+    write32(&mut dma, cnt(1), ENABLE | IRQ | 4);
+    let effect = dma.finish(&t, END);
+    assert_eq!(effect.requests.arm9, DMA0_IRQ << 1);
+}

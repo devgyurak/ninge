@@ -8,7 +8,7 @@ use crate::cpu::{Bus, Cp15, Tcm};
 use crate::io::device::Width;
 use crate::io::map::{Owner, decode};
 use crate::io::{At, Io};
-use crate::scheduler::{ARM9_INSTRUCTION_COST, Scheduler};
+use crate::scheduler::Scheduler;
 
 /// Both TCM regions as CP15 resolves them (`docs/hw/cp15.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +113,7 @@ struct Access<'a, const ARM9: bool> {
     scheduler: &'a mut Scheduler,
     tcm: TcmConfig,
     now: u64,
+    floor: u64,
 }
 
 impl<const ARM9: bool> Access<'_, ARM9> {
@@ -173,23 +174,18 @@ impl<const ARM9: bool> Access<'_, ARM9> {
     }
 
     /// The time of this access, and the earliest an event it schedules may fire. An overflow
-    /// event never lies before the end of the instruction that scheduled it: on the ARM9 that is
-    /// one instruction cost past the clock; the ARM7's step leaves the master clock where it is
-    /// (`timers.md`, "Model").
+    /// event never lies before the end of the instruction that scheduled it. The caller hands
+    /// that time in as `floor`, because a step's cost is known only once it ends: on the ARM9 it
+    /// is one instruction cost past the clock; the ARM7's step leaves the master clock where it
+    /// is (`timers.md`, "Model").
     // TODO(hw-unverified): an ARM7 event is floored at the master clock, which the ARM9 has
     // already carried to the round's stop (`scheduler.md`, "Unverified").
-    // TODO(#115): this assumes every ARM9 access is one fixed-cost instruction; a step that
-    // returns its own cost must hand the floor in instead. A DMA unit's write takes the same
-    // floor (`dma.md`, "Model"), which only matters for an event it queues.
+    // TODO(#115): a DMA unit's write takes the ARM9 instruction's floor though no instruction is
+    // running (`dma.md`, "Model"), which only matters for an event it queues.
     fn at(&self) -> At {
-        let floor = if ARM9 {
-            self.scheduler.now().saturating_add(ARM9_INSTRUCTION_COST)
-        } else {
-            self.scheduler.now()
-        };
         At {
             now: self.now,
-            floor,
+            floor: self.floor,
         }
     }
 }
@@ -206,16 +202,19 @@ pub struct Arm9View<'a> {
     scheduler: &'a mut Scheduler,
     tcm: TcmConfig,
     now: u64,
+    floor: u64,
 }
 
 impl<'a> Arm9View<'a> {
-    /// Builds the view for one step taken at the ARM9 clock `now`, in master cycles.
+    /// Builds the view for one step taken at the ARM9 clock `now`, in master cycles. `floor` is
+    /// the earliest an event the step schedules may fire: the end of the step.
     pub fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
         tcm: TcmConfig,
         now: u64,
+        floor: u64,
     ) -> Self {
         Self {
             memory,
@@ -223,6 +222,7 @@ impl<'a> Arm9View<'a> {
             scheduler,
             tcm,
             now,
+            floor,
         }
     }
 
@@ -233,6 +233,7 @@ impl<'a> Arm9View<'a> {
             scheduler: self.scheduler,
             tcm: self.tcm,
             now: self.now,
+            floor: self.floor,
         }
     }
 }
@@ -275,21 +276,26 @@ pub struct Arm7View<'a> {
     io: &'a mut Io,
     scheduler: &'a mut Scheduler,
     now: u64,
+    floor: u64,
 }
 
 impl<'a> Arm7View<'a> {
-    /// Builds the view for one step taken at the ARM7 clock `now`, in master cycles.
+    /// Builds the view for one step taken at the ARM7 clock `now`, in master cycles. `floor` is
+    /// the earliest an event the step schedules may fire: the master clock, which the step leaves
+    /// where it is.
     pub fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
         now: u64,
+        floor: u64,
     ) -> Self {
         Self {
             memory,
             io,
             scheduler,
             now,
+            floor,
         }
     }
 
@@ -300,6 +306,7 @@ impl<'a> Arm7View<'a> {
             scheduler: self.scheduler,
             tcm: TcmConfig::NONE,
             now: self.now,
+            floor: self.floor,
         }
     }
 }

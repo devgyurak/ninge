@@ -186,20 +186,21 @@ impl<const ARM9: bool> Cpu<ARM9> {
     }
 
     /// Offers pending interrupt lines between two instructions: a FIQ is taken if F is clear, an
-    /// IRQ if I is clear, and FIQ has the higher priority. True if one was taken.
+    /// IRQ if I is clear, and FIQ has the higher priority. Returns the entry's cost in master cycles if
+    /// one was taken, which is an instruction's (`docs/hw/interrupts.md`, "Behavior"), else `None`.
     /// Call it between two instructions, when R15 reads the next instruction's address + 8 (ARM) or
     /// + 4 (Thumb).
     // The interrupt controller (`docs/hw/interrupts.md`) drives the IRQ line; nothing drives FIQ.
-    pub fn take_interrupt<B: Bus>(&mut self, bus: &mut B, irq: bool, fiq: bool) -> bool {
+    pub fn take_interrupt<B: Bus>(&mut self, bus: &mut B, irq: bool, fiq: bool) -> Option<u64> {
         let cpsr = self.regs.cpsr();
         let exception = match (fiq && cpsr & FLAG_F == 0, irq && cpsr & FLAG_I == 0) {
             (true, _) => Exception::Fiq,
             (false, true) => Exception::Irq,
-            (false, false) => return false,
+            (false, false) => return None,
         };
         self.take_exception(exception);
         self.refill(bus);
-        true
+        Some(Self::INSTRUCTION_COST)
     }
 
     /// Takes a prefetch abort for the instruction that is executing (R15 = its address + 8).

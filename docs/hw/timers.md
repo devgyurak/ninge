@@ -110,7 +110,8 @@ hardware behavior.
   while it lags the master clock can compute an overflow that is already past; its event is
   queued for the master clock, which the ARM7's step leaves where it is. For the ARM9 the floor
   is one instruction cost past the clock (`scheduler.md`, "Cost per instruction"), the master time
-  at which the writing instruction retires. An F/1 timer's shortest
+  at which the writing instruction retires. The floor is an input to the bus view, which the
+  caller computes before the step, because the step's cost is known only when it ends. An F/1 timer's shortest
   period is 2 master cycles, so an ARM9 write that starts a timer is never raised to the floor; only
   a long-overdue settle (see below) can be. The next overflow stays on the timer's own tick grid,
   so the count does not drift. Only the delivery of the IRQ is late, by less than one slice.

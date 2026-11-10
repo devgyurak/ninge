@@ -3,16 +3,13 @@
 
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use crate::cart::Header;
-use crate::cpu::Cpu;
+use crate::cpu::{ARM9_INSTRUCTION_COST, Cpu};
 use crate::io::Io;
 use crate::io::dma::{Dma, Trigger};
 use crate::io::irq::InterruptController;
 use crate::io::timers::Timers;
 use crate::io::timing::FIRST_VBLANK_LINE;
-use crate::scheduler::{
-    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, LINE_CYCLES, Participants,
-    Scheduler,
-};
+use crate::scheduler::{Event, EventKind, LINE_CYCLES, Participants, Scheduler};
 use serde::{Deserialize, Serialize};
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
@@ -351,11 +348,15 @@ impl Machine {
             &mut self.scheduler,
             tcm,
             now,
+            // The cost is known only once the instruction ends, so the floor is handed in: an
+            // event the instruction schedules fires no earlier than its end (`timers.md`, "Model").
+            now.saturating_add(ARM9_INSTRUCTION_COST),
         );
-        if !self.arm9.take_interrupt(&mut view, irq, false) {
-            self.arm9.step(&mut view);
-        }
-        self.scheduler.advance(ARM9_INSTRUCTION_COST);
+        let cost = match self.arm9.take_interrupt(&mut view, irq, false) {
+            Some(cost) => cost,
+            None => self.arm9.step(&mut view),
+        };
+        self.scheduler.advance(cost);
     }
 
     /// One ARM7 instruction and its cost, with nothing else; the IRQ entry takes its place as in
@@ -364,16 +365,20 @@ impl Machine {
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     pub(crate) fn step_arm7_instruction(&mut self) {
         let irq = self.io.irq7().line();
+        // The ARM7's step leaves the master clock where it is, so that is its floor.
+        let floor = self.scheduler.now();
         let mut view = Arm7View::new(
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
             self.arm7_clock,
+            floor,
         );
-        if !self.arm7.take_interrupt(&mut view, irq, false) {
-            self.arm7.step(&mut view);
-        }
-        self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
+        let cost = match self.arm7.take_interrupt(&mut view, irq, false) {
+            Some(cost) => cost,
+            None => self.arm7.step(&mut view),
+        };
+        self.arm7_clock = self.arm7_clock.saturating_add(cost);
     }
 
     /// Reads `N` bytes as the ARM9 data bus would, without side effects: IPCFIFORECV shows its
@@ -475,6 +480,9 @@ impl Machine {
                 // (`docs/hw/dma.md`, "Unverified").
                 TcmConfig::NONE,
                 now,
+                // TODO(#115): a DMA unit's write is not an instruction; for now it keeps the ARM9
+                // instruction floor, as before the floor became an input (`dma.md`, "Model").
+                now.saturating_add(ARM9_INSTRUCTION_COST),
             );
             transfer.run(&mut view)
         } else {
@@ -483,6 +491,7 @@ impl Machine {
                 &mut self.io,
                 &mut self.scheduler,
                 self.arm7_clock,
+                now,
             );
             transfer.run(&mut view)
         };

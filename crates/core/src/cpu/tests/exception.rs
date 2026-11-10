@@ -157,9 +157,11 @@ fn cpu_in(cpsr: u32, pc: u32, opcode: u32) -> Cpu<false> {
 
 fn fire<const ARM9: bool>(cpu: &mut Cpu<ARM9>, bus: &mut RecBus, trigger: Trigger) {
     match trigger {
-        Trigger::Step(_) => cpu.step(bus),
-        Trigger::Irq => assert!(cpu.take_interrupt(bus, true, false)),
-        Trigger::Fiq => assert!(cpu.take_interrupt(bus, false, true)),
+        Trigger::Step(_) => {
+            let _ = cpu.step(bus);
+        }
+        Trigger::Irq => assert!(cpu.take_interrupt(bus, true, false).is_some()),
+        Trigger::Fiq => assert!(cpu.take_interrupt(bus, false, true).is_some()),
         Trigger::Prefetch => cpu.prefetch_abort(bus),
         Trigger::Data => cpu.data_abort(bus),
         Trigger::Reset => cpu.reset(bus),
@@ -338,7 +340,7 @@ fn given_a_swi_whose_condition_fails_when_stepped_then_it_is_a_plain_step() {
     // SWINE with Z set.
     let mut cpu = cpu_in(0x13 | 0x4000_0000, ARM_PC, 0x1F00_0000);
     let before = cpu.regs().cpsr();
-    cpu.step(&mut RecBus::new());
+    let _ = cpu.step(&mut RecBus::new());
     assert_eq!(
         (cpu.regs().cpsr(), cpu.regs().get(15), cpu.pipeline()),
         (before, ARM_PC + 4, [NEXT, ARM_PC])
@@ -350,7 +352,7 @@ fn given_an_undefined_word_whose_condition_fails_when_stepped_then_it_is_a_plain
     // The undefined space with condition NE and Z set.
     let mut cpu = cpu_in(0x13 | 0x4000_0000, ARM_PC, 0x1600_0010);
     let before = cpu.regs().cpsr();
-    cpu.step(&mut RecBus::new());
+    let _ = cpu.step(&mut RecBus::new());
     assert_eq!(
         (cpu.regs().cpsr(), cpu.regs().get(15), cpu.pipeline()),
         (before, ARM_PC + 4, [NEXT, ARM_PC])
@@ -364,7 +366,7 @@ fn given_a_swi_taken_in_supervisor_mode_when_it_enters_then_r14_and_the_spsr_are
     let mut cpu = cpu_in(0x13 | FLAGS, ARM_PC, SWI);
     cpu.regs_mut().set(14, 0x1111_1111);
     cpu.regs_mut().set_spsr(Bank::Supervisor, 0x2222_2222);
-    cpu.step(&mut RecBus::new());
+    let _ = cpu.step(&mut RecBus::new());
     assert_eq!(
         (cpu.regs().get(14), cpu.regs().spsr(Bank::Supervisor)),
         (ARM_PC - 4, Some(0x13 | FLAGS))
@@ -389,7 +391,7 @@ fn given_a_fiq_from_user_mode_when_it_enters_then_r8_to_r12_switch_to_the_fiq_co
 fn interrupt_outcome(cpsr: u32, irq: bool, fiq: bool) -> (bool, u32) {
     let mut cpu = cpu_in(cpsr, ARM_PC, 0);
     let taken = cpu.take_interrupt(&mut RecBus::new(), irq, fiq);
-    (taken, cpu.regs().cpsr() & 0x1F)
+    (taken.is_some(), cpu.regs().cpsr() & 0x1F)
 }
 
 fn interrupt_mask_problems() -> Vec<String> {
@@ -436,7 +438,7 @@ fn given_control_bit_13_set_by_mcr_when_an_arm9_takes_a_swi_then_it_enters_at_ff
     cpu.regs_mut().set(15, ARM_PC);
     cpu.set_pipeline([SWI, NEXT]);
     let mut bus = RecBus::new();
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     assert_eq!(
         (cpu.regs().get(15), cpu.pipeline(), bus.fetches),
         (
@@ -453,7 +455,7 @@ fn given_control_bit_13_in_an_arm7s_cp15_when_it_takes_a_swi_then_it_still_enter
     cpu.cp15.write(1, 0, 0, 1 << 13);
     cpu.regs_mut().set(15, ARM_PC);
     cpu.set_pipeline([SWI, NEXT]);
-    cpu.step(&mut RecBus::new());
+    let _ = cpu.step(&mut RecBus::new());
     assert_eq!(cpu.pipeline(), [8, 12]);
 }
 
@@ -503,7 +505,7 @@ fn coprocessor_words(cp: u32) -> [u32; 6] {
 fn arm7_traps(word: u32) -> bool {
     let mut cpu = cpu_in(0x13, ARM_PC, word);
     let mut bus = RecBus::new();
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     cpu.regs().cpsr() & 0x1F == 0x1B
         && bus.fetches == [(32, ARM_PC), (32, 4), (32, 8)]
         && cpu.regs().get(14) == ARM_PC - 4
@@ -528,7 +530,7 @@ fn arm9_outcome(word: u32) -> (bool, bool) {
     cpu.regs_mut().set_cpsr(0x13);
     cpu.regs_mut().set(15, ARM_PC);
     cpu.set_pipeline([word, NEXT]);
-    cpu.step(&mut RecBus::new());
+    let _ = cpu.step(&mut RecBus::new());
     (
         cpu.regs().cpsr() & 0x1F == 0x1B,
         cpu.regs().cpsr() == 0x13 && cpu.regs().get(15) == ARM_PC + 4,
@@ -576,7 +578,7 @@ fn round_trip(trigger: Trigger, start: u32, return_op: u32, data: u32) -> (u32, 
     cpu.regs_mut().set(13, 0x4000);
     bus.data = data;
     bus.fetches.clear();
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     (cpu.regs().get(15), cpu.regs().cpsr(), cpu.pipeline())
 }
 
@@ -629,7 +631,7 @@ fn given_a_thumb_swi_when_the_handler_runs_movs_pc_lr_then_t_is_restored_and_a_1
     cpu.take_exception(Exception::SoftwareInterrupt);
     cpu.set_pipeline([MOVS_PC_LR, 0]);
     let mut bus = RecBus::new();
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     assert_eq!(
         (cpu.regs().cpsr(), cpu.regs().get(15), bus.fetches),
         (
@@ -651,7 +653,7 @@ proptest! {
     ) {
         let cpsr = (top & !0xFF) | mode_bits(MODES[mode]) | (u32::from(f) * F_BIT);
         let mut cpu = cpu_in(cpsr, ARM_PC, SWI);
-        cpu.step(&mut RecBus::new());
+        let _ = cpu.step(&mut RecBus::new());
         prop_assert_eq!(
             cpu.regs().cpsr(),
             (cpsr & !0xFF) | I_BIT | (cpsr & F_BIT) | 0x13

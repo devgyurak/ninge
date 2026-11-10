@@ -1719,3 +1719,44 @@ fn given_an_arm7_write_that_settles_a_long_overdue_timer_when_it_is_rescheduled_
     m.arm7(1000).write8(TM1CNT_L, 0);
     assert_eq!(timer_event_times(&m, false, 0), vec![1000]);
 }
+
+/// Master time far above `now` (0), so the unfloored due time of a fresh timer lies below it.
+const FAR_FLOOR: u64 = 5000;
+
+/// The overflow event times of ARM9 timer 0 after START is written through a view at `now` 0
+/// whose floor is `FAR_FLOOR`. Unfloored, the event is at 32 (16 ticks of 2 cycles).
+fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
+    let mut m = Bench::new();
+    let mut v = Arm9View::new(
+        &mut m.memory,
+        &mut m.io,
+        &mut m.scheduler,
+        plain(),
+        0,
+        FAR_FLOOR,
+    );
+    v.write16(TM0CNT_L, RELOAD_16_TICKS);
+    v.write16(TM0CNT_H, START);
+    timer_event_times(&m, true, 0)
+}
+
+/// The same through the ARM7's view.
+fn arm7_event_after_start_with_far_floor() -> Vec<u64> {
+    let mut m = Bench::new();
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0, FAR_FLOOR);
+    v.write16(TM0CNT_L, RELOAD_16_TICKS);
+    v.write16(TM0CNT_H, START);
+    timer_event_times(&m, false, 0)
+}
+
+#[test]
+fn given_an_arm9_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_the_event_is_at_the_floor()
+ {
+    assert_eq!(arm9_event_after_start_with_far_floor(), vec![FAR_FLOOR]);
+}
+
+#[test]
+fn given_an_arm7_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_the_event_is_at_the_floor()
+ {
+    assert_eq!(arm7_event_after_start_with_far_floor(), vec![FAR_FLOOR]);
+}

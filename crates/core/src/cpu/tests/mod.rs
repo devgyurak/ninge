@@ -397,7 +397,7 @@ fn given_new_cpu_when_stepping_a_failed_condition_then_only_r15_advances_by_4() 
     let mut cpu = Cpu::<false>::new();
     let mut expected = cpu.clone();
     expected.regs_mut().set(15, 4);
-    cpu.step(&mut NullBus);
+    let _ = cpu.step(&mut NullBus);
     assert_eq!(cpu, expected);
 }
 
@@ -406,4 +406,86 @@ fn given_new_cpu_when_editing_registers_through_regs_mut_then_regs_shows_the_edi
     let mut cpu = Cpu::<true>::default();
     cpu.regs_mut().set(5, 55);
     assert_eq!(cpu.regs().get(5), 55);
+}
+
+// ------------------------------------------------------------ cost of a step
+// Expected values come from `docs/hw/scheduler.md` ("Cost per instruction"): the ARM9 runs at
+// the master clock, one instruction per master cycle; the ARM7 at half of it, two per instruction.
+
+const SVC_ARM: u32 = 0x13;
+const SVC_THUMB: u32 = 0x13 | 0x20;
+const SVC_I_SET: u32 = 0x13 | 0x80;
+
+fn arm9_at(cpsr: u32) -> Cpu<true> {
+    let mut cpu = Cpu::<true>::new();
+    cpu.regs_mut().set_cpsr(cpsr);
+    cpu.set_pipeline([0, 0]);
+    cpu
+}
+
+fn arm7_at(cpsr: u32) -> Cpu<false> {
+    let mut cpu = Cpu::<false>::new();
+    cpu.regs_mut().set_cpsr(cpsr);
+    cpu.set_pipeline([0, 0]);
+    cpu
+}
+
+#[test]
+fn given_an_arm9_in_arm_state_when_it_steps_then_the_cost_is_one_master_cycle() {
+    assert_eq!(arm9_at(SVC_ARM).step(&mut NullBus), 1);
+}
+
+#[test]
+fn given_an_arm9_in_thumb_state_when_it_steps_then_the_cost_is_one_master_cycle() {
+    assert_eq!(arm9_at(SVC_THUMB).step(&mut NullBus), 1);
+}
+
+#[test]
+fn given_an_arm7_in_arm_state_when_it_steps_then_the_cost_is_two_master_cycles() {
+    assert_eq!(arm7_at(SVC_ARM).step(&mut NullBus), 2);
+}
+
+#[test]
+fn given_an_arm7_in_thumb_state_when_it_steps_then_the_cost_is_two_master_cycles() {
+    assert_eq!(arm7_at(SVC_THUMB).step(&mut NullBus), 2);
+}
+
+#[test]
+fn given_the_cost_constants_when_read_then_the_arm9_is_one_and_the_arm7_is_two() {
+    assert_eq!((ARM9_INSTRUCTION_COST, ARM7_INSTRUCTION_COST), (1, 2));
+}
+
+#[test]
+fn given_an_arm9_with_i_clear_when_an_irq_is_taken_then_the_cost_equals_a_step() {
+    let entry = arm9_at(SVC_ARM).take_interrupt(&mut NullBus, true, false);
+    assert_eq!(entry, Some(arm9_at(SVC_ARM).step(&mut NullBus)));
+}
+
+#[test]
+fn given_an_arm7_with_i_clear_when_an_irq_is_taken_then_the_cost_equals_a_step() {
+    let entry = arm7_at(SVC_ARM).take_interrupt(&mut NullBus, true, false);
+    assert_eq!(entry, Some(arm7_at(SVC_ARM).step(&mut NullBus)));
+}
+
+#[test]
+fn given_i_set_when_an_irq_is_offered_then_the_arm9_returns_no_cost() {
+    assert_eq!(
+        arm9_at(SVC_I_SET).take_interrupt(&mut NullBus, true, false),
+        None
+    );
+}
+
+#[test]
+fn given_i_set_when_an_irq_is_offered_then_the_arm7_returns_no_cost() {
+    assert_eq!(
+        arm7_at(SVC_I_SET).take_interrupt(&mut NullBus, true, false),
+        None
+    );
+}
+
+#[test]
+fn given_the_irq_line_low_when_an_interrupt_is_offered_then_both_cpus_return_no_cost() {
+    let arm9 = arm9_at(SVC_ARM).take_interrupt(&mut NullBus, false, false);
+    let arm7 = arm7_at(SVC_ARM).take_interrupt(&mut NullBus, false, false);
+    assert_eq!((arm9, arm7), (None, None));
 }

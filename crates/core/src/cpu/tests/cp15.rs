@@ -100,7 +100,7 @@ fn exec<const A: bool>(cpu: &mut Cpu<A>, opcode: u32) -> Rec {
     cpu.regs_mut().set(15, ARM_PC);
     cpu.set_pipeline([opcode, NEXT]);
     let mut bus = Rec::new();
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     bus
 }
 

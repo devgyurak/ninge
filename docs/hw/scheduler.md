@@ -56,6 +56,15 @@ advances in steps of 2.
 
 - One ARM9 instruction costs 1 master cycle.
 - One ARM7 instruction costs 2 master cycles (1 ARM7 cycle).
+- The cost is the return value of `Cpu::step`, and of `Cpu::take_interrupt` when it takes an
+  interrupt: an interrupt entry costs the same as an instruction. The machine advances the CPU's
+  clock by what the call returns. The constants live with the CPU (`cpu/mod.rs`), which does not
+  depend on the scheduler.
+- A step cannot tell the bus view its own end time, so the caller hands the view a **floor**: the
+  earliest time an event the step schedules may fire (`timers.md`, "Model"). It is the clock plus
+  the instruction cost for the ARM9 and the master clock for the ARM7. A savestate's bound on the
+  ARM7's lead over the master clock uses the same cost; once costs vary it becomes the largest
+  cost.
 
 With these costs a frame gives the ARM9 1,120,380 instructions and the ARM7 560,190. This is
 the best-case "one cycle per instruction" reading of the clock ratio: it ignores the waitstates
@@ -201,7 +210,7 @@ A saved machine is refused on load when:
 ## Unverified
 
 - **Instruction costs** (ARM9 1, ARM7 2 master cycles) ignore waitstates, multi-cycle
-  instructions and cache effects. — `crates/core/src/scheduler/mod.rs`
+  instructions and cache effects. — `crates/core/src/cpu/mod.rs`
   (`ARM9_INSTRUCTION_COST`, `ARM7_INSTRUCTION_COST`) — verify against a test ROM timing a
   fixed loop against a hardware timer (Phase 8), or by trace comparison with the oracle.
 - **The tie order of same-time events** (line, HBlank, timers, DMA; ARM9 before ARM7) is a model

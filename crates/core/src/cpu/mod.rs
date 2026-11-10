@@ -28,6 +28,13 @@ pub use regs::{Bank, Mode, Registers};
 use psr::FLAG_T;
 use serde::{Deserialize, Serialize};
 
+/// Master cycles one ARM9 instruction costs (`scheduler.md`, "Cost per instruction").
+// TODO(hw-unverified): ignores waitstates and multi-cycle instructions (`scheduler.md`, "Unverified").
+pub const ARM9_INSTRUCTION_COST: u64 = 1;
+/// Master cycles one ARM7 instruction costs (`scheduler.md`, "Cost per instruction").
+// TODO(hw-unverified): ignores waitstates and multi-cycle instructions (`scheduler.md`, "Unverified").
+pub const ARM7_INSTRUCTION_COST: u64 = 2;
+
 /// One ARM core. `ARM9` selects the ARMv5TE behavior over ARMv4T at compile time.
 ///
 /// Decided in #76.
@@ -95,13 +102,22 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.refill(bus);
     }
 
+    /// Master cycles one instruction costs this CPU, which is also what an interrupt entry costs.
+    const INSTRUCTION_COST: u64 = match ARM9 {
+        true => ARM9_INSTRUCTION_COST,
+        false => ARM7_INSTRUCTION_COST,
+    };
+
     /// Executes one instruction, in the state the CPSR's T bit selects (ARM when clear, Thumb
-    /// when set).
-    pub fn step<B: Bus>(&mut self, bus: &mut B) {
+    /// when set). Returns its cost in master cycles (`docs/hw/scheduler.md`, "Cost per
+    /// instruction").
+    #[must_use]
+    pub fn step<B: Bus>(&mut self, bus: &mut B) -> u64 {
         match self.regs.cpsr() & FLAG_T != 0 {
             true => self.step_thumb(bus),
             false => self.step_arm(bus),
         }
+        Self::INSTRUCTION_COST
     }
 }
 

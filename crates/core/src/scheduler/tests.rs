@@ -352,11 +352,8 @@ fn given_frame_cycles_when_computed_from_the_display_timing_then_it_is_1120380()
 }
 
 #[test]
-fn given_the_cost_constants_when_read_then_arm9_costs_1_arm7_costs_2_and_slice_is_64() {
-    assert_eq!(
-        (ARM9_INSTRUCTION_COST, ARM7_INSTRUCTION_COST, SLICE),
-        (1, 2, 64)
-    );
+fn given_the_slice_constant_when_read_then_it_is_64() {
+    assert_eq!(SLICE, 64);
 }
 
 // -------------------------------------------------------- savestate validity

@@ -119,7 +119,7 @@ fn run<const ARM9: bool>(
     regs.iter().for_each(|&(i, v)| cpu.regs_mut().set(i, v));
     cpu.set_pipeline([word, NEXT]);
     let mut bus = Mem::new(mem);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     Run { cpu, bus }
 }
 
@@ -205,7 +205,7 @@ fn given_an_arm9_ldm_pc_with_s_when_the_loaded_bit_0_is_set_then_t_comes_from_th
     cpu.regs_mut().set(15, ADDR + 8);
     cpu.set_pipeline([LDM_PC_S, NEXT]);
     let mut bus = Mem::new(&[(0x100, 0x3001)]);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     assert_eq!(cpu.regs().cpsr(), SYS);
 }
 
@@ -219,7 +219,7 @@ fn given_an_arm9_ldm_pc_with_s_when_the_spsr_has_t_set_then_the_core_enters_thum
     cpu.regs_mut().set(15, ADDR + 8);
     cpu.set_pipeline([LDM_PC_S, NEXT]);
     let mut bus = Mem::new(&[(0x100, 0x3000)]);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     assert_eq!(
         (cpu.regs().cpsr(), cpu.regs().get(15)),
         (SYS | T_BIT, 0x3004)
@@ -373,8 +373,8 @@ fn given_an_arm9_thumb_prefix_and_blx_suffix_when_both_execute_then_lr_returns_p
     cpu.regs_mut().set(15, ADDR + 4);
     cpu.set_pipeline([u32::from(THUMB_PREFIX_1), u32::from(THUMB_BLX_SUFFIX_2)]);
     let mut bus = Mem::new(&[]);
-    cpu.step(&mut bus);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     assert_eq!(
         (
             cpu.regs().cpsr() & T_BIT,
@@ -1164,7 +1164,7 @@ fn given_an_arm9_bkpt_with_control_bit_13_set_when_executed_then_it_vectors_to_f
     cpu.regs_mut().set_cpsr(SVC);
     cpu.regs_mut().set(15, ADDR + 8);
     cpu.set_pipeline([BKPT_0, NEXT]);
-    cpu.step(&mut Mem::new(&[]));
+    let _ = cpu.step(&mut Mem::new(&[]));
     assert_eq!(cpu.pipeline(), [0xFFFF_000C, 0xFFFF_0010]);
 }
 

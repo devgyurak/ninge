@@ -3,7 +3,7 @@
 //! Expected values come from `docs/hw/arm-multiply.md`, "ARM7TDMI multiply carry": the four
 //! worked examples of US 5,557,563 for the datapath, and hand-worked operands for the C rule.
 
-use super::multiply_carry::{carry_save, iterations, multiply_carry};
+use crate::cpu::multiply_carry::{carry_save, iterations, multiply_carry};
 use proptest::prelude::*;
 
 /// The 33-bit width of the active region of the save and carry vectors.

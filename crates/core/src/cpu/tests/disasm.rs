@@ -7,8 +7,8 @@
 //! Loops live in the harness functions below; a test body only asserts that the list of
 //! failures is empty, so every wrong row shows at once.
 
-use super::decode::{Kind, decode};
-use super::disassemble_arm;
+use crate::cpu::decode::{Kind, decode};
+use crate::cpu::disassemble_arm;
 
 /// The address of the instruction under test unless a row says otherwise. Chosen so that the
 /// +8 pipeline offset is visible in a branch target and a PC-relative comment.

@@ -113,33 +113,3 @@ impl<const ARM9: bool> Default for Cpu<ARM9> {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod tests_arm;
-
-#[cfg(test)]
-mod tests_transfer;
-
-#[cfg(test)]
-mod tests_branch;
-
-#[cfg(test)]
-mod tests_exception;
-
-#[cfg(test)]
-mod tests_thumb;
-
-#[cfg(test)]
-mod tests_armv5;
-
-#[cfg(test)]
-mod tests_cp15;
-
-#[cfg(test)]
-mod tests_disasm;
-
-#[cfg(test)]
-mod tests_multiply_carry;
-
-#[cfg(test)]
-mod tests_disasm_thumb;

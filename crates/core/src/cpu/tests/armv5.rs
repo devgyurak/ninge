@@ -7,8 +7,8 @@
 //! address each entry came from; a data read returns the value placed at that address, or a
 //! marker for unset memory. R15 reads the executing address + 8 (ARM) or + 4 (Thumb).
 
-use super::regs::LR;
-use super::*;
+use crate::cpu::regs::LR;
+use crate::cpu::*;
 use std::collections::BTreeMap;
 
 /// Address of the instruction under test.
@@ -1160,7 +1160,7 @@ fn given_an_arm9_bkpt_when_the_flags_are_set_then_the_abort_cpsr_keeps_them_and_
 
 #[test]
 fn given_an_arm9_bkpt_with_control_bit_13_set_when_executed_then_it_vectors_to_ffff_000c() {
-    let mut cpu = super::tests_cp15::arm9_with_high_vectors();
+    let mut cpu = super::cp15::arm9_with_high_vectors();
     cpu.regs_mut().set_cpsr(SVC);
     cpu.regs_mut().set(15, ADDR + 8);
     cpu.set_pipeline([BKPT_0, NEXT]);

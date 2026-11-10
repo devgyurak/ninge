@@ -6,8 +6,8 @@
 //! instruction did not write it, or the written value + 8 if it did. The bus receives the raw
 //! effective address, low bits included; code fetches (the prefetch) return a harmless zero.
 
-use super::arm_transfer::{block_start, halfword_value, rotate_word};
-use super::*;
+use crate::cpu::arm_transfer::{block_start, halfword_value, rotate_word};
+use crate::cpu::*;
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 

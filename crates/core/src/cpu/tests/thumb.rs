@@ -7,7 +7,7 @@
 //! The recording bus answers a fetch with the address it was asked for, so the pipeline
 //! contents show which address each entry came from.
 
-use super::*;
+use crate::cpu::*;
 use proptest::prelude::*;
 
 /// Address of the instruction under test.

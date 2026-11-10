@@ -8,7 +8,7 @@
 //! the instruction did not write it, or the written value + 8 if it did. The bus is only asked
 //! for the prefetch, whose value these tests do not look at.
 
-use super::*;
+use crate::cpu::*;
 use proptest::prelude::*;
 
 /// Address of the instruction under test.
@@ -1226,7 +1226,7 @@ proptest! {
         a in any::<u32>(), b in any::<u32>(), f in 0u32..16,
     ) {
         let want = a.wrapping_mul(b);
-        // C comes from the carry model, which `tests_multiply_carry.rs` pins.
+        // C comes from the carry model, which `tests/multiply_carry.rs` pins.
         prop_assert_eq!(
             cpsr_after(f << 28, &[(1, a), (2, b)], MUL | S_BIT) & !C,
             SVC | (f << 28 & V) | want & N | u32::from(want == 0) << 30

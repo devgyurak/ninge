@@ -7,7 +7,7 @@
 //! at `ADDR` in Supervisor mode, so R15 reads `ADDR + 8` while it executes and `ADDR + 12` is the
 //! value an MCR with Rd = R15 sends (the note's "Access").
 
-use super::*;
+use crate::cpu::*;
 
 /// Address of the instruction under test.
 const ADDR: u32 = 0x1000;

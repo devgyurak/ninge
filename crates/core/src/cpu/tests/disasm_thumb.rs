@@ -8,8 +8,8 @@
 //! checks that the row decodes to the `ThumbKind` the table is about, so a row cannot sit under
 //! the wrong format.
 
-use super::disassemble_thumb;
-use super::thumb_decode::{ThumbKind, decode};
+use crate::cpu::disassemble_thumb;
+use crate::cpu::thumb_decode::{ThumbKind, decode};
 use proptest::prelude::*;
 
 /// Address of the instruction under test unless a row says otherwise.

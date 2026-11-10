@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 
+mod arm;
+mod armv5;
+mod branch;
+mod cp15;
+mod disasm;
+mod disasm_thumb;
+mod exception;
+mod multiply_carry;
+mod thumb;
+mod transfer;
+
 /// A bus that serves nothing; the CPU executes no instruction yet.
 struct NullBus;
 

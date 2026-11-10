@@ -7,9 +7,9 @@
 //! The recording bus answers a fetch with the address it was asked for, so the pipeline contents
 //! show which address each entry came from.
 
-use super::exception::Exception;
-use super::tests_cp15::{arm9_with_high_vectors, write_control};
-use super::*;
+use super::cp15::{arm9_with_high_vectors, write_control};
+use crate::cpu::exception::Exception;
+use crate::cpu::*;
 use proptest::prelude::*;
 
 /// Address of the instruction under test.

@@ -177,11 +177,10 @@ impl<const ARM9: bool> Access<'_, ARM9> {
     /// event never lies before the end of the instruction that scheduled it. The caller hands
     /// that time in as `floor`, because a step's cost is known only once it ends: on the ARM9 it
     /// is one instruction cost past the clock; the ARM7's step leaves the master clock where it
-    /// is (`timers.md`, "Model").
+    /// is (`timers.md`, "Model"). A DMA unit's write is not an instruction: `Machine::run_dma` passes the
+    /// clock itself (`dma.md`, "Model").
     // TODO(hw-unverified): an ARM7 event is floored at the master clock, which the ARM9 has
     // already carried to the round's stop (`scheduler.md`, "Unverified").
-    // TODO(#115): a DMA unit's write takes the ARM9 instruction's floor though no instruction is
-    // running (`dma.md`, "Model"), which only matters for an event it queues.
     fn at(&self) -> At {
         At {
             now: self.now,

@@ -198,12 +198,6 @@ A saved machine is refused on load when:
   them, and a load rebuilds the queue from `now`, so those past events are gone. Such a machine
   never fires its events anyway (there is no program to run), so the only difference a caller
   can see is `pending()`.
-- **Known gap:** a DMA transfer whose unit writes an ARM9 DMA control register (a chained
-  immediate-start DMA) queues that start at `now + 1`, because the ARM9's bus view floors every write at the end of one instruction
-  (`bus/view.rs`, `at`; TODO #115). The rebuild queues it at `now`, so a machine saved in that
-  state and loaded fires the event one ARM9 instruction earlier than an uninterrupted run. No
-  test ROM does this yet; fixing it means flooring a DMA unit's write at `now` (a behavior
-  change, so not part of #112).
 - A sequence counter is a `u64` and cannot realistically wrap; it uses wrapping arithmetic so
   that a hand-made state cannot panic.
 

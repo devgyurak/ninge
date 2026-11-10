@@ -468,7 +468,7 @@ impl Machine {
     /// An ARM7 start comes late by what the ARM7 lags the master clock, under one slice.
     // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
     // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
-    // revisit with #115.
+    // revisit with the Phase 8 timing work.
     fn run_dma(&mut self, transfer: crate::io::dma::Transfer) {
         let now = self.scheduler.now();
         let end = if transfer.arm9 {
@@ -480,9 +480,10 @@ impl Machine {
                 // (`docs/hw/dma.md`, "Unverified").
                 TcmConfig::NONE,
                 now,
-                // TODO(#115): a DMA unit's write is not an instruction; for now it keeps the ARM9
-                // instruction floor, as before the floor became an input (`dma.md`, "Model").
-                now.saturating_add(ARM9_INSTRUCTION_COST),
+                // A DMA unit's write is not an instruction, so its floor is `now`: an event it
+                // queues waits for the next round and fires at `now`, which is where a load
+                // rebuilds it (`dma.md`, "Model").
+                now,
             );
             transfer.run(&mut view)
         } else {

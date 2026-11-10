@@ -646,7 +646,8 @@ fn given_a_dma_writing_another_channels_control_when_it_ends_then_that_channel_i
 {
     // Channel 0 stores the word `ENABLE | 1` into DMA1CNT: a register write like any other
     // (`dma.md`, "Edge cases"), so channel 1 starts as if a CPU had enabled it. The write lands
-    // at the master time the transfer ran (1), and an ARM9 write's floor is one cycle later.
+    // at the master time the transfer ran (1); a DMA unit's write is floored at `now`, not one
+    // instruction later, so the start is queued at 1 (`dma.md`, "Model").
     let mut m = machine();
     poke_words(&mut m, SRC, &[ENABLE | 1]);
     poke_halfwords(&mut m, SRC + 0x100, &[0xABCD]);
@@ -660,7 +661,7 @@ fn given_a_dma_writing_another_channels_control_when_it_ends_then_that_channel_i
             peek_halfwords(&m, DST, 1),
             busy9(&m, 0)
         ),
-        (true, vec![(2, true, 1)], vec![0], 0)
+        (true, vec![(1, true, 1)], vec![0], 0)
     );
 }
 

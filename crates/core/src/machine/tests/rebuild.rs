@@ -262,3 +262,48 @@ fn given_an_arm7_timer_started_while_lagging_when_saved_and_loaded_then_the_queu
         (true, true)
     );
 }
+
+// ------------------------------------------- (e) a DMA unit that enables a chained immediate DMA
+
+const DMA1SAD: u32 = 0x0400_00BC;
+const DMA1DAD: u32 = 0x0400_00C0;
+const DMA1CNT: u32 = 0x0400_00C4;
+/// Enable, word-sized, Immediate start (bits 27-29 = 0), 1 unit.
+const IMMEDIATE_COPY_1_WORD: u32 = (1 << 31) | (1 << 26) | 1;
+
+/// Channel 0's one unit copies a control word into DMA1CNT, which enables channel 1 (Immediate).
+/// The clock is at the round boundary right after channel 0 ran, with channel 1's start queued
+/// and not yet fired (`dma.md`, "Starting": Immediate starts when the enable write retires).
+fn dma_unit_that_chains_an_immediate_channel() -> Machine {
+    let mut m = machine();
+    m.bus9().write32(SRC, IMMEDIATE_COPY_1_WORD);
+    m.bus9().write32(DMA1SAD, SRC);
+    m.bus9().write32(DMA1DAD, DST);
+    m.bus9().write32(DMA0SAD, SRC);
+    m.bus9().write32(DMA0DAD, DMA1CNT);
+    m.bus9().write32(DMA0CNT, IMMEDIATE_COPY_1_WORD);
+    run_round(&mut m);
+    m
+}
+
+#[test]
+fn given_an_arm9_dma_unit_that_enables_an_immediate_channel_when_saved_and_loaded_then_the_run_matches_an_uninterrupted_one()
+ {
+    let original = dma_unit_that_chains_an_immediate_channel();
+    let chained_start = EventKind::DmaStart {
+        arm9: true,
+        channel: 1,
+    };
+    let resumed = resume(&original, |m| rounds(m, 3));
+    assert_eq!(
+        (
+            resumed
+                .original_pending
+                .iter()
+                .any(|&(_, kind)| kind == chained_start),
+            resumed.loaded_pending,
+            resumed.bytes_equal_after
+        ),
+        (true, resumed.original_pending, true)
+    );
+}

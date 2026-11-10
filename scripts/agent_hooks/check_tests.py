@@ -9,7 +9,10 @@ For every `#[test]`-like function in an edited `.rs` file:
     (so no `let … else` either) and no `for_each`. Many cases go through a harness function
     that returns the list of failures, and the test asserts that list is empty;
   * the body asserts something (`assert*!`, `prop_assert*!`, an insta `assert_*_snapshot!`,
-    or a helper named `assert_*`), or the fn is `#[should_panic(expected = …)]`.
+    or a helper named `assert_*`), or the fn is `#[should_panic(expected = …)]`;
+  * under `crates/`, the tests sit in their module's `tests.rs` (or `tests/<topic>.rs` beside a
+    `tests/mod.rs`): no inline `mod tests { … }` and no `tests_<topic>.rs` sibling file
+    (AGENTS.md §5.1).
 
 Modes:
   * default        — judge the `.rs` paths in the hook payload;
@@ -53,10 +56,16 @@ VAGUE_THEN = frozenset(
 CONTROL_FLOW_RE = re.compile(r"\b(if|else|for|while|loop|match|for_each|try_for_each)\b")
 ASSERT_RE = re.compile(r"\b(?:prop_)?assert\w*!|\bassert_\w+\s*\(|\binsta::assert_\w+!")
 
+# An inline test module: `mod tests {` or `mod tests_<topic> {`. `mod tests;` (a file) is the
+# approved form and has no brace.
+INLINE_TESTS_RE = re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+tests\w*[ \t]*\{", re.MULTILINE)
+SIBLING_TESTS_FILE_RE = re.compile(r"^tests_\w+\.rs$")
+
 RULE = (
     "Test conventions (AGENTS.md §5): name tests given_<state>_when_<action>_then_<observable>; "
     "keep control flow out of test bodies (put the loop in a harness fn that returns the "
-    "failures, then assert the list is empty); every test asserts something."
+    "failures, then assert the list is empty); every test asserts something; a module's tests live "
+    "in its tests.rs (or tests/<topic>.rs), never inline and never in a tests_<topic>.rs sibling."
 )
 
 
@@ -76,6 +85,20 @@ def check_source(source: str, label: str) -> list[str]:
             violations.append(f"{where} — control flow in the test body: {', '.join(flow)}.")
         if not ASSERT_RE.search(test.body) and "should_panic" not in test.attrs:
             violations.append(f"{where} — asserts nothing.")
+    violations.extend(check_placement(source, label))
+    return violations
+
+
+def check_placement(source: str, label: str) -> list[str]:
+    """Where the tests of a file under `crates/` live (AGENTS.md §5.1). Pure, like check_source."""
+    if not label.startswith("crates/"):
+        return []
+    violations: list[str] = []
+    if SIBLING_TESTS_FILE_RE.match(label.rsplit("/", 1)[-1]):
+        violations.append(f"  {label} — a `tests_<topic>.rs` sibling; use the module's tests.rs or tests/<topic>.rs.")
+    for match in INLINE_TESTS_RE.finditer(strip(source)):
+        line = source.count("\n", 0, match.start()) + 1
+        violations.append(f"  {label}:{line} — an inline test module; move it to the module's tests.rs.")
     return violations
 
 

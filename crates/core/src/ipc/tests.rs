@@ -21,21 +21,35 @@ const RECV_FULL: u16 = 1 << 9;
 const IF16: u32 = 1 << 16;
 const IF17: u32 = 1 << 17;
 const IF18: u32 = 1 << 18;
+/// IPCSYNC and IPCFIFOCNT in the register space of the device, which starts at IPCSYNC.
+const SYNC: u32 = 0;
+const CNT: u32 = CNT_OFFSET;
+
+/// A byte write at `offset` as CPU `ARM9`; returns the requests.
+fn write_byte<const ARM9: bool>(ipc: &mut Ipc, offset: u32, value: u8) -> Requests {
+    Device::<ARM9>::write(ipc, offset, Width::Byte, u32::from(value), 0).requests
+}
+
+/// A byte read at `offset` as CPU `ARM9`.
+fn read_byte<const ARM9: bool>(ipc: &Ipc, offset: u32) -> u8 {
+    Device::<ARM9>::peek(ipc, offset, Width::Byte, 0) as u8
+}
+
 const NONE: Requests = Requests { arm9: 0, arm7: 0 };
 
 /// Writes a halfword to IPCSYNC as CPU `ARM9`, byte by byte as the bus does; returns the requests.
 fn write_sync<const ARM9: bool>(ipc: &mut Ipc, value: u16) -> Requests {
-    write_half::<ARM9>(ipc, IPCSYNC_ADDR, value)
+    write_half::<ARM9>(ipc, SYNC, value)
 }
 
 fn write_cnt<const ARM9: bool>(ipc: &mut Ipc, value: u16) -> Requests {
-    write_half::<ARM9>(ipc, IPCFIFOCNT_ADDR, value)
+    write_half::<ARM9>(ipc, CNT, value)
 }
 
-fn write_half<const ARM9: bool>(ipc: &mut Ipc, addr: u32, value: u16) -> Requests {
+fn write_half<const ARM9: bool>(ipc: &mut Ipc, offset: u32, value: u16) -> Requests {
     let [low, high] = value.to_le_bytes();
-    let first = ipc.write_byte::<ARM9>(addr, low);
-    let second = ipc.write_byte::<ARM9>(addr + 1, high);
+    let first = write_byte::<ARM9>(ipc, offset, low);
+    let second = write_byte::<ARM9>(ipc, offset + 1, high);
     first.merge(second)
 }
 
@@ -115,14 +129,14 @@ fn given_the_arm7_wrote_ipcsync_when_the_arm9_output_is_read_then_it_is_unchange
 #[test]
 fn given_only_the_high_byte_written_when_ipcsync_is_read_then_the_output_nibble_is_set() {
     let mut ipc = Ipc::new();
-    ipc.write_byte::<true>(IPCSYNC_ADDR + 1, 0x0B);
+    write_byte::<true>(&mut ipc, SYNC + 1, 0x0B);
     assert_eq!(ipc.sync::<false>(), 0x000B);
 }
 
 #[test]
 fn given_only_the_low_byte_written_when_ipcsync_is_read_then_nothing_changes() {
     let mut ipc = Ipc::new();
-    ipc.write_byte::<true>(IPCSYNC_ADDR, 0xFF);
+    write_byte::<true>(&mut ipc, SYNC, 0xFF);
     assert_eq!((ipc.sync::<true>(), ipc.sync::<false>()), (0, 0));
 }
 
@@ -253,7 +267,7 @@ fn given_the_clear_bit_written_when_ipcfifocnt_is_read_then_bit_3_reads_zero() {
 #[test]
 fn given_a_byte_write_to_the_low_byte_when_ipcfifocnt_is_read_then_the_high_byte_is_unchanged() {
     let mut ipc = enabled();
-    ipc.write_byte::<true>(IPCFIFOCNT_ADDR, SEND_IRQ_ENABLE as u8);
+    write_byte::<true>(&mut ipc, CNT, SEND_IRQ_ENABLE as u8);
     assert_eq!(
         ipc.control::<true>(),
         ENABLE | SEND_IRQ_ENABLE | RECV_EMPTY | SEND_EMPTY
@@ -263,8 +277,8 @@ fn given_a_byte_write_to_the_low_byte_when_ipcfifocnt_is_read_then_the_high_byte
 #[test]
 fn given_a_byte_write_to_the_high_byte_when_ipcfifocnt_is_read_then_the_low_byte_is_unchanged() {
     let mut ipc = Ipc::new();
-    ipc.write_byte::<true>(IPCFIFOCNT_ADDR, SEND_IRQ_ENABLE as u8);
-    ipc.write_byte::<true>(IPCFIFOCNT_ADDR + 1, (ENABLE >> 8) as u8);
+    write_byte::<true>(&mut ipc, CNT, SEND_IRQ_ENABLE as u8);
+    write_byte::<true>(&mut ipc, CNT + 1, (ENABLE >> 8) as u8);
     assert_eq!(
         ipc.control::<true>(),
         ENABLE | SEND_IRQ_ENABLE | RECV_EMPTY | SEND_EMPTY
@@ -276,10 +290,10 @@ fn given_a_byte_address_past_the_two_registers_when_read_then_no_register_answer
     let ipc = Ipc::new();
     assert_eq!(
         (
-            ipc.read_byte::<true>(IPCFIFOCNT_ADDR + 2),
-            ipc.read_byte::<true>(IPCSYNC_ADDR + 2)
+            read_byte::<true>(&ipc, CNT + 2),
+            read_byte::<true>(&ipc, SYNC + 2)
         ),
-        (None, None)
+        (0, 0)
     );
 }
 

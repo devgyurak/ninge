@@ -7,6 +7,7 @@
 //! reach a CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io`
 //! hands those to the two controllers.
 
+use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,13 @@ pub const IPCFIFOCNT_ADDR: u32 = 0x0400_0184;
 pub const IPCFIFOSEND_ADDR: u32 = 0x0400_0188;
 /// IPCFIFORECV, at `0410_0000h` (`ipc.md`, "Registers").
 pub const IPCFIFORECV_ADDR: u32 = 0x0410_0000;
+
+/// IPCFIFOCNT's offset in the register space of [`Ipc`], which starts at IPCSYNC.
+const CNT_OFFSET: u32 = IPCFIFOCNT_ADDR - IPCSYNC_ADDR;
+/// IPCFIFOSEND's offset in the same space.
+const SEND_OFFSET: u32 = IPCFIFOSEND_ADDR - IPCSYNC_ADDR;
+/// IPCFIFORECV's offset in the same space: a different block, but the same device.
+const RECV_OFFSET: u32 = IPCFIFORECV_ADDR - IPCSYNC_ADDR;
 
 /// Words a FIFO holds (`ipc.md`, "IPCFIFOSEND and IPCFIFORECV").
 const FIFO_CAPACITY: u8 = 16;
@@ -268,30 +276,30 @@ impl Ipc {
         (0..send.len.min(FIFO_CAPACITY)).map(move |i| send.words[send.slot(i)])
     }
 
-    /// The byte of IPCSYNC or IPCFIFOCNT at `addr`, if one holds it.
-    pub(crate) fn read_byte<const ARM9: bool>(&self, addr: u32) -> Option<u8> {
-        let (value, shift) = match addr {
-            IPCSYNC_ADDR | 0x0400_0181 => (self.sync::<ARM9>(), (addr - IPCSYNC_ADDR) * 8),
-            IPCFIFOCNT_ADDR | 0x0400_0185 => (self.control::<ARM9>(), (addr - IPCFIFOCNT_ADDR) * 8),
-            _ => return None,
+    /// The byte at `offset` of IPCSYNC or IPCFIFOCNT; 0 where neither holds it.
+    fn read_byte<const ARM9: bool>(&self, offset: u32) -> u8 {
+        let (value, shift) = match offset {
+            0 | 1 => (self.sync::<ARM9>(), offset * 8),
+            CNT_OFFSET | 5 => (self.control::<ARM9>(), (offset - CNT_OFFSET) * 8),
+            _ => return 0,
         };
-        Some((value >> shift) as u8)
+        (value >> shift) as u8
     }
 
-    /// Writes a byte of IPCSYNC or IPCFIFOCNT; any other address is ignored. Returns what the
-    /// write asks the controllers to latch.
+    /// Writes a byte at `offset` of IPCSYNC or IPCFIFOCNT; any other offset is ignored. Returns
+    /// what the write asks the controllers to latch.
     ///
     /// The fields of both registers sit in single bytes, so a wider write is the same as its
     /// bytes in turn: the IRQ conditions can only fall between them, never rise and fall.
-    pub(crate) fn write_byte<const ARM9: bool>(&mut self, addr: u32, value: u8) -> Requests {
+    fn write_byte<const ARM9: bool>(&mut self, offset: u32, value: u8) -> Requests {
         let before = self.conditions();
-        let sent = match addr {
-            0x0400_0181 => self.write_sync_high::<ARM9>(value),
-            IPCFIFOCNT_ADDR => {
+        let sent = match offset {
+            1 => self.write_sync_high::<ARM9>(value),
+            CNT_OFFSET => {
                 self.write_cnt_low::<ARM9>(value);
                 Requests::default()
             }
-            0x0400_0185 => {
+            5 => {
                 self.write_cnt_high::<ARM9>(value);
                 Requests::default()
             }
@@ -417,6 +425,59 @@ impl Ipc {
         let mut ipc = Self::new();
         ipc.port9.sync_out = out;
         ipc
+    }
+}
+
+/// IPC is the one device that decides what an access width means, because two of its registers
+/// are not bytes: IPCFIFOSEND sends on a word write alone, and IPCFIFORECV takes one word whatever
+/// the width. The rest (IPCSYNC, IPCFIFOCNT) split into bytes.
+impl<const ARM9: bool> Device<ARM9> for Ipc {
+    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+        match Self::recv_shift(offset) {
+            Some(shift) => (self.peek_recv::<ARM9>() >> shift) & width.mask(),
+            None => read_bytes(offset, width, |at| self.read_byte::<ARM9>(at)),
+        }
+    }
+
+    /// A read of IPCFIFORECV takes a word from the FIFO and the access sees the bytes at its own
+    /// address.
+    // TODO(hw-unverified): a byte or halfword read takes a whole word (`ipc.md`, "Unverified").
+    fn read(&mut self, offset: u32, width: Width, now: u64) -> (u32, Effect) {
+        match Self::recv_shift(offset) {
+            Some(shift) => {
+                let (word, requests) = self.receive::<ARM9>();
+                ((word >> shift) & width.mask(), Effect::raising(requests))
+            }
+            None => (
+                Device::<ARM9>::peek(self, offset, width, now),
+                Effect::default(),
+            ),
+        }
+    }
+
+    /// IPCFIFOSEND takes the access as one word; it is not split into bytes.
+    // TODO(hw-unverified): a byte or halfword write is ignored (`ipc.md`, "Unverified").
+    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+        if offset & !3 == SEND_OFFSET {
+            return match width {
+                Width::Word => Effect::raising(self.send::<ARM9>(value)),
+                Width::Byte | Width::Half => Effect::default(),
+            };
+        }
+        write_bytes(offset, width, value, |at, byte| {
+            Effect::raising(self.write_byte::<ARM9>(at, byte))
+        })
+    }
+}
+
+impl Ipc {
+    /// The bit position of `offset` within IPCFIFORECV's word, if `offset` is in it. `offset` is
+    /// aligned to the access, and the register is 4 bytes, so the access stays inside it.
+    fn recv_shift(offset: u32) -> Option<u32> {
+        offset
+            .checked_sub(RECV_OFFSET)
+            .filter(|&within| within < 4)
+            .map(|within| within * 8)
     }
 }
 

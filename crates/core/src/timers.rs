@@ -6,10 +6,11 @@
 //! `Timers<const ARM9: bool>`. The counter is not stepped: a running timer stores the counter it
 //! had at an origin time and every read works the value out from the clock it is given
 //! (`timers.md`, "Model"). An overflow is a scheduler event; this module has no way to reach the
-//! scheduler or an interrupt controller, so a write or an overflow hands back an [`Outcome`]: the
+//! scheduler or an interrupt controller, so a write or an overflow hands back an [`Effect`]: the
 //! requests it would raise and the mask of timers whose overflow event must be replaced. `Io`
 //! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]).
 
+use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::{EventKind, SLICE};
 use serde::{Deserialize, Serialize};
@@ -40,25 +41,6 @@ const COUNTER_RANGE: u64 = 0x1_0000;
 const MASTER_CYCLES_PER_TICK: u64 = 2;
 /// log2 of the clock divider each prescaler setting picks: F/1, F/64, F/256, F/1024.
 const PRESCALER_SHIFT: [u32; 4] = [0, 6, 8, 10];
-
-/// What a register write or an overflow asks of its caller (`timers.md`, "Model").
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Outcome {
-    /// The IF bits to raise, on this set's CPU.
-    pub(crate) requests: Requests,
-    /// Bit n: timer n's schedule changed, so its overflow event must be replaced.
-    pub(crate) reschedule: u8,
-}
-
-impl Outcome {
-    /// Both outcomes in one: the requests and the timers to reschedule of each.
-    fn merge(self, other: Self) -> Self {
-        Self {
-            requests: self.requests.merge(other.requests),
-            reschedule: self.reschedule | other.reschedule,
-        }
-    }
-}
 
 /// One timer's registers and the counter's value at a moment. Plain data.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,21 +203,25 @@ impl<const ARM9: bool> Timers<ARM9> {
         Requests::for_cpu::<ARM9>(mask)
     }
 
-    /// The byte of the register at `addr`, read at master time `now`, if a timer holds it.
+    /// The byte at `offset` of the register block, read at master time `now`; 0 where no timer
+    /// holds it.
     // TODO(hw-unverified): a byte read returns that byte of the counter or the control
     // (`timers.md`, "Unverified").
-    pub(crate) fn read_byte(&self, addr: u32, now: u64) -> Option<u8> {
-        let (index, high_half, shift) = Self::locate(addr)?;
+    fn read_byte(&self, offset: u32, now: u64) -> u8 {
+        let Some((index, high_half, shift)) = Self::register_at(offset) else {
+            return 0;
+        };
         let value = if high_half {
             self.control(index)
         } else {
             self.counter(index, now)
         };
-        Some((value >> shift) as u8)
+        (value >> shift) as u8
     }
 
-    /// Writes a byte at master time `now`; a byte no timer holds is ignored. A write to the low
-    /// half sets the reload; one to the control half may start, stop or retime the timer.
+    /// Writes a byte at `offset` at master time `now`; a byte no timer holds is ignored. A write
+    /// to the low half sets the reload; one to the control half may start, stop or retime the
+    /// timer.
     // TODO(hw-unverified): a byte write acts on its own byte of the reload, and a write to the
     // low byte of the control acts at once (`timers.md`, "Unverified").
     ///
@@ -243,9 +229,9 @@ impl<const ARM9: bool> Timers<ARM9> {
     /// under (`timers.md`, "Model"); the IF bits they raise come back, and so does the set of
     /// timers whose overflow event is now stale: those that overflowed, and the one the write
     /// retimed.
-    pub(crate) fn write_byte(&mut self, addr: u32, value: u8, now: u64) -> Outcome {
-        let Some((index, high_half, shift)) = Self::locate(addr) else {
-            return Outcome::default();
+    fn write_byte(&mut self, offset: u32, value: u8, now: u64) -> Effect {
+        let Some((index, high_half, shift)) = Self::register_at(offset) else {
+            return Effect::default();
         };
         let settled = self.settle(now);
         if high_half {
@@ -256,7 +242,7 @@ impl<const ARM9: bool> Timers<ARM9> {
             } else {
                 0
             };
-            return settled.merge(Outcome {
+            return settled.merge(Effect {
                 requests: Requests::default(),
                 reschedule: retimed,
             });
@@ -275,15 +261,15 @@ impl<const ARM9: bool> Timers<ARM9> {
     ///
     /// The gap is under one slice, so a timer overflows at most `SLICE / 2` times in it; the bound
     /// also keeps a hand-made state with a far-off origin from looping for ages.
-    fn settle(&mut self, now: u64) -> Outcome {
-        (0..TIMER_COUNT).fold(Outcome::default(), |outcome, index| {
+    fn settle(&mut self, now: u64) -> Effect {
+        (0..TIMER_COUNT).fold(Effect::default(), |outcome, index| {
             outcome.merge(self.settle_timer(index, now))
         })
     }
 
     /// [`Timers::settle`] for timer `index` alone: what its event does when it fires.
-    pub(crate) fn settle_timer(&mut self, index: usize, now: u64) -> Outcome {
-        let mut outcome = Outcome::default();
+    pub(crate) fn settle_timer(&mut self, index: usize, now: u64) -> Effect {
+        let mut outcome = Effect::default();
         for _ in 0..SLICE {
             let Some(due) = self.overflow_time(index).filter(|&due| due <= now) else {
                 break;
@@ -329,13 +315,10 @@ impl<const ARM9: bool> Timers<ARM9> {
         1 << index
     }
 
-    /// Which timer holds `addr`, whether it is the control half, and the bit position of the byte
-    /// within its 16-bit register.
-    fn locate(addr: u32) -> Option<(usize, bool, u32)> {
-        let offset = addr
-            .checked_sub(TM0CNT_L_ADDR)
-            .filter(|&o| o < BLOCK_BYTES)?;
-        Some(((offset / 4) as usize, offset % 4 >= 2, (offset % 2) * 8))
+    /// Which timer holds `offset`, whether it is the control half, and the bit position of the
+    /// byte within its 16-bit register.
+    fn register_at(offset: u32) -> Option<(usize, bool, u32)> {
+        (offset < BLOCK_BYTES).then_some(((offset / 4) as usize, offset % 4 >= 2, (offset % 2) * 8))
     }
 
     /// Whether the decoded timers hold only bits that exist. A savestate that decodes to
@@ -344,6 +327,20 @@ impl<const ARM9: bool> Timers<ARM9> {
         self.timers
             .iter()
             .all(|timer| timer.control & !CONTROL_MASK == 0)
+    }
+}
+
+/// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
+/// split into them, and a read has no side effect.
+impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
+    fn peek(&self, offset: u32, width: Width, now: u64) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte(at, now))
+    }
+
+    fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect {
+        write_bytes(offset, width, value, |at, byte| {
+            self.write_byte(at, byte, now)
+        })
     }
 }
 

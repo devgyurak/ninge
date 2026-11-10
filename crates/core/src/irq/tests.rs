@@ -7,6 +7,21 @@
 
 use super::*;
 
+/// The registers' offsets in the controller's register space, which starts at IME.
+const IME: u32 = 0;
+const IE: u32 = IE_ADDR - IME_ADDR;
+const IF: u32 = IF_ADDR - IME_ADDR;
+
+/// A byte write at `offset`.
+fn write_byte<const ARM9: bool>(c: &mut InterruptController<ARM9>, offset: u32, value: u8) {
+    c.write(offset, Width::Byte, u32::from(value), 0);
+}
+
+/// A byte read at `offset`.
+fn read_byte<const ARM9: bool>(c: &InterruptController<ARM9>, offset: u32) -> u8 {
+    c.peek(offset, Width::Byte, 0) as u8
+}
+
 /// The note's "IE and IF bits" table: (bit, exists on the ARM9, exists on the ARM7). Bits not
 /// listed (14, 15, 25-31) exist on neither.
 const BIT_TABLE: [(u32, bool, bool); 32] = [
@@ -57,16 +72,14 @@ fn write_word<const ARM9: bool>(c: &mut InterruptController<ARM9>, addr: u32, va
         .to_le_bytes()
         .iter()
         .enumerate()
-        .for_each(|(i, &b)| c.write_byte(addr + i as u32, b));
+        .for_each(|(i, &b)| write_byte(c, addr + i as u32, b));
 }
 
-/// Reads a 32-bit little-endian value one byte at a time at `addr`; a missing byte reads as
-/// `None` for the whole word.
-fn read_word<const ARM9: bool>(c: &InterruptController<ARM9>, addr: u32) -> Option<u32> {
-    (0..4)
-        .map(|i| c.read_byte(addr + i))
-        .collect::<Option<Vec<u8>>>()
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+/// Reads a 32-bit little-endian value at `offset`, byte by byte.
+fn read_word<const ARM9: bool>(c: &InterruptController<ARM9>, offset: u32) -> u32 {
+    (0..4).fold(0, |value, i| {
+        value | u32::from(read_byte(c, offset + i)) << (8 * i)
+    })
 }
 
 // ---------------------------------------------------------------- reset
@@ -93,38 +106,35 @@ fn given_new_controllers_when_the_line_is_read_then_it_is_low() {
 #[test]
 fn given_a_word_of_all_ones_written_to_ime_when_read_then_only_bit_0_is_kept() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IME_ADDR, 0xFFFF_FFFF);
-    assert_eq!((c.ime(), read_word(&c, IME_ADDR)), (true, Some(1)));
+    write_word(&mut c, IME, 0xFFFF_FFFF);
+    assert_eq!((c.ime(), read_word(&c, IME)), (true, 1));
 }
 
 /// IME's state and its four bytes after byte writes of FF to bytes 1-3.
-fn ime_after_high_byte_writes() -> (bool, Vec<Option<u8>>) {
+fn ime_after_high_byte_writes() -> (bool, Vec<u8>) {
     let mut c = InterruptController::<true>::new();
-    (1..4).for_each(|i| c.write_byte(IME_ADDR + i, 0xFF));
-    (c.ime(), (0..4).map(|i| c.read_byte(IME_ADDR + i)).collect())
+    (1..4).for_each(|i| write_byte(&mut c, IME + i, 0xFF));
+    (c.ime(), (0..4).map(|i| read_byte(&c, IME + i)).collect())
 }
 
 #[test]
 fn given_bytes_1_to_3_of_ime_written_with_ff_when_read_then_ime_is_still_off_and_they_read_0() {
-    assert_eq!(
-        ime_after_high_byte_writes(),
-        (false, vec![Some(0), Some(0), Some(0), Some(0)])
-    );
+    assert_eq!(ime_after_high_byte_writes(), (false, vec![0, 0, 0, 0]));
 }
 
 #[test]
 fn given_an_even_value_written_to_the_ime_low_byte_when_read_then_ime_is_off() {
     let mut c = InterruptController::<false>::new();
-    c.write_byte(IME_ADDR, 0x01);
-    c.write_byte(IME_ADDR, 0xFE);
-    assert_eq!((c.ime(), c.read_byte(IME_ADDR)), (false, Some(0)));
+    write_byte(&mut c, IME, 0x01);
+    write_byte(&mut c, IME, 0xFE);
+    assert_eq!((c.ime(), read_byte(&c, IME)), (false, 0));
 }
 
 #[test]
 fn given_ime_on_when_0_is_written_to_it_then_it_is_off() {
     let mut c = InterruptController::<false>::new();
-    write_word(&mut c, IME_ADDR, 1);
-    write_word(&mut c, IME_ADDR, 0);
+    write_word(&mut c, IME, 1);
+    write_word(&mut c, IME, 0);
     assert!(!c.ime());
 }
 
@@ -133,7 +143,7 @@ fn given_ime_on_when_0_is_written_to_it_then_it_is_off() {
 /// The bits that stay set after all ones are written to IE, minus those the table says exist.
 fn ie_bit_differences<const ARM9: bool>() -> Vec<u32> {
     let mut c = InterruptController::<ARM9>::new();
-    write_word(&mut c, IE_ADDR, 0xFFFF_FFFF);
+    write_word(&mut c, IE, 0xFFFF_FFFF);
     (0..32)
         .filter(|&bit| (c.ie() >> bit & 1 == 1) != exists::<ARM9>(bit))
         .collect()
@@ -154,7 +164,7 @@ fn single_bit_ie_failures<const ARM9: bool>() -> Vec<(u32, u32)> {
     (0..32)
         .filter_map(|bit| {
             let mut c = InterruptController::<ARM9>::new();
-            write_word(&mut c, IE_ADDR, 1 << bit);
+            write_word(&mut c, IE, 1 << bit);
             let want = if exists::<ARM9>(bit) { 1 << bit } else { 0 };
             (c.ie() != want).then_some((bit, c.ie()))
         })
@@ -175,16 +185,16 @@ fn given_each_single_bit_written_to_ie_when_read_then_it_is_kept_only_where_the_
 #[test]
 fn given_ie_set_when_0_is_written_to_it_then_it_is_cleared_not_ored() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IE_ADDR, 0xFFFF_FFFF);
-    write_word(&mut c, IE_ADDR, 0x0000_0001);
+    write_word(&mut c, IE, 0xFFFF_FFFF);
+    write_word(&mut c, IE, 0x0000_0001);
     assert_eq!(c.ie(), 1);
 }
 
 /// A CPU's four IE bytes after byte writes of FF to each.
-fn ie_bytes_after_ff_writes<const ARM9: bool>() -> Vec<Option<u8>> {
+fn ie_bytes_after_ff_writes<const ARM9: bool>() -> Vec<u8> {
     let mut c = InterruptController::<ARM9>::new();
-    (0..4).for_each(|i| c.write_byte(IE_ADDR + i, 0xFF));
-    (0..4).map(|i| c.read_byte(IE_ADDR + i)).collect()
+    (0..4).for_each(|i| write_byte(&mut c, IE + i, 0xFF));
+    (0..4).map(|i| read_byte(&c, IE + i)).collect()
 }
 
 #[test]
@@ -194,18 +204,15 @@ fn given_byte_writes_of_ff_to_each_ie_byte_when_read_then_each_byte_holds_its_cp
             ie_bytes_after_ff_writes::<true>(),
             ie_bytes_after_ff_writes::<false>()
         ),
-        (
-            vec![Some(0x7F), Some(0x3F), Some(0x3F), Some(0x00)],
-            vec![Some(0xFF), Some(0x3F), Some(0xDF), Some(0x01)]
-        )
+        (vec![0x7F, 0x3F, 0x3F, 0x00], vec![0xFF, 0x3F, 0xDF, 0x01])
     );
 }
 
 #[test]
 fn given_a_byte_write_to_ie_when_read_then_only_that_byte_changed() {
     let mut c = InterruptController::<false>::new();
-    write_word(&mut c, IE_ADDR, 0x0000_0001);
-    c.write_byte(IE_ADDR + 2, 0x04);
+    write_word(&mut c, IE, 0x0000_0001);
+    write_byte(&mut c, IE + 2, 0x04);
     assert_eq!(c.ie(), 0x0004_0001);
 }
 
@@ -260,7 +267,7 @@ fn given_a_latched_request_when_it_is_requested_again_then_if_is_unchanged() {
 fn given_a_request_when_if_is_read_by_bytes_then_the_bytes_are_the_little_endian_parts() {
     let mut c = InterruptController::<true>::new();
     c.request(1 << 0 | 1 << 9 | 1 << 17 | 1 << 21);
-    assert_eq!(read_word(&c, IF_ADDR), Some(0x0022_0201));
+    assert_eq!(read_word(&c, IF), 0x0022_0201);
 }
 
 // ---------------------------------------------------------------- IF: acknowledge
@@ -269,7 +276,7 @@ fn given_a_request_when_if_is_read_by_bytes_then_the_bytes_are_the_little_endian
 fn given_if_bits_set_when_1_is_written_to_one_of_them_then_only_that_bit_clears() {
     let mut c = InterruptController::<true>::new();
     c.request(0b111);
-    c.write_byte(IF_ADDR, 0x01);
+    write_byte(&mut c, IF, 0x01);
     assert_eq!(c.if_(), 0b110);
 }
 
@@ -277,14 +284,14 @@ fn given_if_bits_set_when_1_is_written_to_one_of_them_then_only_that_bit_clears(
 fn given_if_bits_set_when_0_is_written_then_nothing_changes() {
     let mut c = InterruptController::<true>::new();
     c.request(0x0003_0107);
-    write_word(&mut c, IF_ADDR, 0);
+    write_word(&mut c, IF, 0);
     assert_eq!(c.if_(), 0x0003_0107);
 }
 
 #[test]
 fn given_if_clear_when_1_is_written_to_a_bit_then_it_does_not_become_set() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IF_ADDR, 0xFFFF_FFFF);
+    write_word(&mut c, IF, 0xFFFF_FFFF);
     assert_eq!(c.if_(), 0);
 }
 
@@ -292,7 +299,7 @@ fn given_if_clear_when_1_is_written_to_a_bit_then_it_does_not_become_set() {
 fn given_if_bits_in_every_byte_when_ff_is_written_to_one_byte_then_only_that_byte_clears() {
     let mut c = InterruptController::<true>::new();
     c.request(1 << 0 | 1 << 9 | 1 << 17 | 1 << 21);
-    c.write_byte(IF_ADDR + 2, 0xFF);
+    write_byte(&mut c, IF + 2, 0xFF);
     assert_eq!(c.if_(), 1 << 0 | 1 << 9);
 }
 
@@ -300,8 +307,8 @@ fn given_if_bits_in_every_byte_when_ff_is_written_to_one_byte_then_only_that_byt
 fn given_if_bits_in_every_byte_when_a_halfword_of_ones_is_written_then_only_that_half_clears() {
     let mut c = InterruptController::<true>::new();
     c.request(1 << 0 | 1 << 9 | 1 << 17 | 1 << 21);
-    c.write_byte(IF_ADDR, 0xFF);
-    c.write_byte(IF_ADDR + 1, 0xFF);
+    write_byte(&mut c, IF, 0xFF);
+    write_byte(&mut c, IF + 1, 0xFF);
     assert_eq!(c.if_(), 1 << 17 | 1 << 21);
 }
 
@@ -309,17 +316,17 @@ fn given_if_bits_in_every_byte_when_a_halfword_of_ones_is_written_then_only_that
 fn given_if_bits_set_when_a_word_of_ones_is_written_then_all_clear() {
     let mut c = InterruptController::<false>::new();
     c.request(0xFFFF_FFFF);
-    write_word(&mut c, IF_ADDR, 0xFFFF_FFFF);
+    write_word(&mut c, IF, 0xFFFF_FFFF);
     assert_eq!(c.if_(), 0);
 }
 
 #[test]
 fn given_a_write_to_if_when_the_other_registers_are_read_then_ime_and_ie_are_untouched() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IME_ADDR, 1);
-    write_word(&mut c, IE_ADDR, 0x0000_0005);
+    write_word(&mut c, IME, 1);
+    write_word(&mut c, IE, 0x0000_0005);
     c.request(0b101);
-    write_word(&mut c, IF_ADDR, 0xFFFF_FFFF);
+    write_word(&mut c, IF, 0xFFFF_FFFF);
     assert_eq!((c.ime(), c.ie()), (true, 5));
 }
 
@@ -342,8 +349,8 @@ fn line_failures<const ARM9: bool>() -> Vec<(u32, u32, u32, bool)> {
         .iter()
         .filter(|&&(ime, ie, req, want)| {
             let mut c = InterruptController::<ARM9>::new();
-            write_word(&mut c, IME_ADDR, ime);
-            write_word(&mut c, IE_ADDR, ie);
+            write_word(&mut c, IME, ime);
+            write_word(&mut c, IE, ie);
             c.request(req);
             c.line() != want
         })
@@ -364,7 +371,7 @@ fn given_ime_ie_and_if_combinations_when_the_arm7_line_is_read_then_it_follows_i
 #[test]
 fn given_ime_off_and_a_request_when_if_is_read_then_it_holds_the_request_and_the_line_is_low() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IE_ADDR, 1);
+    write_word(&mut c, IE, 1);
     c.request(1);
     assert_eq!((c.if_(), c.line()), (1, false));
 }
@@ -372,94 +379,83 @@ fn given_ime_off_and_a_request_when_if_is_read_then_it_holds_the_request_and_the
 #[test]
 fn given_a_pending_enabled_request_when_ime_is_set_later_then_the_line_goes_high() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IE_ADDR, 1);
+    write_word(&mut c, IE, 1);
     c.request(1);
-    write_word(&mut c, IME_ADDR, 1);
+    write_word(&mut c, IME, 1);
     assert_eq!((c.if_(), c.line()), (1, true));
 }
 
 #[test]
 fn given_a_latched_request_when_ie_enables_it_later_then_the_line_goes_high() {
     let mut c = InterruptController::<false>::new();
-    write_word(&mut c, IME_ADDR, 1);
+    write_word(&mut c, IME, 1);
     c.request(1 << 8);
     let before = c.line();
-    write_word(&mut c, IE_ADDR, 1 << 8);
+    write_word(&mut c, IE, 1 << 8);
     assert_eq!((before, c.line()), (false, true));
 }
 
 #[test]
 fn given_a_high_line_when_the_request_is_acknowledged_then_the_line_drops() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IME_ADDR, 1);
-    write_word(&mut c, IE_ADDR, 1);
+    write_word(&mut c, IME, 1);
+    write_word(&mut c, IE, 1);
     c.request(1);
     let before = c.line();
-    c.write_byte(IF_ADDR, 1);
+    write_byte(&mut c, IF, 1);
     assert_eq!((before, c.line()), (true, false));
 }
 
 #[test]
 fn given_a_request_for_a_bit_that_does_not_exist_when_ie_is_all_ones_then_the_line_stays_low() {
     let mut c = InterruptController::<true>::new();
-    write_word(&mut c, IME_ADDR, 1);
-    write_word(&mut c, IE_ADDR, 0xFFFF_FFFF);
+    write_word(&mut c, IME, 1);
+    write_word(&mut c, IE, 0xFFFF_FFFF);
     c.request(1 << 7);
     assert!(!c.line());
 }
 
-// ---------------------------------------------------------------- addresses outside the registers
+// ---------------------------------------------------------------- the hole between IME and IE
 
-/// Addresses next to and between the three registers (IME 208-20B, IE 210-213, IF 214-217).
-const OUTSIDE: [u32; 10] = [
-    0x0400_0207,
-    0x0400_020C,
-    0x0400_020D,
-    0x0400_020E,
-    0x0400_020F,
-    0x0400_0218,
-    0x0400_021B,
-    0x0400_0200,
-    0x0400_0000,
-    0x0400_0300,
-];
+// Which addresses reach the controller at all is the I/O map's to say (`io.rs` tests); what is
+// left to the controller is the word between IME (208-20B) and IE (210-213), inside its block.
 
-#[test]
-fn given_addresses_that_no_register_holds_when_read_then_none_is_returned_for_each() {
-    let c = InterruptController::<true>::new();
-    let answered: Vec<u32> = OUTSIDE
-        .iter()
-        .copied()
-        .filter(|&a| c.read_byte(a).is_some())
-        .collect();
-    assert_eq!(answered, Vec::<u32>::new());
+/// The offsets of the word between IME and IE (`20C`-`20F`).
+const HOLE: [u32; 4] = [IME + 4, IME + 5, IME + 6, IME + 7];
+
+/// A controller with state in every register.
+fn controller_with_state() -> InterruptController<false> {
+    let mut c = InterruptController::<false>::new();
+    write_word(&mut c, IME, 1);
+    write_word(&mut c, IE, 0x0000_00FF);
+    c.request(0x0000_0F0F);
+    c
 }
 
-/// A controller with state, before and after byte writes of FF outside the registers.
-fn controllers_around_outside_writes() -> (InterruptController<false>, InterruptController<false>) {
-    let mut c = InterruptController::<false>::new();
-    write_word(&mut c, IME_ADDR, 1);
-    write_word(&mut c, IE_ADDR, 0x0000_00FF);
-    c.request(0x0000_0F0F);
+#[test]
+fn given_the_word_between_ime_and_ie_when_read_then_each_byte_reads_0() {
+    let c = controller_with_state();
+    let nonzero: Vec<u32> = HOLE
+        .iter()
+        .copied()
+        .filter(|&offset| read_byte(&c, offset) != 0)
+        .collect();
+    assert_eq!(nonzero, Vec::<u32>::new());
+}
+
+/// A controller with state, before and after byte writes of FF into the hole.
+fn controllers_around_hole_writes() -> (InterruptController<false>, InterruptController<false>) {
+    let mut c = controller_with_state();
     let before = c.clone();
-    OUTSIDE.iter().for_each(|&a| c.write_byte(a, 0xFF));
+    HOLE.iter()
+        .for_each(|&offset| write_byte(&mut c, offset, 0xFF));
     (before, c)
 }
 
 #[test]
-fn given_addresses_that_no_register_holds_when_written_then_the_controller_is_unchanged() {
-    let (before, after) = controllers_around_outside_writes();
+fn given_the_word_between_ime_and_ie_when_written_then_the_controller_is_unchanged() {
+    let (before, after) = controllers_around_hole_writes();
     assert_eq!((after, before.if_()), (before, 0x0F0F));
-}
-
-#[test]
-fn given_every_byte_of_the_three_registers_when_read_then_each_answers() {
-    let c = InterruptController::<true>::new();
-    let silent: Vec<u32> = (0..4)
-        .flat_map(|i| [IME_ADDR + i, IE_ADDR + i, IF_ADDR + i])
-        .filter(|&a| c.read_byte(a).is_none())
-        .collect();
-    assert_eq!(silent, Vec::<u32>::new());
 }
 
 #[test]

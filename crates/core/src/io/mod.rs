@@ -19,6 +19,7 @@ pub mod dma;
 pub mod ipc;
 pub mod irq;
 pub(crate) mod map;
+pub mod power;
 #[cfg(test)]
 mod tests;
 pub mod timers;
@@ -31,6 +32,7 @@ use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
 use irq::{InterruptController, Requests};
 use map::Port;
+use power::Power;
 use serde::{Deserialize, Serialize};
 use timers::Timers;
 use timing::Timing;
@@ -70,7 +72,8 @@ macro_rules! device_call {
                 Device::<true>::$method(borrow!($b $io.dma9) $(, $arg)*)
             }
             Port::Dma | Port::DmaFill => Device::<false>::$method(borrow!($b $io.dma7) $(, $arg)*),
-            Port::Gpu2d => {
+            Port::Power if !$arm9 => Device::<false>::$method(borrow!($b $io.power) $(, $arg)*),
+            Port::Gpu2d | Port::Power => {
                 debug_assert!(false, "port not reachable through Io");
                 $absent
             }
@@ -107,6 +110,8 @@ pub struct Io {
     // Each CPU's four DMA channels: the same addresses, separate state (`dma.md`).
     dma9: Dma<true>,
     dma7: Dma<false>,
+    // The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
+    power: Power,
 }
 
 impl Io {
@@ -122,6 +127,7 @@ impl Io {
             timers7: Timers::new(),
             dma9: Dma::new(),
             dma7: Dma::new(),
+            power: Power::new(),
         }
     }
 
@@ -176,6 +182,15 @@ impl Io {
     // The debugger's IO register panel shows them with the ARM9's.
     pub fn dma7(&self) -> &Dma<false> {
         &self.dma7
+    }
+
+    /// The ARM7's HALTCNT.
+    pub fn power(&self) -> &Power {
+        &self.power
+    }
+
+    pub(crate) fn power_mut(&mut self) -> &mut Power {
+        &mut self.power
     }
 
     /// Raises the requests in the two masks on the matching controllers: IF latches them. The

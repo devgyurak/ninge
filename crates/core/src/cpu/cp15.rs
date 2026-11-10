@@ -184,8 +184,8 @@ impl Cp15 {
     // TODO(hw-unverified): a write to an ID register, the FCSE process ID or an unmapped register
     // is ignored (`docs/hw/cp15.md`, "Unverified").
     // TODO(phase8): the BIST registers at C15 ignore writes (`docs/hw/cp15.md`, "Not modeled").
-    // TODO(phase3): C7,C0,4 and C7,C8,2 are wait-for-interrupt, which halts the core until an
-    // interrupt is pending.
+    // C7,C0,4 and C7,C8,2 are wait-for-interrupt: `Cpu::cp15_transfer` halts the core, this
+    // register file only accepts the write.
     // TODO(phase8): the protection unit registers are held, but no access is checked against
     // them and no cache is modeled.
     pub(super) fn write(&mut self, crn: u32, crm: u32, opc2: u32, value: u32) {

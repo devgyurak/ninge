@@ -122,6 +122,13 @@ impl<const ARM9: bool> InterruptController<ARM9> {
         self.if_
     }
 
+    /// Whether a halted CPU wakes: `IE & IF` is not zero, whatever IME says
+    /// (`hle-swi.md`, "Halt, and what wakes a CPU").
+    // TODO(hw-unverified): IME plays no part in the wake (`hle-swi.md`, "Unverified").
+    pub fn wakes(&self) -> bool {
+        self.ie & self.if_ != 0
+    }
+
     /// Whether the controller asserts the CPU's IRQ line: `IME && (IE & IF) != 0`
     /// (`interrupts.md`, "Behavior"). The CPU's own I flag is the CPU's to check.
     pub fn line(&self) -> bool {

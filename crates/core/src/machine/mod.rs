@@ -3,7 +3,7 @@
 
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use crate::cart::Header;
-use crate::cpu::{ARM9_INSTRUCTION_COST, Cpu};
+use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::{BiosState, SwiRecord};
 use crate::io::Io;
 use crate::io::dma::{Dma, Trigger};
@@ -356,6 +356,15 @@ impl Machine {
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     fn step_arm9_instruction(&mut self) {
+        // A halted core runs nothing until `IE & IF` is not zero (`docs/hw/hle-swi.md`, "Halt, and
+        // what wakes a CPU"); a lone step of it idles for one instruction's time.
+        if self.arm9.halted() {
+            if !self.io.irq9().wakes() {
+                self.scheduler.advance(ARM9_INSTRUCTION_COST);
+                return;
+            }
+            self.arm9.set_halted(false);
+        }
         let irq = self.io.irq9().line();
         let now = self.scheduler.now();
         let tcm = TcmConfig::from_cp15(self.arm9.cp15());
@@ -369,11 +378,12 @@ impl Machine {
             // event the instruction schedules fires no earlier than its end (`timers.md`, "Model").
             now.saturating_add(ARM9_INSTRUCTION_COST),
         );
-        // The BIOS vectors are HLE: at one, the machine does the BIOS's work in place of the
-        // instruction (`docs/hw/hle-swi.md`).
-        let cost = match crate::hle::enter(&mut self.arm9, &mut view, &mut self.bios.arm9) {
+        // An interrupt comes first, even at a BIOS address: IntrWait waits with I clear, and the
+        // IRQ must be taken before its loop looks again. At the vectors I is set, so the BIOS's
+        // work, which takes the instruction's place there, is next (`docs/hw/hle-swi.md`).
+        let cost = match self.arm9.take_interrupt(&mut view, irq, false) {
             Some(cost) => cost,
-            None => match self.arm9.take_interrupt(&mut view, irq, false) {
+            None => match crate::hle::enter(&mut self.arm9, &mut view, &mut self.bios.arm9) {
                 Some(cost) => cost,
                 None => self.arm9.step(&mut view),
             },
@@ -386,6 +396,13 @@ impl Machine {
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     pub(crate) fn step_arm7_instruction(&mut self) {
+        if self.arm7.halted() {
+            if !self.io.irq7().wakes() {
+                self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
+                return;
+            }
+            self.arm7.set_halted(false);
+        }
         let irq = self.io.irq7().line();
         // The ARM7's step leaves the master clock where it is, so that is its floor.
         let floor = self.scheduler.now();
@@ -396,14 +413,19 @@ impl Machine {
             self.arm7_clock,
             floor,
         );
-        let cost = match crate::hle::enter(&mut self.arm7, &mut view, &mut self.bios.arm7) {
+        let cost = match self.arm7.take_interrupt(&mut view, irq, false) {
             Some(cost) => cost,
-            None => match self.arm7.take_interrupt(&mut view, irq, false) {
+            None => match crate::hle::enter(&mut self.arm7, &mut view, &mut self.bios.arm7) {
                 Some(cost) => cost,
                 None => self.arm7.step(&mut view),
             },
         };
         self.arm7_clock = self.arm7_clock.saturating_add(cost);
+        // A write of HALTCNT's halt mode halts the ARM7 from the next instruction
+        // (`docs/hw/interrupts.md`, "HALTCNT").
+        if self.io.power_mut().take_halt() {
+            self.arm7.set_halted(true);
+        }
     }
 
     /// Reads `N` bytes as the ARM9 data bus would, without side effects: IPCFIFORECV shows its
@@ -460,12 +482,28 @@ impl Participants for Machine {
                 .next_time()
                 .is_none_or(|time| self.scheduler.now() < time)
         {
+            // A halted ARM9 runs nothing, so its clock skips in one step to `target` or to an event
+            // queued before it (by the instruction that halted it, say a timer write), whichever is
+            // earlier: the event fires on time and the wake is tested after it
+            // (`docs/hw/scheduler.md`, "Interleaving").
+            if self.arm9.halted() && !self.io.irq9().wakes() {
+                let stop = self
+                    .scheduler
+                    .next_time()
+                    .map_or(target, |time| time.min(target));
+                self.scheduler.advance(stop - self.scheduler.now());
+                break;
+            }
             self.step_arm9_instruction();
         }
     }
 
     fn run_arm7_until(&mut self, target: u64) {
         while self.arm7_clock < target {
+            if self.arm7.halted() && !self.io.irq7().wakes() {
+                self.arm7_clock = target;
+                break;
+            }
             self.step_arm7_instruction();
         }
     }
@@ -521,6 +559,10 @@ impl Machine {
             );
             transfer.run(&mut view)
         };
+        // A DMA unit may write HALTCNT: the ARM7 halts at once, not after its next instruction.
+        if self.io.power_mut().take_halt() {
+            self.arm7.set_halted(true);
+        }
         self.io.dma_finished(&transfer, end);
     }
 
@@ -531,7 +573,6 @@ impl Machine {
     ///
     /// The first blank line also starts the VBlank-start DMA channels (`docs/hw/dma.md`,
     /// "Starting").
-    // TODO(phase3): the IntrWait VBlank wait (#27) hooks in here.
     fn line_started(&mut self, time: u64) {
         let requests = self.io.timing_mut().line_started();
         self.io.request_irq(requests);

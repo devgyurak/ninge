@@ -8,16 +8,15 @@ not read, so each is under "Unverified": the SWI comment field ("ARM Opcodes ...
 Opcodes ... SWI") and the DS function numbers ("BIOS Function Summary"). Also
 `arm-exceptions-modes.md` for the exception entry.
 Used by: `crates/core/src/hle/`, `crates/core/src/bus/memory/mod.rs`,
-`crates/core/src/machine/mod.rs`   Phase: 3 (#27, part 1 of 3)
+`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 and 2 of 3)
 
 ninge boots without a BIOS dump (AGENTS.md §3.2). The BIOS is high-level emulated: the CPU
 enters its exception vectors exactly as on hardware, and the machine does in Rust what the BIOS
 code at those addresses would do. No BIOS image exists in ninge, and no instruction of it is
 written down anywhere. This note covers the BIOS area, the vectors, how an SWI number is found,
-the IRQ dispatcher and the SWI numbers nothing implements yet. The wait routines (Halt,
-IntrWait, VBlankIntrWait) are `hle-swi.md`'s next part (#27, PR 2) and the copy, math and
-decompression routines the one after (PR 3); until then they take the "Unimplemented number" path
-below.
+the IRQ dispatcher, the wait routines (Halt, WaitByLoop, IntrWait, VBlankIntrWait) and the SWI
+numbers nothing implements. The copy, math and decompression routines are the next part (#27,
+PR 3); until then they take the "Unimplemented number" path below.
 
 ## The BIOS area
 
@@ -46,11 +45,12 @@ table"). Of them the machine looks at two, plus two addresses of its own:
 | `+08h` | SWI vector | the SWI instruction |
 | `+18h` | IRQ vector | an interrupt (`interrupts.md`) |
 | `+20h` | IRQ return | ninge's own address (below); the user handler returns to it |
+| `+24h` | IntrWait loop | ninge's own address (below); IntrWait waits here |
 
-`+20h` is not a hardware vector. On hardware the BIOS IRQ code gives the user handler a return
-address inside the BIOS, and GBATEK does not state the DS address; ninge picks `+20h` (the
-address between the FIQ vector and the end of the vector table that nothing uses) and says so in
-"Unverified". The other vectors (reset, undefined, prefetch and data abort, FIQ) are not handled:
+`+20h` and `+24h` are not hardware vectors. On hardware the BIOS IRQ code gives the user handler a
+return address inside the BIOS, and GBATEK does not state the DS address; ninge picks `+20h` (an
+address past the FIQ vector that nothing uses) and says so in "Unverified". `+24h` is the place
+where the IntrWait code of this model loops. The other vectors (reset, undefined, prefetch and data abort, FIQ) are not handled:
 the CPU enters them and executes the zero words of the synthetic area.
 
 ## How the machine takes the BIOS's place
@@ -63,7 +63,7 @@ synthetic area.
 Before it executes an instruction, the machine compares R15 with the trap addresses. R15 reads
 the address of the next instruction + 8 in ARM state (`arm-branch-pipeline.md`); a refill from
 the vector `V` leaves R15 = `V + 8`, so the trap addresses in R15 terms are base + `10h` (SWI),
-base + `20h` (IRQ) and base + `28h` (IRQ return). When R15 is one of them, T is clear and the CPU
+base + `20h` (IRQ), base + `28h` (IRQ return) and base + `2Ch` (IntrWait loop). When R15 is one of them, T is clear and the CPU
 is the one that owns the BIOS area, the machine does the BIOS's work and then leaves exactly as
 the BIOS's return instruction would. The check is one compare on the common path (R15 outside
 the span of the BIOS vectors).
@@ -105,6 +105,63 @@ guest SWI never panics the core.
 On hardware, GBATEK says the debug handler pointer (`027FFD9Ch` ARM9, `0380FFDCh` ARM7) is called
 for the unused numbers `00h`-`1Fh`; no debug handler exists here (see "Unverified").
 
+## Halt, and what wakes a CPU
+
+A CPU can be halted: it executes nothing until an interrupt is pending. Three things halt it:
+
+- the ARM9's CP15 wait-for-interrupt (`cp15.md`, "C7 — cache commands and halt");
+- the ARM7's write to HALTCNT (`interrupts.md`, "HALTCNT"), mode 2;
+- the BIOS function Halt (SWI `06h`), which on hardware does one of the two.
+
+A halted CPU wakes when `IE & IF` is not zero: IME and the CPSR I flag do not matter for the wake
+itself (GBATEK, "DS Interrupts": the halt lasts while `IE AND IF` is zero). After the wake the
+CPU continues with the next instruction; if IME is 1 and I is clear the IRQ is then taken at once,
+as for any pending request (`interrupts.md`, "The IRQ line"). In ninge a halted CPU's clock does
+not run instructions: the machine moves it to the end of the time it is asked to run, in one
+step, and the wake is tested at the start of the next round (the events that raise IF end a
+round exactly at their own time, `scheduler.md`). A halted ARM9 skips to the earlier of the round
+target and the next queued event, so an event its last instruction queued (a timer started just
+before the wait) still fires on time.
+
+A DMA unit can write HALTCNT as well (it is an ordinary ARM7-side write). The ARM7 halts when the
+transfer ends, not after its next instruction, because a DMA unit runs in the gap between two
+instructions; this is the model's order, as GBATEK does not describe it (see "Unverified").
+
+## The wait SWIs
+
+| Number | Name | Arguments | Effect |
+|---|---|---|---|
+| `03h` | WaitByLoop | `R0` = loop count | a delay; no effect here beyond the entry cost (see "Unverified") |
+| `04h` | IntrWait | `R0` = discard old flags, `R1` = flags to wait for | waits until one of the flags is set (below) |
+| `05h` | VBlankIntrWait | none | IntrWait with `R0 = 1`, `R1 = 1` (the V-blank bit) |
+| `06h` | Halt | none | halts the CPU (above) and returns at once; execution resumes after the wake |
+
+**IntrWait.** This description is recalled from GBATEK's text (and from how the GBA text
+describes the same function), not read from the page; "Unverified" lists what is least certain.
+GBATEK describes the function: it waits in the halt state until one of the interrupts
+named in `R1` has happened, and it forces IME to 1. How it knows that an interrupt has happened is
+the IRQ check flags (the word at DTCM base + `3FF8h` on the ARM9, `0380FFF8h` on the ARM7, in the
+IE/IF format; `interrupts.md`): the user's IRQ handler ORs the bit of each interrupt it serves
+into that word, and IntrWait consumes it. IntrWait does not set IE, does not acknowledge IF and
+does not set the flags itself.
+
+In ninge IntrWait is a small state machine whose state is the CPU's own: its position is the
+IntrWait loop address (`+24h`, trap `+2Ch`), so no extra state is saved.
+
+1. The SWI trap (`04h` or `05h`; `05h` first sets `R0 = 1`, `R1 = 1`) writes IME = 1, and if
+   `R0` is not zero clears the bits of `R1` in the flag word (the old flags are discarded). It
+   clears the CPSR I flag (the BIOS lets interrupts in while it waits) and jumps to the IntrWait
+   loop address in SVC mode, leaving `LR_svc` and `SPSR_svc` as the SWI entry made them.
+2. At the loop trap: read the flag word `w`. Write back `w` with the bits of `R1` cleared. If
+   any bit of `R1` was set in `w`, return to the caller as the SWI return does
+   (`CPSR = SPSR_svc`, `PC = LR_svc`). Otherwise halt the CPU and stay at the loop address.
+3. When the CPU wakes, an interrupt is pending and enabled in IE; with I clear and IME = 1 it is
+   taken first: the IRQ dispatcher and the user handler run, and the dispatcher's return goes to
+   the loop address (`LR_irq - 4`, the address the interrupt came from). The loop trap then runs
+   again from step 2, which now sees the bit the handler set.
+
+`R1` survives the IRQ because the dispatcher saves and restores `R0-R3`.
+
 ## The IRQ dispatcher
 
 Hardware: the BIOS IRQ code saves `R0-R3`, `R12` and `LR` on the IRQ-mode stack, loads the
@@ -141,6 +198,11 @@ The handler returns with `BX LR` (or any jump to its `LR`). At the IRQ-return tr
 `LR` as the CPU wrote it on entry is the next instruction's address + 4 in ARM state and the next
 instruction's address + 4 in Thumb state as well (`arm-exceptions-modes.md`, "Return address"),
 so the same `-4` returns to the interrupted instruction in both states.
+
+The machine tests for an interrupt before it tests for a BIOS trap, in every step: at a vector I
+is set, so the trap runs; at the IntrWait loop address I is clear, so a pending interrupt is
+taken first and its return lands on the loop address again (`The wait SWIs`, step 3). Reversing
+the order would halt again with the IRQ line still asserted.
 
 Acknowledging IF is the handler's job (`interrupts.md`); the dispatcher never touches IF, IE or
 IME, and does not set the IRQ check flags: GBATEK says the user handler should do it so that
@@ -200,6 +262,27 @@ checks").
 - **The SWI number is read with a normal load.** If `LR - 2` points at an I/O register the read has
   its side effect, as the BIOS's own load would; the model does not use a side-effect-free peek.
   — `hle::bios::software_interrupt` — verify likewise.
+- **A DMA write to HALTCNT.** That the ARM7 halts once the transfer ends is the model's order, not
+  from GBATEK. — `Machine::run_dma` in `crates/core/src/machine/mod.rs` (`take_halt`) — verify
+  by a test ROM on hardware that DMAs a halt byte.
+- **Interrupt before BIOS trap.** A pending, unmasked IRQ is taken before the BIOS trap at a
+  vector address is looked at; hardware has no such ordering to copy (the BIOS is code), so this
+  is the model's choice. — `Machine::step_arm9_instruction` — invisible unless an IRQ arrives
+  while a CPU stands on a vector.
+- **IME and the CPSR I flag in the wake.** The wake depends only on `IE & IF` (GBATEK's Halt
+  wording); for the ARM9's CP15 wait-for-interrupt GBATEK does not say whether the core's own IRQ
+  input (which includes IME) is what wakes it. — `InterruptController::wakes` in
+  `crates/core/src/io/irq/mod.rs` — verify by a test ROM on hardware that halts with IME = 0.
+- **IntrWait details.** That a hit clears the bits of `R1` from the flag word, that the flag word
+  is rewritten even without a hit, that IME is left at 1, that the CPSR I flag is cleared during
+  the wait and the caller's CPSR comes back through `SPSR_svc` are taken from how the BIOS and
+  the GBA text describe the function; whether a wait that is already satisfied halts at all is
+  not stated. — `hle::bios::intr_wait_loop` — verify likewise.
+- **WaitByLoop.** The delay is not modeled: the SWI costs one instruction. A delay would stall the
+  CPU's clock past events, which the scheduler does not support (`scheduler.md`). —
+  `hle::swi::run` — `TODO(hw-unverified)`; revisit with the Phase 8 timing work.
+- **The IntrWait loop address `base + 24h`.** ninge's own. — `hle::bios::INTR_WAIT_VECTOR` —
+  invisible to a game unless it reads `LR` inside IntrWait.
 - **Cost.** One instruction per BIOS entry is a model; the real BIOS runs tens of instructions per
   call. — `hle::ENTRY_INSTRUCTIONS` in `crates/core/src/hle/bios.rs` — revisit with the Phase 8
   timing work.

@@ -167,6 +167,8 @@ impl<const ARM9: bool> Cpu<ARM9> {
             (false, 0) => {
                 let value = self.store_operand(rd as u32);
                 self.cp15.write(crn, crm, opc2, value);
+                // Wait-for-interrupt: C7,C0,4 and C7,C8,2 halt the core (`docs/hw/cp15.md`, "C7").
+                self.halted |= matches!((crn, crm, opc2), (7, 0, 4) | (7, 8, 2));
             }
             (false, _) => {}
         }
@@ -264,6 +266,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(hw-unverified): see `Exception::link_offset`; CP15, the vector base included, is left
     // alone, as GBATEK says nothing about a reset changing it (`docs/hw/cp15.md`, "Unverified").
     pub fn reset<B: Bus>(&mut self, bus: &mut B) {
+        self.halted = false;
         self.take_exception(Exception::Reset);
         self.refill(bus);
     }

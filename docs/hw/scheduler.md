@@ -139,6 +139,12 @@ whose computed overflow lies before `now` therefore fires at the end of the roun
 at its time. That lag is a known, bounded approximation (under one slice) and is not changed by
 the early ARM9 stop; an overflow that lies after `now` is queued at its time and fires on time.
 
+**A halted CPU** (`hle-swi.md`, "Halt, and what wakes a CPU") runs nothing. In step 2 or 3 the
+machine first lets it wake if `IE & IF` is not zero; if it stays halted its clock is moved to the
+round's target (`target` for the ARM9, `stop` for the ARM7) in one step and the round goes on.
+No event can raise IF inside the skip, because the round's target is never past the next event.
+A single `step_arm9` of a halted ARM9 advances its clock by one cost unit.
+
 SLICE bounds how far one CPU runs ahead of the other. It is a trade-off between interleaving
 fidelity and per-round overhead, not a hardware fact.
 

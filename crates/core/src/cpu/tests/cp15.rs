@@ -858,8 +858,34 @@ fn cache_command_problems() -> Vec<String> {
 #[test]
 fn given_cache_commands_and_both_wait_for_interrupt_forms_when_mcr_writes_them_then_cp15_is_unchanged_and_the_core_runs_on()
  {
-    // TODO(phase3): wait-for-interrupt halts the core until an interrupt is pending.
+    // The halt itself is the machine's: `Cpu::step` does not look at it (`hle-swi.md`).
     assert_eq!(cache_command_problems(), Vec::<String>::new());
+}
+
+/// The commands after which the core is halted: only the two wait-for-interrupt forms may be.
+fn halted_commands() -> Vec<(u32, u32)> {
+    CACHE_COMMANDS
+        .iter()
+        .copied()
+        .filter(|&(crm, opc2)| {
+            let mut cpu = preloaded();
+            write_to(&mut cpu, reg(7, crm, opc2), 0);
+            cpu.halted()
+        })
+        .collect()
+}
+
+#[test]
+fn given_cache_commands_and_both_wait_for_interrupt_forms_when_mcr_writes_them_then_only_the_wait_forms_halt_the_core()
+ {
+    assert_eq!(halted_commands(), vec![(0, 4), (8, 2)]);
+}
+
+#[test]
+fn given_a_wait_for_interrupt_when_mcr_writes_it_then_the_operand_register_is_ignored() {
+    let mut cpu = preloaded();
+    write_to(&mut cpu, reg(7, 0, 4), 0xDEAD_BEEF);
+    assert!(cpu.halted());
 }
 
 fn cache_read_problems() -> Vec<String> {

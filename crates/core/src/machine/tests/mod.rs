@@ -7,6 +7,7 @@ use serde::de::value::{Error, MapDeserializer};
 mod arm9;
 mod bios;
 mod dma;
+mod halt;
 mod ipc;
 mod irq;
 mod rebuild;

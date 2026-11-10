@@ -14,44 +14,44 @@ use crate::cpu::{Bank, Bus};
 use crate::io::irq::Requests;
 use crate::machine::*;
 
-const ENTRY9: u32 = 0x0200_0000;
-const ENTRY7: u32 = 0x0238_0000;
-const HANDLER: u32 = 0x0200_0100;
-const HANDLER7: u32 = 0x0238_0100;
+pub(super) const ENTRY9: u32 = 0x0200_0000;
+pub(super) const ENTRY7: u32 = 0x0238_0000;
+pub(super) const HANDLER: u32 = 0x0200_0100;
+pub(super) const HANDLER7: u32 = 0x0238_0100;
 
-const IME: u32 = 0x0400_0208;
-const IE: u32 = 0x0400_0210;
+pub(super) const IME: u32 = 0x0400_0208;
+pub(super) const IE: u32 = 0x0400_0210;
 /// A source both CPUs have: timer 0 overflow (bit 3).
-const TIMER0: u32 = 1 << 3;
+pub(super) const TIMER0: u32 = 1 << 3;
 
 /// CP15 control register bit 13: the vectors at `FFFF0000h`.
-const HIGH_VECTORS: u32 = 1 << 13;
+pub(super) const HIGH_VECTORS: u32 = 1 << 13;
 /// CP15 control bits 16 (DTCM enable) and 18 (ITCM enable).
-const DTCM_ENABLE: u32 = 1 << 16;
+pub(super) const DTCM_ENABLE: u32 = 1 << 16;
 const ITCM_ENABLE: u32 = 1 << 18;
 /// The DTCM at `027C0000h`, 16 KiB (size field 5), and the 32 KiB ITCM (size field 6).
-const DTCM_REGISTER: u32 = 0x027C_000A;
+pub(super) const DTCM_REGISTER: u32 = 0x027C_000A;
 const ITCM_REGISTER: u32 = 0x0000_000C;
-const DTCM_BASE: u32 = 0x027C_0000;
+pub(super) const DTCM_BASE: u32 = 0x027C_0000;
 
 /// System mode, ARM state, I clear, with the N and C flags set so a lost CPSR shows.
-const SYSTEM_FLAGS: u32 = 0xA000_001F;
-const SYSTEM_I_CLEAR: u32 = 0x1F;
+pub(super) const SYSTEM_FLAGS: u32 = 0xA000_001F;
+pub(super) const SYSTEM_I_CLEAR: u32 = 0x1F;
 const SVC_MODE: u32 = 0x13;
-const IRQ_MODE: u32 = 0x12;
+pub(super) const IRQ_MODE: u32 = 0x12;
 const THUMB: u32 = 1 << 5;
-const SP_IRQ9: u32 = 0x0200_1000;
+pub(super) const SP_IRQ9: u32 = 0x0200_1000;
 
 /// `mov r0, #0x55`, `mov r1, #0x66`, `b .`.
-const PROGRAM: [u32; 3] = [0xE3A0_0055, 0xE3A0_1066, 0xEAFF_FFFE];
+pub(super) const PROGRAM: [u32; 3] = [0xE3A0_0055, 0xE3A0_1066, 0xEAFF_FFFE];
 /// `bx lr`.
-const BX_LR: u32 = 0xE12F_FF1E;
+pub(super) const BX_LR: u32 = 0xE12F_FF1E;
 /// `mov r6, #0x99`.
-const MOV_R6: u32 = 0xE3A0_6099;
+pub(super) const MOV_R6: u32 = 0xE3A0_6099;
 /// `mov r5, #0x77`.
 const MOV_R5: u32 = 0xE3A0_5077;
 
-fn machine_with(arm9: &[u32], arm7: &[u32]) -> Machine {
+pub(super) fn machine_with(arm9: &[u32], arm7: &[u32]) -> Machine {
     let mut image = Image::valid();
     image.arm9_code = words(arm9);
     image.arm7_code = words(arm7);
@@ -61,14 +61,14 @@ fn machine_with(arm9: &[u32], arm7: &[u32]) -> Machine {
 }
 
 /// An ARM9 that runs `program` with the BIOS vectors on and the CPSR as `SYSTEM_FLAGS` says.
-fn arm9_running(program: &[u32]) -> Machine {
+pub(super) fn arm9_running(program: &[u32]) -> Machine {
     let mut m = machine_with(program, &PROGRAM);
     m.arm9.write_cp15(1, 0, 0, HIGH_VECTORS);
     m.arm9.regs_mut().set_cpsr(SYSTEM_FLAGS);
     m
 }
 
-fn arm7_running(program: &[u32]) -> Machine {
+pub(super) fn arm7_running(program: &[u32]) -> Machine {
     let mut m = machine_with(&PROGRAM, program);
     m.arm7.regs_mut().set_cpsr(SYSTEM_FLAGS);
     m
@@ -79,11 +79,11 @@ fn seed_low_registers(m: &mut Machine) {
     (0..4).for_each(|i| m.arm9.regs_mut().set(i, 0xA0 + i as u32));
 }
 
-fn step9(m: &mut Machine, count: usize) {
+pub(super) fn step9(m: &mut Machine, count: usize) {
     (0..count).for_each(|_| m.step_arm9());
 }
 
-fn step7(m: &mut Machine, count: usize) {
+pub(super) fn step7(m: &mut Machine, count: usize) {
     (0..count).for_each(|_| m.step_arm7_instruction());
 }
 
@@ -96,7 +96,7 @@ fn thumb_swi_program(number: u16) -> [u32; 3] {
     ]
 }
 
-fn arm_swi(comment: u32) -> u32 {
+pub(super) fn arm_swi(comment: u32) -> u32 {
     0xEF00_0000 | comment
 }
 
@@ -137,7 +137,7 @@ fn given_an_arm7_swi_when_the_bios_traps_then_the_arm7_record_holds_the_number()
 
 #[test]
 fn given_an_arm_swi_when_executed_then_the_cpu_is_in_supervisor_mode_at_the_trap_address() {
-    let mut m = arm9_running(&[arm_swi(0x05_0000), PROGRAM[1], PROGRAM[2]]);
+    let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 1);
     let regs = m.arm9().regs();
     assert_eq!(
@@ -152,14 +152,14 @@ fn given_an_arm_swi_when_executed_then_the_cpu_is_in_supervisor_mode_at_the_trap
 
 #[test]
 fn given_an_arm_swi_when_the_bios_returns_then_the_cpsr_is_the_one_before_the_swi() {
-    let mut m = arm9_running(&[arm_swi(0x05_0000), PROGRAM[1], PROGRAM[2]]);
+    let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 2);
     assert_eq!(m.arm9().regs().cpsr(), SYSTEM_FLAGS);
 }
 
 #[test]
 fn given_an_arm_swi_when_the_bios_returns_then_the_next_instruction_runs() {
-    let mut m = arm9_running(&[arm_swi(0x05_0000), PROGRAM[1], PROGRAM[2]]);
+    let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 3);
     assert_eq!(m.arm9().regs().get(1), 0x66);
 }
@@ -167,7 +167,7 @@ fn given_an_arm_swi_when_the_bios_returns_then_the_next_instruction_runs() {
 #[test]
 fn given_a_thumb_swi_when_the_bios_returns_then_t_is_set_again_and_the_next_thumb_instruction_runs()
 {
-    let mut m = arm9_running(&thumb_swi_program(5));
+    let mut m = arm9_running(&thumb_swi_program(0x1E));
     step9(&mut m, 5);
     let regs = m.arm9().regs();
     assert_eq!((regs.cpsr() & THUMB, regs.get(1)), (THUMB, 0x66));
@@ -175,7 +175,7 @@ fn given_a_thumb_swi_when_the_bios_returns_then_t_is_set_again_and_the_next_thum
 
 #[test]
 fn given_a_thumb_swi_when_executed_then_the_vector_is_entered_in_arm_state() {
-    let mut m = arm9_running(&thumb_swi_program(5));
+    let mut m = arm9_running(&thumb_swi_program(0x1E));
     step9(&mut m, 3);
     let regs = m.arm9().regs();
     assert_eq!(
@@ -256,7 +256,7 @@ fn given_arm9_vectors_at_zero_when_irq_is_taken_then_the_game_handler_runs_and_t
 
 // ------------------------------------------------------------------------ the IRQ dispatcher
 
-fn request_timer0_on_arm9(m: &mut Machine) {
+pub(super) fn request_timer0_on_arm9(m: &mut Machine) {
     m.bus9().write32(IME, 1);
     m.bus9().write32(IE, TIMER0);
     m.io.request_irq(Requests {
@@ -265,7 +265,7 @@ fn request_timer0_on_arm9(m: &mut Machine) {
     });
 }
 
-fn request_timer0_on_arm7(m: &mut Machine) {
+pub(super) fn request_timer0_on_arm7(m: &mut Machine) {
     m.bus7(0).write32(IME, 1);
     m.bus7(0).write32(IE, TIMER0);
     m.io.request_irq(Requests {

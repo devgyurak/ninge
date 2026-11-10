@@ -172,6 +172,45 @@ impl Port {
     }
 }
 
+/// `&$place` for `ref` and `&mut $place` for `mut`: lets [`device_call`] borrow a device either way.
+macro_rules! borrow {
+    (ref $place:expr) => {
+        &$place
+    };
+    (mut $place:expr) => {
+        &mut $place
+    };
+}
+
+/// The one place a [`Port`] meets its device for one CPU: calls `Device::<cpu>::$method` on the
+/// field `$io` keeps for `$port`, borrowing it as `$b` says (`ref` or `mut`), and evaluates to
+/// the call's result. `$arm9` is the const generic naming the CPU that asks. A port the CPU's
+/// `Io` does not own (the memory-control block, or engine A seen from the ARM7) is a bug in the
+/// caller: it asserts in a debug build and evaluates to `$absent`.
+///
+/// A macro and not a function because each arm calls a different concrete device type. It is
+/// still static dispatch: every arm is a monomorphized call, no `dyn` (`AGENTS.md` §2 rule 3).
+/// A new device adds its arms here once and every access path picks it up.
+macro_rules! device_call {
+    ($io:expr, $arm9:ident, $port:expr, $b:tt, $method:ident($($arg:expr),*), $absent:expr) => {
+        match $port {
+            Port::Gpu2d if $arm9 => Device::<true>::$method(borrow!($b $io.gpu2d) $(, $arg)*),
+            Port::Timing => Device::<$arm9>::$method(borrow!($b $io.timing) $(, $arg)*),
+            Port::Irq if $arm9 => Device::<true>::$method(borrow!($b $io.irq9) $(, $arg)*),
+            Port::Irq => Device::<false>::$method(borrow!($b $io.irq7) $(, $arg)*),
+            Port::Ipc | Port::IpcRecv => {
+                Device::<$arm9>::$method(borrow!($b $io.ipc) $(, $arg)*)
+            }
+            Port::Timers if $arm9 => Device::<true>::$method(borrow!($b $io.timers9) $(, $arg)*),
+            Port::Timers => Device::<false>::$method(borrow!($b $io.timers7) $(, $arg)*),
+            Port::Gpu2d | Port::MemoryControl => {
+                debug_assert!(false, "port not reachable through Io");
+                $absent
+            }
+        }
+    };
+}
+
 /// One entry of the address map: the first address, the length in bytes, and the owner.
 pub(crate) type PortEntry = (u32, u32, Port);
 
@@ -339,20 +378,7 @@ impl Io {
         width: Width,
         now: u64,
     ) -> u32 {
-        match port {
-            Port::Gpu2d if ARM9 => Device::<true>::peek(&self.gpu2d, offset, width, now),
-            Port::Timing => Device::<ARM9>::peek(&self.timing, offset, width, now),
-            Port::Irq if ARM9 => Device::<true>::peek(&self.irq9, offset, width, now),
-            Port::Irq => Device::<false>::peek(&self.irq7, offset, width, now),
-            Port::Ipc | Port::IpcRecv => Device::<ARM9>::peek(&self.ipc, offset, width, now),
-            Port::Timers if ARM9 => Device::<true>::peek(&self.timers9, offset, width, now),
-            Port::Timers => Device::<false>::peek(&self.timers7, offset, width, now),
-            // The ARM7 has no engine A, and `Memory` owns the memory-control registers.
-            Port::Gpu2d | Port::MemoryControl => {
-                debug_assert!(false, "port not reachable through Io");
-                0
-            }
-        }
+        device_call!(self, ARM9, port, ref, peek(offset, width, now), 0)
     }
 
     /// A CPU's read from `port`: what it returns, with the effect applied (IF bits raised, events
@@ -365,19 +391,14 @@ impl Io {
         offset: u32,
         width: Width,
     ) -> u32 {
-        let (value, effect) = match port {
-            Port::Gpu2d if ARM9 => Device::<true>::read(&mut self.gpu2d, offset, width, at.now),
-            Port::Timing => Device::<ARM9>::read(&mut self.timing, offset, width, at.now),
-            Port::Irq if ARM9 => Device::<true>::read(&mut self.irq9, offset, width, at.now),
-            Port::Irq => Device::<false>::read(&mut self.irq7, offset, width, at.now),
-            Port::Ipc | Port::IpcRecv => Device::<ARM9>::read(&mut self.ipc, offset, width, at.now),
-            Port::Timers if ARM9 => Device::<true>::read(&mut self.timers9, offset, width, at.now),
-            Port::Timers => Device::<false>::read(&mut self.timers7, offset, width, at.now),
-            Port::Gpu2d | Port::MemoryControl => {
-                debug_assert!(false, "port not reachable through Io");
-                (0, Effect::default())
-            }
-        };
+        let (value, effect) = device_call!(
+            self,
+            ARM9,
+            port,
+            mut,
+            read(offset, width, at.now),
+            (0, Effect::default())
+        );
         self.apply::<ARM9>(scheduler, at, port, effect);
         value
     }
@@ -394,26 +415,14 @@ impl Io {
         width: Width,
         value: u32,
     ) {
-        let now = at.now;
-        let effect = match port {
-            Port::Gpu2d if ARM9 => {
-                Device::<true>::write(&mut self.gpu2d, offset, width, value, now)
-            }
-            Port::Timing => Device::<ARM9>::write(&mut self.timing, offset, width, value, now),
-            Port::Irq if ARM9 => Device::<true>::write(&mut self.irq9, offset, width, value, now),
-            Port::Irq => Device::<false>::write(&mut self.irq7, offset, width, value, now),
-            Port::Ipc | Port::IpcRecv => {
-                Device::<ARM9>::write(&mut self.ipc, offset, width, value, now)
-            }
-            Port::Timers if ARM9 => {
-                Device::<true>::write(&mut self.timers9, offset, width, value, now)
-            }
-            Port::Timers => Device::<false>::write(&mut self.timers7, offset, width, value, now),
-            Port::Gpu2d | Port::MemoryControl => {
-                debug_assert!(false, "port not reachable through Io");
-                Effect::default()
-            }
-        };
+        let effect = device_call!(
+            self,
+            ARM9,
+            port,
+            mut,
+            write(offset, width, value, at.now),
+            Effect::default()
+        );
         self.apply::<ARM9>(scheduler, at, port, effect);
     }
 

@@ -90,10 +90,15 @@ other. The VBlank and HBlank flags and VCOUNT are shared, because there is one d
 
 ### Where the frame is drawn
 
-Per-scanline drawing is not modeled. The frame is drawn once, from the registers and VRAM as
-they are at that moment, when VCOUNT wraps from 262 to 0 (the start of line 0), the same point
-as before this note; `display-mode-vram.md` has the rule. This is a model choice, not
-hardware. The VBlank start (line 192) is a separate event that raises the flag and the IRQ.
+Each visible line (0-191) is drawn at its own line start, from the registers and memory as they
+are at that moment (`bg-text.md`, "Lines"). The lines go into a frame in progress; when line 192
+starts, the last visible line is done, the frame in progress becomes the one `Machine::frame`
+returns, and the VBlank flag and IRQ rise as before. The start of line 0 still ends the frame
+(`run_frame` stops there) and draws line 0 of the next one, which is why a write that follows
+that point shows from line 1 on. Line 0 of the very first frame is drawn when the ROM is loaded,
+from the power-on registers (the first line start is line 1). Sampling at the line start is a
+model choice, not hardware: the hardware reads the registers while the line is drawn
+(`bg-text.md`, "Unverified").
 
 ### Hooks for later features
 

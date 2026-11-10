@@ -42,12 +42,19 @@ pub struct Machine {
     // Invariant: each buffer holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels. They are
     // `Vec`s because serde does not derive for arrays this large. The buffers are derived
     // output, not savestate data: they are skipped on save, and a load recreates them blank
-    // (restoring the invariant) until the next frame is drawn. The savestate format is in
+    // (restoring the invariant) until the next frame is presented. The savestate format is in
     // the `savestate` module.
     #[serde(skip, default = "blank_screen")]
     pub(crate) top: Vec<u32>,
     #[serde(skip, default = "blank_screen")]
     pub(crate) bottom: Vec<u32>,
+    // The frame being drawn: each visible line is drawn here at its line start, and the buffers
+    // swap with `top` and `bottom` when the last visible line is done, so a frame a caller reads
+    // is always a whole one (`docs/hw/bg-text.md`, "Lines"). Derived output like `top`.
+    #[serde(skip, default = "blank_screen")]
+    pub(crate) work_top: Vec<u32>,
+    #[serde(skip, default = "blank_screen")]
+    pub(crate) work_bottom: Vec<u32>,
     // The ROM image is an input, not machine state: it is skipped on save and a savestate
     // loads onto a machine that was handed the ROM again, so a savestate never embeds the
     // (possibly commercial) image (`savestate` module docs). Defaults to empty.
@@ -90,6 +97,8 @@ impl Machine {
         let mut machine = Self {
             top: blank_screen(),
             bottom: blank_screen(),
+            work_top: blank_screen(),
+            work_bottom: blank_screen(),
             rom: Vec::new(),
             frame_count: 0,
             arm9: Cpu::new(),
@@ -142,6 +151,8 @@ impl Machine {
         );
         self.header = Some(header);
         self.rom = rom;
+        // The first line start is line 1, so line 0 of the first frame is drawn here.
+        self.render_line(0);
         Ok(())
     }
 
@@ -157,8 +168,8 @@ impl Machine {
     }
 
     /// Runs the machine for one frame: rounds of ARM9, ARM7, events until VCOUNT wraps to line
-    /// 0, which draws the screens and counts the frame (`docs/hw/scheduler.md`,
-    /// `docs/hw/display-timing.md`).
+    /// 0, which counts the frame; the lines were drawn as their starts went by and the frame
+    /// was presented at line 192 (`docs/hw/scheduler.md`, `docs/hw/display-timing.md`).
     ///
     /// A machine with no booted program (no ROM, or a refused one) runs no CPU and draws
     /// nothing: the frame only advances the counter and leaves both screens black.
@@ -174,23 +185,64 @@ impl Machine {
         }
     }
 
-    /// Draws both screens from the registers and VRAM as they are now.
+    /// Draws visible line `y` of both screens into the frame being drawn, from the registers and
+    /// memory as they are now (`docs/hw/bg-text.md`, "Lines"). A line past the last visible one is
+    /// not drawn.
     ///
     /// Engine A goes to the screen POWCNT1 bit 15 picks; the other screen is a black
     /// placeholder for engine B (`docs/hw/display-mode-vram.md`).
     // TODO(phase4): engine B draws its screen.
-    // TODO(phase3): per-scanline drawing replaces the whole-frame render; the line timing it
-    // needs is in `docs/hw/display-timing.md` (#104).
-    pub(crate) fn render_frame(&mut self) {
+    pub(crate) fn render_line(&mut self, y: usize) {
+        if y >= SCREEN_HEIGHT {
+            return;
+        }
         let (engine_a, engine_b) = if self.io.gpu2d().engine_a_on_top() {
-            (&mut self.top, &mut self.bottom)
+            (&mut self.work_top, &mut self.work_bottom)
         } else {
-            (&mut self.bottom, &mut self.top)
+            (&mut self.work_bottom, &mut self.work_top)
         };
-        self.io
-            .gpu2d()
-            .render_engine_a(self.memory.vram_a_lcdc(), engine_a);
-        engine_b.fill(crate::gpu2d::BLACK);
+        let line = y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH;
+        if let Some(out) = engine_a.get_mut(line.clone()) {
+            self.io.gpu2d().render_line_a(
+                y,
+                self.memory.vram_a_lcdc(),
+                &self.memory.bg_vram_a(),
+                self.memory.palette(),
+                out,
+            );
+        }
+        if let Some(out) = engine_b.get_mut(line) {
+            out.fill(crate::gpu2d::BLACK);
+        }
+    }
+
+    /// The frame being drawn is complete: it becomes the one [`Machine::frame`] returns, and the
+    /// buffers it replaces are drawn over by the next frame's lines.
+    pub(crate) fn present_frame(&mut self) {
+        std::mem::swap(&mut self.top, &mut self.work_top);
+        std::mem::swap(&mut self.bottom, &mut self.work_bottom);
+    }
+
+    /// Draws every visible line from the registers and memory as they are now and presents the
+    /// result: a whole frame without the line timing, for tests that set the state directly.
+    #[cfg(test)]
+    pub(crate) fn render_frame(&mut self) {
+        (0..SCREEN_HEIGHT).for_each(|y| self.render_line(y));
+        self.present_frame();
+    }
+
+    /// Draws again the lines of the frame in progress that were drawn before a savestate was
+    /// taken, from the loaded state: the frame buffers are not saved, so a load would otherwise
+    /// leave them blank. A machine saved at a frame boundary is whole; one saved mid-frame
+    /// loses a raster effect that changed a register earlier in the same frame, for that frame
+    /// only (`docs/hw/bg-text.md`, "Lines").
+    // Decided with the maintainer in #28: redraw rather than save the buffers.
+    pub(crate) fn redraw_started_lines(&mut self) {
+        if self.header.is_none() {
+            return;
+        }
+        let last = usize::from(self.io.timing().vcount()).min(SCREEN_HEIGHT - 1);
+        (0..=last).for_each(|y| self.render_line(y));
     }
 
     /// VCOUNT: the current line, 0-262 (`docs/hw/display-timing.md`).
@@ -569,7 +621,9 @@ impl Machine {
     /// A line begins at `time` (`docs/hw/display-timing.md`). VBlank starts here too, when the
     /// line is the first blank one; this is the one place for it.
     ///
-    /// The start of line 0 ends the frame: the screens are drawn and the frame is counted.
+    /// The start of each visible line draws that line (`docs/hw/bg-text.md`, "Lines"); the start
+    /// of the first blank line presents the finished frame, and the start of line 0 ends the frame:
+    /// it is counted.
     ///
     /// The first blank line also starts the VBlank-start DMA channels (`docs/hw/dma.md`,
     /// "Starting").
@@ -580,8 +634,14 @@ impl Machine {
             self.io
                 .trigger_dma(&mut self.scheduler, Trigger::VBlank, time);
         }
-        if self.io.timing().vcount() == 0 {
-            self.render_frame();
+        let line = usize::from(self.io.timing().vcount());
+        // The last visible line is drawn: the frame is whole and becomes the one callers read.
+        if line == SCREEN_HEIGHT {
+            self.present_frame();
+        }
+        self.render_line(line);
+        // The start of line 0 ends the frame; its own line 0 belongs to the next one.
+        if line == 0 {
             self.frame_count = self.frame_count.wrapping_add(1);
         }
         // From the event's own time, not `now`, so a line's length never drifts.

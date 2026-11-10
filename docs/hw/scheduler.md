@@ -108,9 +108,9 @@ started, clock-driven timer of either CPU, so at most eight; see `timers.md`) an
 per channel whose transfer is waiting to run, at most eight; see `dma.md`). A pending event of
 a kind can be cancelled, which a timer write uses to replace its overflow: the bus view holds the
 scheduler, so the write schedules at once, never before the end of the writing instruction
-(`timers.md`, "Model"). The `LineStart` that begins line 0
-draws the screens and counts the frame, which ends `run_frame`: frames stay 1,120,380 master
-cycles apart. Each reschedules from its own time, so nothing drifts.
+(`timers.md`, "Model"). Each `LineStart` of a visible line draws that line (`bg-text.md`, "Lines"); the one that begins
+line 192 presents the finished frame, and the one that begins line 0 counts the frame, which ends
+`run_frame`: frames stay 1,120,380 master cycles apart. Each reschedules from its own time, so nothing drifts.
 
 ### Interleaving
 

@@ -4,7 +4,7 @@
 //! [`ARM7_PORTS`]. The map lives here and nowhere else; a test pins that no two entries overlap.
 
 use crate::bus::VRAMCNT_A_ADDR;
-use crate::gpu2d::{DISPCNT_A_ADDR, POWCNT1_ADDR};
+use crate::gpu2d::{BG_REGS_ADDR, BG_REGS_BYTES, DISPCNT_A_ADDR, POWCNT1_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::IME_ADDR;
@@ -27,7 +27,8 @@ pub(crate) enum Owner {
 /// Which device holds a register. [`Port::base`] is where its register space starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Port {
-    /// DISPCNT of engine A and POWCNT1 (two table entries, one device).
+    /// DISPCNT, the BG control and scroll registers of engine A, and POWCNT1 (three table
+    /// entries, one device).
     Gpu2d,
     /// DISPSTAT and VCOUNT.
     Timing,
@@ -74,9 +75,11 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 10] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 11] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
+    // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
+    (BG_REGS_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
     // DMA0SAD..DMA3CNT, twelve bytes a channel, then the fill registers.
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (DMA0FILL_ADDR, FILL_BYTES, Some(Port::DmaFill)),

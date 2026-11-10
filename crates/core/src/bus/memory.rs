@@ -10,7 +10,7 @@
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
-use crate::io::{Width, read_bytes};
+use crate::io::device::{Width, read_bytes};
 use serde::{Deserialize, Serialize};
 
 /// Page size of the fast-path table: 16 KiB (AGENTS.md §2 rule 9).

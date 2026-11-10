@@ -7,7 +7,7 @@
 //! reach a CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io`
 //! hands those to the two controllers.
 
-use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};
 

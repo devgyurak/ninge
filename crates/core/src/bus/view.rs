@@ -5,7 +5,9 @@
 
 use super::Memory;
 use crate::cpu::{Bus, Cp15, Tcm};
-use crate::io::{At, Io, Owner, Width, decode};
+use crate::io::device::Width;
+use crate::io::map::{Owner, decode};
+use crate::io::{At, Io};
 use crate::scheduler::{ARM9_INSTRUCTION_COST, Scheduler};
 
 /// Both TCM regions as CP15 resolves them (`docs/hw/cp15.md`).

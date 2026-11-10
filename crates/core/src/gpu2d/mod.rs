@@ -8,7 +8,7 @@
 //! Engine A is wired to the ARM9 alone, so `Gpu2d` is a plain type with no CPU const generic: the
 //! "seen by one CPU" class of `AGENTS.md` §4 ("Per-CPU devices").
 
-use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 pub mod timing;

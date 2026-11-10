@@ -5,7 +5,7 @@
 //! "an independent copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two
 //! instances of `InterruptController<const ARM9: bool>`.
 
-use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// IME, at `0400_0208h` (`interrupts.md`, "Registers").

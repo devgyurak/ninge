@@ -10,7 +10,7 @@
 //! are generic over which CPU asks. That is the "seen by both CPUs" class of `AGENTS.md` §4
 //! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
-use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use serde::{Deserialize, Serialize};
 

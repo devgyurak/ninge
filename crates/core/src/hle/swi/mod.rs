@@ -8,8 +8,6 @@ mod copy;
 mod lz77;
 mod math;
 mod misc;
-#[cfg(test)]
-mod tests;
 
 use super::bios::{SwiRecord, flag_address};
 use crate::cpu::{Bus, Cpu};
@@ -107,8 +105,9 @@ fn data_routine<const ARM9: bool, B: Bus>(number: u8, cpu: &mut Cpu<ARM9>, bus: 
         // Retail hardware has no debugger.
         IS_DEBUGGER => cpu.regs_mut().set(0, 0),
         LZ77_WRAM => lz77::decode_wram(bus, r0, r1),
-        // The last number of the caller's match is LZ77_VRAM.
-        _ => lz77::decode_vram(bus, r0, r1),
+        LZ77_VRAM => lz77::decode_vram(bus, r0, r1),
+        // `run` sends only the numbers above here.
+        _ => {}
     }
 }
 
@@ -124,3 +123,6 @@ fn intr_wait<const ARM9: bool, B: Bus>(cpu: &mut Cpu<ARM9>, bus: &mut B) {
         bus.write32(address, flags & !cpu.regs().get(1));
     }
 }
+
+#[cfg(test)]
+mod tests;

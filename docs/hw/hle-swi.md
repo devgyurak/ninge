@@ -163,9 +163,11 @@ IntrWait loop address (`+24h`, trap `+2Ch`), so no extra state is saved.
 
 ## The copy, math and decompression SWIs
 
-Chosen from what a libnds console program calls and what #27 lists: Div, CpuSet, CpuFastSet,
-Sqrt, LZ77 in its two forms, and from the survey of that program (the ARM9 calls `0Fh` and `03h`;
-the stock ARM7 calls `03h`, `06h`, `07h`, `08h` and `0Eh`) GetCRC16 and IsDebugger. Every one runs
+Chosen from what #27 lists (Div, CpuSet, CpuFastSet, Sqrt, LZ77 in its two forms) and from a
+survey made for this note: a libnds console `printf` program built with the BlocksDS v1.24.0 image
+that `scripts/build_testroms.sh` pins, its ARM9 ELF and the image's stock ARM7 ELF disassembled
+for `swi`/`svc`. The ARM9 calls `0Fh` and `03h`; the ARM7 calls `03h`, `06h`, `07h`, `08h` and
+`0Eh` (and DSi-only `24h`-`27h` stubs it never reaches). So GetCRC16 and IsDebugger are added. Every one runs
 through the calling CPU's own bus view, so a write reaches I/O registers and VRAM as an instruction's
 would, and costs one instruction (see "Cost").
 
@@ -197,7 +199,8 @@ words: a count of 9 moves 16 words, a count of 1 fills 8.
 
 **GetCRC16.** CRC-16/MODBUS (`cart-header.md`, "The header CRC16") continued from `R0`, over `R2`
 bytes read as halfwords from `R1`: for each halfword the low byte, then the high byte. `R2` is
-halved: an odd length leaves its last byte out. Only `R0` changes.
+halved. Only `R0` changes. An odd length and the registers other than `R0` are under
+"Unverified".
 
 **IsDebugger.** Retail hardware has no debugger: `R0 = 0`.
 
@@ -338,21 +341,24 @@ checks").
   `hle::swi::run` — `TODO(hw-unverified)`; revisit with the Phase 8 timing work.
 - **The IntrWait loop address `base + 24h`.** ninge's own. — `hle::bios::INTR_WAIT_VECTOR` —
   invisible to a game unless it reads `LR` inside IntrWait.
-- **Div by zero and `-80000000h / -1`.** The note does not state the BIOS's results. The model
+- **Div by zero and `-80000000h / -1`.** The BIOS's results are not established here. The model
   returns, for a zero denominator, `R0 = 1` (`-1` for a negative numerator), `R1` = the numerator,
-  `R3 = 1`, as the hardware divider does (`DIVCNT` is not modeled, `TODO` below), and for the
-  overflow case the wrapped result (`R0 = 80000000h`, `R1 = 0`, `R3 = 80000000h`). —
-  `hle::swi::math::divide` — verify by a test ROM on hardware.
-- **CpuSet and CpuFastSet details.** Misaligned addresses are aligned down by the bus; the
-  registers after the call are left unchanged although the BIOS leaves them undefined; reading
-  the source of a fill from an unaligned address aligns it down. — `hle::swi::copy` — verify
+  `R3 = 1`, and for the overflow case the wrapped result (`R0 = 80000000h`, `R1 = 0`,
+  `R3 = 80000000h`); both are choices, not findings. — `hle::swi::math::divide` — verify by a
+  test ROM on hardware.
+- **CpuSet and CpuFastSet details.** That a count of 0 does nothing, that `R2` bits other than 0-20,
+  24 and 26 are ignored, and that CpuFastSet rounds its count up to a multiple of 8 words are the
+  model's (GBATEK may state the multiple of 8 as a requirement on the caller instead of a
+  round-up). Misaligned addresses are aligned down by the bus; the registers after the call are
+  left unchanged although the BIOS leaves them undefined; the source of a fill at an unaligned
+  address is aligned down. — `hle::swi::copy` — verify likewise.
+- **GetCRC16.** `R2` bytes are taken as `R2 / 2` halfwords, so an odd length leaves its last byte
+  out; only `R0` is set and `R1`-`R3` are left as they were. — `hle::swi::misc` — verify
   likewise.
 - **LZ77.** A type other than 1 is decoded anyway; the 16-bit form's distance-1 block and an odd
   size follow the model above; on the DS GBATEK describes `12h` as reading through callbacks given
   in `R3` (`LZ77UnCompReadByCallbackWrite16bit`) and the model reads memory directly and ignores
   `R3`, as it also treats `11h`. — `hle::swi::lz77` — verify likewise.
-- **GetCRC16 registers.** Only `R0` is set; `R1`-`R3` are left, GBATEK's wording on the others is
-  not available here. — `hle::swi::misc` — verify likewise.
 - **Not implemented.** Sleep (`07h`, `TODO(phase5)`), SoundBias (`08h`, `TODO(phase6)`), BitUnPack,
   Huffman and run-length decompression (`10h`, `13h`-`15h`), the DSi-only numbers, and the other
   GBA-compatible numbers take the "Unimplemented number" path.

@@ -15,8 +15,8 @@ const FAST_BLOCK_WORDS: u32 = 8;
 
 /// CpuSet: `count` halfwords or words copied from `src` to `dst`, or one unit read at `src` and
 /// written `count` times. A count of 0 does nothing.
-// TODO(hw-unverified): the addresses are aligned down to the unit; the registers are left as they
-// were (`hle-swi.md`, "Unverified").
+// TODO(hw-unverified): the count of 0, the ignored control bits, the addresses aligned down to the
+// unit and the registers left as they were are the model's (`hle-swi.md`, "Unverified").
 pub(super) fn cpu_set<B: Bus>(bus: &mut B, src: u32, dst: u32, control: u32) {
     let count = control & COUNT_MASK;
     match (control & FILL != 0, control & WIDE != 0) {
@@ -28,6 +28,8 @@ pub(super) fn cpu_set<B: Bus>(bus: &mut B, src: u32, dst: u32, control: u32) {
 }
 
 /// CpuFastSet: words only, and the count rounded up to a whole number of 8-word blocks.
+// TODO(hw-unverified): the round-up, the count of 0, the ignored control bits and the alignment are
+// the model's (`hle-swi.md`, "Unverified").
 pub(super) fn cpu_fast_set<B: Bus>(bus: &mut B, src: u32, dst: u32, control: u32) {
     let count = control & COUNT_MASK;
     let words = count.div_ceil(FAST_BLOCK_WORDS) * FAST_BLOCK_WORDS;

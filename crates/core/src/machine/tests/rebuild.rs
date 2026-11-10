@@ -236,3 +236,29 @@ fn given_a_vblank_dma_start_waiting_at_now_when_loaded_and_a_round_runs_then_the
     let copied: Vec<u32> = (0..4).map(|i| loaded.arm9_peek32(DST + 4 * i)).collect();
     assert_eq!(copied, vec![1, 2, 3, 4]);
 }
+
+// ------------------------------------------------- (d) an ARM7 timer started while it lagged
+
+/// An ARM7 write at master time 20 while the clock is at 33 starts the timer from 20, so its
+/// overflow lies at 52, after `now`, and is queued there (`timers.md`, "Model").
+fn arm7_timer_started_while_lagging() -> Machine {
+    let mut m = machine();
+    step(&mut m, 33);
+    m.bus7(20).write16(TM0CNT_L, RELOAD_16_TICKS);
+    m.bus7(20).write16(TM0CNT_L + 2, START);
+    m
+}
+
+#[test]
+fn given_an_arm7_timer_started_while_lagging_when_saved_and_loaded_then_the_queue_and_the_continuation_equal_the_uninterrupted_ones()
+ {
+    let m = arm7_timer_started_while_lagging();
+    let resumed = resume(&m, |m| step(m, 200));
+    assert_eq!(
+        (
+            resumed.loaded_pending == resumed.original_pending,
+            resumed.bytes_equal_after
+        ),
+        (true, true)
+    );
+}

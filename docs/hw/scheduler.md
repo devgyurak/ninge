@@ -83,12 +83,14 @@ fact (see "Unverified"). It is a function of the kind, so it is the same for a m
 was saved and loaded, whose queue was rebuilt (see "Savestate checks"). The queue holds at most
 one event of each kind (a reschedule cancels the pending one first), so `(timestamp, priority)`
 orders every event completely. A sequence number, assigned from a counter that only goes up,
-is kept as the last tie-break and as the guard below; it is not saved. The heap's internal
+is kept only for the guard below; it is not part of the order and is not saved. The heap's internal
 order is never relied on.
 
-Events due at the target fire in order, but only those queued when the dispatch began (the
-sequence number is what tells them apart): an event a handler schedules waits for the next
-round. This keeps a handler that reschedules itself
+Events due at the target fire in priority order. An event a handler schedules during the
+dispatch waits for the next round (the sequence number tells it from the ones queued before):
+the dispatch only looks at the top of the heap, so if such an event sorts to the top, the
+other events due at the same time wait for the next round too. That round is zero cycles long
+and fires them in the same order, so nothing observable changes. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
 Four kinds exist so far, `LineStart` (every 4,260 master cycles), `HBlankStart` (once per
@@ -162,7 +164,7 @@ and a load rebuilds it, so no check has to prove that the queue and the devices 
 - Every channel with a start waiting gets a `DmaStart` at `now`: a waiting start is due at once
   and the queue never holds an event before the master clock (`dma.md`, "Model").
 
-Every event the queue can hold between rounds is covered: the event a handler scheduled during
+Every event the queue can hold between rounds is covered, except the known gap under "Edge cases": the event a handler scheduled during
 the last dispatch and that waits for the next round is one of these (a DMA start the VBlank
 raised, due at `now`).
 
@@ -187,8 +189,8 @@ A saved machine is refused on load when:
   them, and a load rebuilds the queue from `now`, so those past events are gone. Such a machine
   never fires its events anyway (there is no program to run), so the only difference a caller
   can see is `pending()`.
-- **Known gap:** a DMA transfer whose unit writes a timer or DMA register queues that event at
-  `now + 1`, because the ARM9's bus view floors every write at the end of one instruction
+- **Known gap:** a DMA transfer whose unit writes an ARM9 DMA control register (a chained
+  immediate-start DMA) queues that start at `now + 1`, because the ARM9's bus view floors every write at the end of one instruction
   (`bus/view.rs`, `at`; TODO #115). The rebuild queues it at `now`, so a machine saved in that
   state and loaded fires the event one ARM9 instruction earlier than an uninterrupted run. No
   test ROM does this yet; fixing it means flooring a DMA unit's write at `now` (a behavior

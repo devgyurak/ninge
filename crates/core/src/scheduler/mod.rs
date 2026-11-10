@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The event scheduler and the ARM9/ARM7 interleaving (`docs/hw/scheduler.md`).
 //!
-//! Events sit in a binary heap ordered by `(time, priority of the kind)`. A round runs the ARM9, then the ARM7,
+//! Events sit in a binary heap ordered by `(time, priority of the kind)`; the queue holds at most
+//! one event of each kind. A round runs the ARM9, then the ARM7,
 //! then the events due where the ARM9 stopped: the round's target, or earlier when the ARM9
 //! queued an event before it; see [`run_round`].
 
@@ -81,21 +82,20 @@ impl EventKind {
 pub struct Event {
     /// Master-clock time at which it fires.
     pub time: u64,
-    /// Order in which it was scheduled in this run. Not saved. It is the last tie-break, and
+    /// Order in which it was scheduled in this run. Not saved and not part of the order: it only
     /// tells an event queued before a dispatch from one a handler queued during it.
     pub seq: u64,
     /// What it does.
     pub kind: EventKind,
 }
 
-// `seq` is the last key but `PartialEq` ignores it: the queue holds at most one event of each kind,
-// so no two events tie on `(time, kind)` and the two never disagree.
+// Ordered by `(time, priority)` only, so `Ord` agrees with `PartialEq`. `seq` is not part of the
+// order: it is read only by the dispatch guard (`pop_due_before`).
 impl Ord for Event {
     fn cmp(&self, other: &Self) -> Ordering {
         self.time
             .cmp(&other.time)
             .then_with(|| self.kind.priority().cmp(&other.kind.priority()))
-            .then_with(|| self.seq.cmp(&other.seq))
     }
 }
 

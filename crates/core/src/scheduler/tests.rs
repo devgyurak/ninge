@@ -810,3 +810,37 @@ fn given_a_cancel_when_checked_then_the_queue_is_still_well_formed() {
     scheduler.cancel(ARM9_TIMER0);
     assert!(scheduler.is_well_formed());
 }
+
+// ------------------------------------------------------------------ the line and HBlank grid
+
+/// The grid points `next_line_start` and `next_hblank_start` return for `now` values on and
+/// around a grid point, where they differ from "the first point strictly after `now`".
+fn grid_failures() -> Vec<(u64, u64, u64)> {
+    let line = LINE_CYCLES;
+    let hblank = HBLANK_START_CYCLES;
+    let cases = [
+        // (now, next line start, next HBlank start)
+        (0, line, hblank),
+        (hblank - 1, line, hblank),
+        (hblank, line, line + hblank),
+        (line - 1, line, line + hblank),
+        (line, 2 * line, line + hblank),
+        (line + hblank - 1, 2 * line, line + hblank),
+        (line + hblank, 2 * line, 2 * line + hblank),
+    ];
+    cases
+        .into_iter()
+        .filter(|&(now, next_line, next_hblank)| {
+            (
+                Scheduler::next_line_start(now),
+                Scheduler::next_hblank_start(now),
+            ) != (next_line, next_hblank)
+        })
+        .collect()
+}
+
+#[test]
+fn given_clocks_on_and_beside_grid_points_when_the_next_line_events_are_asked_then_each_is_strictly_after_now()
+ {
+    assert_eq!(grid_failures(), vec![]);
+}

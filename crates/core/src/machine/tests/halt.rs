@@ -16,7 +16,7 @@ use super::bios::{
 use crate::cpu::{Bank, Bus};
 use crate::io::irq::Requests;
 use crate::machine::*;
-use crate::scheduler::run_round;
+use crate::scheduler::{SLICE, run_round};
 
 /// `mcr p15, 0, r0, c7, c0, 4` and `mcr p15, 0, r0, c7, c8, 2`: the two wait-for-interrupt forms.
 const WFI_C0_4: u32 = 0xEE07_0F90;
@@ -597,29 +597,41 @@ fn given_a_halted_arm7_when_a_frame_runs_then_the_frame_completes_and_the_arm7_c
 
 // ------------------------------------------------- review follow-ups: event before halt, DMA halt
 
-const TM0CNT: u32 = 0x0400_0100;
+/// The ARM9 starts timer 0 itself, inside the round, and then waits: `mov r0, #0x04000000`,
+/// `add r0, r0, #0x100`, `mov r1, #0xC00000`, `orr r1, r1, #0xFF00`, `orr r1, r1, #0xF0`,
+/// `str r1, [r0]`, then WFI and the marker. TM0CNT = 00C0FFF0h: reload FFF0h, enabled, IRQ on
+/// overflow, prescaler F/1, so it overflows after the WFI, inside the round's slice.
+const START_TIMER_THEN_WAIT: [u32; 9] = [
+    0xE3A0_0301,
+    0xE280_0C01,
+    0xE3A0_18C0,
+    0xE381_1CFF,
+    0xE381_10F0,
+    0xE580_1000,
+    WFI_C0_4,
+    MOV_R1,
+    SPIN,
+];
 
 #[test]
-fn given_a_timer_started_just_before_the_arm9_halts_when_a_round_runs_then_the_clock_stops_at_the_overflow()
+fn given_the_arm9_starts_a_timer_and_halts_in_one_round_when_the_round_ends_then_the_clock_stops_at_the_overflow()
  {
-    let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
-    // Reload FFF0h, enabled with the IRQ bit and prescaler F/1: it overflows 16 cycles later.
-    m.bus9().write32(TM0CNT, 0x00C0_FFF0);
-    step9(&mut m, 1);
-    let due = m.scheduler().next_time().expect("the overflow is queued");
+    let mut m = arm9_running(&START_TIMER_THEN_WAIT);
     run_round(&mut m);
-    assert_eq!((m.arm9().halted(), m.scheduler().now()), (true, due));
+    // The clock stops at the overflow, inside the slice, not at the slice's end.
+    assert_eq!(
+        (m.arm9().halted(), m.scheduler().now() < SLICE),
+        (true, true)
+    );
 }
 
 #[test]
-fn given_a_timer_irq_enabled_before_the_arm9_halts_when_rounds_run_then_the_overflow_wakes_it() {
-    let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
+fn given_the_arm9_starts_a_timer_with_its_irq_enabled_and_halts_when_rounds_run_then_the_overflow_wakes_it()
+ {
+    let mut m = arm9_running(&START_TIMER_THEN_WAIT);
     m.arm9.regs_mut().set_cpsr(0x9F);
     m.bus9().write32(IE, TIMER0);
-    m.bus9().write32(TM0CNT, 0x00C0_FFF0);
-    step9(&mut m, 1);
     clocks_after_rounds(&mut m, 3);
-    step9(&mut m, 1);
     assert_eq!((m.arm9().halted(), m.arm9().regs().get(1)), (false, 0x66));
 }
 

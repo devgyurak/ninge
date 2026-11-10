@@ -119,7 +119,13 @@ CPU continues with the next instruction; if IME is 1 and I is clear the IRQ is t
 as for any pending request (`interrupts.md`, "The IRQ line"). In ninge a halted CPU's clock does
 not run instructions: the machine moves it to the end of the time it is asked to run, in one
 step, and the wake is tested at the start of the next round (the events that raise IF end a
-round exactly at their own time, `scheduler.md`).
+round exactly at their own time, `scheduler.md`). A halted ARM9 skips to the earlier of the round
+target and the next queued event, so an event its last instruction queued (a timer started just
+before the wait) still fires on time.
+
+A DMA unit can write HALTCNT as well (it is an ordinary ARM7-side write). The ARM7 halts when the
+transfer ends, not after its next instruction, because a DMA unit runs in the gap between two
+instructions; this is the model's order, as GBATEK does not describe it (see "Unverified").
 
 ## The wait SWIs
 
@@ -130,7 +136,9 @@ round exactly at their own time, `scheduler.md`).
 | `05h` | VBlankIntrWait | none | IntrWait with `R0 = 1`, `R1 = 1` (the V-blank bit) |
 | `06h` | Halt | none | halts the CPU (above) and returns at once; execution resumes after the wake |
 
-**IntrWait.** This description is written from memory of GBATEK's text (and of how the GBA text describes the same function), not from a page re-read in this session; "Unverified" lists what is least certain. GBATEK describes the function: it waits in the halt state until one of the interrupts
+**IntrWait.** This description is recalled from GBATEK's text (and from how the GBA text
+describes the same function), not read from the page; "Unverified" lists what is least certain.
+GBATEK describes the function: it waits in the halt state until one of the interrupts
 named in `R1` has happened, and it forces IME to 1. How it knows that an interrupt has happened is
 the IRQ check flags (the word at DTCM base + `3FF8h` on the ARM9, `0380FFF8h` on the ARM7, in the
 IE/IF format; `interrupts.md`): the user's IRQ handler ORs the bit of each interrupt it serves
@@ -254,6 +262,13 @@ checks").
 - **The SWI number is read with a normal load.** If `LR - 2` points at an I/O register the read has
   its side effect, as the BIOS's own load would; the model does not use a side-effect-free peek.
   — `hle::bios::software_interrupt` — verify likewise.
+- **A DMA write to HALTCNT.** That the ARM7 halts once the transfer ends is the model's order, not
+  from GBATEK. — `Machine::run_dma` in `crates/core/src/machine/mod.rs` (`take_halt`) — verify
+  by a test ROM on hardware that DMAs a halt byte.
+- **Interrupt before BIOS trap.** A pending, unmasked IRQ is taken before the BIOS trap at a
+  vector address is looked at; hardware has no such ordering to copy (the BIOS is code), so this
+  is the model's choice. — `Machine::step_arm9_instruction` — invisible unless an IRQ arrives
+  while a CPU stands on a vector.
 - **IME and the CPSR I flag in the wake.** The wake depends only on `IE & IF` (GBATEK's Halt
   wording); for the ARM9's CP15 wait-for-interrupt GBATEK does not say whether the core's own IRQ
   input (which includes IME) is what wakes it. — `InterruptController::wakes` in

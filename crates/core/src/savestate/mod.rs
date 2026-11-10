@@ -173,7 +173,7 @@ impl Machine {
             // A booted machine is always settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up.
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())
-            // TODO(#115): once an instruction's cost varies, this bound is the largest cost.
+            // TODO(phase8): once an instruction's cost varies, this bound is the largest cost.
             || loaded.arm7_clock >= loaded.scheduler.now().saturating_add(ARM7_INSTRUCTION_COST)
         {
             return Err(SavestateError::Corrupt);

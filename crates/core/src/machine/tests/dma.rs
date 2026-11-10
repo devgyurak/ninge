@@ -14,10 +14,10 @@
 //! The programs are `b .`-style spins, so nothing but the DMA touches the data. Data lives at
 //! `SRC` and `DST` in main RAM, clear of both CPUs' code.
 
-use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
+use crate::machine::*;
 use crate::scheduler::{LINE_CYCLES, run_round};
 
 const SRC: u32 = 0x0220_0000;

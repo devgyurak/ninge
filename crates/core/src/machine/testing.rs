@@ -2,8 +2,8 @@
 //! Test fixture: bus access on a whole `Machine`, the way a CPU step reaches it. The views split-borrow
 //! the machine's fields, so a register write schedules its timers like a real instruction's does.
 
-use crate::Machine;
 use crate::bus::{Arm7View, Arm9View, TcmConfig};
+use crate::machine::Machine;
 
 impl Machine {
     /// The ARM9's bus at the master clock, with the TCM as CP15 has it.

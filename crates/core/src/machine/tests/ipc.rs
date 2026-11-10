@@ -3,17 +3,17 @@
 //! `Machine`. Expected values come from `docs/hw/ipc.md` ("Registers", "Behavior", "Wider and
 //! narrower accesses", "Unverified") and `docs/hw/interrupts.md`, never from running the code.
 //!
-//! The bus has two read paths (see `bus::view`): a CPU's read through its view takes a word out
+//! The bus has two read paths (see `crate::bus::view`): a CPU's read through its view takes a word out
 //! of the receive FIFO, the peeks (debugger, runner) only show it.
 //!
 //! ARM7 delivery (the IRQ exception) is pinned here rather than in a test ROM because the ARM7's
 //! BIOS vectors are #27's (`docs/hw/interrupts.md`, "The IRQ dispatcher is not the controller").
 
-use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, SEND_EMPTY_IRQ};
+use crate::machine::*;
 
 const ENTRY7: u32 = 0x0238_0000;
 const ENABLE: u16 = 1 << 15;

@@ -7,8 +7,8 @@
 //! pipeline already holds the first two opcodes (`arm-branch-pipeline.md`, "The prefetch
 //! pipeline"); each step fetches the opcode at R15 from the bus.
 
-use super::*;
 use crate::cpu::Bus;
+use crate::machine::*;
 
 const ENTRY: u32 = 0x0200_0000;
 const SVC: u32 = 0x13;
@@ -192,7 +192,7 @@ fn given_a_strb_to_vramcnt_a_when_executed_then_bank_a_is_enabled_in_lcdc_mode()
     let machine = run_vram_stores();
     assert_eq!(
         machine.vram_a(),
-        bus::VramBankState {
+        crate::bus::VramBankState {
             enabled: true,
             mst: 0,
             offset: 0

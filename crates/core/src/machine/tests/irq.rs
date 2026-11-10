@@ -19,11 +19,11 @@
 //! Where the exception entry sits (step_arm9, step_arm7_instruction, or a shared helper) is the
 //! implementation's choice: the tests drive `step_arm9` and `step_arm7_instruction`.
 
-use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
 use crate::cpu::Bus;
 use crate::io::irq::Requests;
+use crate::machine::*;
 
 const ENTRY9: u32 = 0x0200_0000;
 const ENTRY7: u32 = 0x0238_0000;

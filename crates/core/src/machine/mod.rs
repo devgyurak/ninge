@@ -1,0 +1,529 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The whole emulated machine: [`Machine`], the one struct that owns all emulator state.
+
+use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
+use crate::cart::Header;
+use crate::cpu::Cpu;
+use crate::io::Io;
+use crate::io::dma::{Dma, Trigger};
+use crate::io::irq::InterruptController;
+use crate::io::timers::Timers;
+use crate::io::timing::FIRST_VBLANK_LINE;
+use crate::scheduler::{
+    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, HBLANK_START_CYCLES,
+    LINE_CYCLES, Participants, Scheduler,
+};
+use serde::{Deserialize, Serialize};
+
+/// Width of each screen in pixels (`docs/hw/display.md`).
+pub const SCREEN_WIDTH: usize = 256;
+/// Height of each screen in pixels (`docs/hw/display.md`).
+pub const SCREEN_HEIGHT: usize = 192;
+
+/// One of the two physical screens.
+///
+/// `Top` and `Bottom` are the physical screens, not graphics engines A/B: which engine shows
+/// on which screen is set by POWCNT1 (Phase 2-3). See `docs/hw/display.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Screen {
+    /// The upper screen.
+    Top,
+    /// The lower screen, which carries the touch panel.
+    Bottom,
+}
+
+/// The whole emulated machine; it owns all emulator state.
+///
+/// Frame buffers are `u32` per pixel in xRGB8888 (`0x00RRGGBB`). That is the emulator's
+/// host-side output format, not a hardware fact (`docs/hw/display.md`).
+///
+/// Load a savestate only through [`Machine::load_state`]; deserializing a `Machine` directly
+/// skips its checks and leaves the derived page table empty.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Machine {
+    // Invariant: each buffer holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels. They are
+    // `Vec`s because serde does not derive for arrays this large. The buffers are derived
+    // output, not savestate data: they are skipped on save, and a load recreates them blank
+    // (restoring the invariant) until the next frame is drawn. The savestate format is in
+    // the `savestate` module.
+    #[serde(skip, default = "blank_screen")]
+    pub(crate) top: Vec<u32>,
+    #[serde(skip, default = "blank_screen")]
+    pub(crate) bottom: Vec<u32>,
+    // The ROM image is an input, not machine state: it is skipped on save and a savestate
+    // loads onto a machine that was handed the ROM again, so a savestate never embeds the
+    // (possibly commercial) image (`savestate` module docs). Defaults to empty.
+    // Invariant: `header` is `Some` exactly when `rom` is non-empty; `load_state` keeps it.
+    // Note: `Clone` copies the whole ROM; revisit before rewind and run-ahead (no phase or issue
+    // plans them yet).
+    #[serde(skip)]
+    pub(crate) rom: Vec<u8>,
+    // Frames completed by `run_frame`; plain state, so it is serialized. A savestate
+    // without it is refused, never half-loaded (AGENTS.md §2 rule 5).
+    pub(crate) frame_count: u64,
+    // The ARM9, the RAM both CPUs see and the register devices. Plain data; a savestate lacking
+    // them is refused.
+    pub(crate) arm9: Cpu<true>,
+    pub(crate) memory: Memory,
+    pub(crate) io: Io,
+    // The ARM7 and its clock in master cycles; the scheduler (`docs/hw/scheduler.md`).
+    pub(crate) arm7: Cpu<false>,
+    pub(crate) arm7_clock: u64,
+    pub(crate) scheduler: Scheduler,
+    // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
+    pub(crate) header: Option<Header>,
+}
+
+/// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
+pub type RomError = crate::cart::HeaderError;
+
+/// A black screen of exactly `SCREEN_WIDTH * SCREEN_HEIGHT` pixels.
+fn blank_screen() -> Vec<u32> {
+    vec![0x0000_0000; SCREEN_WIDTH * SCREEN_HEIGHT]
+}
+
+impl Machine {
+    /// Creates a machine with both screens black.
+    ///
+    /// Black is a Phase 0 placeholder value, not the hardware power-on state.
+    pub fn new() -> Self {
+        let mut scheduler = Scheduler::new();
+        scheduler.schedule(HBLANK_START_CYCLES, EventKind::HBlankStart);
+        scheduler.schedule(LINE_CYCLES, EventKind::LineStart);
+        Self {
+            top: blank_screen(),
+            bottom: blank_screen(),
+            rom: Vec::new(),
+            frame_count: 0,
+            arm9: Cpu::new(),
+            memory: Memory::new(),
+            io: Io::new(),
+            arm7: Cpu::new(),
+            arm7_clock: 0,
+            scheduler,
+            header: None,
+        }
+    }
+
+    /// Hands the machine a ROM image, kept verbatim, and direct-boots it.
+    ///
+    /// Loading a ROM starts from power-on: every other piece of state is reset first. This is
+    /// the host API's contract, not hardware behavior. The header is then parsed and the ARM9
+    /// started at its entry point (`docs/hw/direct-boot.md`).
+    ///
+    /// A ROM whose header is invalid is refused with a [`RomError`] and the machine stays in
+    /// the power-on state with no program loaded. A header whose CRC does not match is
+    /// accepted and boots (`docs/hw/cart-header.md`). The image is guest-controlled input and
+    /// never panics the core.
+    pub fn load_rom(&mut self, rom: Vec<u8>) -> Result<(), RomError> {
+        *self = Self::new();
+        let header = crate::cart::parse(&rom)?;
+        crate::hle::boot(
+            &mut self.arm9,
+            &mut self.arm7,
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            &rom,
+            &header,
+        );
+        self.header = Some(header);
+        self.rom = rom;
+        Ok(())
+    }
+
+    /// The parsed header of the booted program, or `None` when no program is booted.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn header(&self) -> Option<&Header> {
+        self.header.as_ref()
+    }
+
+    /// Returns the loaded ROM image; empty until [`Machine::load_rom`] is called.
+    pub fn rom(&self) -> &[u8] {
+        &self.rom
+    }
+
+    /// Runs the machine for one frame: rounds of ARM9, ARM7, events until VCOUNT wraps to line
+    /// 0, which draws the screens and counts the frame (`docs/hw/scheduler.md`,
+    /// `docs/hw/display-timing.md`).
+    ///
+    /// A machine with no booted program (no ROM, or a refused one) runs no CPU and draws
+    /// nothing: the frame only advances the counter and leaves both screens black.
+    // TODO(hw-unverified): the per-frame instruction counts are a model (`docs/hw/scheduler.md`).
+    pub fn run_frame(&mut self) {
+        if self.header.is_none() {
+            self.frame_count = self.frame_count.wrapping_add(1);
+            return;
+        }
+        let started = self.frame_count;
+        while self.frame_count == started {
+            crate::scheduler::run_round(self);
+        }
+    }
+
+    /// Draws both screens from the registers and VRAM as they are now.
+    ///
+    /// Engine A goes to the screen POWCNT1 bit 15 picks; the other screen is a black
+    /// placeholder for engine B (`docs/hw/display-mode-vram.md`).
+    // TODO(phase4): engine B draws its screen.
+    // TODO(phase3): per-scanline drawing replaces the whole-frame render; the line timing it
+    // needs is in `docs/hw/display-timing.md` (#104).
+    pub(crate) fn render_frame(&mut self) {
+        let (engine_a, engine_b) = if self.io.gpu2d().engine_a_on_top() {
+            (&mut self.top, &mut self.bottom)
+        } else {
+            (&mut self.bottom, &mut self.top)
+        };
+        self.io
+            .gpu2d()
+            .render_engine_a(self.memory.vram_a_lcdc(), engine_a);
+        engine_b.fill(crate::gpu2d::BLACK);
+    }
+
+    /// VCOUNT: the current line, 0-262 (`docs/hw/display-timing.md`).
+    // The debugger's IO register panel and the scheduler timeline (#59) will show it.
+    pub fn vcount(&self) -> u16 {
+        self.io.timing().vcount()
+    }
+
+    /// DISPSTAT as the ARM9 reads it.
+    // The debugger's IO register panel will show it.
+    pub fn dispstat9(&self) -> u16 {
+        self.io.timing().dispstat::<true>()
+    }
+
+    /// DISPSTAT as the ARM7 reads it.
+    // The debugger's IO register panel will show it.
+    pub fn dispstat7(&self) -> u16 {
+        self.io.timing().dispstat::<false>()
+    }
+
+    /// Engine A's display registers.
+    // The debugger's IO register panel will show them.
+    pub fn gpu2d(&self) -> &crate::gpu2d::Gpu2d {
+        self.io.gpu2d()
+    }
+
+    /// Returns how many frames [`Machine::run_frame`] has completed.
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
+    }
+
+    /// The ARM9 core.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn arm9(&self) -> &Cpu<true> {
+        &self.arm9
+    }
+
+    /// The ARM7 core.
+    // The debugger's scheduler event timeline (#59) will show it with the scheduler.
+    pub fn arm7(&self) -> &Cpu<false> {
+        &self.arm7
+    }
+
+    /// The ARM7's clock in master cycles (ARM9 cycles).
+    pub fn arm7_clock(&self) -> u64 {
+        self.arm7_clock
+    }
+
+    /// The master clock and the pending events.
+    // The debugger's scheduler event timeline (#59) will show it.
+    pub fn scheduler(&self) -> &crate::scheduler::Scheduler {
+        &self.scheduler
+    }
+
+    /// The RAM both CPUs see.
+    // The debugger's memory viewer (#57) will show it.
+    pub fn memory(&self) -> &Memory {
+        &self.memory
+    }
+
+    /// The register devices: display, interrupt controllers, IPC, timers and DMA.
+    // The debugger's IO register panel will show them.
+    pub fn io(&self) -> &Io {
+        &self.io
+    }
+
+    /// VRAMCNT_A as decoded.
+    // The debugger's VRAM bank map (#58) will show it.
+    pub fn vram_a(&self) -> VramBankState {
+        self.memory.vram_a()
+    }
+
+    /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.
+    // The debugger's memory viewer (#57) shows each CPU's window from it.
+    pub fn wramcnt(&self) -> WramState {
+        self.memory.wramcnt()
+    }
+
+    /// The ARM9's interrupt controller (IME, IE, IF).
+    // The debugger's CPU panel (#56) shows it beside the ARM9's registers.
+    pub fn irq9(&self) -> &InterruptController<true> {
+        self.io.irq9()
+    }
+
+    /// The ARM7's interrupt controller (IME, IE, IF).
+    // The debugger's CPU panel (#56) shows it beside the ARM7's registers.
+    pub fn irq7(&self) -> &InterruptController<false> {
+        self.io.irq7()
+    }
+
+    /// IPCSYNC and the two IPC FIFOs.
+    // The debugger's IPC panel (#56 CPU panel until one exists) shows the sync nibbles, both
+    // FIFOs' contents and the flags of both CPUs.
+    pub fn ipc(&self) -> &crate::io::ipc::Ipc {
+        self.io.ipc()
+    }
+
+    /// The ARM9's four timers.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows each timer's
+    // counter, reload and control; the scheduler timeline (#59) shows their overflow events.
+    pub fn timers9(&self) -> &Timers<true> {
+        self.io.timers9()
+    }
+
+    /// The ARM7's four timers.
+    // The debugger's IO register panel shows them with the ARM9's; the scheduler timeline (#59)
+    // shows their overflow events.
+    pub fn timers7(&self) -> &Timers<false> {
+        self.io.timers7()
+    }
+
+    /// The ARM9's four DMA channels.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
+    // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
+    pub fn dma9(&self) -> &Dma<true> {
+        self.io.dma9()
+    }
+
+    /// The ARM7's four DMA channels.
+    // The debugger's IO register panel shows them with the ARM9's.
+    pub fn dma7(&self) -> &Dma<false> {
+        self.io.dma7()
+    }
+
+    /// Steps the ARM9 by one instruction and advances the master clock by its cost
+    /// (`docs/hw/scheduler.md`, "Debugger single-step").
+    ///
+    /// On a machine with a booted program the ARM7 is then brought up to the new time and any
+    /// event that became due fires, so a debugger stepping across a frame end still draws and
+    /// counts the frame, and the clocks stay consistent for a savestate. A machine with no
+    /// program steps only the ARM9.
+    ///
+    /// The TCM registers are copied into the ARM9's bus view first, so a CP15 write takes effect
+    /// from the next instruction (`docs/hw/arm9-memory-map.md`).
+    ///
+    /// A step that meets an asserted IRQ line with CPSR I clear only enters the IRQ vector; the
+    /// instruction that would have run is not executed (`docs/hw/interrupts.md`, "Behavior").
+    // TODO(hw-unverified): opcodes already in the pipeline keep the mapping they were fetched
+    // under (`docs/hw/arm9-memory-map.md`, "Unverified").
+    pub fn step_arm9(&mut self) {
+        self.step_arm9_instruction();
+        if self.header.is_some() {
+            crate::scheduler::settle(self);
+        }
+    }
+
+    /// One ARM9 instruction and its cost, with nothing else. If the controller's line was
+    /// asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
+    /// costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ source.
+    // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
+    // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
+    fn step_arm9_instruction(&mut self) {
+        let irq = self.io.irq9().line();
+        let now = self.scheduler.now();
+        let tcm = TcmConfig::from_cp15(self.arm9.cp15());
+        let mut view = Arm9View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            tcm,
+            now,
+        );
+        if !self.arm9.take_interrupt(&mut view, irq, false) {
+            self.arm9.step(&mut view);
+        }
+        self.scheduler.advance(ARM9_INSTRUCTION_COST);
+    }
+
+    /// One ARM7 instruction and its cost, with nothing else; the IRQ entry takes its place as in
+    /// [`Machine::step_arm9_instruction`].
+    // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
+    // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
+    pub(crate) fn step_arm7_instruction(&mut self) {
+        let irq = self.io.irq7().line();
+        let mut view = Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            self.arm7_clock,
+        );
+        if !self.arm7.take_interrupt(&mut view, irq, false) {
+            self.arm7.step(&mut view);
+        }
+        self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
+    }
+
+    /// Reads `N` bytes as the ARM9 data bus would, without side effects: IPCFIFORECV shows its
+    /// next word without taking it, and nothing needs the scheduler.
+    fn arm9_peek<const N: usize>(&self, addr: u32) -> [u8; N] {
+        crate::bus::peek::<true, N>(
+            &self.memory,
+            &self.io,
+            &TcmConfig::from_cp15(self.arm9.cp15()),
+            self.scheduler.now(),
+            addr,
+        )
+    }
+
+    /// Reads a byte as the ARM9 data bus would, without side effects.
+    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
+    pub fn arm9_peek8(&self, addr: u32) -> u8 {
+        u8::from_le_bytes(self.arm9_peek(addr))
+    }
+
+    /// Reads a halfword as the ARM9 data bus would, without side effects.
+    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
+    pub fn arm9_peek16(&self, addr: u32) -> u16 {
+        u16::from_le_bytes(self.arm9_peek(addr))
+    }
+
+    /// Reads a word as the ARM9 data bus would, without side effects.
+    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
+    pub fn arm9_peek32(&self, addr: u32) -> u32 {
+        u32::from_le_bytes(self.arm9_peek(addr))
+    }
+
+    /// Returns the pixels of one screen, row by row, as xRGB8888.
+    pub fn frame(&self, screen: Screen) -> &[u32] {
+        match screen {
+            Screen::Top => &self.top,
+            Screen::Bottom => &self.bottom,
+        }
+    }
+}
+
+impl Participants for Machine {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        &mut self.scheduler
+    }
+
+    fn run_arm9_until(&mut self, target: u64) {
+        // An instruction can queue an event before `target` (a timer write, #109); stop at it so
+        // it sees every earlier instruction and none after (`scheduler.md`, "Interleaving").
+        // See #118. `next_time` is a heap peek: O(1), no allocation.
+        while self.scheduler.now() < target
+            && self
+                .scheduler
+                .next_time()
+                .is_none_or(|time| self.scheduler.now() < time)
+        {
+            self.step_arm9_instruction();
+        }
+    }
+
+    fn run_arm7_until(&mut self, target: u64) {
+        while self.arm7_clock < target {
+            self.step_arm7_instruction();
+        }
+    }
+
+    fn dispatch(&mut self, event: Event) {
+        match event.kind {
+            EventKind::LineStart => self.line_started(event.time),
+            EventKind::HBlankStart => self.hblank_started(event.time),
+            EventKind::TimerOverflow { .. } | EventKind::DmaStart { .. } => {
+                if let Some(transfer) = self.io.fire(&mut self.scheduler, event.kind) {
+                    self.run_dma(transfer);
+                }
+            }
+        }
+    }
+}
+
+impl Machine {
+    /// Runs a DMA transfer through the owning CPU's bus view with the TCM switched off: DMA
+    /// cannot reach it (`docs/hw/dma.md`, "Transferring"). The view is the CPU's own, so the
+    /// units reach RAM, VRAM and the I/O registers (the DMA registers too) as an instruction's
+    /// accesses would. The channel then repeats or ends and raises its IRQ.
+    ///
+    /// The transfer is atomic: all units move at the event's master time and neither CPU stalls.
+    /// An ARM7 start comes late by what the ARM7 lags the master clock, under one slice.
+    // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
+    // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
+    // revisit with #115.
+    fn run_dma(&mut self, transfer: crate::io::dma::Transfer) {
+        let now = self.scheduler.now();
+        let end = if transfer.arm9 {
+            let mut view = Arm9View::new(
+                &mut self.memory,
+                &mut self.io,
+                &mut self.scheduler,
+                // TODO(hw-unverified): DMA sees the address behind a TCM window, not a hole
+                // (`docs/hw/dma.md`, "Unverified").
+                TcmConfig::NONE,
+                now,
+            );
+            transfer.run(&mut view)
+        } else {
+            let mut view = Arm7View::new(
+                &mut self.memory,
+                &mut self.io,
+                &mut self.scheduler,
+                self.arm7_clock,
+            );
+            transfer.run(&mut view)
+        };
+        self.io.dma_finished(&transfer, end);
+    }
+
+    /// A line begins at `time` (`docs/hw/display-timing.md`). VBlank starts here too, when the
+    /// line is the first blank one; this is the one place for it.
+    ///
+    /// The start of line 0 ends the frame: the screens are drawn and the frame is counted.
+    ///
+    /// The first blank line also starts the VBlank-start DMA channels (`docs/hw/dma.md`,
+    /// "Starting").
+    // TODO(phase3): the IntrWait VBlank wait (#27) hooks in here.
+    fn line_started(&mut self, time: u64) {
+        let requests = self.io.timing_mut().line_started();
+        self.io.request_irq(requests);
+        if self.io.timing().vcount() == FIRST_VBLANK_LINE {
+            self.io
+                .trigger_dma(&mut self.scheduler, Trigger::VBlank, time);
+        }
+        if self.io.timing().vcount() == 0 {
+            self.render_frame();
+            self.frame_count = self.frame_count.wrapping_add(1);
+        }
+        // From the event's own time, not `now`, so a line's length never drifts.
+        self.scheduler
+            .schedule(time.saturating_add(LINE_CYCLES), EventKind::LineStart);
+    }
+
+    /// HBlank begins at `time` in the current line (`docs/hw/display-timing.md`); the one place
+    /// for it. In a visible line it starts the HBlank-start DMA channels (`docs/hw/dma.md`,
+    /// "Starting").
+    // TODO(hw-unverified): no HBlank-start DMA in the blank lines (`docs/hw/dma.md`, "Unverified").
+    fn hblank_started(&mut self, time: u64) {
+        let requests = self.io.timing_mut().hblank_started();
+        self.io.request_irq(requests);
+        if self.io.timing().vcount() < FIRST_VBLANK_LINE {
+            self.io
+                .trigger_dma(&mut self.scheduler, Trigger::HBlank, time);
+        }
+        self.scheduler
+            .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
+    }
+}
+
+impl Default for Machine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod testing;
+#[cfg(test)]
+mod tests;

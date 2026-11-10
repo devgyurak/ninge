@@ -11,9 +11,9 @@
 //! The programs are `b .` on both CPUs. `run_to(t)` runs rounds until the master clock is `t`;
 //! the events due at `t` have fired when it returns (`scheduler.md`, "Interleaving").
 
-use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::machine::*;
 use crate::scheduler::{EventKind, FRAME_CYCLES, SLICE, run_round};
 
 const LINE: u64 = 4_260;

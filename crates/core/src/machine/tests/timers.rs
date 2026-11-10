@@ -10,10 +10,10 @@
 //! A timer started at master time `T` with reload `0xFFF0` at F/1 overflows at `T + 16 * 2`. The
 //! programs are `b .`-style spins, so nothing else touches the timers.
 
-use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::timers::TM0CNT_L_ADDR;
+use crate::machine::*;
 use crate::savestate::SavestateError;
 use crate::scheduler::{EventKind, LINE_CYCLES, SLICE, run_round};
 

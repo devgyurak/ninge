@@ -6,9 +6,9 @@
 //! never from running the code. Opcodes are encoded by hand from the ARM ARM, "A3 The ARM
 //! Instruction Set" (data-processing and single-data-transfer formats, condition AL).
 
-use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
+use crate::machine::*;
 use crate::scheduler::{EventKind, FRAME_CYCLES, HBLANK_START_CYCLES, LINE_CYCLES};
 
 /// Where the ARM9 counting loop keeps its counter, and the ARM7's.

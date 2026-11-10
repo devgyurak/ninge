@@ -21,7 +21,7 @@ const RECV_FULL: u16 = 1 << 9;
 const IF16: u32 = 1 << 16;
 const IF17: u32 = 1 << 17;
 const IF18: u32 = 1 << 18;
-const NONE: Requests = Requests { irq9: 0, irq7: 0 };
+const NONE: Requests = Requests { arm9: 0, arm7: 0 };
 
 /// Writes a halfword to IPCSYNC as CPU `ARM9`, byte by byte as the bus does; returns the requests.
 fn write_sync<const ARM9: bool>(ipc: &mut Ipc, value: u16) -> Requests {
@@ -36,10 +36,7 @@ fn write_half<const ARM9: bool>(ipc: &mut Ipc, addr: u32, value: u16) -> Request
     let [low, high] = value.to_le_bytes();
     let first = ipc.write_byte::<ARM9>(addr, low);
     let second = ipc.write_byte::<ARM9>(addr + 1, high);
-    Requests {
-        irq9: first.irq9 | second.irq9,
-        irq7: first.irq7 | second.irq7,
-    }
+    first.merge(second)
 }
 
 /// Both CPUs with their FIFOs enabled and nothing else set.
@@ -137,8 +134,8 @@ fn given_the_arm9_sends_the_sync_irq_when_the_arm7_enabled_it_then_if16_is_reque
     assert_eq!(
         requests,
         Requests {
-            irq9: 0,
-            irq7: IF16
+            arm9: 0,
+            arm7: IF16
         }
     );
 }
@@ -151,8 +148,8 @@ fn given_the_arm7_sends_the_sync_irq_when_the_arm9_enabled_it_then_if16_is_reque
     assert_eq!(
         requests,
         Requests {
-            irq9: IF16,
-            irq7: 0
+            arm9: IF16,
+            arm7: 0
         }
     );
 }
@@ -545,8 +542,8 @@ fn given_an_empty_send_fifo_when_the_send_empty_irq_is_enabled_then_if17_is_requ
     assert_eq!(
         arm9_cnt(&mut ipc, SEND_IRQ_ENABLE),
         Requests {
-            irq9: IF17,
-            irq7: 0
+            arm9: IF17,
+            arm7: 0
         }
     );
 }
@@ -579,8 +576,8 @@ fn given_a_non_empty_send_fifo_when_the_receiver_takes_the_last_word_then_if17_i
         (
             NONE,
             Requests {
-                irq9: IF17,
-                irq7: 0
+                arm9: IF17,
+                arm7: 0
             }
         )
     );
@@ -603,8 +600,8 @@ fn given_if17_raised_once_when_the_fifo_fills_and_drains_again_then_it_is_raised
     assert_eq!(
         again,
         Requests {
-            irq9: IF17,
-            irq7: 0
+            arm9: IF17,
+            arm7: 0
         }
     );
 }
@@ -618,8 +615,8 @@ fn given_a_non_empty_send_fifo_when_the_sender_clears_it_then_if17_is_requested_
     assert_eq!(
         requests,
         Requests {
-            irq9: IF17,
-            irq7: 0
+            arm9: IF17,
+            arm7: 0
         }
     );
 }
@@ -631,8 +628,8 @@ fn given_the_receive_irq_enabled_when_a_word_arrives_then_if18_is_requested_on_t
     assert_eq!(
         ipc.send::<true>(1),
         Requests {
-            irq9: 0,
-            irq7: IF18
+            arm9: 0,
+            arm7: IF18
         }
     );
 }
@@ -655,8 +652,8 @@ fn given_the_receive_irq_enabled_when_the_fifo_drains_and_a_word_arrives_again_t
     assert_eq!(
         ipc.send::<true>(2),
         Requests {
-            irq9: 0,
-            irq7: IF18
+            arm9: 0,
+            arm7: IF18
         }
     );
 }
@@ -674,8 +671,8 @@ fn given_a_waiting_word_when_the_receive_irq_is_enabled_then_if18_is_requested_u
     assert_eq!(
         write_cnt::<false>(&mut ipc, ENABLE | RECV_IRQ_ENABLE),
         Requests {
-            irq9: 0,
-            irq7: IF18
+            arm9: 0,
+            arm7: IF18
         }
     );
 }

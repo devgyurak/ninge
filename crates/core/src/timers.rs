@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //! One CPU's four timers (`docs/hw/timers.md`).
 //!
-//! Each CPU owns one set at the same addresses; they never see each other. The counter is not
-//! stepped: a running timer stores the counter it had at an origin time and every read works the
-//! value out from the clock it is given (`timers.md`, "Model"). An overflow is a scheduler event;
-//! this module has no way to reach the scheduler or an interrupt controller, so a write or an
-//! overflow hands back an [`Outcome`]: the IF mask it would raise and the mask of timers whose
-//! overflow event must be replaced. `Io` schedules them, asking each timer for its next overflow
-//! ([`Timers::overflow_time`]).
+//! Each CPU owns one set at the same addresses; they never see each other: the "an independent
+//! copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"), two instances of
+//! `Timers<const ARM9: bool>`. The counter is not stepped: a running timer stores the counter it
+//! had at an origin time and every read works the value out from the clock it is given
+//! (`timers.md`, "Model"). An overflow is a scheduler event; this module has no way to reach the
+//! scheduler or an interrupt controller, so a write or an overflow hands back an [`Outcome`]: the
+//! requests it would raise and the mask of timers whose overflow event must be replaced. `Io`
+//! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]).
 
-use crate::irq::{TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
+use crate::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::{EventKind, SLICE};
 use serde::{Deserialize, Serialize};
 
@@ -43,8 +44,8 @@ const PRESCALER_SHIFT: [u32; 4] = [0, 6, 8, 10];
 /// What a register write or an overflow asks of its caller (`timers.md`, "Model").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Outcome {
-    /// The IF bits to raise.
-    pub(crate) requests: u32,
+    /// The IF bits to raise, on this set's CPU.
+    pub(crate) requests: Requests,
     /// Bit n: timer n's schedule changed, so its overflow event must be replaced.
     pub(crate) reschedule: u8,
 }
@@ -53,7 +54,7 @@ impl Outcome {
     /// Both outcomes in one: the requests and the timers to reschedule of each.
     fn merge(self, other: Self) -> Self {
         Self {
-            requests: self.requests | other.requests,
+            requests: self.requests.merge(other.requests),
             reschedule: self.reschedule | other.reschedule,
         }
     }
@@ -188,17 +189,18 @@ impl<const ARM9: bool> Timers<ARM9> {
     }
 
     /// Timer `index` overflows at master time `time`: it reloads, the timers it feeds tick, and
-    /// the IF bits to raise come back (`timers.md`, "Counting" and "Count-up").
+    /// the requests to raise come back, filled for this set's CPU (`timers.md`, "Counting" and
+    /// "Count-up").
     ///
     /// A clock-driven timer's next period starts at `time`, so the grid never drifts.
-    pub(crate) fn overflow(&mut self, index: usize, time: u64) -> u32 {
-        let mut requests = 0;
+    pub(crate) fn overflow(&mut self, index: usize, time: u64) -> Requests {
+        let mut mask = 0;
         let mut index = index;
         while let Some(timer) = self.timers.get_mut(index) {
             timer.counter = timer.reload;
             timer.origin = time;
             if timer.irq_enabled() {
-                requests |= OVERFLOW_IRQ.get(index).copied().unwrap_or(0);
+                mask |= OVERFLOW_IRQ.get(index).copied().unwrap_or(0);
             }
             // The next timer ticks once; it overflows in turn when that passes `FFFFh`.
             index += 1;
@@ -216,7 +218,7 @@ impl<const ARM9: bool> Timers<ARM9> {
                 None => continue,
             }
         }
-        requests
+        Requests::for_cpu::<ARM9>(mask)
     }
 
     /// The byte of the register at `addr`, read at master time `now`, if a timer holds it.
@@ -255,7 +257,7 @@ impl<const ARM9: bool> Timers<ARM9> {
                 0
             };
             return settled.merge(Outcome {
-                requests: 0,
+                requests: Requests::default(),
                 reschedule: retimed,
             });
         }
@@ -286,7 +288,7 @@ impl<const ARM9: bool> Timers<ARM9> {
             let Some(due) = self.overflow_time(index).filter(|&due| due <= now) else {
                 break;
             };
-            outcome.requests |= self.overflow(index, due);
+            outcome.requests = outcome.requests.merge(self.overflow(index, due));
             outcome.reschedule |= 1 << index;
         }
         outcome

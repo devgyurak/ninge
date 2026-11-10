@@ -23,6 +23,7 @@ use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
 use crate::cpu::Bus;
+use crate::irq::Requests;
 
 const ENTRY9: u32 = 0x0200_0000;
 const ENTRY7: u32 = 0x0238_0000;
@@ -110,7 +111,10 @@ struct Setup {
 fn prepared9(s: Setup) -> Machine {
     let mut m = machine();
     enable9(&mut m, u32::from(s.ime), s.ie);
-    m.io.request_irq(s.request, 0);
+    m.io.request_irq(Requests {
+        arm9: s.request,
+        arm7: 0,
+    });
     m.arm9.regs_mut().set_cpsr(if s.i_set {
         SYSTEM_I_SET
     } else {
@@ -123,7 +127,10 @@ fn prepared9(s: Setup) -> Machine {
 fn prepared7(s: Setup) -> Machine {
     let mut m = machine();
     enable7(&mut m, u32::from(s.ime), s.ie);
-    m.io.request_irq(0, s.request);
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: s.request,
+    });
     m.arm7.regs_mut().set_cpsr(if s.i_set {
         SYSTEM_I_SET
     } else {
@@ -469,7 +476,10 @@ fn given_a_request_on_the_arm7_when_both_cpus_run_then_the_arm9_is_never_interru
 fn given_the_same_request_on_both_cpus_with_only_the_arm9_enabled_when_both_run_then_only_the_arm9_enters_irq_mode()
  {
     let mut m = prepared9(ALL_ON);
-    m.io.request_irq(0, TIMER0);
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: TIMER0,
+    });
     m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     // The ARM7's IME is off: its request stays latched.
     m.step_arm9();
@@ -492,8 +502,14 @@ fn given_a_pending_enabled_request_on_each_cpu_when_a_frame_runs_then_both_enter
     let mut m = machine();
     enable9(&mut m, 1, TIMER0);
     enable7(&mut m, 1, TIMER0);
-    m.io.request_irq(TIMER0, 0);
-    m.io.request_irq(0, TIMER0);
+    m.io.request_irq(Requests {
+        arm9: TIMER0,
+        arm7: 0,
+    });
+    m.io.request_irq(Requests {
+        arm9: 0,
+        arm7: TIMER0,
+    });
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m.run_frame();
@@ -533,7 +549,10 @@ fn given_the_arm9_in_thumb_state_when_an_irq_is_taken_then_lr_is_the_next_instru
     m.step_arm9_instruction();
     let thumb_cpsr = m.arm9().regs().cpsr() & !0x80;
     m.arm9.regs_mut().set_cpsr(thumb_cpsr);
-    m.io.request_irq(TIMER0, 0);
+    m.io.request_irq(Requests {
+        arm9: TIMER0,
+        arm7: 0,
+    });
     m.step_arm9_instruction();
     // The Thumb code starts at ENTRY9 + 8; its first instruction did not run (r0 is still the
     // address `bx` jumped through), the CPSR is ARM state in IRQ mode with I set, SPSR_irq holds

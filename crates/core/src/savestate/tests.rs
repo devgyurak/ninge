@@ -12,6 +12,7 @@ use super::*;
 use crate::bus::{Region, VramBankState};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
@@ -917,8 +918,14 @@ fn with_irq_state(frames: u32) -> Machine {
     machine.bus9().write32(IRQ_IME, 0xFFFF_FFFF);
     machine.bus9().write32(IRQ_IE, 0xFFFF_FFFF);
     machine.bus7(0).write32(IRQ_IE, 1 << 7 | 1 << 16);
-    machine.io.request_irq(0b1001, 0);
-    machine.io.request_irq(0, 1 << 7 | 1 << 24);
+    machine.io.request_irq(Requests {
+        arm9: 0b1001,
+        arm7: 0,
+    });
+    machine.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 1 << 7 | 1 << 24,
+    });
     machine
 }
 
@@ -972,8 +979,14 @@ fn given_a_state_with_interrupt_registers_when_loaded_over_a_machine_with_others
  {
     let saved = with_irq_state(1);
     let mut target = booted(&counter_rom(), 0);
-    target.io.request_irq(1 << 16, 0);
-    target.io.request_irq(0, 1 << 8);
+    target.io.request_irq(Requests {
+        arm9: 1 << 16,
+        arm7: 0,
+    });
+    target.io.request_irq(Requests {
+        arm9: 0,
+        arm7: 1 << 8,
+    });
     let result = target.load_state(&saved.save_state());
     assert_eq!((result, irq_state(&target)), (Ok(()), IRQ_STATE));
 }

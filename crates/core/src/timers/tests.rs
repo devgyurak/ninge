@@ -86,6 +86,11 @@ const IF1: u32 = 1 << 4;
 const IF2: u32 = 1 << 5;
 const IF3: u32 = 1 << 6;
 
+/// What an ARM9 timer set returns for the IF `mask`: the ARM9 side only (`AGENTS.md` §4).
+fn nine(mask: u32) -> Requests {
+    Requests::for_cpu::<true>(mask)
+}
+
 // ------------------------------------------------------------------ overflow time per prescaler
 
 /// For each prescaler, the overflow time of a timer started at `at` with `reload`, against
@@ -313,7 +318,7 @@ fn given_an_overflow_when_it_is_processed_then_the_counter_is_the_reload_and_the
 #[test]
 fn given_irq_enable_set_when_the_timer_overflows_then_its_if_bit_is_requested() {
     let mut timers = timer0(0xFFF0, START | IRQ, 0);
-    assert_eq!(timers.overflow(0, 32), IF0);
+    assert_eq!(timers.overflow(0, 32), nine(IF0));
 }
 
 #[test]
@@ -323,20 +328,20 @@ fn given_irq_enable_clear_when_the_timer_overflows_then_nothing_is_requested_but
     let requests = timers.overflow(0, 32);
     assert_eq!(
         (requests, timers.counter(0, 40), timers.overflow_time(0)),
-        (0, 0xFFF4, Some(64))
+        (nine(0), 0xFFF4, Some(64))
     );
 }
 
 #[test]
 fn given_each_timer_with_irq_enabled_when_it_overflows_then_it_requests_if_bit_3_plus_its_index() {
-    let requests: Vec<u32> = (0..4u32)
+    let requests: Vec<Requests> = (0..4u32)
         .map(|n| {
             let mut timers = Arm9Timers::new();
             start(&mut timers, n, 0xFFF0, START | IRQ, 0);
             timers.overflow(n as usize, 32)
         })
         .collect();
-    assert_eq!(requests, vec![IF0, IF1, IF2, IF3]);
+    assert_eq!(requests, vec![nine(IF0), nine(IF1), nine(IF2), nine(IF3)]);
 }
 
 // ---------------------------------------------------------------------------------- cascade
@@ -345,7 +350,7 @@ fn given_each_timer_with_irq_enabled_when_it_overflows_then_it_requests_if_bit_3
 fn given_four_chained_timers_at_ffff_with_irqs_when_timer_0_overflows_then_all_four_overflow_in_one_call()
  {
     let mut timers = chain([true; 4], [0xFFFF; 4]);
-    assert_eq!(timers.overflow(0, 2), IF0 | IF1 | IF2 | IF3);
+    assert_eq!(timers.overflow(0, 2), nine(IF0 | IF1 | IF2 | IF3));
 }
 
 #[test]
@@ -360,14 +365,14 @@ fn given_four_chained_timers_at_ffff_when_timer_0_overflows_then_each_reloads() 
 fn given_a_chained_timer_with_irq_clear_when_timer_0_overflows_then_it_cascades_without_requesting()
 {
     let mut timers = chain([true, false, true, true], [0xFFFF; 4]);
-    assert_eq!(timers.overflow(0, 2), IF0 | IF2 | IF3);
+    assert_eq!(timers.overflow(0, 2), nine(IF0 | IF2 | IF3));
 }
 
 #[test]
 fn given_timer_0_with_irq_clear_when_it_overflows_then_the_chain_still_runs_and_requests_its_own_irqs()
  {
     let mut timers = chain([false, true, true, true], [0xFFFF; 4]);
-    assert_eq!(timers.overflow(0, 2), IF1 | IF2 | IF3);
+    assert_eq!(timers.overflow(0, 2), nine(IF1 | IF2 | IF3));
 }
 
 #[test]
@@ -376,11 +381,14 @@ fn given_a_count_up_timer_below_ffff_when_timer_0_overflows_then_it_adds_one_and
     let requests = timers.overflow(0, 2);
     let counters: Vec<u16> = (0..4).map(|n| timers.counter(n, 2)).collect();
     // Timer 1 started at its reload 0 and now holds 1; timers 2 and 3 saw nothing.
-    assert_eq!((requests, counters), (IF0, vec![0xFFFF, 1, 0xFFFF, 0xFFFF]));
+    assert_eq!(
+        (requests, counters),
+        (nine(IF0), vec![0xFFFF, 1, 0xFFFF, 0xFFFF])
+    );
 }
 
-/// Timer 1 counts up from `0xFFFD`; timer 0 overflows `times` times. Returns each call's IF mask.
-fn masks_over_successive_overflows(times: u64) -> Vec<u32> {
+/// Timer 1 counts up from `0xFFFD`; timer 0 overflows `times` times. Returns each call's requests.
+fn masks_over_successive_overflows(times: u64) -> Vec<Requests> {
     let mut timers = chain([true; 4], [0xFFF0, 0xFFFD, 0x0000, 0x0000]);
     (1..=times).map(|k| timers.overflow(0, 32 * k)).collect()
 }
@@ -390,7 +398,7 @@ fn given_a_count_up_timer_at_fffd_when_timer_0_overflows_three_times_then_only_t
  {
     assert_eq!(
         masks_over_successive_overflows(3),
-        vec![IF0, IF0, IF0 | IF1]
+        vec![nine(IF0), nine(IF0), nine(IF0 | IF1)]
     );
 }
 
@@ -421,7 +429,7 @@ fn given_a_count_up_timer_that_is_stopped_when_the_previous_timer_overflows_then
     // Timer 1: count-up and IRQ enable but never started.
     start(&mut timers, 1, 0xFFFF, COUNT_UP | IRQ, 0);
     let requests = timers.overflow(0, 32);
-    assert_eq!((requests, timers.counter(1, 32)), (IF0, 0));
+    assert_eq!((requests, timers.counter(1, 32)), (nine(IF0), 0));
 }
 
 #[test]
@@ -432,7 +440,7 @@ fn given_a_stopped_middle_timer_when_timer_0_overflows_then_the_chain_does_not_p
     start(&mut timers, 2, 0xFFFF, START | COUNT_UP | IRQ, 0);
     let requests = timers.overflow(0, 32);
     // Timer 2 would overflow on its first tick; it never gets one.
-    assert_eq!((requests, timers.counter(2, 32)), (IF0, 0xFFFF));
+    assert_eq!((requests, timers.counter(2, 32)), (nine(IF0), 0xFFFF));
 }
 
 #[test]
@@ -443,20 +451,20 @@ fn given_a_clock_driven_next_timer_when_timer_0_overflows_then_it_is_not_ticked(
     let requests = timers.overflow(0, 32);
     assert_eq!(
         (requests, timers.counter(1, 0), timers.overflow_time(1)),
-        (IF0, 0xFFF0, Some(32))
+        (nine(IF0), 0xFFF0, Some(32))
     );
 }
 
 #[test]
 fn given_timer_3_when_it_overflows_then_only_its_own_irq_is_requested() {
     let mut timers = chain([true; 4], [0xFFF0, 0xFFF0, 0xFFF0, 0xFFF0]);
-    assert_eq!(timers.overflow(3, 100), IF3);
+    assert_eq!(timers.overflow(3, 100), nine(IF3));
 }
 
 #[test]
 fn given_a_timer_index_past_the_last_when_overflow_is_processed_then_nothing_is_requested() {
     let mut timers = chain([true; 4], [0xFFFF; 4]);
-    assert_eq!(timers.overflow(4, 100), 0);
+    assert_eq!(timers.overflow(4, 100), nine(0));
 }
 
 #[test]
@@ -594,7 +602,7 @@ fn given_irq_enable_changed_on_a_running_timer_when_written_then_the_counter_ori
 fn given_irq_enable_set_after_start_when_the_timer_overflows_then_the_irq_is_requested() {
     let mut timers = timer0(0xFFF0, START, 0);
     write16(&mut timers, control_addr(0), START | IRQ, 10);
-    assert_eq!(timers.overflow(0, 32), IF0);
+    assert_eq!(timers.overflow(0, 32), nine(IF0));
 }
 
 // ------------------------------------------------------------------ 32-bit write ordering

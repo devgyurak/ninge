@@ -461,3 +461,44 @@ fn given_every_byte_of_the_three_registers_when_read_then_each_answers() {
         .collect();
     assert_eq!(silent, Vec::<u32>::new());
 }
+
+#[test]
+fn given_two_requests_when_merged_then_each_cpus_mask_is_ored() {
+    let merged = Requests {
+        arm9: 0b0011,
+        arm7: 0b0100,
+    }
+    .merge(Requests {
+        arm9: 0b0110,
+        arm7: 0b1000,
+    });
+    assert_eq!(
+        merged,
+        Requests {
+            arm9: 0b0111,
+            arm7: 0b1100,
+        }
+    );
+}
+
+#[test]
+fn given_a_mask_when_built_for_the_arm9_then_only_the_arm9_side_is_filled() {
+    assert_eq!(
+        Requests::for_cpu::<true>(TIMER0_IRQ),
+        Requests {
+            arm9: TIMER0_IRQ,
+            arm7: 0,
+        }
+    );
+}
+
+#[test]
+fn given_a_mask_when_built_for_the_arm7_then_only_the_arm7_side_is_filled() {
+    assert_eq!(
+        Requests::for_cpu::<false>(TIMER0_IRQ),
+        Requests {
+            arm9: 0,
+            arm7: TIMER0_IRQ,
+        }
+    );
+}

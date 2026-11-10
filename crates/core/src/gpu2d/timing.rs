@@ -5,8 +5,12 @@
 //! The scheduler fires one event at the start of every line and one at the point in the line
 //! where HBlank begins; this module holds what those events change and says which interrupt
 //! requests they raise. The machine delivers the requests.
+//!
+//! One instance serves both CPUs: VCOUNT is shared and DISPSTAT is one per CPU, so the accessors
+//! are generic over which CPU asks. That is the "seen by both CPUs" class of `AGENTS.md` §4
+//! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
-use crate::irq::{HBLANK_IRQ, VBLANK_IRQ, VCOUNT_IRQ};
+use crate::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use serde::{Deserialize, Serialize};
 
 /// DISPSTAT, at `0400_0004h` (`display-timing.md`, "Registers").
@@ -50,13 +54,6 @@ pub const WRITABLE: u16 = VBLANK_IRQ_ENABLE
     | VCOUNT_IRQ_ENABLE
     | SETTING_MSB
     | (0xFF << SETTING_LOW_SHIFT);
-
-/// The interrupt requests a display event raises, as IF masks for each CPU.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Requests {
-    pub(crate) arm9: u32,
-    pub(crate) arm7: u32,
-}
 
 /// One CPU's DISPSTAT: what it wrote, and its own VCount-match flag, which follows its own
 /// setting (`display-timing.md`, "Flags").

@@ -105,7 +105,7 @@ fn cpu_in(cpsr: u32) -> Cpu<false> {
 fn step_op(cpu: &mut Cpu<false>, opcode: u32) {
     cpu.regs_mut().set(15, ADDR + 8);
     cpu.set_pipeline([opcode, 0]);
-    cpu.step(&mut FixedBus(0));
+    let _ = cpu.step(&mut FixedBus(0));
 }
 
 /// Sets the listed visible registers, then runs `opcode`.
@@ -1116,7 +1116,7 @@ fn arm9_after(setup: &[(usize, u32)], opcode: u32, flags: u32) -> (u32, u32) {
     setup.iter().for_each(|&(i, v)| cpu.regs_mut().set(i, v));
     cpu.regs_mut().set(15, ADDR + 8);
     cpu.set_pipeline([opcode, 0]);
-    cpu.step(&mut FixedBus(0));
+    let _ = cpu.step(&mut FixedBus(0));
     (cpu.regs().get(4), cpu.regs().cpsr())
 }
 

@@ -213,7 +213,7 @@ fn run<const A: bool>(
     cpu.regs_mut().set(15, PC_READ);
     cpu.set_pipeline([opcode, 0]);
     let mut bus = LogBus::new(mem);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     (cpu, bus.log)
 }
 
@@ -1084,7 +1084,7 @@ fn stm_user_r13<const A: bool>() -> (Vec<Access>, u32) {
     cpu.regs_mut().set(15, PC_READ);
     cpu.set_pipeline([blk(0, 1, 1, 0, 0, 0, 1 << 13), 0]);
     let mut bus = LogBus::new(&[]);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     (bus.log, cpu.regs().get(13))
 }
 
@@ -1107,7 +1107,7 @@ fn ldm_user_r13<const A: bool>() -> (u32, u32) {
     cpu.regs_mut().set(15, PC_READ);
     cpu.set_pipeline([blk(0, 1, 1, 0, 1, 0, 1 << 13), 0]);
     let mut bus = LogBus::new(&[(0x2000, 0xAAAA_0001)]);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     (cpu.regs().banked(Bank::UserSystem, 13), cpu.regs().get(13))
 }
 
@@ -1130,7 +1130,7 @@ fn stm_user_r8<const A: bool>() -> Vec<Access> {
     cpu.regs_mut().set(15, PC_READ);
     cpu.set_pipeline([blk(0, 1, 1, 0, 0, 0, 1 << 8), 0]);
     let mut bus = LogBus::new(&[]);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     bus.log
 }
 
@@ -1152,7 +1152,7 @@ fn ldm_pc_with_s<const A: bool>() -> (u32, u32, Bank) {
     cpu.regs_mut().set(15, PC_READ);
     cpu.set_pipeline([blk(0, 1, 1, 0, 1, 0, 0x8000), 0]);
     let mut bus = LogBus::new(&[(0x2000, 0x0000_4000)]);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     (cpu.regs().cpsr(), cpu.regs().get(15), cpu.regs().bank())
 }
 

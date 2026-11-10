@@ -85,7 +85,7 @@ fn exec_with(cpsr: u32, setup: &[(usize, u32)], data: u32, opcode: u32) -> Stepp
         fetches: Vec::new(),
         data,
     };
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     Stepped {
         cpu,
         fetches: bus.fetches,
@@ -407,7 +407,7 @@ fn given_ldm_pc_with_s_and_a_thumb_spsr_when_executed_then_it_refills_as_thumb()
         fetches: Vec::new(),
         data: 0x2001,
     };
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     assert_eq!(
         (cpu.regs().get(15), cpu.pipeline(), bus.fetches),
         (

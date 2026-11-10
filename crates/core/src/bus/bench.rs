@@ -5,7 +5,7 @@
 //! ARM7's view), so each case stays the scenario it was.
 
 use super::{Arm7View, Arm9View, Memory, Region, TcmConfig, VramBankState, WramState};
-use crate::cpu::Bus;
+use crate::cpu::{ARM9_INSTRUCTION_COST, Bus};
 use crate::io::Io;
 use crate::io::irq::InterruptController;
 use crate::scheduler::Scheduler;
@@ -36,12 +36,20 @@ impl Bench {
             &mut self.scheduler,
             tcm,
             now,
+            now.saturating_add(ARM9_INSTRUCTION_COST),
         )
     }
 
     /// The ARM7's view at its own clock `now`.
     pub(crate) fn arm7(&mut self, now: u64) -> Arm7View<'_> {
-        Arm7View::new(&mut self.memory, &mut self.io, &mut self.scheduler, now)
+        let floor = self.scheduler.now();
+        Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            now,
+            floor,
+        )
     }
 
     fn peek9<const N: usize>(&self, tcm: &TcmConfig, addr: u32) -> [u8; N] {

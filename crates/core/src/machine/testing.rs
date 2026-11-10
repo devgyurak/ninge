@@ -3,6 +3,7 @@
 //! the machine's fields, so a register write schedules its timers like a real instruction's does.
 
 use crate::bus::{Arm7View, Arm9View, TcmConfig};
+use crate::cpu::ARM9_INSTRUCTION_COST;
 use crate::machine::Machine;
 
 impl Machine {
@@ -16,12 +17,20 @@ impl Machine {
             &mut self.scheduler,
             tcm,
             now,
+            now.saturating_add(ARM9_INSTRUCTION_COST),
         )
     }
 
     /// The ARM7's bus at its own clock `now`.
     pub(crate) fn bus7(&mut self, now: u64) -> Arm7View<'_> {
-        Arm7View::new(&mut self.memory, &mut self.io, &mut self.scheduler, now)
+        let floor = self.scheduler.now();
+        Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            now,
+            floor,
+        )
     }
 
     /// A byte as the ARM7 would read it at its clock `now`, without side effects.

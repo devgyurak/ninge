@@ -662,14 +662,16 @@ pub fn run_case_with<const ARM9: bool>(
 
 /// Runs one case with [`Cpu::step`] as the step.
 pub fn run_case<const ARM9: bool>(case: &Case) -> Vec<FieldDiff> {
-    run_case_with::<ARM9>(case, |cpu, bus| cpu.step(bus))
+    run_case_with::<ARM9>(case, |cpu, bus| {
+        let _ = cpu.step(bus);
+    })
 }
 
 /// What one case does between loading and comparing; [`Cpu::step`] outside of tests.
 type StepFn<const ARM9: bool> = fn(&mut Cpu<ARM9>, &mut ReplayBus);
 
 fn step_cpu<const ARM9: bool>(cpu: &mut Cpu<ARM9>, bus: &mut ReplayBus) {
-    cpu.step(bus);
+    let _ = cpu.step(bus);
 }
 
 /// Runs every case in decoded `cases`; `file` only labels the diffs.

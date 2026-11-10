@@ -325,6 +325,14 @@ fn given_booted_machine_when_stepping_the_arm9_once_then_the_arm7_ran_one_instru
 }
 
 #[test]
+fn given_booted_machine_when_the_arm7_steps_one_instruction_then_its_clock_advances_by_two_and_now_is_unchanged()
+ {
+    let mut machine = booted(&counting_rom());
+    machine.step_arm7_instruction();
+    assert_eq!((machine.arm7_clock(), machine.scheduler().now()), (2, 0));
+}
+
+#[test]
 fn given_booted_machine_when_stepping_the_arm9_four_times_then_the_arm7_clock_equals_now() {
     let mut machine = booted(&counting_rom());
     step(&mut machine, 4);

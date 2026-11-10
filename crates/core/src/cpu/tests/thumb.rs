@@ -117,7 +117,9 @@ fn run(addr: u32, cpsr: u32, setup: &[(usize, u32)], data: u32, opcodes: &[u16])
     let following = opcodes.get(1).map_or(NEXT, |&o| u32::from(o));
     cpu.set_pipeline([u32::from(opcodes[0]), following]);
     let mut bus = RecBus::new(data);
-    opcodes.iter().for_each(|_| cpu.step(&mut bus));
+    opcodes.iter().for_each(|_| {
+        let _ = cpu.step(&mut bus);
+    });
     Stepped { cpu, bus }
 }
 
@@ -922,7 +924,7 @@ fn exec_arm9(setup: &[(usize, u32)], data: u32, opcode: u16) -> (Cpu<true>, RecB
     cpu.regs_mut().set(15, PC_READ);
     cpu.set_pipeline([u32::from(opcode), NEXT]);
     let mut bus = RecBus::new(data);
-    cpu.step(&mut bus);
+    let _ = cpu.step(&mut bus);
     (cpu, bus)
 }
 

@@ -22,12 +22,6 @@ pub const FRAME_CYCLES: u64 = 263 * LINE_CYCLES;
 /// "Interleaving"). A model choice, not a hardware fact.
 // TODO(hw-unverified): see `scheduler.md`, "Unverified". Decided in #102.
 pub const SLICE: u64 = 64;
-/// Master cycles one ARM9 instruction costs (`scheduler.md`, "Cost per instruction").
-// TODO(hw-unverified): ignores waitstates and multi-cycle instructions (`scheduler.md`, "Unverified").
-pub const ARM9_INSTRUCTION_COST: u64 = 1;
-/// Master cycles one ARM7 instruction costs (`scheduler.md`, "Cost per instruction").
-// TODO(hw-unverified): ignores waitstates and multi-cycle instructions (`scheduler.md`, "Unverified").
-pub const ARM7_INSTRUCTION_COST: u64 = 2;
 /// Events the queue holds without growing: a line start, an HBlank start, eight timers and eight
 /// DMA starts. Reserved up front so scheduling on the hot path does not allocate.
 const EVENT_CAPACITY: usize = 24;

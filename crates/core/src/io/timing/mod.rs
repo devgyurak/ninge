@@ -11,7 +11,7 @@
 //! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
-use crate::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
+use crate::io::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use serde::{Deserialize, Serialize};
 
 /// DISPSTAT, at `0400_0004h` (`display-timing.md`, "Registers").

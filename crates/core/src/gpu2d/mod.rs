@@ -11,8 +11,6 @@
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
-pub mod timing;
-
 /// DISPCNT of engine A, at `0400_0000h` (`display-mode-vram.md`, "Registers").
 pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;
 /// POWCNT1, at `0400_0304h` (`display-mode-vram.md`, "Registers").

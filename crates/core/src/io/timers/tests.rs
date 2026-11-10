@@ -772,7 +772,7 @@ fn given_unused_control_bits_written_when_a_timer_is_started_then_it_still_runs_
 
 // ----------------------------------------------------------------------- the register block
 
-// Which addresses reach the timers at all is the I/O map's to say (`io.rs` tests); what is left
+// Which addresses reach the timers at all is the I/O map's to say (`io/tests.rs`); what is left
 // to them is the 16 bytes of the block and what lies just past it in their own offset space.
 
 /// The offsets in the block whose power-on byte is not 0.

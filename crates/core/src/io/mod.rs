@@ -5,30 +5,35 @@
 //! bus view can borrow memory, devices and the scheduler at once: a register write that changes a
 //! device's schedule schedules it on the spot.
 //!
-//! [`map`] decodes an address to the [`map::Owner`] that holds it and [`device`] defines the one
-//! interface a device speaks, [`device::Device`]. `Io`, here, owns the devices and calls the
-//! concrete type behind a [`map::Port`] through one `match` that lives in `device_call!`: static
-//! dispatch, no `dyn` (`AGENTS.md` §2 rule 3). A device depends on [`device`] and never on `Io`.
+//! `map` decodes an address to the `Owner` that holds it and `device` defines the one interface a
+//! device speaks, `Device`. `Io`, here, owns the devices and calls the concrete type behind a
+//! `Port` through one `match` that lives in `device_call!`: static dispatch, no `dyn`
+//! (`AGENTS.md` §2 rule 3). A device depends on `device` and never on `Io`.
 //!
-//! Every IF bit a device raises goes through [`Io::request_irq`], the one path to the two
-//! controllers. A device returns what it would raise in an [`device::Effect`]; it never reaches a
+//! Every IF bit a device raises goes through `Io::request_irq`, the one path to the two
+//! controllers. A device returns what it would raise in an `Effect`; it never reaches a
 //! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
 pub(crate) mod device;
+pub mod dma;
+pub mod ipc;
+pub mod irq;
 pub(crate) mod map;
 #[cfg(test)]
 mod tests;
+pub mod timers;
+pub mod timing;
 
-use crate::dma::{Dma, End, Transfer, Trigger};
 use crate::gpu2d::Gpu2d;
-use crate::gpu2d::timing::Timing;
-use crate::ipc::Ipc;
-use crate::irq::{InterruptController, Requests};
 use crate::scheduler::{EventKind, Scheduler};
-use crate::timers::Timers;
 use device::{Device, Effect, Fired, Width};
+use dma::{Dma, End, Transfer, Trigger};
+use ipc::Ipc;
+use irq::{InterruptController, Requests};
 use map::Port;
 use serde::{Deserialize, Serialize};
+use timers::Timers;
+use timing::Timing;
 
 /// `&$place` for `ref` and `&mut $place` for `mut`: lets [`device_call`] borrow a device either way.
 macro_rules! borrow {

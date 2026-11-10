@@ -17,7 +17,7 @@
 use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
-use crate::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
+use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
 use crate::scheduler::{LINE_CYCLES, run_round};
 
 const SRC: u32 = 0x0220_0000;
@@ -827,7 +827,7 @@ fn given_a_fill_register_when_a_dma_uses_it_as_a_fixed_source_then_the_fill_word
 fn given_a_fill_word_written_by_the_arm9_when_the_arm7_dma_reads_that_address_then_it_reads_zero_unverified()
  {
     // The fill block is not on the ARM7's bus (`dma.md`, "Registers"); an unmapped I/O address
-    // reads 0 in this model (`io.rs`, `decode`).
+    // reads 0 in this model (`io/map.rs`, `decode`).
     let mut m = machine();
     m.bus9().write32(fill_addr(0), 0xDEAD_BEEF);
     poke_words(&mut m, DST, &[0xFFFF_FFFF]);

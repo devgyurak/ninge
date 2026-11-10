@@ -12,8 +12,8 @@
 use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
-use crate::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYNC_ADDR};
-use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, SEND_EMPTY_IRQ};
+use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYNC_ADDR};
+use crate::io::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, SEND_EMPTY_IRQ};
 
 const ENTRY7: u32 = 0x0238_0000;
 const ENABLE: u16 = 1 << 15;
@@ -273,7 +273,8 @@ fn given_if18_acknowledged_while_the_condition_holds_when_a_second_word_arrives_
     let mut m = enabled();
     m.bus7(0).write16(IPCFIFOCNT_ADDR, ENABLE | RECV_IRQ_ENABLE);
     send9(&mut m, &[1]);
-    m.bus7(0).write32(crate::irq::IF_ADDR, RECV_NOT_EMPTY_IRQ);
+    m.bus7(0)
+        .write32(crate::io::irq::IF_ADDR, RECV_NOT_EMPTY_IRQ);
     send9(&mut m, &[2]);
     assert_eq!(m.irq7().if_(), 0);
 }
@@ -283,8 +284,8 @@ fn given_if18_acknowledged_while_the_condition_holds_when_a_second_word_arrives_
 /// A machine whose ARM7 has IME = 1, IE = `ie` and I clear.
 fn arm7_listening(ie: u32) -> Machine {
     let mut m = enabled();
-    m.bus7(0).write32(crate::irq::IME_ADDR, 1);
-    m.bus7(0).write32(crate::irq::IE_ADDR, ie);
+    m.bus7(0).write32(crate::io::irq::IME_ADDR, 1);
+    m.bus7(0).write32(crate::io::irq::IE_ADDR, ie);
     m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m
 }

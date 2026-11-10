@@ -5,12 +5,12 @@ use super::device::{Effect, Width, read_bytes, write_bytes};
 use super::map::{ARM7_PORTS, ARM9_PORTS, Owner, Port, PortEntry, decode};
 use super::*;
 use crate::bus::VRAMCNT_A_ADDR;
-use crate::dma::{DMA0FILL_ADDR, DMA0SAD_ADDR};
-use crate::gpu2d::timing::{DISPSTAT_ADDR, VCOUNT_ADDR};
 use crate::gpu2d::{DISPCNT_A_ADDR, POWCNT1_ADDR};
-use crate::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYNC_ADDR};
-use crate::irq::{IE_ADDR, IF_ADDR, IME_ADDR, InterruptController, Requests};
-use crate::timers::TM0CNT_L_ADDR;
+use crate::io::dma::{DMA0FILL_ADDR, DMA0SAD_ADDR};
+use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYNC_ADDR};
+use crate::io::irq::{IE_ADDR, IF_ADDR, IME_ADDR, InterruptController, Requests};
+use crate::io::timers::TM0CNT_L_ADDR;
+use crate::io::timing::{DISPSTAT_ADDR, VCOUNT_ADDR};
 
 /// The WRAMCNT, WRAMSTAT and VRAMCNT_G addresses, which `Memory` keeps private.
 const VRAMCNT_G: u32 = 0x0400_0246;

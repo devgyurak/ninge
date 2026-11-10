@@ -4,29 +4,25 @@
 pub mod bus;
 pub mod cart;
 pub mod cpu;
-pub mod dma;
 pub mod gpu2d;
 mod hle;
 pub mod io;
-pub mod ipc;
-pub mod irq;
 pub mod savestate;
 pub mod scheduler;
-pub mod timers;
 
 use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use cart::Header;
 use cpu::Cpu;
-use dma::{Dma, Trigger};
-use gpu2d::timing::FIRST_VBLANK_LINE;
 use io::Io;
-use irq::InterruptController;
+use io::dma::{Dma, Trigger};
+use io::irq::InterruptController;
+use io::timers::Timers;
+use io::timing::FIRST_VBLANK_LINE;
 use scheduler::{
     ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, HBLANK_START_CYCLES,
     LINE_CYCLES, Participants, Scheduler,
 };
 use serde::{Deserialize, Serialize};
-use timers::Timers;
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
 pub const SCREEN_WIDTH: usize = 256;
@@ -284,7 +280,7 @@ impl Machine {
     /// IPCSYNC and the two IPC FIFOs.
     // The debugger's IPC panel (#56 CPU panel until one exists) shows the sync nibbles, both
     // FIFOs' contents and the flags of both CPUs.
-    pub fn ipc(&self) -> &ipc::Ipc {
+    pub fn ipc(&self) -> &io::ipc::Ipc {
         self.io.ipc()
     }
 
@@ -465,7 +461,7 @@ impl Machine {
     // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
     // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
     // revisit with #115.
-    fn run_dma(&mut self, transfer: dma::Transfer) {
+    fn run_dma(&mut self, transfer: io::dma::Transfer) {
         let now = self.scheduler.now();
         let end = if transfer.arm9 {
             let mut view = Arm9View::new(

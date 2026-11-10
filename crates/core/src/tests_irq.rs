@@ -23,7 +23,7 @@ use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
 use crate::cpu::Bus;
-use crate::irq::Requests;
+use crate::io::irq::Requests;
 
 const ENTRY9: u32 = 0x0200_0000;
 const ENTRY7: u32 = 0x0238_0000;

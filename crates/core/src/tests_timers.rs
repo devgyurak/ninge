@@ -13,9 +13,9 @@
 use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::timers::TM0CNT_L_ADDR;
 use crate::savestate::SavestateError;
 use crate::scheduler::{EventKind, LINE_CYCLES, SLICE, run_round};
-use crate::timers::TM0CNT_L_ADDR;
 
 const IME: u32 = 0x0400_0208;
 const IE: u32 = 0x0400_0210;

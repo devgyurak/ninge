@@ -53,9 +53,9 @@
 //! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load.
 
 use crate::Machine;
-use crate::dma::{CHANNEL_COUNT, Dma};
+use crate::io::dma::{CHANNEL_COUNT, Dma};
+use crate::io::timers::{TIMER_COUNT, Timers};
 use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES, SLICE, Scheduler};
-use crate::timers::{TIMER_COUNT, Timers};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";

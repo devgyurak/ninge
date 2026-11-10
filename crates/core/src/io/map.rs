@@ -4,12 +4,12 @@
 //! [`ARM7_PORTS`]. The map lives here and nowhere else; a test pins that no two entries overlap.
 
 use crate::bus::VRAMCNT_A_ADDR;
-use crate::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
-use crate::gpu2d::timing::DISPSTAT_ADDR;
 use crate::gpu2d::{DISPCNT_A_ADDR, POWCNT1_ADDR};
-use crate::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
-use crate::irq::IME_ADDR;
-use crate::timers::TM0CNT_L_ADDR;
+use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
+use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
+use crate::io::irq::IME_ADDR;
+use crate::io::timers::TM0CNT_L_ADDR;
+use crate::io::timing::DISPSTAT_ADDR;
 
 /// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..G,
 /// WRAMCNT, WRAMSTAT) stays in `Memory` because the page tables derive from it (#109), every

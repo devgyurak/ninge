@@ -13,7 +13,7 @@
 //! `slot_due` and `slot_fire`).
 
 use crate::io::device::{Device, Effect, Fired, Width, read_bytes, write_bytes};
-use crate::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
+use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::{EventKind, SLICE};
 use serde::{Deserialize, Serialize};
 

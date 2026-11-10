@@ -8,8 +8,8 @@
 //! happens when it fires. `Io` replaces the events of the slots an [`Effect`] names and fires them
 //! without knowing which device it is.
 
-use crate::dma::Transfer;
-use crate::irq::Requests;
+use crate::io::dma::Transfer;
+use crate::io::irq::Requests;
 use crate::scheduler::EventKind;
 
 /// The width of one bus access.

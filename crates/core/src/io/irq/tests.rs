@@ -417,7 +417,7 @@ fn given_a_request_for_a_bit_that_does_not_exist_when_ie_is_all_ones_then_the_li
 
 // ---------------------------------------------------------------- the hole between IME and IE
 
-// Which addresses reach the controller at all is the I/O map's to say (`io.rs` tests); what is
+// Which addresses reach the controller at all is the I/O map's to say (`io/tests.rs`); what is
 // left to the controller is the word between IME (208-20B) and IE (210-213), inside its block.
 
 /// The offsets of the word between IME and IE (`20C`-`20F`).

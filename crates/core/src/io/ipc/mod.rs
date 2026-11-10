@@ -8,7 +8,7 @@
 //! hands those to the two controllers.
 
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
-use crate::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
+use crate::io::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};
 
 /// IPCSYNC, at `0400_0180h` (`ipc.md`, "Registers").

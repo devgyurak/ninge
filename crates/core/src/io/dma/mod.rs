@@ -11,7 +11,7 @@
 
 use crate::cpu::Bus;
 use crate::io::device::{Device, Effect, Fired, Width, read_bytes, write_bytes};
-use crate::irq::{DMA0_IRQ, Requests};
+use crate::io::irq::{DMA0_IRQ, Requests};
 use crate::scheduler::EventKind;
 use serde::{Deserialize, Serialize};
 

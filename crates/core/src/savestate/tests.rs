@@ -12,7 +12,7 @@ use super::*;
 use crate::bus::{Region, VramBankState};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
-use crate::irq::Requests;
+use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
@@ -1166,7 +1166,7 @@ fn given_words_in_flight_when_the_state_loads_over_a_machine_with_an_empty_fifo_
 
 /// Loads a state whose ARM9 IPC block is `ipc` onto a fresh machine; returns the result and
 /// whether the target was left as it was.
-fn load_with_ipc(ipc: crate::ipc::Ipc) -> (Result<(), SavestateError>, bool) {
+fn load_with_ipc(ipc: crate::io::ipc::Ipc) -> (Result<(), SavestateError>, bool) {
     let rom = counter_rom();
     let mut saver = booted(&rom, 1);
     saver.io.replace_ipc_for_test(ipc);
@@ -1177,7 +1177,7 @@ fn load_with_ipc(ipc: crate::ipc::Ipc) -> (Result<(), SavestateError>, bool) {
 fn given_a_state_with_a_fifo_length_of_17_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
     assert_eq!(
-        load_with_ipc(crate::ipc::Ipc::with_corrupt_fifo_len(17)),
+        load_with_ipc(crate::io::ipc::Ipc::with_corrupt_fifo_len(17)),
         (Err(SavestateError::Corrupt), true)
     );
 }
@@ -1186,7 +1186,7 @@ fn given_a_state_with_a_fifo_length_of_17_when_loaded_then_it_is_corrupt_and_the
 fn given_a_state_with_a_fifo_head_of_16_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
 {
     assert_eq!(
-        load_with_ipc(crate::ipc::Ipc::with_corrupt_fifo_head(16)),
+        load_with_ipc(crate::io::ipc::Ipc::with_corrupt_fifo_head(16)),
         (Err(SavestateError::Corrupt), true)
     );
 }
@@ -1195,7 +1195,7 @@ fn given_a_state_with_a_fifo_head_of_16_when_loaded_then_it_is_corrupt_and_the_t
 fn given_a_state_with_a_sync_output_above_15_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
     assert_eq!(
-        load_with_ipc(crate::ipc::Ipc::with_corrupt_sync_out(0x10)),
+        load_with_ipc(crate::io::ipc::Ipc::with_corrupt_sync_out(0x10)),
         (Err(SavestateError::Corrupt), true)
     );
 }
@@ -1320,7 +1320,7 @@ fn given_a_state_with_a_dma_start_event_exactly_a_slice_ahead_when_loaded_then_i
     assert_eq!(load_onto_fresh(&counter_rom(), &saver).0, Ok(()));
 }
 
-/// The part of a channel's saved encoding the tests below rebuild, field for field as `dma.rs`
+/// The part of a channel's saved encoding the tests below rebuild, field for field as `io/dma/mod.rs`
 /// declares it: postcard is positional, so only the order and the types matter.
 #[derive(serde::Serialize)]
 struct ChannelBytes {

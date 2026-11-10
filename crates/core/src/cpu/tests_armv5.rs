@@ -7,6 +7,7 @@
 //! address each entry came from; a data read returns the value placed at that address, or a
 //! marker for unset memory. R15 reads the executing address + 8 (ARM) or + 4 (Thumb).
 
+use super::regs::LR;
 use super::*;
 use std::collections::BTreeMap;
 
@@ -251,8 +252,6 @@ fn given_an_arm7_thumb_pop_pc_when_the_popped_bit_0_is_clear_then_the_core_stays
 
 // ---------------------------------------------------------------- BLX
 
-/// R14.
-const LR: usize = 14;
 /// BLX R1 in ARM state, with condition AL and with condition NE.
 const BLX_R1: u32 = 0xE12F_FF31;
 const BLX_R1_NE: u32 = 0x112F_FF31;

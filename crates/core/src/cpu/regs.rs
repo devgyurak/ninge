@@ -2,10 +2,15 @@
 //! The register file: current registers, banked copies, CPSR and the five SPSRs
 //! (`docs/hw/cpu-registers.md`).
 
+use super::psr::MODE_MASK;
 use serde::{Deserialize, Serialize};
 
-/// CPSR mode-bit field, M4–M0 (`docs/hw/cpu-registers.md`, "Mode bits").
-const MODE_MASK: u32 = 0x1F;
+/// R13, the stack pointer by convention.
+pub(crate) const SP: usize = 13;
+/// R14, the link register.
+pub(crate) const LR: usize = 14;
+/// R15, the program counter.
+pub(crate) const PC: usize = 15;
 /// CPSR value after power-on: Supervisor mode, IRQ and FIQ disabled, ARM state. GBATEK
 /// "ARM CPU Exceptions" states the mode, I = 1, F = 1 and T = 0 for a reset.
 // TODO(hw-unverified): the sources do not state R0–R14 or N, Z, C, V after a reset; they are

@@ -3,18 +3,13 @@
 //! abort and interrupt entries, and the vector base. Note: `docs/hw/arm-exceptions-modes.md`.
 
 use super::cp15::UNMAPPED_READ;
+use super::psr::MODE_MASK;
 use super::psr::{FLAG_F, FLAG_I, FLAG_T};
-use super::regs::Mode;
+use super::regs::{LR, Mode, PC};
 use super::{Bus, Cpu};
 
-/// CPSR mode field, M4–M0.
-const MODE_MASK: u32 = 0x1F;
 /// The high vector base (`docs/hw/arm-exceptions-modes.md`, "Vector base").
 const HIGH_VECTOR_BASE: u32 = 0xFFFF_0000;
-/// R14, which receives the return address.
-const LR: usize = 14;
-/// R15.
-const PC: usize = 15;
 /// The coprocessor number of the CP15 system control coprocessor.
 const CP15: u32 = 15;
 /// CPSR bits 31–28, N Z C V: what an MRC to R15 loads (`docs/hw/cp15.md`, "Access").

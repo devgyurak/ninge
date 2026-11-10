@@ -6,7 +6,7 @@
 //! unrotated (`docs/hw/arm-load-store.md`, "Alignment"; measured on the suite).
 
 use super::psr::FLAG_C;
-use super::regs::Bank;
+use super::regs::{Bank, LR, PC};
 use super::shifter::{ShiftKind, shift_immediate};
 use super::{Bus, Cpu};
 
@@ -14,10 +14,6 @@ use super::{Bus, Cpu};
 const WORD: u32 = 4;
 /// What an empty register list moves the base by, in words (0x40 bytes).
 const EMPTY_LIST_WORDS: u32 = 16;
-/// R15's index and its bit in a register list.
-const PC: u32 = 15;
-/// R14, which LDRD and STRD cannot use as Rd (its pair would include R15).
-const LR: u32 = 14;
 
 impl<const ARM9: bool> Cpu<ARM9> {
     /// LDR, STR, LDRB, STRB and the T forms; true if it wrote the PC.
@@ -56,7 +52,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 // an LDR into R15 from an address that is not word aligned (the ARM ARM calls it
                 // unpredictable) switches state on the rotated word
                 // (`docs/hw/armv5te.md`, "Unverified").
-                match (ARM9, byte, rd) {
+                match (ARM9, byte, rd as usize) {
                     (true, false, PC) => self.exchange_to(value) || flushed,
                     _ => self.write_loaded(rd, value) || flushed,
                 }
@@ -115,7 +111,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
             1 => ((word >> 4) & 0xF0) | (word & 0xF),
             _ => self.operand(word & 0xF, 0),
         };
-        match (rd & 1, rd) {
+        match (rd & 1, rd as usize) {
             (1, _) | (_, LR) => false,
             _ => {
                 let (address, moved, writeback) = self.transfer_address(word, rn, offset);
@@ -216,17 +212,15 @@ impl<const ARM9: bool> Cpu<ARM9> {
                 (true, _) => {
                     let value = bus.read32(address);
                     match user_bank {
-                        true => self
-                            .regs
-                            .set_banked(Bank::UserSystem, index as usize, value),
-                        false => self.regs.set(index as usize, value),
+                        true => self.regs.set_banked(Bank::UserSystem, index, value),
+                        false => self.regs.set(index, value),
                     }
                 }
                 (false, _) => {
                     let value = self.block_store_value(index, user_bank);
                     // STM with the base in the list: ARM7 stores the written-back base unless
                     // it is the first register; ARM9 always stores the old base.
-                    let value = match writeback && index == rn && !first && !ARM9 {
+                    let value = match writeback && index == rn as usize && !first && !ARM9 {
                         true => moved,
                         false => value,
                     };
@@ -241,7 +235,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.write_back(writeback && !skip, rn, moved, user_bank);
         // TODO(hw-unverified): a block transfer whose written-back Rn is R15 flushes to the moved
         // address, so R15 ends as the value + 8 (suite; `docs/hw/arm-branch-pipeline.md`).
-        let wrote_base_pc = writeback && !skip && rn == PC;
+        let wrote_base_pc = writeback && !skip && rn as usize == PC;
         match pc_value {
             Some(value) => {
                 // The PSR-restore form: S with R15 in an LDM list, in a mode with an SPSR; T then
@@ -288,11 +282,11 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // is the suite's behavior where GBATEK says not to use it (`docs/hw/arm-load-store.md`,
     // "Unverified"; `docs/hw/arm-branch-pipeline.md`).
     fn write_back(&mut self, writeback: bool, rn: u32, moved: u32, user_bank: bool) {
-        match (writeback, rn, user_bank) {
+        match (writeback, rn as usize, user_bank) {
             (false, _, _) => {}
             (true, PC, _) => self.write_pc(moved),
-            (true, _, true) => self.regs.set_banked(Bank::UserSystem, rn as usize, moved),
-            (true, _, false) => self.regs.set(rn as usize, moved),
+            (true, rn, true) => self.regs.set_banked(Bank::UserSystem, rn, moved),
+            (true, rn, false) => self.regs.set(rn, moved),
         }
     }
 
@@ -302,14 +296,14 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(hw-unverified): the suite's flush target for this form; GBATEK does not allow R15 as a
     // base with writeback (`docs/hw/arm-branch-pipeline.md`, "Unverified"). Decided in #NN.
     fn write_back_single(&mut self, writeback: bool, rn: u32, moved: u32) -> bool {
-        match (writeback, rn) {
+        match (writeback, rn as usize) {
             (false, _) => false,
             (true, PC) => {
                 self.write_pc(moved.wrapping_add(WORD));
                 true
             }
-            (true, _) => {
-                self.regs.set(rn as usize, moved);
+            (true, rn) => {
+                self.regs.set(rn, moved);
                 false
             }
         }
@@ -318,22 +312,22 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// Writes a loaded value to Rd; R15 takes the value and the step refills from it. True if
     /// R15.
     fn write_loaded(&mut self, rd: u32, value: u32) -> bool {
-        match rd {
+        match rd as usize {
             PC => self.write_pc(value),
-            _ => self.regs.set(rd as usize, value),
+            other => self.regs.set(other, value),
         }
-        rd == PC
+        rd as usize == PC
     }
 
     /// The value STM writes for register `index`: R15 reads address + 12, and with the S bit the
     /// other registers come from the User bank.
     // TODO(hw-unverified): STM with S = 1 and R15 in the list stores address + 12 as a plain STM
     // does (`docs/hw/arm-load-store.md`, "Unverified").
-    fn block_store_value(&self, index: u32, user_bank: bool) -> u32 {
+    fn block_store_value(&self, index: usize, user_bank: bool) -> u32 {
         match (index, user_bank) {
-            (PC, _) => self.store_operand(PC),
-            (_, true) => self.regs.banked(Bank::UserSystem, index as usize),
-            _ => self.regs.get(index as usize),
+            (PC, _) => self.store_operand(PC as u32),
+            (_, true) => self.regs.banked(Bank::UserSystem, index),
+            _ => self.regs.get(index),
         }
     }
 }

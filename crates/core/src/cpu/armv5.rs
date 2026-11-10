@@ -3,8 +3,9 @@
 //! `docs/hw/armv5te.md`. The switch to Thumb on a load into R15 is in `arm_transfer.rs`.
 
 use super::Cpu;
-use super::arm::{ARM_PC_AHEAD, ARM_WORD, LR, THUMB_HALFWORD, branch_offset};
+use super::arm::{ARM_PC_AHEAD, ARM_WORD, THUMB_HALFWORD, branch_offset};
 use super::psr::FLAG_Q;
+use super::regs::{LR, PC};
 
 /// BLX (immediate) adds H, bit 24, as a halfword to the word-scaled offset.
 const BLX_H_SHIFT: u32 = 1;
@@ -12,8 +13,6 @@ const BLX_H_SHIFT: u32 = 1;
 const RD_SHIFT: u32 = 12;
 /// Rn's position in the saturating adds (bits 19–16).
 const RN_SHIFT: u32 = 16;
-/// R15's index.
-const PC: u32 = 15;
 /// Bit 0 of a link value written from Thumb state, so that a return by BX stays in Thumb.
 const THUMB_LINK_BIT: u32 = 1;
 
@@ -129,11 +128,11 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(hw-unverified): R15 is not allowed as the destination of these instructions; it is
     // written like a data-processing result (`docs/hw/armv5te.md`, "Unverified").
     fn write_destination(&mut self, rd: u32, value: u32) -> bool {
-        match rd {
+        match rd as usize {
             PC => self.write_pc(value),
-            _ => self.regs.set(rd as usize, value),
+            other => self.regs.set(other, value),
         }
-        rd == PC
+        rd as usize == PC
     }
 }
 

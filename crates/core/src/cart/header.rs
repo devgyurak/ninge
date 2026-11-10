@@ -163,12 +163,17 @@ const WRAM_SIZE_MAX: u32 = 0xFE00;
 // GBATEK's table form, read with a register wider than 16 bits, is this variant; the standard
 // check vector and the CRC `ndstool` wrote into our own test ROM agree.
 pub fn crc16(data: &[u8]) -> u16 {
+    data.iter()
+        .fold(0xFFFF, |crc, &byte| crc16_update(crc, byte))
+}
+
+/// One byte of the CRC-16/MODBUS: `crc` continued over `byte`. The BIOS function GetCRC16 starts
+/// from a value of its caller's and feeds the same steps (`hle-swi.md`).
+pub(crate) fn crc16_update(crc: u16, byte: u8) -> u16 {
     const POLYNOMIAL: u16 = 0xA001;
-    data.iter().fold(0xFFFF, |crc, &byte| {
-        (0..8).fold(crc ^ u16::from(byte), |crc, _| match crc & 1 {
-            0 => crc >> 1,
-            _ => (crc >> 1) ^ POLYNOMIAL,
-        })
+    (0..8).fold(crc ^ u16::from(byte), |crc, _| match crc & 1 {
+        0 => crc >> 1,
+        _ => (crc >> 1) ^ POLYNOMIAL,
     })
 }
 

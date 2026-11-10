@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The HLE BIOS observed through our own `swi` test ROM (`testroms/swi/`): VBlank IRQs through the
 //! BIOS dispatcher, SWI calls from ARM and Thumb state, VBlankIntrWait, SWI Halt and each CPU's
-//! own halt (the ARM9's CP15 wait-for-interrupt, the ARM7's HALTCNT), on both CPUs. Each CPU records what it
+//! own halt (the ARM9's CP15 wait-for-interrupt, the ARM7's HALTCNT), and the data SWIs (CpuSet,
+//! CpuFastSet, Div, Sqrt, GetCRC16, IsDebugger, LZ77 in both forms), on both CPUs. Each CPU records what it
 //! saw in main RAM (ARM9 at 0x0200_4000, ARM7 at 0x0200_5000; the slot layout is at the top of
 //! `arm9.s` and `arm7.s`). Expected values come from `docs/hw/hle-swi.md` ("SWI", "The IRQ
 //! dispatcher", "Edge cases"), never from running the ROM. This is the first test ROM that takes
@@ -198,5 +199,139 @@ fn given_swi_rom_when_run_then_neither_cpu_ends_halted() {
     assert_eq!(
         (machine.arm9().halted(), machine.arm7().halted()),
         (false, false)
+    );
+}
+
+// ------------------------------------------------------------------ the data SWIs
+
+const ARM9_RESULTS: u32 = 0x0200_8000;
+const ARM7_RESULTS: u32 = 0x0200_9000;
+/// The result area starts filled with AAh bytes (`arm9.s`).
+const FILLER: u32 = 0xAAAA_AAAA;
+
+/// A mismatch in the result area: (byte offset, name, expected, got).
+type ResultMismatch = (u32, &'static str, u32, u32);
+
+/// Expected result words: (byte offset, name, value).
+type ResultRow = (u32, &'static str, u32);
+
+fn result_mismatches(base: u32, rows: &[ResultRow]) -> Vec<ResultMismatch> {
+    let machine = boot();
+    rows.iter()
+        .map(|&(offset, name, expected)| {
+            (offset, name, expected, machine.arm9_peek32(base + offset))
+        })
+        .filter(|&(_, _, expected, got)| expected != got)
+        .collect()
+}
+
+/// CRC-16/MODBUS, bit by bit from the note (`cart-header.md`), for the ASCII digits.
+fn crc_of_digits() -> u32 {
+    let crc = b"12345678".iter().fold(0xFFFFu16, |mut crc, &byte| {
+        crc ^= u16::from(byte);
+        (0..8).for_each(|_| crc = (crc >> 1) ^ (0xA001 * (crc & 1)));
+        crc
+    });
+    u32::from(crc)
+}
+
+/// The rows both CPUs share (`hle-swi.md`, "The copy, math and decompression SWIs"). Everything
+/// is derived from the note: units copied or filled, the fast set's round-up to 8 words,
+/// truncating signed division, the floor square root, the CRC and the LZ77 stream "ABABABABAB".
+fn shared_results() -> Vec<ResultRow> {
+    let mut rows: Vec<ResultRow> = vec![
+        (0x00, "CpuSet copy16, first word", 0x2222_1111),
+        (0x04, "CpuSet copy16, third unit only", 0xAAAA_3333),
+        (0x10, "CpuSet fill32, first word", 0xDEAD_BEEF),
+        (0x14, "CpuSet fill32, second word", 0xDEAD_BEEF),
+        (0x18, "CpuSet fill32, third word", 0xDEAD_BEEF),
+        (0x1C, "CpuSet fill32, fourth word untouched", FILLER),
+        (
+            0x60,
+            "CpuFastSet copy of 9 words rounds to 16: the 17th is untouched",
+            FILLER,
+        ),
+        (
+            0xA0,
+            "CpuFastSet fill of 1 word writes 8: the 9th is untouched",
+            FILLER,
+        ),
+        (0xC0, "CpuSet with a count of 0 writes nothing", FILLER),
+        (0xD0, "Div -7 / 2 quotient", 0xFFFF_FFFD),
+        (0xD4, "Div -7 / 2 remainder", 0xFFFF_FFFF),
+        (0xD8, "Div -7 / 2 absolute quotient", 3),
+        (0xDC, "Div 7 / -2 quotient", 0xFFFF_FFFD),
+        (0xE0, "Div 7 / -2 remainder", 1),
+        (0xE4, "Div 7 / -2 absolute quotient", 3),
+        (0xF0, "Sqrt of 1000000", 1000),
+        (0xF4, "Sqrt of FFFFFFFFh", 0xFFFF),
+        (0xF8, "Sqrt of 0", 0),
+        (0x100, "GetCRC16 of the digits from FFFFh", crc_of_digits()),
+        (0x104, "IsDebugger", 0),
+        (0x110, "LZ77 byte writes, bytes 0-3", 0x4241_4241),
+        (0x114, "LZ77 byte writes, bytes 4-7", 0x4241_4241),
+        (
+            0x118,
+            "LZ77 byte writes, bytes 8-9 then untouched",
+            0xAAAA_4241,
+        ),
+        (0x11C, "LZ77 byte writes, nothing past the size", FILLER),
+        (0x130, "LZ77 halfword writes, bytes 0-3", 0x4241_4241),
+        (0x134, "LZ77 halfword writes, bytes 4-7", 0x4241_4241),
+        (
+            0x138,
+            "LZ77 halfword writes, bytes 8-9 then untouched",
+            0xAAAA_4241,
+        ),
+        (0x13C, "LZ77 halfword writes, nothing past the size", FILLER),
+    ];
+    // CpuFastSet copy: the source words 1..=16 land at +20h.
+    rows.extend((0..16).map(|i| (0x20 + 4 * i, "CpuFastSet copy word", i + 1)));
+    // CpuFastSet fill: eight words of DEADBEEFh at +80h.
+    rows.extend((0..8).map(|i| (0x80 + 4 * i, "CpuFastSet fill word", 0xDEAD_BEEF)));
+    rows
+}
+
+#[test]
+fn given_swi_rom_when_run_then_the_arm9_data_swis_leave_the_results_the_note_describes() {
+    assert_eq!(
+        result_mismatches(ARM9_RESULTS, &shared_results()),
+        Vec::<ResultMismatch>::new()
+    );
+}
+
+#[test]
+fn given_swi_rom_when_run_then_the_arm7_data_swis_leave_the_results_the_note_describes() {
+    assert_eq!(
+        result_mismatches(ARM7_RESULTS, &shared_results()),
+        Vec::<ResultMismatch>::new()
+    );
+}
+
+/// "The 8-bit form loses its writes to VRAM, the 16-bit form lands" (`hle-swi.md`, "LZ77").
+const VRAM_RESULTS: &[ResultRow] = &[
+    (0x150, "VRAM first word after a byte-write LZ77", 0),
+    (
+        0x160,
+        "VRAM words 0-3 after a halfword-write LZ77",
+        0x4241_4241,
+    ),
+    (
+        0x164,
+        "VRAM words 4-7 after a halfword-write LZ77",
+        0x4241_4241,
+    ),
+    (
+        0x168,
+        "VRAM words 8-9 after a halfword-write LZ77",
+        0x0000_4241,
+    ),
+];
+
+#[test]
+fn given_swi_rom_when_run_then_lz77_to_vram_loses_byte_writes_and_keeps_halfword_writes() {
+    assert_eq!(
+        result_mismatches(ARM9_RESULTS, VRAM_RESULTS),
+        Vec::<ResultMismatch>::new()
     );
 }

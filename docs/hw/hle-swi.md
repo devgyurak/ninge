@@ -130,7 +130,7 @@ round exactly at their own time, `scheduler.md`).
 | `05h` | VBlankIntrWait | none | IntrWait with `R0 = 1`, `R1 = 1` (the V-blank bit) |
 | `06h` | Halt | none | halts the CPU (above) and returns at once; execution resumes after the wake |
 
-**IntrWait.** GBATEK describes the function: it waits in the halt state until one of the interrupts
+**IntrWait.** This description is written from memory of GBATEK's text (and of how the GBA text describes the same function), not from a page re-read in this session; "Unverified" lists what is least certain. GBATEK describes the function: it waits in the halt state until one of the interrupts
 named in `R1` has happened, and it forces IME to 1. How it knows that an interrupt has happened is
 the IRQ check flags (the word at DTCM base + `3FF8h` on the ARM9, `0380FFF8h` on the ARM7, in the
 IE/IF format; `interrupts.md`): the user's IRQ handler ORs the bit of each interrupt it serves
@@ -190,6 +190,11 @@ The handler returns with `BX LR` (or any jump to its `LR`). At the IRQ-return tr
 `LR` as the CPU wrote it on entry is the next instruction's address + 4 in ARM state and the next
 instruction's address + 4 in Thumb state as well (`arm-exceptions-modes.md`, "Return address"),
 so the same `-4` returns to the interrupted instruction in both states.
+
+The machine tests for an interrupt before it tests for a BIOS trap, in every step: at a vector I
+is set, so the trap runs; at the IntrWait loop address I is clear, so a pending interrupt is
+taken first and its return lands on the loop address again (`The wait SWIs`, step 3). Reversing
+the order would halt again with the IRQ line still asserted.
 
 Acknowledging IF is the handler's job (`interrupts.md`); the dispatcher never touches IF, IE or
 IME, and does not set the IRQ check flags: GBATEK says the user handler should do it so that

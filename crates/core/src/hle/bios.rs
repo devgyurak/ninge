@@ -18,6 +18,7 @@ const IRQ_VECTOR: u32 = 0x18;
 // TODO(hw-unverified): GBATEK does not state the BIOS's own address (`hle-swi.md`, "Unverified").
 const IRQ_RETURN_VECTOR: u32 = 0x20;
 /// ninge's own address where IntrWait loops (`hle-swi.md`, "The wait SWIs").
+// TODO(hw-unverified): the address is ninge's, invisible unless a game reads `LR` inside IntrWait.
 const INTR_WAIT_VECTOR: u32 = 0x24;
 /// R15 reads this far past the instruction at the head of the pipeline (`arm-branch-pipeline.md`).
 const PIPELINE_AHEAD: u32 = 8;
@@ -138,6 +139,7 @@ fn software_interrupt<const ARM9: bool, B: Bus>(
     match swi::run(number, cpu, bus, record) {
         Next::Return => cpu.return_from_exception(bus, 0),
         Next::IntrWait => {
+            // TODO(hw-unverified): I is cleared during the wait (`hle-swi.md`, "Unverified").
             // The BIOS waits with interrupts open (`hle-swi.md`, "The wait SWIs", step 1); the
             // caller's CPSR comes back through `SPSR_svc` when the wait returns.
             let cpsr = cpu.regs().cpsr();
@@ -167,6 +169,9 @@ pub(super) fn flag_address<const ARM9: bool>(cpu: &Cpu<ARM9>) -> u32 {
 
 /// One pass of IntrWait's loop (`hle-swi.md`, "The wait SWIs", step 2): consumes the waited bits
 /// of the flag word and returns to the caller if any was set, else halts and stays here.
+// TODO(hw-unverified): the flag word is rewritten even without a hit, a hit clears the waited
+// bits, IME stays 1, a wait whose flag is already set never halts, and I is clear while waiting
+// (`hle-swi.md`, "Unverified").
 fn intr_wait_loop<const ARM9: bool, B: Bus>(cpu: &mut Cpu<ARM9>, bus: &mut B) {
     let wanted = cpu.regs().get(1);
     let address = flag_address(cpu);

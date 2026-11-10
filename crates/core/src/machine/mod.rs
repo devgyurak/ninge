@@ -482,10 +482,16 @@ impl Participants for Machine {
                 .next_time()
                 .is_none_or(|time| self.scheduler.now() < time)
         {
-            // A halted ARM9 queues no event and no IF bit changes before `target`, so its clock
-            // skips there in one step (`docs/hw/scheduler.md`, "Interleaving").
+            // A halted ARM9 runs nothing, so its clock skips in one step to `target` or to an event
+            // queued before it (by the instruction that halted it, say a timer write), whichever is
+            // earlier: the event fires on time and the wake is tested after it
+            // (`docs/hw/scheduler.md`, "Interleaving").
             if self.arm9.halted() && !self.io.irq9().wakes() {
-                self.scheduler.advance(target - self.scheduler.now());
+                let stop = self
+                    .scheduler
+                    .next_time()
+                    .map_or(target, |time| time.min(target));
+                self.scheduler.advance(stop - self.scheduler.now());
                 break;
             }
             self.step_arm9_instruction();
@@ -553,6 +559,10 @@ impl Machine {
             );
             transfer.run(&mut view)
         };
+        // A DMA unit may write HALTCNT: the ARM7 halts at once, not after its next instruction.
+        if self.io.power_mut().take_halt() {
+            self.arm7.set_halted(true);
+        }
         self.io.dma_finished(&transfer, end);
     }
 

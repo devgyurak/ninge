@@ -45,8 +45,8 @@ impl Power {
 
 impl Device<false> for Power {
     /// HALTCNT reads 0.
-    // TODO(hw-unverified): GBATEK lists HALTCNT as readable; it reads 0 here (`interrupts.md`,
-    // "Unverified").
+    // TODO(hw-unverified): GBATEK lists HALTCNT as readable; it reads 0 here, and POSTFLG (offset
+    // 0) is not modeled: it reads 0 and drops writes (`interrupts.md`, "Unverified").
     fn peek(&self, _offset: u32, _width: Width, _now: u64) -> u32 {
         0
     }

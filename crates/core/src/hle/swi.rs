@@ -64,6 +64,8 @@ pub(super) fn run<const ARM9: bool, B: Bus>(
 
 /// The start of IntrWait: IME = 1, and with `R0` not zero the old flags of `R1` are discarded
 /// (`hle-swi.md`, "The wait SWIs", step 1).
+// TODO(hw-unverified): IME is forced to 1 and left there, and discarding clears the `R1` bits of
+// the flag word (`hle-swi.md`, "Unverified").
 fn intr_wait<const ARM9: bool, B: Bus>(cpu: &mut Cpu<ARM9>, bus: &mut B) {
     bus.write32(IME_ADDR, 1);
     if cpu.regs().get(0) != 0 {

@@ -594,3 +594,54 @@ fn given_a_halted_arm7_when_a_frame_runs_then_the_frame_completes_and_the_arm7_c
         (1, true, true)
     );
 }
+
+// ------------------------------------------------- review follow-ups: event before halt, DMA halt
+
+const TM0CNT: u32 = 0x0400_0100;
+
+#[test]
+fn given_a_timer_started_just_before_the_arm9_halts_when_a_round_runs_then_the_clock_stops_at_the_overflow()
+ {
+    let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
+    // Reload FFF0h, enabled with the IRQ bit and prescaler F/1: it overflows 16 cycles later.
+    m.bus9().write32(TM0CNT, 0x00C0_FFF0);
+    step9(&mut m, 1);
+    let due = m.scheduler().next_time().expect("the overflow is queued");
+    run_round(&mut m);
+    assert_eq!((m.arm9().halted(), m.scheduler().now()), (true, due));
+}
+
+#[test]
+fn given_a_timer_irq_enabled_before_the_arm9_halts_when_rounds_run_then_the_overflow_wakes_it() {
+    let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
+    m.arm9.regs_mut().set_cpsr(0x9F);
+    m.bus9().write32(IE, TIMER0);
+    m.bus9().write32(TM0CNT, 0x00C0_FFF0);
+    step9(&mut m, 1);
+    clocks_after_rounds(&mut m, 3);
+    step9(&mut m, 1);
+    assert_eq!((m.arm9().halted(), m.arm9().regs().get(1)), (false, 0x66));
+}
+
+/// An ARM7 whose DMA channel 0 copies one halfword, 8000h, to POSTFLG/HALTCNT, so the high byte
+/// (HALTCNT) is mode 2. Returns after the first round in which the ARM7 is halted or the request
+/// is pending: `(halted, request still pending)`.
+fn arm7_halted_by_dma() -> (bool, bool) {
+    let mut m = arm7_running(&[SPIN]);
+    m.bus7(0).write16(0x0220_0000, 0x8000);
+    m.bus7(0).write32(0x0400_00B0, 0x0220_0000);
+    m.bus7(0).write32(0x0400_00B4, 0x0400_0300);
+    m.bus7(0).write32(0x0400_00B8, (1 << 31) | 1);
+    (0..8)
+        .map(|_| {
+            run_round(&mut m);
+            (m.arm7().halted(), m.io().power().halt_requested())
+        })
+        .find(|&(halted, pending)| halted || pending)
+        .unwrap_or((false, false))
+}
+
+#[test]
+fn given_a_dma_unit_writing_haltcnt_when_the_transfer_ends_then_the_arm7_is_halted_at_once() {
+    assert_eq!(arm7_halted_by_dma(), (true, false));
+}

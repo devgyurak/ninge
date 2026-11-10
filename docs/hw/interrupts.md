@@ -126,7 +126,7 @@ what wakes a CPU".
 
 ## Unverified
 
-- HALTCNT reads 0 and its GBA-mode and sleep modes do nothing (GBATEK lists the register as
+- POSTFLG (`0400_0300h`, the byte before HALTCNT) reads 0 and drops writes, and HALTCNT reads 0 and its GBA-mode and sleep modes do nothing (GBATEK lists the register as
   readable and the modes as defined) — `crates/core/src/io/power/mod.rs` — the sleep mode is
   `TODO(phase5)`; verify the read-back with a test ROM on hardware.
 - Wake with IME = 0 or I set: taken from GBATEK's Halt wording, `IE & IF` only —

@@ -348,7 +348,10 @@ impl Io {
             Port::Timers if ARM9 => Device::<true>::peek(&self.timers9, offset, width, now),
             Port::Timers => Device::<false>::peek(&self.timers7, offset, width, now),
             // The ARM7 has no engine A, and `Memory` owns the memory-control registers.
-            Port::Gpu2d | Port::MemoryControl => 0,
+            Port::Gpu2d | Port::MemoryControl => {
+                debug_assert!(false, "port not reachable through Io");
+                0
+            }
         }
     }
 
@@ -370,7 +373,10 @@ impl Io {
             Port::Ipc | Port::IpcRecv => Device::<ARM9>::read(&mut self.ipc, offset, width, at.now),
             Port::Timers if ARM9 => Device::<true>::read(&mut self.timers9, offset, width, at.now),
             Port::Timers => Device::<false>::read(&mut self.timers7, offset, width, at.now),
-            Port::Gpu2d | Port::MemoryControl => (0, Effect::default()),
+            Port::Gpu2d | Port::MemoryControl => {
+                debug_assert!(false, "port not reachable through Io");
+                (0, Effect::default())
+            }
         };
         self.apply::<ARM9>(scheduler, at, port, effect);
         value
@@ -403,7 +409,10 @@ impl Io {
                 Device::<true>::write(&mut self.timers9, offset, width, value, now)
             }
             Port::Timers => Device::<false>::write(&mut self.timers7, offset, width, value, now),
-            Port::Gpu2d | Port::MemoryControl => Effect::default(),
+            Port::Gpu2d | Port::MemoryControl => {
+                debug_assert!(false, "port not reachable through Io");
+                Effect::default()
+            }
         };
         self.apply::<ARM9>(scheduler, at, port, effect);
     }
@@ -421,9 +430,10 @@ impl Io {
         // Only the timers have event slots today; DMA (#26) extends this.
         debug_assert!(port == Port::Timers || effect.reschedule == 0);
         if port == Port::Timers {
-            match ARM9 {
-                true => schedule_timers(scheduler, &self.timers9, effect.reschedule, at.floor),
-                false => schedule_timers(scheduler, &self.timers7, effect.reschedule, at.floor),
+            if ARM9 {
+                schedule_timers(scheduler, &self.timers9, effect.reschedule, at.floor);
+            } else {
+                schedule_timers(scheduler, &self.timers7, effect.reschedule, at.floor);
             }
         }
     }

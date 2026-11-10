@@ -231,6 +231,34 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.refill(bus);
     }
 
+    /// Jumps to `target` the way the HLE BIOS's `LDR PC` does, and refills the pipeline
+    /// (`docs/hw/hle-swi.md`, "The IRQ dispatcher"). On the ARM9 bit 0 selects Thumb state and is
+    /// dropped; the ARM7 stays in ARM state.
+    // TODO(hw-unverified): the ARM7 drops bit 0 of the target (`docs/hw/hle-swi.md`, "Unverified").
+    pub(crate) fn jump_to<B: Bus>(&mut self, bus: &mut B, target: u32) {
+        let thumb = ARM9 && target & 1 != 0;
+        let cpsr = self.regs.cpsr();
+        self.regs.set_cpsr(match thumb {
+            true => cpsr | FLAG_T,
+            false => cpsr & !FLAG_T,
+        });
+        self.regs.set(PC, target & !1);
+        self.refill(bus);
+    }
+
+    /// Returns from an exception the way the BIOS's `SUBS PC, LR, #offset` does: R15 becomes
+    /// `LR - offset`, the CPSR is loaded from the current mode's SPSR (kept as it is in a mode
+    /// with none), and the pipeline is refilled in the state the restored CPSR names
+    /// (`docs/hw/hle-swi.md`, "SWI" and "The IRQ dispatcher").
+    pub(crate) fn return_from_exception<B: Bus>(&mut self, bus: &mut B, offset: u32) {
+        let target = self.regs.get(LR).wrapping_sub(offset);
+        if let Some(spsr) = self.regs.spsr(self.regs.bank()) {
+            self.regs.set_cpsr(spsr);
+        }
+        self.regs.set(PC, target);
+        self.refill(bus);
+    }
+
     /// Resets the core: Supervisor mode, I and F set, ARM state, and the pipeline refilled from
     /// the reset vector. R14, the SPSR and the other registers are left as they were.
     // TODO(hw-unverified): see `Exception::link_offset`; CP15, the vector base included, is left

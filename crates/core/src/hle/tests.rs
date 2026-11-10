@@ -556,3 +556,36 @@ fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm7_starts_on_its_fi
     machine.step_arm7_instruction();
     assert_eq!(machine.arm7().regs().get(0), 1);
 }
+
+// ------------------------------------------------------------------ the BIOS trap addresses
+
+use crate::hle::bios::{Trap, trap_at};
+
+/// The R15 values at which each CPU's machine takes over: the vector + 8 (`hle-swi.md`, "How the
+/// machine takes the BIOS's place"). Rows: (R15, ARM9's trap, ARM7's trap).
+fn trap_table_failures() -> Vec<u32> {
+    let table = [
+        (0x0000_0010, None, Some(Trap::Swi)),
+        (0x0000_0020, None, Some(Trap::Irq)),
+        (0x0000_0028, None, Some(Trap::IrqReturn)),
+        (0x0000_0014, None, None),
+        (0x0000_0018, None, None),
+        (0x0000_002C, None, None),
+        (0x0200_0010, None, None),
+        (0xFFFF_0010, Some(Trap::Swi), None),
+        (0xFFFF_0020, Some(Trap::Irq), None),
+        (0xFFFF_0028, Some(Trap::IrqReturn), None),
+        (0xFFFF_0024, None, None),
+        (0xFFFE_0010, None, None),
+    ];
+    table
+        .iter()
+        .filter(|&&(pc, nine, seven)| (trap_at::<true>(pc), trap_at::<false>(pc)) != (nine, seven))
+        .map(|&(pc, ..)| pc)
+        .collect()
+}
+
+#[test]
+fn given_the_vector_addresses_plus_eight_when_looked_up_then_each_cpu_traps_only_in_its_own_bios() {
+    assert_eq!(trap_table_failures(), Vec::<u32>::new());
+}

@@ -592,7 +592,8 @@ fn given_power_on_memory_when_regions_are_looked_up_then_only_main_ram_is_mapped
         (0x0300_0000, Region::SharedWram),
         (VRAMCNT_A, Region::Unmapped),
         (VRAM_A, Region::Unmapped),
-        (0xFFFF_0000, Region::Unmapped),
+        // The synthetic BIOS (`hle-swi.md`, "The BIOS area").
+        (0xFFFF_0000, Region::Bios),
     ];
     assert_eq!(region_failures(&Bench::new(), &table), vec![]);
 }
@@ -1759,4 +1760,54 @@ fn given_an_arm9_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_t
 fn given_an_arm7_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_the_event_is_at_the_floor()
  {
     assert_eq!(arm7_event_after_start_with_far_floor(), vec![FAR_FLOOR]);
+}
+
+// ------------------------------------------------------------------------------ the BIOS area
+
+/// The ARM9 BIOS is 32 KiB at `FFFF0000h`; the ARM7 BIOS is 16 KiB at 0 (`hle-swi.md`, "The BIOS
+/// area"). Rows: (address, ARM9 region, ARM7 region); the ARM9's low addresses are not BIOS
+/// whatever the vector base is.
+#[test]
+fn given_power_on_memory_when_the_bios_edges_are_looked_up_then_each_cpu_sees_only_its_own() {
+    let table = [
+        (0x0000_0000, Region::Unmapped, Region::Bios),
+        (0x0000_3FFF, Region::Unmapped, Region::Bios),
+        (0x0000_4000, Region::Unmapped, Region::Unmapped),
+        (0xFFFE_FFFF, Region::Unmapped, Region::Unmapped),
+        (0xFFFF_0000, Region::Bios, Region::Unmapped),
+        (0xFFFF_7FFF, Region::Bios, Region::Unmapped),
+        (0xFFFF_8000, Region::Unmapped, Region::Unmapped),
+    ];
+    let m = Bench::new();
+    let failures: Vec<_> = table
+        .iter()
+        .filter(|&&(addr, nine, seven)| (m.region(addr), m.region7(addr)) != (nine, seven))
+        .collect();
+    assert_eq!(failures, Vec::<&(u32, Region, Region)>::new());
+}
+
+#[test]
+fn given_the_bios_area_when_written_then_it_still_reads_zero_on_both_cpus() {
+    let mut m = Bench::new();
+    write_as(&mut m, Nine, 0xFFFF_0008, 0xAB);
+    write_as(&mut m, Seven, 0x0000_0008, 0xCD);
+    assert_eq!(
+        (
+            read_as(&m, Nine, 0xFFFF_0008),
+            read_as(&m, Seven, 0x0000_0008)
+        ),
+        (0, 0)
+    );
+}
+
+#[test]
+fn given_the_bios_area_when_fetched_then_a_synthetic_zero_word_is_read() {
+    let mut m = Bench::new();
+    assert_eq!(
+        (
+            m.fetch32(&plain(), 0xFFFF_0018),
+            m.fetch32_arm7(0, 0x0000_0018)
+        ),
+        (0, 0)
+    );
 }

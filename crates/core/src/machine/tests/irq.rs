@@ -512,9 +512,13 @@ fn given_a_pending_enabled_request_on_each_cpu_when_a_frame_runs_then_both_enter
     });
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m.arm7.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
+    // The ARM7's vector is in the BIOS, so the dispatcher runs after the entry (`hle-swi.md`):
+    // the user handler pointer names the program's `b .`, where the ARM7 then stays.
+    m.bus7(0).write32(0x0380_FFFC, ENTRY7 + 8);
     m.run_frame();
-    // The entry replaced the first instruction (r0 stays 0), LR_irq = start + 4, and the
-    // unacknowledged request is still latched.
+    // The ARM9's entry replaced the first instruction (r0 stays 0) and LR_irq = start + 4. The
+    // ARM7's dispatcher then set R0 to the I/O base and LR_irq to the IRQ return address
+    // (`hle-swi.md`, "The IRQ dispatcher"). The unacknowledged request is still latched.
     let (s9, s7) = (seen9(&m), seen7(&m));
     assert_eq!(
         (
@@ -524,7 +528,7 @@ fn given_a_pending_enabled_request_on_each_cpu_when_a_frame_runs_then_both_enter
         ),
         (
             (IRQ_ENTRY_CPSR, ENTRY9 + 4, 0),
-            (IRQ_ENTRY_CPSR, ENTRY7 + 4, 0),
+            (IRQ_ENTRY_CPSR, 0x20, 0x0400_0000),
             (TIMER0, TIMER0)
         )
     );

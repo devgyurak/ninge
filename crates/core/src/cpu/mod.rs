@@ -25,7 +25,8 @@ pub use disasm::{ArmDisassembly, disassemble_arm};
 pub use disasm_thumb::{ThumbDisassembly, disassemble_thumb};
 pub use regs::{Bank, Mode, Registers};
 
-use psr::FLAG_T;
+pub(crate) use psr::FLAG_T;
+pub(crate) use regs::{LR, PC, SP};
 use serde::{Deserialize, Serialize};
 
 /// Master cycles one ARM9 instruction costs (`scheduler.md`, "Cost per instruction").
@@ -102,8 +103,14 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.refill(bus);
     }
 
+    /// Writes a CP15 register as an MCR would, for a test to set the machine up.
+    #[cfg(test)]
+    pub(crate) fn write_cp15(&mut self, crn: u32, crm: u32, opc2: u32, value: u32) {
+        self.cp15.write(crn, crm, opc2, value);
+    }
+
     /// Master cycles one instruction costs this CPU, which is also what an interrupt entry costs.
-    const INSTRUCTION_COST: u64 = match ARM9 {
+    pub(crate) const INSTRUCTION_COST: u64 = match ARM9 {
         true => ARM9_INSTRUCTION_COST,
         false => ARM7_INSTRUCTION_COST,
     };

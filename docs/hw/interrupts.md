@@ -88,7 +88,10 @@ handler that returns without doing so is interrupted again at once.
 
 **The IRQ dispatcher is not the controller.** On real hardware the BIOS vector code saves
 registers and calls the user's handler through a pointer in memory; that routine belongs to the
-HLE BIOS (#27). #23 stops at the exception entry: IRQ mode, R14_irq, SPSR_irq, and the vector.
+HLE BIOS (#27), and `hle-swi.md` ("The IRQ dispatcher") describes it. The controller stops at the
+exception entry: IRQ mode, R14_irq, SPSR_irq, and the vector. When the vector is in the BIOS (the
+ARM7 always, the ARM9 when CP15 bit 13 is set) the machine then does the dispatcher's work; a
+game that keeps its own vectors at `0000_0000h` on the ARM9 never reaches it.
 
 ## Edge cases
 

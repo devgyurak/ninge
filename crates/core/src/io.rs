@@ -5,17 +5,229 @@
 //! borrow memory, devices and the scheduler at once: a register write that changes a device's
 //! schedule schedules it on the spot.
 //!
+//! The address map lives here and nowhere else: [`decode`] turns an address into the [`Port`]
+//! that owns it and an offset into that device's own register space, once per access, from the
+//! per-CPU tables [`ARM9_PORTS`] and [`ARM7_PORTS`]. A test pins that no two entries overlap.
+//! The device behind a port speaks one interface, [`Device`], and `Io` calls the concrete type
+//! with a `match`: static dispatch, no `dyn` (`AGENTS.md` §2 rule 3).
+//!
 //! Every IF bit a device raises goes through [`Io::request_irq`], the one path to the two
-//! controllers. A device returns what it would raise as a [`Requests`]; it never reaches a
+//! controllers. A device returns what it would raise in an [`Effect`]; it never reaches a
 //! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
-use crate::gpu2d::Gpu2d;
-use crate::gpu2d::timing::Timing;
-use crate::ipc::{IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, Ipc};
-use crate::irq::{InterruptController, Requests};
+use crate::bus::VRAMCNT_A_ADDR;
+use crate::gpu2d::timing::{DISPSTAT_ADDR, Timing};
+use crate::gpu2d::{DISPCNT_A_ADDR, Gpu2d, POWCNT1_ADDR};
+use crate::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR, Ipc};
+use crate::irq::{IME_ADDR, InterruptController, Requests};
 use crate::scheduler::Scheduler;
-use crate::timers::{TIMER_COUNT, Timers};
+use crate::timers::{TIMER_COUNT, TM0CNT_L_ADDR, Timers};
 use serde::{Deserialize, Serialize};
+
+/// The width of one bus access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Width {
+    Byte,
+    Half,
+    Word,
+}
+
+impl Width {
+    /// The width of an access of `N` bytes. The bus only makes 1, 2 and 4.
+    pub(crate) const fn of<const N: usize>() -> Self {
+        const { assert!(N == 1 || N == 2 || N == 4) };
+        match N {
+            1 => Self::Byte,
+            2 => Self::Half,
+            _ => Self::Word,
+        }
+    }
+
+    /// Bytes in the access.
+    pub(crate) const fn bytes(self) -> u32 {
+        match self {
+            Self::Byte => 1,
+            Self::Half => 2,
+            Self::Word => 4,
+        }
+    }
+
+    /// The bits of a `u32` the access carries.
+    pub(crate) const fn mask(self) -> u32 {
+        match self {
+            Self::Byte => 0xFF,
+            Self::Half => 0xFFFF,
+            Self::Word => u32::MAX,
+        }
+    }
+}
+
+/// What a register access asks of its caller: the IF bits to raise, and which of the device's
+/// event slots must be replaced. Every device returns this one type, so the caller handles an
+/// access the same way whatever it reached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Effect {
+    /// The IF bits to raise.
+    pub(crate) requests: Requests,
+    /// Bit n: the device's event slot n changed and its scheduler event must be replaced. The
+    /// four timers are slots 0-3; DMA's four channels will take the same shape (#26).
+    pub(crate) reschedule: u8,
+}
+
+impl Effect {
+    /// An effect that only raises `requests`.
+    pub(crate) fn raising(requests: Requests) -> Self {
+        Self {
+            requests,
+            reschedule: 0,
+        }
+    }
+
+    /// Both effects in one: the requests and the slots to reschedule of each.
+    pub(crate) fn merge(self, other: Self) -> Self {
+        Self {
+            requests: self.requests.merge(other.requests),
+            reschedule: self.reschedule | other.reschedule,
+        }
+    }
+}
+
+/// A register device. `offset` is into the device's own register space ([`Port::base`] is
+/// offset 0) and `now` is the master time of the access. `ARM9` is the CPU asking: a device that
+/// serves one CPU (or two copies of one) is implemented for that CPU's value alone
+/// (`AGENTS.md` §4, "Per-CPU devices").
+pub(crate) trait Device<const ARM9: bool> {
+    /// What a read would return, with no side effect: the debugger's and the fetch's view.
+    fn peek(&self, offset: u32, width: Width, now: u64) -> u32;
+
+    /// A CPU's read. A register that a read changes (a FIFO that pops) overrides this; the
+    /// others read as they peek.
+    fn read(&mut self, offset: u32, width: Width, now: u64) -> (u32, Effect) {
+        (self.peek(offset, width, now), Effect::default())
+    }
+
+    /// A CPU's write of `width` at `offset`.
+    fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect;
+}
+
+/// A read of `width` at `offset` built from a device that holds registers one byte at a time:
+/// each byte comes from the register at its own address, so a wide read spans neighbouring
+/// registers. The default helper a byte-register device opts into.
+// TODO(hw-unverified): a wider read is split into bytes and each comes from the register at its
+// own address (`arm9-memory-map.md`, "Unverified").
+pub(crate) fn read_bytes(offset: u32, width: Width, byte: impl Fn(u32) -> u8) -> u32 {
+    (0..width.bytes()).fold(0, |value, i| {
+        value | u32::from(byte(offset.wrapping_add(i))) << (8 * i)
+    })
+}
+
+/// A write of `width` at `offset` split into bytes, each going to the register at its own
+/// address in ascending order, and the effects merged. The counterpart of [`read_bytes`].
+// TODO(hw-unverified): a wider write is split into bytes and each goes to the register at its
+// own address (`arm9-memory-map.md`, "Unverified").
+pub(crate) fn write_bytes(
+    offset: u32,
+    width: Width,
+    value: u32,
+    mut byte: impl FnMut(u32, u8) -> Effect,
+) -> Effect {
+    (0..width.bytes()).fold(Effect::default(), |effect, i| {
+        effect.merge(byte(offset.wrapping_add(i), (value >> (8 * i)) as u8))
+    })
+}
+
+/// Who owns an address. Memory-control registers are a port so the map is complete, but their
+/// state stays in `Memory` (#109): the bus view sends that port to `Memory`, not to `Io`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Port {
+    /// DISPCNT of engine A and POWCNT1 (two table entries, one device).
+    Gpu2d,
+    /// DISPSTAT and VCOUNT.
+    Timing,
+    /// IME, IE and IF.
+    Irq,
+    /// IPCSYNC, IPCFIFOCNT and IPCFIFOSEND.
+    Ipc,
+    /// IPCFIFORECV: its own entry, because it lives in a different block, but the same device.
+    IpcRecv,
+    /// The four timers.
+    Timers,
+    /// VRAMCNT_A..G, WRAMCNT (ARM9) and WRAMSTAT (ARM7): owned by `Memory`.
+    MemoryControl,
+}
+
+impl Port {
+    /// The address that is offset 0 of the device behind this port. A device with two table
+    /// entries ([`Port::Gpu2d`]) or two ports ([`Port::Ipc`], [`Port::IpcRecv`]) has one offset
+    /// space across them.
+    pub(crate) const fn base(self) -> u32 {
+        match self {
+            Self::Gpu2d => DISPCNT_A_ADDR,
+            Self::Timing => DISPSTAT_ADDR,
+            Self::Irq => IME_ADDR,
+            Self::Ipc | Self::IpcRecv => IPCSYNC_ADDR,
+            Self::Timers => TM0CNT_L_ADDR,
+            Self::MemoryControl => VRAMCNT_A_ADDR,
+        }
+    }
+}
+
+/// One entry of the address map: the first address, the length in bytes, and the owner.
+pub(crate) type PortEntry = (u32, u32, Port);
+
+/// What the ARM9 sees, in ascending address order. Every entry is a 4-byte-aligned block whose
+/// length is a multiple of 4, so one aligned access never spans two entries. Holes inside an
+/// entry belong to its device, which reads them 0 and drops writes to them.
+// TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
+// TODO(phase3): the I/O registers of the other blocks arrive with their issues (#26).
+pub(crate) const ARM9_PORTS: [PortEntry; 8] = [
+    (DISPCNT_A_ADDR, 4, Port::Gpu2d),
+    (DISPSTAT_ADDR, 4, Port::Timing),
+    (TM0CNT_L_ADDR, 16, Port::Timers),
+    // IPCSYNC, IPCFIFOCNT and IPCFIFOSEND, 4 bytes each.
+    (IPCSYNC_ADDR, 12, Port::Ipc),
+    // IME, a hole, IE and IF.
+    (IME_ADDR, 16, Port::Irq),
+    // VRAMCNT_A..D and VRAMCNT_E, F, G and WRAMCNT.
+    (VRAMCNT_A_ADDR, 8, Port::MemoryControl),
+    (POWCNT1_ADDR, 4, Port::Gpu2d),
+    (IPCFIFORECV_ADDR, 4, Port::IpcRecv),
+];
+
+/// What the ARM7 sees: the same blocks, without engine A, and WRAMSTAT in place of the ARM9's
+/// memory-control block.
+pub(crate) const ARM7_PORTS: [PortEntry; 6] = [
+    (DISPSTAT_ADDR, 4, Port::Timing),
+    (TM0CNT_L_ADDR, 16, Port::Timers),
+    (IPCSYNC_ADDR, 12, Port::Ipc),
+    (IME_ADDR, 16, Port::Irq),
+    // WRAMSTAT sits in the second byte.
+    (VRAMCNT_A_ADDR, 4, Port::MemoryControl),
+    (IPCFIFORECV_ADDR, 4, Port::IpcRecv),
+];
+
+/// The port that owns `addr` for CPU `ARM9` and the offset of `addr` in that device's register
+/// space, or `None` when no device holds it (it reads 0 and ignores writes).
+// TODO(hw-unverified): an undefined I/O port reads 0 (GBATEK says so); unmapped memory is
+// "undefined" there and reads 0 here (`arm9-memory-map.md`, "Unverified").
+pub(crate) fn decode<const ARM9: bool>(addr: u32) -> Option<(Port, u32)> {
+    let ports: &[PortEntry] = if ARM9 { &ARM9_PORTS } else { &ARM7_PORTS };
+    ports.iter().find_map(|&(start, len, port)| {
+        let within = addr.checked_sub(start).filter(|&d| d < len)?;
+        Some((port, start.wrapping_sub(port.base()).wrapping_add(within)))
+    })
+}
+
+/// When an access happens: the clock of the CPU making it, and the earliest time an event it
+/// schedules may fire.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct At {
+    /// Master time of the access, as the CPU's own clock has it.
+    pub(crate) now: u64,
+    /// An overflow event never lies before the end of the instruction that scheduled it
+    /// (`timers.md`, "Model").
+    pub(crate) floor: u64,
+}
 
 /// The register devices. Plain data; the machine owns one next to its `Memory`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,13 +244,6 @@ pub struct Io {
     // Each CPU's four timers: the same addresses, separate state (`timers.md`).
     timers9: Timers<true>,
     timers7: Timers<false>,
-}
-
-/// Which byte of IPCFIFORECV `addr` is, if it is one.
-fn recv_offset(addr: u32) -> Option<usize> {
-    addr.checked_sub(IPCFIFORECV_ADDR)
-        .filter(|&offset| offset < 4)
-        .map(|offset| offset as usize)
 }
 
 /// Replaces the overflow event of each timer in `reschedule` (bit n = timer n) with one at its
@@ -124,95 +329,102 @@ impl Io {
         self.irq7.request(requests.arm7);
     }
 
-    /// The byte of the register at `addr` as CPU `ARM9` reads it at master time `now`, if a
-    /// device holds it. A byte of IPCFIFORECV shows the word a read would take, without taking
-    /// it. Each byte of a wide read comes from the register at its own address.
+    /// What CPU `ARM9` would read from `port` at master time `now`, with no side effect. A
+    /// FIFO shows the word a read would take, without taking it.
     // TODO(hw-unverified): IPCFIFORECV is not mirrored (`ipc.md`, "Unverified").
-    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#26).
-    pub(crate) fn read_byte<const ARM9: bool>(&self, addr: u32, now: u64) -> Option<u8> {
-        let recv =
-            || recv_offset(addr).map(|offset| self.ipc.peek_recv::<ARM9>().to_le_bytes()[offset]);
-        if ARM9 {
-            self.irq9
-                .read_byte(addr)
-                .or_else(|| self.ipc.read_byte::<true>(addr))
-                .or_else(recv)
-                .or_else(|| self.gpu2d.read_byte(addr))
-                .or_else(|| self.timing.read_byte::<true>(addr))
-                .or_else(|| self.timers9.read_byte(addr, now))
-        } else {
-            self.irq7
-                .read_byte(addr)
-                .or_else(|| self.ipc.read_byte::<false>(addr))
-                .or_else(recv)
-                .or_else(|| self.timing.read_byte::<false>(addr))
-                .or_else(|| self.timers7.read_byte(addr, now))
+    pub(crate) fn peek<const ARM9: bool>(
+        &self,
+        port: Port,
+        offset: u32,
+        width: Width,
+        now: u64,
+    ) -> u32 {
+        match port {
+            Port::Gpu2d if ARM9 => Device::<true>::peek(&self.gpu2d, offset, width, now),
+            Port::Timing => Device::<ARM9>::peek(&self.timing, offset, width, now),
+            Port::Irq if ARM9 => Device::<true>::peek(&self.irq9, offset, width, now),
+            Port::Irq => Device::<false>::peek(&self.irq7, offset, width, now),
+            Port::Ipc | Port::IpcRecv => Device::<ARM9>::peek(&self.ipc, offset, width, now),
+            Port::Timers if ARM9 => Device::<true>::peek(&self.timers9, offset, width, now),
+            Port::Timers => Device::<false>::peek(&self.timers7, offset, width, now),
+            // The ARM7 has no engine A, and `Memory` owns the memory-control registers.
+            Port::Gpu2d | Port::MemoryControl => 0,
         }
     }
 
-    /// A CPU's read of `N` bytes at `addr` when it lands on IPCFIFORECV: one word is taken from
-    /// the FIFO whatever the width, and the access sees the bytes at its own address.
-    // TODO(hw-unverified): a byte or halfword read takes a whole word (`ipc.md`, "Unverified").
-    pub(crate) fn receive_bytes<const ARM9: bool, const N: usize>(
-        &mut self,
-        addr: u32,
-    ) -> Option<[u8; N]> {
-        let offset = recv_offset(addr)?;
-        let (word, requests) = self.ipc.receive::<ARM9>();
-        self.request_irq(requests);
-        let bytes = word.to_le_bytes();
-        // `addr` is aligned to `N` and the register is 4 bytes, so the access stays inside it.
-        Some(std::array::from_fn(|i| bytes[(offset + i) & 3]))
-    }
-
-    /// A CPU's write of `N` bytes at the aligned `addr` when it lands on IPCFIFOSEND: a word
-    /// write sends one word. Returns whether the address was IPCFIFOSEND.
-    // TODO(hw-unverified): a byte or halfword write is ignored (`ipc.md`, "Unverified").
-    pub(crate) fn send_word<const ARM9: bool, const N: usize>(
-        &mut self,
-        addr: u32,
-        bytes: [u8; N],
-    ) -> bool {
-        if addr & !3 != IPCFIFOSEND_ADDR {
-            return false;
-        }
-        if let Ok(word) = <[u8; 4]>::try_from(bytes.as_slice()) {
-            let requests = self.ipc.send::<ARM9>(u32::from_le_bytes(word));
-            self.request_irq(requests);
-        }
-        true
-    }
-
-    /// Writes one byte of a register as CPU `ARM9` at master time `now`; a byte no device holds
-    /// is dropped. A timer write that changes a schedule replaces that overflow event in
-    /// `scheduler` at once, never earlier than `floor` (`timers.md`, "Model").
-    // TODO(hw-unverified): a wider write is split into bytes and each goes to the register at its
-    // own address (`arm9-memory-map.md`, "Unverified").
-    pub(crate) fn write_byte<const ARM9: bool>(
+    /// A CPU's read from `port`: what it returns, with the effect applied (IF bits raised, events
+    /// replaced). A read that takes a word out of a FIFO can raise the sender's requests.
+    pub(crate) fn read<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
-        now: u64,
-        floor: u64,
-        addr: u32,
-        value: u8,
+        at: At,
+        port: Port,
+        offset: u32,
+        width: Width,
+    ) -> u32 {
+        let (value, effect) = match port {
+            Port::Gpu2d if ARM9 => Device::<true>::read(&mut self.gpu2d, offset, width, at.now),
+            Port::Timing => Device::<ARM9>::read(&mut self.timing, offset, width, at.now),
+            Port::Irq if ARM9 => Device::<true>::read(&mut self.irq9, offset, width, at.now),
+            Port::Irq => Device::<false>::read(&mut self.irq7, offset, width, at.now),
+            Port::Ipc | Port::IpcRecv => Device::<ARM9>::read(&mut self.ipc, offset, width, at.now),
+            Port::Timers if ARM9 => Device::<true>::read(&mut self.timers9, offset, width, at.now),
+            Port::Timers => Device::<false>::read(&mut self.timers7, offset, width, at.now),
+            Port::Gpu2d | Port::MemoryControl => (0, Effect::default()),
+        };
+        self.apply::<ARM9>(scheduler, at, port, effect);
+        value
+    }
+
+    /// A CPU's write of `value` to `port`, with the effect applied. A timer write that changes a
+    /// schedule replaces that overflow event in `scheduler` at once, never earlier than
+    /// `at.floor` (`timers.md`, "Model").
+    pub(crate) fn write<const ARM9: bool>(
+        &mut self,
+        scheduler: &mut Scheduler,
+        at: At,
+        port: Port,
+        offset: u32,
+        width: Width,
+        value: u32,
     ) {
-        if ARM9 {
-            self.irq9.write_byte(addr, value);
-            let requests = self.ipc.write_byte::<true>(addr, value);
-            self.request_irq(requests);
-            self.gpu2d.write_byte(addr, value);
-            self.timing.write_byte::<true>(addr, value);
-            let outcome = self.timers9.write_byte(addr, value, now);
-            self.request_irq(outcome.requests);
-            schedule_timers(scheduler, &self.timers9, outcome.reschedule, floor);
-        } else {
-            self.irq7.write_byte(addr, value);
-            let requests = self.ipc.write_byte::<false>(addr, value);
-            self.request_irq(requests);
-            self.timing.write_byte::<false>(addr, value);
-            let outcome = self.timers7.write_byte(addr, value, now);
-            self.request_irq(outcome.requests);
-            schedule_timers(scheduler, &self.timers7, outcome.reschedule, floor);
+        let now = at.now;
+        let effect = match port {
+            Port::Gpu2d if ARM9 => {
+                Device::<true>::write(&mut self.gpu2d, offset, width, value, now)
+            }
+            Port::Timing => Device::<ARM9>::write(&mut self.timing, offset, width, value, now),
+            Port::Irq if ARM9 => Device::<true>::write(&mut self.irq9, offset, width, value, now),
+            Port::Irq => Device::<false>::write(&mut self.irq7, offset, width, value, now),
+            Port::Ipc | Port::IpcRecv => {
+                Device::<ARM9>::write(&mut self.ipc, offset, width, value, now)
+            }
+            Port::Timers if ARM9 => {
+                Device::<true>::write(&mut self.timers9, offset, width, value, now)
+            }
+            Port::Timers => Device::<false>::write(&mut self.timers7, offset, width, value, now),
+            Port::Gpu2d | Port::MemoryControl => Effect::default(),
+        };
+        self.apply::<ARM9>(scheduler, at, port, effect);
+    }
+
+    /// Hands an access's effect on: its IF bits to the controllers, and the timers it names to
+    /// the scheduler.
+    fn apply<const ARM9: bool>(
+        &mut self,
+        scheduler: &mut Scheduler,
+        at: At,
+        port: Port,
+        effect: Effect,
+    ) {
+        self.request_irq(effect.requests);
+        // Only the timers have event slots today; DMA (#26) extends this.
+        debug_assert!(port == Port::Timers || effect.reschedule == 0);
+        if port == Port::Timers {
+            match ARM9 {
+                true => schedule_timers(scheduler, &self.timers9, effect.reschedule, at.floor),
+                false => schedule_timers(scheduler, &self.timers7, effect.reschedule, at.floor),
+            }
         }
     }
 
@@ -225,21 +437,21 @@ impl Io {
         // the CPUs standing still. The timer is rescheduled whether or not one was due.
         let now = scheduler.now();
         if arm9 {
-            let outcome = self.timers9.settle_timer(index, now);
-            self.request_irq(outcome.requests);
+            let effect = self.timers9.settle_timer(index, now);
+            self.request_irq(effect.requests);
             schedule_timers(
                 scheduler,
                 &self.timers9,
-                outcome.reschedule | 1 << index,
+                effect.reschedule | 1 << index,
                 now,
             );
         } else {
-            let outcome = self.timers7.settle_timer(index, now);
-            self.request_irq(outcome.requests);
+            let effect = self.timers7.settle_timer(index, now);
+            self.request_irq(effect.requests);
             schedule_timers(
                 scheduler,
                 &self.timers7,
-                outcome.reschedule | 1 << index,
+                effect.reschedule | 1 << index,
                 now,
             );
         }
@@ -272,7 +484,216 @@ impl Default for Io {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::irq::{InterruptController, Requests};
+    use crate::gpu2d::timing::VCOUNT_ADDR;
+    use crate::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
+    use crate::irq::{IE_ADDR, IF_ADDR, InterruptController, Requests};
+
+    /// The WRAMCNT, WRAMSTAT and VRAMCNT_G addresses, which `Memory` keeps private.
+    const VRAMCNT_G: u32 = 0x0400_0246;
+    const WRAMCNT: u32 = 0x0400_0247;
+    const WRAMSTAT: u32 = 0x0400_0241;
+
+    /// The pairs of entries in `table` that share an address, as (first start, second start).
+    fn overlapping_pairs(table: &[PortEntry]) -> Vec<(u32, u32)> {
+        table
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &(a, a_len, _))| {
+                table[i + 1..]
+                    .iter()
+                    .filter(move |&&(b, b_len, _)| a < b + b_len && b < a + a_len)
+                    .map(move |&(b, ..)| (a, b))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn given_the_io_port_tables_when_compared_pairwise_then_no_two_ports_overlap() {
+        assert_eq!(
+            (
+                overlapping_pairs(&ARM9_PORTS),
+                overlapping_pairs(&ARM7_PORTS)
+            ),
+            (Vec::<(u32, u32)>::new(), Vec::<(u32, u32)>::new())
+        );
+    }
+
+    /// The entries of `table` that break the shape the decoder relies on: a start or a length
+    /// off the 4-byte grid, an empty block, or a start below its port's base.
+    fn malformed_entries(table: &[PortEntry]) -> Vec<(u32, u32)> {
+        table
+            .iter()
+            .filter(|&&(start, len, port)| {
+                start % 4 != 0 || len % 4 != 0 || len == 0 || start < port.base()
+            })
+            .map(|&(start, len, _)| (start, len))
+            .collect()
+    }
+
+    #[test]
+    fn given_the_io_port_tables_when_each_entry_is_checked_then_blocks_are_aligned_and_above_their_base()
+     {
+        assert_eq!(
+            (
+                malformed_entries(&ARM9_PORTS),
+                malformed_entries(&ARM7_PORTS)
+            ),
+            (Vec::<(u32, u32)>::new(), Vec::<(u32, u32)>::new())
+        );
+    }
+
+    /// The cases where `decode` answers something other than `expected`, as (address, got).
+    fn decode_failures<const ARM9: bool>(
+        expected: &[(u32, Option<(Port, u32)>)],
+    ) -> Vec<(u32, Option<(Port, u32)>)> {
+        expected
+            .iter()
+            .filter(|&&(addr, want)| decode::<ARM9>(addr) != want)
+            .map(|&(addr, _)| (addr, decode::<ARM9>(addr)))
+            .collect()
+    }
+
+    #[test]
+    fn given_each_arm9_register_address_when_decoded_then_the_expected_port_and_offset_answer() {
+        let expected = [
+            (DISPCNT_A_ADDR, Some((Port::Gpu2d, 0))),
+            (DISPCNT_A_ADDR + 3, Some((Port::Gpu2d, 3))),
+            (
+                POWCNT1_ADDR,
+                Some((Port::Gpu2d, POWCNT1_ADDR - DISPCNT_A_ADDR)),
+            ),
+            (DISPSTAT_ADDR, Some((Port::Timing, 0))),
+            (VCOUNT_ADDR, Some((Port::Timing, 2))),
+            (TM0CNT_L_ADDR, Some((Port::Timers, 0))),
+            (TM0CNT_L_ADDR + 15, Some((Port::Timers, 15))),
+            (IPCSYNC_ADDR, Some((Port::Ipc, 0))),
+            (IPCFIFOCNT_ADDR, Some((Port::Ipc, 4))),
+            (IPCFIFOSEND_ADDR, Some((Port::Ipc, 8))),
+            (
+                IPCFIFORECV_ADDR,
+                Some((Port::IpcRecv, IPCFIFORECV_ADDR - IPCSYNC_ADDR)),
+            ),
+            (IME_ADDR, Some((Port::Irq, 0))),
+            (IE_ADDR, Some((Port::Irq, 8))),
+            (IF_ADDR, Some((Port::Irq, 12))),
+            (VRAMCNT_A_ADDR, Some((Port::MemoryControl, 0))),
+            (VRAMCNT_G, Some((Port::MemoryControl, 6))),
+            (WRAMCNT, Some((Port::MemoryControl, 7))),
+        ];
+        assert_eq!(decode_failures::<true>(&expected), vec![]);
+    }
+
+    #[test]
+    fn given_each_arm7_register_address_when_decoded_then_the_expected_port_and_offset_answer() {
+        let expected = [
+            (DISPSTAT_ADDR, Some((Port::Timing, 0))),
+            (VCOUNT_ADDR, Some((Port::Timing, 2))),
+            (TM0CNT_L_ADDR + 4, Some((Port::Timers, 4))),
+            (IPCSYNC_ADDR, Some((Port::Ipc, 0))),
+            (IPCFIFOSEND_ADDR, Some((Port::Ipc, 8))),
+            (
+                IPCFIFORECV_ADDR,
+                Some((Port::IpcRecv, IPCFIFORECV_ADDR - IPCSYNC_ADDR)),
+            ),
+            (IME_ADDR, Some((Port::Irq, 0))),
+            (IF_ADDR, Some((Port::Irq, 12))),
+            (WRAMSTAT, Some((Port::MemoryControl, 1))),
+        ];
+        assert_eq!(decode_failures::<false>(&expected), vec![]);
+    }
+
+    #[test]
+    fn given_arm9_only_registers_when_the_arm7_decodes_them_then_no_port_owns_them() {
+        let expected = [
+            (DISPCNT_A_ADDR, None),
+            (POWCNT1_ADDR, None),
+            (WRAMCNT, None),
+            (VRAMCNT_G, None),
+        ];
+        assert_eq!(decode_failures::<false>(&expected), vec![]);
+    }
+
+    #[test]
+    fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
+        // Just below and above IME/IE/IF (208-217), the timers (100-10F), IPCSYNC..SEND
+        // (180-18B), the 2D registers and the cart-side neighbour of IPCFIFORECV.
+        let expected = [
+            (0x0400_0207, None),
+            (0x0400_0218, None),
+            (0x0400_021B, None),
+            (0x0400_0200, None),
+            (0x0400_0300, None),
+            (TM0CNT_L_ADDR - 1, None),
+            (TM0CNT_L_ADDR + 16, None),
+            (IPCSYNC_ADDR - 1, None),
+            (IPCFIFOSEND_ADDR + 4, None),
+            (IPCFIFORECV_ADDR + 4, None),
+            (0x0400_0008, None),
+            (0x0000_0000, None),
+        ];
+        assert_eq!(
+            (
+                decode_failures::<true>(&expected),
+                decode_failures::<false>(&expected)
+            ),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn given_every_byte_of_ime_ie_and_if_when_decoded_then_the_irq_port_owns_it() {
+        let unowned: Vec<u32> = (0..4)
+            .flat_map(|i| [IME_ADDR + i, IE_ADDR + i, IF_ADDR + i])
+            .filter(|&addr| decode::<true>(addr).map(|(port, _)| port) != Some(Port::Irq))
+            .collect();
+        assert_eq!(unowned, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn given_a_word_at_the_second_memory_control_block_when_decoded_then_one_port_owns_all_four_bytes()
+     {
+        // VRAMCNT_E/F/G and WRAMCNT share one aligned word, so one access never splits.
+        let ports: Vec<Option<Port>> = (0..4)
+            .map(|i| decode::<true>(0x0400_0244 + i).map(|(port, _)| port))
+            .collect();
+        assert_eq!(ports, vec![Some(Port::MemoryControl); 4]);
+    }
+
+    #[test]
+    fn given_a_word_the_width_helpers_split_when_it_is_joined_again_then_it_round_trips() {
+        let split = write_bytes(0, Width::Word, 0xDDCC_BBAA, |_, _| Effect::default());
+        let joined = read_bytes(0, Width::Word, |at| [0xAA, 0xBB, 0xCC, 0xDD][at as usize]);
+        assert_eq!((split, joined), (Effect::default(), 0xDDCC_BBAA));
+    }
+
+    #[test]
+    fn given_a_halfword_write_when_split_then_each_byte_goes_to_its_own_offset_in_order() {
+        let mut seen = Vec::new();
+        write_bytes(2, Width::Half, 0xBEEF, |at, byte| {
+            seen.push((at, byte));
+            Effect::default()
+        });
+        assert_eq!(seen, vec![(2, 0xEF), (3, 0xBE)]);
+    }
+
+    #[test]
+    fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
+        let merged = Effect {
+            requests: Requests { arm9: 1, arm7: 0 },
+            reschedule: 0b01,
+        }
+        .merge(Effect {
+            requests: Requests { arm9: 2, arm7: 4 },
+            reschedule: 0b10,
+        });
+        assert_eq!(
+            merged,
+            Effect {
+                requests: Requests { arm9: 3, arm7: 4 },
+                reschedule: 0b11,
+            }
+        );
+    }
 
     #[test]
     fn given_power_on_devices_when_checked_then_they_are_well_formed() {

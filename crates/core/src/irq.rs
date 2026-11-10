@@ -5,6 +5,7 @@
 //! "an independent copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two
 //! instances of `InterruptController<const ARM9: bool>`.
 
+use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// IME, at `0400_0208h` (`interrupts.md`, "Registers").
@@ -13,6 +14,11 @@ pub const IME_ADDR: u32 = 0x0400_0208;
 pub const IE_ADDR: u32 = 0x0400_0210;
 /// IF, at `0400_0214h` (`interrupts.md`, "Registers").
 pub const IF_ADDR: u32 = 0x0400_0214;
+
+/// IE's offset in the register space of the controller, which starts at IME.
+const IE_OFFSET: u32 = IE_ADDR - IME_ADDR;
+/// IF's offset in the same space.
+const IF_OFFSET: u32 = IF_ADDR - IME_ADDR;
 
 /// IF bit 0: LCD VBlank (`interrupts.md`, "IE and IF bits").
 pub const VBLANK_IRQ: u32 = 1 << 0;
@@ -147,22 +153,24 @@ impl<const ARM9: bool> InterruptController<ARM9> {
         self.if_ |= mask & Self::valid_bits();
     }
 
-    /// The byte of the register at `addr`, if one of the three holds it.
-    pub(crate) fn read_byte(&self, addr: u32) -> Option<u8> {
-        let (base, shift) = Self::locate(addr)?;
+    /// The byte at `offset` in the register space, which starts at IME; 0 where no register is.
+    fn read_byte(&self, offset: u32) -> u8 {
+        let Some((base, shift)) = Self::register_at(offset) else {
+            return 0;
+        };
         let value = match base {
             // TODO(hw-unverified): IME bits 1-31 read 0 (`interrupts.md`, "Unverified").
-            IME_ADDR => u32::from(self.ime),
-            IE_ADDR => self.ie,
+            0 => u32::from(self.ime),
+            IE_OFFSET => self.ie,
             _ => self.if_,
         };
-        Some((value >> shift) as u8)
+        (value >> shift) as u8
     }
 
-    /// Writes a byte to the register at `addr`; a byte no register holds is ignored. IF takes a
-    /// 1 as "clear this bit" (`interrupts.md`, "Behavior").
-    pub(crate) fn write_byte(&mut self, addr: u32, value: u8) {
-        let Some((base, shift)) = Self::locate(addr) else {
+    /// Writes a byte at `offset`; a byte no register holds is ignored. IF takes a 1 as "clear this
+    /// bit" (`interrupts.md`, "Behavior").
+    fn write_byte(&mut self, offset: u32, value: u8) {
+        let Some((base, shift)) = Self::register_at(offset) else {
             return;
         };
         let part = u32::from(value) << shift;
@@ -170,14 +178,14 @@ impl<const ARM9: bool> InterruptController<ARM9> {
             // Only bit 0 of the register exists, and it sits in byte 0.
             // TODO(hw-unverified): the other IME bits are dropped and read 0
             // (`interrupts.md`, "Unverified").
-            IME_ADDR => {
+            0 => {
                 if shift == 0 {
                     self.ime = part & 1 != 0;
                 }
             }
             // TODO(hw-unverified): a bit that does not exist is dropped
             // (`interrupts.md`, "Unverified").
-            IE_ADDR => {
+            IE_OFFSET => {
                 let byte_mask = 0xFF << shift;
                 self.ie = (self.ie & !byte_mask) | (part & byte_mask & Self::valid_bits());
             }
@@ -185,11 +193,27 @@ impl<const ARM9: bool> InterruptController<ARM9> {
         }
     }
 
-    /// Which register holds `addr`, and the bit position of its byte within the 32-bit register.
-    fn locate(addr: u32) -> Option<(u32, u32)> {
-        [IME_ADDR, IE_ADDR, IF_ADDR].into_iter().find_map(|base| {
-            let offset = addr.checked_sub(base).filter(|&o| o < 4)?;
-            Some((base, offset * 8))
+    /// Which register holds `offset` (its own offset), and the bit position of the byte within
+    /// the 32-bit register. The word between IME and IE holds nothing.
+    fn register_at(offset: u32) -> Option<(u32, u32)> {
+        [0, IE_OFFSET, IF_OFFSET].into_iter().find_map(|base| {
+            let within = offset.checked_sub(base).filter(|&o| o < 4)?;
+            Some((base, within * 8))
+        })
+    }
+}
+
+/// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
+/// split into them.
+impl<const ARM9: bool> Device<ARM9> for InterruptController<ARM9> {
+    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte(at))
+    }
+
+    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+        write_bytes(offset, width, value, |at, byte| {
+            self.write_byte(at, byte);
+            Effect::default()
         })
     }
 }

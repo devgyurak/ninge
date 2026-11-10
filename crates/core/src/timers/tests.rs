@@ -21,38 +21,54 @@ const START: u16 = 0x80;
 const IRQ: u16 = 0x40;
 const COUNT_UP: u16 = 0x04;
 
-/// Timer *n*'s TMnCNT_L and TMnCNT_H (`timers.md`, "Registers").
-const fn reload_addr(index: u32) -> u32 {
-    TM0CNT_L_ADDR + 4 * index
+/// The offsets of timer *n*'s TMnCNT_L and TMnCNT_H in the register block, which starts at
+/// TM0CNT_L (`timers.md`, "Registers").
+const fn reload_offset(index: u32) -> u32 {
+    4 * index
 }
-const fn control_addr(index: u32) -> u32 {
-    TM0CNT_L_ADDR + 4 * index + 2
+const fn control_offset(index: u32) -> u32 {
+    4 * index + 2
+}
+
+/// A byte write at `offset`.
+fn write_byte<const ARM9: bool>(
+    timers: &mut Timers<ARM9>,
+    offset: u32,
+    value: u8,
+    now: u64,
+) -> Effect {
+    timers.write(offset, Width::Byte, u32::from(value), now)
+}
+
+/// A byte read at `offset`.
+fn read_byte(timers: &Arm9Timers, offset: u32, now: u64) -> u8 {
+    timers.peek(offset, Width::Byte, now) as u8
 }
 
 /// A halfword write: bytes in ascending address order, as the bus splits it. Returns the mask of
 /// timers whose overflow event the write made stale.
-fn write16(timers: &mut Arm9Timers, addr: u32, value: u16, now: u64) -> u8 {
-    let low = timers.write_byte(addr, value as u8, now);
-    let high = timers.write_byte(addr + 1, (value >> 8) as u8, now);
+fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> u8 {
+    let low = write_byte(timers, offset, value as u8, now);
+    let high = write_byte(timers, offset + 1, (value >> 8) as u8, now);
     low.reschedule | high.reschedule
 }
 
 /// A word write: four bytes in ascending address order (`timers.md`, "Writing a 32-bit word").
 /// Returns the mask of timers whose overflow event the write made stale.
-fn write32(timers: &mut Arm9Timers, addr: u32, value: u32, now: u64) -> u8 {
+fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> u8 {
     value
         .to_le_bytes()
         .iter()
         .enumerate()
         .fold(0, |mask, (i, &byte)| {
-            mask | timers.write_byte(addr + i as u32, byte, now).reschedule
+            mask | write_byte(timers, offset + i as u32, byte, now).reschedule
         })
 }
 
 /// Writes timer `index`'s reload, then its control, at `now`. Returns the reschedule mask.
 fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) -> u8 {
-    write16(timers, reload_addr(index), reload, now)
-        | write16(timers, control_addr(index), control, now)
+    write16(timers, reload_offset(index), reload, now)
+        | write16(timers, control_offset(index), control, now)
 }
 
 /// One timer 0, started at `now`.
@@ -165,7 +181,7 @@ fn given_a_reload_when_the_timer_is_started_then_the_counter_holds_the_reload() 
 #[test]
 fn given_a_stopped_timer_when_the_reload_is_written_then_the_counter_does_not_change() {
     let mut timers = Arm9Timers::new();
-    write16(&mut timers, reload_addr(0), 0x1234, 0);
+    write16(&mut timers, reload_offset(0), 0x1234, 0);
     assert_eq!((timers.reload(0), timers.counter(0, 50)), (0x1234, 0));
 }
 
@@ -173,7 +189,7 @@ fn given_a_stopped_timer_when_the_reload_is_written_then_the_counter_does_not_ch
 fn given_a_running_timer_when_the_reload_is_written_then_the_counter_and_the_overflow_time_do_not_change()
  {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, reload_addr(0), 0xFF00, 10);
+    write16(&mut timers, reload_offset(0), 0xFF00, 10);
     assert_eq!(
         (
             timers.counter(0, 10),
@@ -188,7 +204,7 @@ fn given_a_running_timer_when_the_reload_is_written_then_the_counter_and_the_ove
 fn given_a_reload_written_while_running_when_the_timer_overflows_then_the_counter_takes_the_new_reload_and_the_next_period_uses_it()
  {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, reload_addr(0), 0xFF00, 10);
+    write16(&mut timers, reload_offset(0), 0xFF00, 10);
     timers.overflow(0, 32);
     // 0x10000 - 0xFF00 = 256 ticks = 512 master cycles after the overflow at 32.
     assert_eq!(
@@ -200,7 +216,7 @@ fn given_a_reload_written_while_running_when_the_timer_overflows_then_the_counte
 #[test]
 fn given_a_reload_write_when_checked_then_the_overflow_event_is_not_marked_for_replacement() {
     let mut timers = timer0(0xFFF0, START, 0);
-    let mask = write16(&mut timers, reload_addr(0), 0xFF00, 10);
+    let mask = write16(&mut timers, reload_offset(0), 0xFF00, 10);
     assert_eq!(mask, 0);
 }
 
@@ -495,7 +511,7 @@ fn given_count_up_on_timer_0_when_read_later_then_the_counter_still_ticks_from_t
 #[test]
 fn given_a_running_timer_when_stopped_then_the_counter_freezes_and_has_no_event() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), 0, 10);
+    write16(&mut timers, control_offset(0), 0, 10);
     assert_eq!(
         (
             timers.counter(0, 10),
@@ -509,8 +525,8 @@ fn given_a_running_timer_when_stopped_then_the_counter_freezes_and_has_no_event(
 #[test]
 fn given_a_stopped_timer_when_started_again_then_the_reload_is_loaded_and_the_period_restarts() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), 0, 10);
-    write16(&mut timers, control_addr(0), START, 2000);
+    write16(&mut timers, control_offset(0), 0, 10);
+    write16(&mut timers, control_offset(0), START, 2000);
     assert_eq!(
         (timers.counter(0, 2000), timers.overflow_time(0)),
         (0xFFF0, Some(2032))
@@ -520,16 +536,16 @@ fn given_a_stopped_timer_when_started_again_then_the_reload_is_loaded_and_the_pe
 #[test]
 fn given_a_stopped_timer_when_the_reload_changes_and_it_restarts_then_the_new_reload_is_loaded() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), 0, 10);
-    write16(&mut timers, reload_addr(0), 0x8000, 20);
-    write16(&mut timers, control_addr(0), START, 30);
+    write16(&mut timers, control_offset(0), 0, 10);
+    write16(&mut timers, reload_offset(0), 0x8000, 20);
+    write16(&mut timers, control_offset(0), START, 30);
     assert_eq!(timers.counter(0, 30), 0x8000);
 }
 
 #[test]
 fn given_a_running_timer_when_start_is_written_again_then_the_counter_is_not_reloaded() {
     let mut timers = timer0(0xFFF0, START, 0);
-    let mask = write16(&mut timers, control_addr(0), START, 10);
+    let mask = write16(&mut timers, control_offset(0), START, 10);
     assert_eq!(
         (timers.counter(0, 10), timers.overflow_time(0), mask),
         (0xFFF5, Some(32), 0)
@@ -546,14 +562,14 @@ fn given_a_timer_started_when_the_write_returns_then_the_mask_names_that_timer()
 #[test]
 fn given_a_running_timer_when_stopped_then_it_is_marked_for_replacement() {
     let mut timers = timer0(0xFFF0, START, 0);
-    let mask = write16(&mut timers, control_addr(0), 0, 10);
+    let mask = write16(&mut timers, control_offset(0), 0, 10);
     assert_eq!(mask, 0b1);
 }
 
 #[test]
 fn given_a_running_timer_when_the_prescaler_changes_then_it_is_marked_for_replacement() {
     let mut timers = timer0(0xFFF0, START, 0);
-    let mask = write16(&mut timers, control_addr(0), START | 1, 10);
+    let mask = write16(&mut timers, control_offset(0), START | 1, 10);
     assert_eq!(mask, 0b1);
 }
 
@@ -561,7 +577,7 @@ fn given_a_running_timer_when_the_prescaler_changes_then_it_is_marked_for_replac
 fn given_a_running_clock_timer_when_count_up_is_set_then_its_event_goes_away_and_it_is_marked() {
     let mut timers = Arm9Timers::new();
     start(&mut timers, 1, 0xFFF0, START, 0);
-    let mask = write16(&mut timers, control_addr(1), START | COUNT_UP, 10);
+    let mask = write16(&mut timers, control_offset(1), START | COUNT_UP, 10);
     assert_eq!(
         (timers.has_event(1), timers.overflow_time(1), mask),
         (false, None, 0b10)
@@ -574,7 +590,7 @@ fn given_a_running_timer_when_the_prescaler_changes_then_the_counter_is_kept_and
     // TODO(hw-unverified): `timers.md`, "Unverified": the new prescaler applies from the write,
     // the counter is kept, and the first tick comes one full period after it.
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), START | 1, 10);
+    write16(&mut timers, control_offset(0), START | 1, 10);
     // Counter 0xFFF5 at time 10; 11 ticks to go at 128 cycles each.
     assert_eq!(
         (timers.counter(0, 10), timers.overflow_time(0)),
@@ -586,7 +602,7 @@ fn given_a_running_timer_when_the_prescaler_changes_then_the_counter_is_kept_and
 fn given_irq_enable_changed_on_a_running_timer_when_written_then_the_counter_origin_and_reschedule_mask_do_not_move()
  {
     let mut timers = timer0(0xFFF0, START, 0);
-    let mask = write16(&mut timers, control_addr(0), START | IRQ, 10);
+    let mask = write16(&mut timers, control_offset(0), START | IRQ, 10);
     assert_eq!(
         (
             timers.counter(0, 10),
@@ -601,7 +617,7 @@ fn given_irq_enable_changed_on_a_running_timer_when_written_then_the_counter_ori
 #[test]
 fn given_irq_enable_set_after_start_when_the_timer_overflows_then_the_irq_is_requested() {
     let mut timers = timer0(0xFFF0, START, 0);
-    write16(&mut timers, control_addr(0), START | IRQ, 10);
+    write16(&mut timers, control_offset(0), START | IRQ, 10);
     assert_eq!(timers.overflow(0, 32), nine(IF0));
 }
 
@@ -613,7 +629,7 @@ fn given_a_word_with_reload_and_start_when_written_at_tmncnt_l_then_the_timer_st
     let mut timers = Arm9Timers::new();
     write32(
         &mut timers,
-        reload_addr(1),
+        reload_offset(1),
         (u32::from(START) << 16) | 0xFFF0,
         40,
     );
@@ -632,8 +648,8 @@ fn given_the_control_byte_written_before_the_reload_when_the_timer_starts_then_t
  {
     // The reverse order is not what a 32-bit write does; it shows the order is what matters.
     let mut timers = Arm9Timers::new();
-    timers.write_byte(control_addr(0), START as u8, 0);
-    write16(&mut timers, reload_addr(0), 0xFFF0, 0);
+    write_byte(&mut timers, control_offset(0), START as u8, 0);
+    write16(&mut timers, reload_offset(0), 0xFFF0, 0);
     assert_eq!((timers.reload(0), timers.counter(0, 0)), (0xFFF0, 0));
 }
 
@@ -643,16 +659,16 @@ fn given_a_word_written_at_tmncnt_l_when_read_back_then_the_two_halves_are_reloa
     let mut timers = Arm9Timers::new();
     write32(
         &mut timers,
-        reload_addr(0),
+        reload_offset(0),
         (u32::from(START | IRQ | 2) << 16) | 0xFFF0,
         0,
     );
     // A stopped-then-read timer shows the counter, not the reload, in TMnCNT_L. At time 0 the
     // counter has just loaded the reload, so they agree here; the control reads back.
-    let bytes: Vec<Option<u8>> = (0..4)
-        .map(|i| timers.read_byte(reload_addr(0) + i, 0))
+    let bytes: Vec<u8> = (0..4)
+        .map(|i| read_byte(&timers, reload_offset(0) + i, 0))
         .collect();
-    assert_eq!(bytes, vec![Some(0xF0), Some(0xFF), Some(0xC2), Some(0x00)]);
+    assert_eq!(bytes, vec![0xF0, 0xFF, 0xC2, 0x00]);
 }
 
 // ------------------------------------------------------------- byte and halfword access
@@ -663,24 +679,24 @@ fn given_two_byte_writes_to_tmncnt_l_when_the_reload_is_read_then_each_byte_land
     // TODO(hw-unverified): `timers.md`, "Unverified": a byte of TMnCNT_L writes that byte of the
     // reload.
     let mut timers = Arm9Timers::new();
-    timers.write_byte(reload_addr(0), 0x34, 0);
-    timers.write_byte(reload_addr(0) + 1, 0x12, 0);
+    write_byte(&mut timers, reload_offset(0), 0x34, 0);
+    write_byte(&mut timers, reload_offset(0) + 1, 0x12, 0);
     assert_eq!(timers.reload(0), 0x1234);
 }
 
 #[test]
 fn given_a_reload_when_only_the_low_byte_is_written_then_the_high_byte_is_kept_hw_unverified() {
     let mut timers = Arm9Timers::new();
-    write16(&mut timers, reload_addr(0), 0xABCD, 0);
-    timers.write_byte(reload_addr(0), 0x11, 0);
+    write16(&mut timers, reload_offset(0), 0xABCD, 0);
+    write_byte(&mut timers, reload_offset(0), 0x11, 0);
     assert_eq!(timers.reload(0), 0xAB11);
 }
 
 #[test]
 fn given_a_reload_when_only_the_high_byte_is_written_then_the_low_byte_is_kept_hw_unverified() {
     let mut timers = Arm9Timers::new();
-    write16(&mut timers, reload_addr(0), 0xABCD, 0);
-    timers.write_byte(reload_addr(0) + 1, 0x11, 0);
+    write16(&mut timers, reload_offset(0), 0xABCD, 0);
+    write_byte(&mut timers, reload_offset(0) + 1, 0x11, 0);
     assert_eq!(timers.reload(0), 0x11CD);
 }
 
@@ -690,13 +706,13 @@ fn given_a_frozen_counter_when_each_byte_is_read_then_it_is_that_byte_of_the_cou
     // TODO(hw-unverified): `timers.md`, "Unverified": a byte of TMnCNT_L reads that byte of the
     // counter.
     let mut timers = timer0(0x1234, START, 0);
-    write16(&mut timers, control_addr(0), 0, 0);
+    write16(&mut timers, control_offset(0), 0, 0);
     assert_eq!(
         (
-            timers.read_byte(reload_addr(0), 99),
-            timers.read_byte(reload_addr(0) + 1, 99)
+            read_byte(&timers, reload_offset(0), 99),
+            read_byte(&timers, reload_offset(0) + 1, 99)
         ),
-        (Some(0x34), Some(0x12))
+        (0x34, 0x12)
     );
 }
 
@@ -706,8 +722,8 @@ fn given_a_byte_write_of_start_to_the_low_control_byte_when_checked_then_the_tim
     // TODO(hw-unverified): `timers.md`, "Unverified": a byte write to TMnCNT_H starts the timer
     // as its value says.
     let mut timers = Arm9Timers::new();
-    write16(&mut timers, reload_addr(0), 0xFFF0, 0);
-    timers.write_byte(control_addr(0), START as u8, 5);
+    write16(&mut timers, reload_offset(0), 0xFFF0, 0);
+    write_byte(&mut timers, control_offset(0), START as u8, 5);
     assert_eq!(
         (timers.has_event(0), timers.overflow_time(0)),
         (true, Some(37))
@@ -718,7 +734,7 @@ fn given_a_byte_write_of_start_to_the_low_control_byte_when_checked_then_the_tim
 fn given_a_byte_write_to_the_high_control_byte_when_checked_then_nothing_changes_hw_unverified() {
     // TODO(hw-unverified): `timers.md`, "Unverified": the high byte of TMnCNT_H holds no bits.
     let mut timers = timer0(0xFFF0, START, 0);
-    let outcome = timers.write_byte(control_addr(0) + 1, 0xFF, 10);
+    let outcome = write_byte(&mut timers, control_offset(0) + 1, 0xFF, 10);
     assert_eq!(
         (
             timers.control(0),
@@ -733,34 +749,37 @@ fn given_a_byte_write_to_the_high_control_byte_when_checked_then_nothing_changes
 fn given_a_halfword_write_of_ffff_to_the_control_when_read_back_then_only_the_defined_bits_remain()
 {
     let mut timers = Arm9Timers::new();
-    write16(&mut timers, control_addr(0), 0xFFFF, 0);
+    write16(&mut timers, control_offset(0), 0xFFFF, 0);
     // Bits 0-2, 6 and 7 exist; bits 3-5 and 8-15 read 0 (`timers.md`, "Unverified").
     let bytes = [
-        timers.read_byte(control_addr(0), 0),
-        timers.read_byte(control_addr(0) + 1, 0),
+        read_byte(&timers, control_offset(0), 0),
+        read_byte(&timers, control_offset(0) + 1, 0),
     ];
-    assert_eq!(bytes, [Some(0xC7), Some(0x00)]);
+    assert_eq!(bytes, [0xC7, 0x00]);
 }
 
 #[test]
 fn given_unused_control_bits_written_when_a_timer_is_started_then_it_still_runs_on_the_defined_bits()
  {
     let mut timers = Arm9Timers::new();
-    write16(&mut timers, reload_addr(0), 0xFFF0, 0);
-    write16(&mut timers, control_addr(0), 0xFF38 | START, 0);
+    write16(&mut timers, reload_offset(0), 0xFFF0, 0);
+    write16(&mut timers, control_offset(0), 0xFF38 | START, 0);
     assert_eq!(
         (timers.control(0), timers.overflow_time(0)),
         (START, Some(32))
     );
 }
 
-// ----------------------------------------------------------------------- the address block
+// ----------------------------------------------------------------------- the register block
 
-/// The addresses in the block whose power-on byte is not 0.
+// Which addresses reach the timers at all is the I/O map's to say (`io.rs` tests); what is left
+// to them is the 16 bytes of the block and what lies just past it in their own offset space.
+
+/// The offsets in the block whose power-on byte is not 0.
 fn nonzero_power_on_bytes() -> Vec<u32> {
     let timers = Arm9Timers::new();
-    (TM0CNT_L_ADDR..TM0CNT_L_ADDR + 16)
-        .filter(|&addr| timers.read_byte(addr, 0) != Some(0))
+    (0..BLOCK_BYTES)
+        .filter(|&offset| read_byte(&timers, offset, 0) != 0)
         .collect()
 }
 
@@ -771,22 +790,21 @@ fn given_a_power_on_machine_when_each_timer_byte_is_read_then_it_is_0_hw_unverif
 }
 
 #[test]
-fn given_addresses_around_the_block_when_read_then_only_the_16_bytes_are_timer_registers() {
-    let timers = Arm9Timers::new();
-    let around = [
-        timers.read_byte(TM0CNT_L_ADDR - 1, 0),
-        timers.read_byte(TM0CNT_L_ADDR, 0),
-        timers.read_byte(TM0CNT_L_ADDR + 15, 0),
-        timers.read_byte(TM0CNT_L_ADDR + 16, 0),
+fn given_offsets_just_past_the_block_when_read_then_no_timer_answers_with_a_value() {
+    let timers = timer0(0xFFF0, START | IRQ, 0);
+    let past = [
+        read_byte(&timers, BLOCK_BYTES, 0),
+        read_byte(&timers, BLOCK_BYTES + 3, 0),
+        read_byte(&timers, u32::MAX, 0),
     ];
-    assert_eq!(around, [None, Some(0), Some(0), None]);
+    assert_eq!(past, [0, 0, 0]);
 }
 
 #[test]
-fn given_writes_outside_the_block_when_applied_then_no_timer_changes() {
+fn given_writes_past_the_block_when_applied_then_no_timer_changes() {
     let mut timers = Arm9Timers::new();
-    timers.write_byte(TM0CNT_L_ADDR - 1, 0xFF, 0);
-    timers.write_byte(TM0CNT_L_ADDR + 16, 0xFF, 0);
+    write_byte(&mut timers, BLOCK_BYTES, 0xFF, 0);
+    write_byte(&mut timers, u32::MAX, 0xFF, 0);
     assert_eq!((timers,), (Arm9Timers::new(),));
 }
 
@@ -794,7 +812,7 @@ fn given_writes_outside_the_block_when_applied_then_no_timer_changes() {
 fn reloads_after_distinct_writes() -> Vec<u16> {
     let mut timers = Arm9Timers::new();
     (0..4u32).for_each(|n| {
-        write16(&mut timers, reload_addr(n), 0x1111 * (n as u16 + 1), 0);
+        write16(&mut timers, reload_offset(n), 0x1111 * (n as u16 + 1), 0);
     });
     (0..4).map(|n| timers.reload(n)).collect()
 }
@@ -825,9 +843,9 @@ fn given_an_index_past_the_last_timer_when_asked_then_everything_reads_zero_or_n
 #[test]
 fn given_the_arm7_timers_when_driven_like_the_arm9_then_they_overflow_at_the_same_master_time() {
     let mut arm7 = Timers::<false>::new();
-    arm7.write_byte(reload_addr(0), 0xF0, 0);
-    arm7.write_byte(reload_addr(0) + 1, 0xFF, 0);
-    arm7.write_byte(control_addr(0), START as u8, 0);
+    write_byte(&mut arm7, reload_offset(0), 0xF0, 0);
+    write_byte(&mut arm7, reload_offset(0) + 1, 0xFF, 0);
+    write_byte(&mut arm7, control_offset(0), START as u8, 0);
     assert_eq!(arm7.overflow_time(0), Some(32));
 }
 
@@ -902,7 +920,7 @@ mod properties {
             value in any::<u16>(),
         ) {
             let mut timers = Arm9Timers::new();
-            write16(&mut timers, control_addr(0), value, 0);
+            write16(&mut timers, control_offset(0), value, 0);
             prop_assert_eq!(timers.control(0), value & 0xC7);
         }
     }

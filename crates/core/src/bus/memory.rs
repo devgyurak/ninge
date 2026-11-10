@@ -10,6 +10,7 @@
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
+use crate::io::{Width, read_bytes};
 use serde::{Deserialize, Serialize};
 
 /// Page size of the fast-path table: 16 KiB (AGENTS.md §2 rule 9).
@@ -51,7 +52,7 @@ const WRAMCNT_MODE_MASK: u8 = 0x03;
 const VRAM_A_BASE: u32 = 0x0680_0000;
 const VRAM_A_SIZE: usize = 128 << 10;
 /// VRAMCNT_A, at `0400_0240h` (`vram-banks.md`, "Registers").
-const VRAMCNT_A_ADDR: u32 = 0x0400_0240;
+pub(crate) const VRAMCNT_A_ADDR: u32 = 0x0400_0240;
 /// VRAMCNT_A bits 0-1: MST. Bit 2 is not used by bank A.
 const VRAMCNT_MST_MASK: u8 = 0x03;
 /// VRAMCNT_A bits 3-4: OFS.
@@ -479,30 +480,45 @@ impl Memory {
         put_bytes(buf, offset, bytes);
     }
 
-    /// The byte of the memory-control register at `addr` as CPU `ARM9` reads it, if it is one:
-    /// WRAMCNT for the ARM9, WRAMSTAT for the ARM7. VRAMCNT_A is write-only and reads 0.
+    /// What CPU `ARM9` reads from the memory-control block at `offset` bytes past VRAMCNT_A:
+    /// WRAMCNT for the ARM9, WRAMSTAT for the ARM7. VRAMCNT_A is write-only and reads 0. This is
+    /// the `MemoryControl` port of the I/O map, kept here because the page tables derive from
+    /// these registers (#109); it has no side effect, so a peek and a read are the same.
     // WRAMCNT is documented R/W in one place and write-only in another; it reads back.
     // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
     // TODO(hw-unverified): VRAMCNT_A reads 0 (`arm9-memory-map.md`, "Unverified").
-    pub(crate) fn control_byte<const ARM9: bool>(&self, addr: u32) -> Option<u8> {
-        match (ARM9, addr) {
-            (true, WRAMCNT_ADDR) | (false, WRAMSTAT_ADDR) => Some(self.wramcnt),
-            _ => None,
-        }
+    pub(crate) fn read_control<const ARM9: bool>(&self, offset: u32, width: Width) -> u32 {
+        read_bytes(offset, width, |at| {
+            match (ARM9, VRAMCNT_A_ADDR.wrapping_add(at)) {
+                (true, WRAMCNT_ADDR) | (false, WRAMSTAT_ADDR) => self.wramcnt,
+                _ => 0,
+            }
+        })
     }
 
-    /// Writes one byte of an ARM9 memory-control register: VRAMCNT_A, WRAMCNT, or VRAMCNT_G
-    /// (discarded for now). Returns whether `addr` is one; the ARM7 has none (WRAMCNT is
-    /// ARM9-only).
-    pub(crate) fn write_control_byte(&mut self, addr: u32, value: u8) -> bool {
-        match addr {
-            VRAMCNT_A_ADDR => self.write_vramcnt_a(value),
-            WRAMCNT_ADDR => self.write_wramcnt(value),
-            // TODO(phase4): VRAMCNT_G arrives with the other banks (#35).
-            VRAMCNT_G_ADDR => {}
-            _ => return false,
+    /// Writes the memory-control block at `offset` bytes past VRAMCNT_A, each byte to the
+    /// register at its own address: VRAMCNT_A, WRAMCNT, or VRAMCNT_G (discarded for now). The
+    /// ARM7 has none (WRAMCNT is ARM9-only), and a byte on no register is dropped.
+    // TODO(hw-unverified): a byte on no register is dropped (`arm9-memory-map.md`, "Unverified").
+    pub(crate) fn write_control<const ARM9: bool>(
+        &mut self,
+        offset: u32,
+        width: Width,
+        value: u32,
+    ) {
+        if !ARM9 {
+            return;
         }
-        true
+        (0..width.bytes()).for_each(|i| {
+            let byte = (value >> (8 * i)) as u8;
+            match VRAMCNT_A_ADDR.wrapping_add(offset).wrapping_add(i) {
+                VRAMCNT_A_ADDR => self.write_vramcnt_a(byte),
+                WRAMCNT_ADDR => self.write_wramcnt(byte),
+                // TODO(phase4): VRAMCNT_G arrives with the other banks (#35).
+                VRAMCNT_G_ADDR => {}
+                _ => {}
+            }
+        });
     }
 
     /// Whether the buffers have the sizes `new` allocates and VRAMCNT_A holds only used bits.

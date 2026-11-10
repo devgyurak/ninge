@@ -10,17 +10,16 @@
 //! are generic over which CPU asks. That is the "seen by both CPUs" class of `AGENTS.md` §4
 //! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
+use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use serde::{Deserialize, Serialize};
 
 /// DISPSTAT, at `0400_0004h` (`display-timing.md`, "Registers").
 pub const DISPSTAT_ADDR: u32 = 0x0400_0004;
-/// DISPSTAT's high byte (the VCount setting's low byte).
-const DISPSTAT_HIGH_ADDR: u32 = DISPSTAT_ADDR + 1;
 /// VCOUNT, at `0400_0006h` (`display-timing.md`, "Registers").
 pub const VCOUNT_ADDR: u32 = 0x0400_0006;
-/// VCOUNT's high byte (bit 8 of the line).
-const VCOUNT_HIGH_ADDR: u32 = VCOUNT_ADDR + 1;
+/// VCOUNT's offset in the register space of [`Timing`], which starts at DISPSTAT.
+const VCOUNT_OFFSET: u32 = VCOUNT_ADDR - DISPSTAT_ADDR;
 
 /// Lines in a frame (`display-timing.md`, "Frame layout").
 pub const LINES: u16 = 263;
@@ -189,14 +188,15 @@ impl Timing {
         }
     }
 
-    /// The byte of DISPSTAT or VCOUNT at `addr` for the ARM9 when `ARM9`, else the ARM7.
-    pub(crate) fn read_byte<const ARM9: bool>(&self, addr: u32) -> Option<u8> {
-        let (value, base) = match addr {
-            DISPSTAT_ADDR | DISPSTAT_HIGH_ADDR => (self.dispstat::<ARM9>(), DISPSTAT_ADDR),
-            VCOUNT_ADDR | VCOUNT_HIGH_ADDR => (self.vcount, VCOUNT_ADDR),
-            _ => return None,
+    /// The byte at `offset` of DISPSTAT or VCOUNT for the ARM9 when `ARM9`, else the ARM7; 0
+    /// where no register is.
+    fn read_byte<const ARM9: bool>(&self, offset: u32) -> u8 {
+        let (value, base) = match offset {
+            0 | 1 => (self.dispstat::<ARM9>(), 0),
+            VCOUNT_OFFSET | 3 => (self.vcount, VCOUNT_OFFSET),
+            _ => return 0,
         };
-        Some((value >> (8 * (addr - base))) as u8)
+        (value >> (8 * (offset - base))) as u8
     }
 
     /// Writes a byte of DISPSTAT; the flags and the unused bit 6 ignore it. A byte of VCOUNT
@@ -205,13 +205,13 @@ impl Timing {
     // (`display-timing.md`, "Unverified").
     // TODO(hw-unverified): GBATEK says VCOUNT is writable but not what a write does; it is
     // dropped here (`display-timing.md`, "Unverified").
-    pub(crate) fn write_byte<const ARM9: bool>(&mut self, addr: u32, value: u8) {
+    fn write_byte<const ARM9: bool>(&mut self, offset: u32, value: u8) {
         let stat = self.stat_mut::<ARM9>();
-        match addr {
-            DISPSTAT_ADDR => {
+        match offset {
+            0 => {
                 stat.control = (stat.control & 0xFF00) | (u16::from(value) & WRITABLE & 0x00FF);
             }
-            DISPSTAT_HIGH_ADDR => {
+            1 => {
                 stat.control = (stat.control & 0x00FF) | (u16::from(value) << SETTING_LOW_SHIFT);
             }
             _ => {}
@@ -243,6 +243,21 @@ impl Timing {
     /// Sets the ARM7's stored DISPSTAT bits unchecked, to build a corrupt state in a test.
     pub(crate) fn set_arm7_control_for_test(&mut self, control: u16) {
         self.arm7.control = control;
+    }
+}
+
+/// One instance serves both CPUs ("seen by both CPUs", `AGENTS.md` §4). Its registers are bytes;
+/// a wider access is split into them.
+impl<const ARM9: bool> Device<ARM9> for Timing {
+    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte::<ARM9>(at))
+    }
+
+    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+        write_bytes(offset, width, value, |at, byte| {
+            self.write_byte::<ARM9>(at, byte);
+            Effect::default()
+        })
     }
 }
 

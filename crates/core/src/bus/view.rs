@@ -5,7 +5,7 @@
 
 use super::Memory;
 use crate::cpu::{Bus, Cp15, Tcm};
-use crate::io::Io;
+use crate::io::{At, Io, Port, Width, decode};
 use crate::scheduler::{ARM9_INSTRUCTION_COST, Scheduler};
 
 /// Both TCM regions as CP15 resolves them (`docs/hw/cp15.md`).
@@ -60,11 +60,21 @@ pub(crate) fn peek<const ARM9: bool, const N: usize>(
         .unwrap_or_else(|| read_registers::<ARM9, N>(memory, io, now, addr))
 }
 
-/// The register devices' answer for a read of `N` bytes at `addr`, with no side effect: each byte
-/// comes from the register at its own address, so a wider read spans neighbouring registers.
-// TODO(hw-unverified): an undefined I/O port reads 0 (GBATEK says so); unmapped memory is
-// "undefined" there and reads 0 here (`arm9-memory-map.md`, "Unverified").
-// TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
+/// The `N` bytes of a register access, as the one value a device takes.
+fn pack<const N: usize>(bytes: [u8; N]) -> u32 {
+    bytes
+        .iter()
+        .enumerate()
+        .fold(0, |value, (i, &byte)| value | u32::from(byte) << (8 * i))
+}
+
+/// A device's answer as the `N` bytes the CPU reads.
+fn unpack<const N: usize>(value: u32) -> [u8; N] {
+    std::array::from_fn(|i| value.wrapping_shr(8 * i as u32) as u8)
+}
+
+/// The register devices' answer for a read of `N` bytes at `addr`, with no side effect: the
+/// address is decoded once and one device (or `Memory`, for the memory-control block) answers.
 // TODO(phase3): the I/O registers of the other blocks arrive with their phases.
 fn read_registers<const ARM9: bool, const N: usize>(
     memory: &Memory,
@@ -72,12 +82,11 @@ fn read_registers<const ARM9: bool, const N: usize>(
     now: u64,
     addr: u32,
 ) -> [u8; N] {
-    std::array::from_fn(|i| {
-        let at = addr.wrapping_add(i as u32);
-        memory
-            .control_byte::<ARM9>(at)
-            .or_else(|| io.read_byte::<ARM9>(at, now))
-            .unwrap_or(0)
+    let width = Width::of::<N>();
+    unpack(match decode::<ARM9>(addr) {
+        Some((Port::MemoryControl, offset)) => memory.read_control::<ARM9>(offset, width),
+        Some((port, offset)) => io.peek::<ARM9>(port, offset, width, now),
+        None => 0,
     })
 }
 
@@ -104,8 +113,7 @@ impl<const ARM9: bool> Access<'_, ARM9> {
         let addr = addr & !(N as u32 - 1);
         self.memory
             .load::<ARM9, N>(&self.tcm, addr)
-            .or_else(|| self.io.receive_bytes::<ARM9, N>(addr))
-            .unwrap_or_else(|| read_registers::<ARM9, N>(self.memory, self.io, self.now, addr))
+            .unwrap_or_else(|| self.read_registers(addr))
     }
 
     fn write<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
@@ -115,34 +123,55 @@ impl<const ARM9: bool> Access<'_, ARM9> {
         }
     }
 
-    /// The slow path for a write: I/O ports; an unmapped address ignores the write.
+    /// The slow path for a read: the address is decoded once and one device answers. An address
+    /// no device holds reads 0.
+    fn read_registers<const N: usize>(&mut self, addr: u32) -> [u8; N] {
+        let width = Width::of::<N>();
+        unpack(match decode::<ARM9>(addr) {
+            Some((Port::MemoryControl, offset)) => self.memory.read_control::<ARM9>(offset, width),
+            Some((port, offset)) => {
+                let at = self.at();
+                self.io
+                    .read::<ARM9>(self.scheduler, at, port, offset, width)
+            }
+            None => 0,
+        })
+    }
+
+    /// The slow path for a write: the address is decoded once and one device takes the access
+    /// (or `Memory`, for the memory-control block); an unmapped address ignores the write.
     // TODO(hw-unverified): a byte on no register is dropped (`arm9-memory-map.md`, "Unverified").
-    // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
-    // TODO(phase3): the ARM7's other I/O registers arrive with their issues (#26).
     fn write_registers<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
-        // IPCFIFOSEND takes the access as one word; it is not split into bytes.
-        if self.io.send_word::<ARM9, N>(addr, bytes) {
-            return;
+        let width = Width::of::<N>();
+        let value = pack(bytes);
+        match decode::<ARM9>(addr) {
+            Some((Port::MemoryControl, offset)) => {
+                self.memory.write_control::<ARM9>(offset, width, value);
+            }
+            Some((port, offset)) => {
+                let at = self.at();
+                self.io
+                    .write::<ARM9>(self.scheduler, at, port, offset, width, value);
+            }
+            None => {}
         }
-        // An overflow event never lies before the end of the instruction that scheduled it: on the
-        // ARM9 that is one instruction cost past the clock; the ARM7's step leaves the master
-        // clock where it is (`timers.md`, "Model").
-        // TODO(#115): this assumes every ARM9 access is one fixed-cost instruction; a step that
-        // returns its own cost, or a DMA write (#26), must hand the floor in instead.
+    }
+
+    /// The time of this access, and the earliest an event it schedules may fire. An overflow
+    /// event never lies before the end of the instruction that scheduled it: on the ARM9 that is
+    /// one instruction cost past the clock; the ARM7's step leaves the master clock where it is
+    /// (`timers.md`, "Model").
+    // TODO(#115): this assumes every ARM9 access is one fixed-cost instruction; a step that
+    // returns its own cost, or a DMA write (#26), must hand the floor in instead.
+    fn at(&self) -> At {
         let floor = if ARM9 {
             self.scheduler.now().saturating_add(ARM9_INSTRUCTION_COST)
         } else {
             self.scheduler.now()
         };
-        // Each byte goes to the register at its own address; an address no register holds
-        // ignores it, as does a VRAM byte write that lands here.
-        for (i, &value) in bytes.iter().enumerate() {
-            let at = addr.wrapping_add(i as u32);
-            if ARM9 && self.memory.write_control_byte(at, value) {
-                continue;
-            }
-            self.io
-                .write_byte::<ARM9>(self.scheduler, self.now, floor, at, value);
+        At {
+            now: self.now,
+            floor,
         }
     }
 }

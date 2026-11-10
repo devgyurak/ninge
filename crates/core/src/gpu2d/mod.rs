@@ -8,6 +8,7 @@
 //! Engine A is wired to the ARM9 alone, so `Gpu2d` is a plain type with no CPU const generic: the
 //! "seen by one CPU" class of `AGENTS.md` §4 ("Per-CPU devices").
 
+use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 pub mod timing;
@@ -16,6 +17,8 @@ pub mod timing;
 pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;
 /// POWCNT1, at `0400_0304h` (`display-mode-vram.md`, "Registers").
 pub const POWCNT1_ADDR: u32 = 0x0400_0304;
+/// POWCNT1's offset in the register space of [`Gpu2d`], which starts at DISPCNT.
+const POWCNT1_OFFSET: u32 = POWCNT1_ADDR - DISPCNT_A_ADDR;
 /// The xRGB8888 value of a white pixel.
 pub const WHITE: u32 = 0x00FF_FFFF;
 /// The xRGB8888 value of a black pixel.
@@ -103,31 +106,31 @@ impl Gpu2d {
         self.powcnt1 & POWCNT1_SWAP != 0
     }
 
-    /// The byte of DISPCNT at `0400_0000h + index`, or `None` outside it.
-    pub(crate) fn read_byte(&self, addr: u32) -> Option<u8> {
-        let (reg, base) = self.register_at(addr)?;
-        Some((reg >> ((addr - base) * 8)) as u8)
+    /// The byte at `offset` in the register space, which starts at DISPCNT; 0 where no register
+    /// is.
+    fn read_byte(&self, offset: u32) -> u8 {
+        self.register_at(offset)
+            .map_or(0, |(reg, base)| (reg >> ((offset - base) * 8)) as u8)
     }
 
-    /// Writes one byte of DISPCNT or POWCNT1; any other address is not ours and is ignored.
+    /// Writes one byte of DISPCNT or POWCNT1; any other offset is not ours and is ignored.
     // TODO(hw-unverified): POWCNT1's undefined bits are kept as written
     // (`display-mode-vram.md`, "Unverified").
-    pub(crate) fn write_byte(&mut self, addr: u32, value: u8) {
-        let dispcnt_index = addr.wrapping_sub(DISPCNT_A_ADDR);
-        let powcnt1_index = addr.wrapping_sub(POWCNT1_ADDR);
-        if dispcnt_index < 4 {
-            self.dispcnt_a = with_byte(self.dispcnt_a, dispcnt_index, value);
+    fn write_byte(&mut self, offset: u32, value: u8) {
+        let powcnt1_index = offset.wrapping_sub(POWCNT1_OFFSET);
+        if offset < 4 {
+            self.dispcnt_a = with_byte(self.dispcnt_a, offset, value);
         } else if powcnt1_index < 2 {
             self.powcnt1 = with_byte(u32::from(self.powcnt1), powcnt1_index, value) as u16;
         }
     }
 
-    /// The register that holds `addr` and its base address.
-    fn register_at(&self, addr: u32) -> Option<(u32, u32)> {
-        if addr.wrapping_sub(DISPCNT_A_ADDR) < 4 {
-            Some((self.dispcnt_a, DISPCNT_A_ADDR))
-        } else if addr.wrapping_sub(POWCNT1_ADDR) < 2 {
-            Some((u32::from(self.powcnt1), POWCNT1_ADDR))
+    /// The register that holds `offset` and its own offset.
+    fn register_at(&self, offset: u32) -> Option<(u32, u32)> {
+        if offset < 4 {
+            Some((self.dispcnt_a, 0))
+        } else if offset.wrapping_sub(POWCNT1_OFFSET) < 2 {
+            Some((u32::from(self.powcnt1), POWCNT1_OFFSET))
         } else {
             None
         }
@@ -157,6 +160,21 @@ impl Gpu2d {
         } else {
             out.fill(BLACK);
         }
+    }
+}
+
+/// Engine A is wired to the ARM9 alone (`AGENTS.md` §4, "Per-CPU devices"). Its registers are
+/// bytes; a wider access is split into them.
+impl Device<true> for Gpu2d {
+    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte(at))
+    }
+
+    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+        write_bytes(offset, width, value, |at, byte| {
+            self.write_byte(at, byte);
+            Effect::default()
+        })
     }
 }
 

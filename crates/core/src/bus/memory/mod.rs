@@ -48,6 +48,13 @@ const VRAMCNT_G_ADDR: u32 = 0x0400_0246;
 /// WRAMCNT bits 0-1: the allocation mode. Bits 2-7 are not used.
 const WRAMCNT_MODE_MASK: u8 = 0x03;
 
+/// The BIOS areas: 32 KiB at `FFFF_0000h` for the ARM9, 16 KiB at 0 for the ARM7 (`hle-swi.md`,
+/// "The BIOS area").
+pub(crate) const BIOS9_BASE: u32 = 0xFFFF_0000;
+const BIOS9_SIZE: u32 = 32 << 10;
+pub(crate) const BIOS7_BASE: u32 = 0;
+const BIOS7_SIZE: u32 = 16 << 10;
+
 /// VRAM bank A, mapped as LCDC at `0680_0000h`, 128 KiB (`vram-banks.md`, "Behavior").
 const VRAM_A_BASE: u32 = 0x0680_0000;
 const VRAM_A_SIZE: usize = 128 << 10;
@@ -77,6 +84,8 @@ pub enum Region {
     VramA,
     /// The shared WRAM, as WRAMCNT allocates it to the CPU asking.
     SharedWram,
+    /// The BIOS area: synthetic, reads zero, writes are ignored (`hle-swi.md`, "The BIOS area").
+    Bios,
     /// The ARM7's own 64 KiB WRAM.
     Wram7,
 }
@@ -256,7 +265,6 @@ impl Memory {
     /// VRAMCNT_A write, and after a savestate load (`savestate`); a WRAMCNT write rebuilds only
     /// the shared WRAM block (`build_wram_pages`).
     // Per-CPU tables: the decision is recorded in the PR that added #22.
-    // TODO(phase3): the BIOS joins the tables (#27).
     // TODO(phase4): the other VRAM banks and MST values join them (#35).
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
     // rule; a disabled bank or MST other than 0 is unmapped; the LCDC window has no mirrors
@@ -276,6 +284,21 @@ impl Memory {
                 Some((0, MAIN_RAM_SIZE)),
             );
         }
+        // The synthetic BIOS, one per CPU (`hle-swi.md`); it has no backing buffer.
+        map_window(
+            &mut self.pages9,
+            BIOS9_BASE,
+            BIOS9_BASE + BIOS9_SIZE,
+            Region::Bios,
+            Some((0, PAGE_SIZE)),
+        );
+        map_window(
+            &mut self.pages7,
+            BIOS7_BASE,
+            BIOS7_BASE + BIOS7_SIZE,
+            Region::Bios,
+            Some((0, PAGE_SIZE)),
+        );
         let bank = self.vram_a();
         if bank.enabled && bank.mst == MST_LCDC {
             map_window(
@@ -371,6 +394,9 @@ impl Memory {
             Region::VramA => &self.vram_a,
             Region::SharedWram => &self.shared_wram,
             Region::Wram7 => &self.wram7,
+            // The BIOS is synthetic: it reads zero (`hle-swi.md`, "The BIOS area").
+            // TODO(hw-unverified): the ARM7 BIOS is read-protected on hardware.
+            Region::Bios => return Some([0; N]),
             Region::Unmapped => return None,
         };
         Some(bytes_at(buf, offset))
@@ -461,6 +487,8 @@ impl Memory {
             // (`vram-banks.md`, "Behavior").
             Region::VramA if N == 1 => false,
             Region::Unmapped => false,
+            // ROM: the write is taken and dropped, it is not an I/O access.
+            Region::Bios => true,
             region => {
                 self.put_region(region, offset, bytes);
                 true
@@ -475,7 +503,7 @@ impl Memory {
             Region::VramA => &mut self.vram_a,
             Region::SharedWram => &mut self.shared_wram,
             Region::Wram7 => &mut self.wram7,
-            Region::Unmapped => return,
+            Region::Bios | Region::Unmapped => return,
         };
         put_bytes(buf, offset, bytes);
     }

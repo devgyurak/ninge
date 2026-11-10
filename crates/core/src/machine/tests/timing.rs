@@ -430,6 +430,8 @@ fn given_the_arm7_vblank_request_with_ime_and_ie_when_the_arm7_runs_on_then_it_e
     m.bus7(0).write32(IE, VBLANK_IRQ);
     m.bus7(0).write32(IME, 1);
     m.arm7.regs_mut().set_cpsr(0x1F);
+    // The ARM7's vector is in the BIOS (`hle-swi.md`): the user handler is the program's `b .`.
+    m.bus7(0).write32(0x0380_FFFC, 0x0238_0000);
     run_to(&mut m, line_start(192));
     run_round(&mut m);
     assert_eq!(m.arm7().regs().cpsr() & 0x1F, IRQ_MODE);

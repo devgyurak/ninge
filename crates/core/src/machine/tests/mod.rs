@@ -5,6 +5,7 @@ use super::*;
 use serde::de::value::{Error, MapDeserializer};
 
 mod arm9;
+mod bios;
 mod dma;
 mod ipc;
 mod irq;

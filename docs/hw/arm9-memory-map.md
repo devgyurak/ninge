@@ -8,7 +8,7 @@ Used by: `crates/core/src/bus/`   Phase: 2 (#18), ARM9 view only
 
 This note is the address decoding the ARM9 sees. The TCM registers are in `cp15.md`; VRAM bank A
 is in `vram-banks.md`. The ARM7's view, shared WRAM and WRAMCNT are in `wramcnt.md` (#22); the other
-VRAM banks are Phase 4 (#35); the BIOS at `FFFF0000h` is Phase 3 (#27). Until those land the
+VRAM banks are Phase 4 (#35); the BIOS at `FFFF0000h` is `hle-swi.md` (#27). Until those land the
 regions below are simply unmapped.
 
 ## Regions (ARM9, Phase 2)
@@ -24,7 +24,7 @@ regions below are simply unmapped.
 | `0600_0000h`..`067F_FFFFh` | | BG/OBJ VRAM windows | unmapped, `TODO(phase4)` (#35) |
 | `0680_0000h` | 128 KiB used | VRAM bank A as LCDC | mapped while bank A is enabled with MST = 0 |
 | `0800_0000h`.. | | GBA slot | unmapped |
-| `FFFF_0000h` | 32 KiB | ARM9 BIOS | unmapped, `TODO(phase3)` (#27) |
+| `FFFF_0000h` | 32 KiB | ARM9 BIOS | mapped, synthetic: reads zero, writes ignored (`hle-swi.md`, "The BIOS area") |
 
 ## Evidence
 
@@ -45,7 +45,7 @@ Unverified items marked below.
 For an access the ARM9 makes, the first match wins:
 
 1. **TCM.** The instruction TCM, then the data TCM (below). Neither goes over the bus.
-2. **Memory regions** of the table above, found by the top address bits.
+2. **Memory regions** of the table above, found by the top address bits (the BIOS included).
 3. **I/O ports** at `04xx_xxxxh`.
 4. **Unmapped.** Nothing answers.
 

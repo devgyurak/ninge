@@ -4,6 +4,7 @@
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use crate::cart::Header;
 use crate::cpu::{ARM9_INSTRUCTION_COST, Cpu};
+use crate::hle::{BiosState, SwiRecord};
 use crate::io::Io;
 use crate::io::dma::{Dma, Trigger};
 use crate::io::irq::InterruptController;
@@ -67,6 +68,8 @@ pub struct Machine {
     pub(crate) arm7: Cpu<false>,
     pub(crate) arm7_clock: u64,
     pub(crate) scheduler: Scheduler,
+    // What the HLE BIOS records of each CPU's SWIs (`docs/hw/hle-swi.md`).
+    pub(crate) bios: BiosState,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
     pub(crate) header: Option<Header>,
 }
@@ -95,6 +98,7 @@ impl Machine {
             arm7: Cpu::new(),
             arm7_clock: 0,
             scheduler: Scheduler::new(),
+            bios: BiosState::default(),
             header: None,
         };
         machine.schedule_events();
@@ -235,6 +239,19 @@ impl Machine {
         self.arm7_clock
     }
 
+    /// What the HLE BIOS recorded of the ARM9's SWIs: the last number and the last one no
+    /// routine implements.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn swi_record9(&self) -> &SwiRecord {
+        &self.bios.arm9
+    }
+
+    /// What the HLE BIOS recorded of the ARM7's SWIs.
+    // The debugger's CPU panel (#56) will show it.
+    pub fn swi_record7(&self) -> &SwiRecord {
+        &self.bios.arm7
+    }
+
     /// The master clock and the pending events.
     // The debugger's scheduler event timeline (#59) will show it.
     pub fn scheduler(&self) -> &crate::scheduler::Scheduler {
@@ -352,9 +369,14 @@ impl Machine {
             // event the instruction schedules fires no earlier than its end (`timers.md`, "Model").
             now.saturating_add(ARM9_INSTRUCTION_COST),
         );
-        let cost = match self.arm9.take_interrupt(&mut view, irq, false) {
+        // The BIOS vectors are HLE: at one, the machine does the BIOS's work in place of the
+        // instruction (`docs/hw/hle-swi.md`).
+        let cost = match crate::hle::enter(&mut self.arm9, &mut view, &mut self.bios.arm9) {
             Some(cost) => cost,
-            None => self.arm9.step(&mut view),
+            None => match self.arm9.take_interrupt(&mut view, irq, false) {
+                Some(cost) => cost,
+                None => self.arm9.step(&mut view),
+            },
         };
         self.scheduler.advance(cost);
     }
@@ -374,9 +396,12 @@ impl Machine {
             self.arm7_clock,
             floor,
         );
-        let cost = match self.arm7.take_interrupt(&mut view, irq, false) {
+        let cost = match crate::hle::enter(&mut self.arm7, &mut view, &mut self.bios.arm7) {
             Some(cost) => cost,
-            None => self.arm7.step(&mut view),
+            None => match self.arm7.take_interrupt(&mut view, irq, false) {
+                Some(cost) => cost,
+                None => self.arm7.step(&mut view),
+            },
         };
         self.arm7_clock = self.arm7_clock.saturating_add(cost);
     }

@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS DMA Transfers" (the DMA registers, the control bits, the start-timing
 tables, the fill registers); GBATEK "DS Interrupts" for the IF bits (see `interrupts.md`).
-Used by: `crates/core/src/dma.rs`, `crates/core/src/io.rs`, `crates/core/src/lib.rs`,
+Used by: `crates/core/src/io/dma/mod.rs`, `crates/core/src/io/mod.rs`, `crates/core/src/machine/mod.rs`,
 `crates/core/src/scheduler/mod.rs`   Phase: 3 (#26)
 
 Each CPU has four DMA channels. They sit at the same addresses on the ARM9 and the ARM7 but are
@@ -178,44 +178,44 @@ hardware behavior.
 ## Unverified
 
 - **Cost and CPU stall.** A real transfer takes cycles and holds the bus; the model takes none
-  and stops no CPU — `crates/core/src/dma.rs`, `crates/core/src/lib.rs` — revisit with the
+  and stops no CPU — `crates/core/src/io/dma/mod.rs`, `crates/core/src/machine/mod.rs` — revisit with the
   instruction-cost work (#115), verify with a cycle-count test ROM on hardware.
 - **Preemption by priority.** On hardware a lower-numbered channel can pre-empt a running one; the
-  atomic transfer cannot be pre-empted — `crates/core/src/lib.rs` — same fix as above.
-- **ARM7 start lag** (see "Model") — `crates/core/src/lib.rs` — the same bounded approximation as
+  atomic transfer cannot be pre-empted — `crates/core/src/machine/mod.rs` — same fix as above.
+- **ARM7 start lag** (see "Model") — `crates/core/src/machine/mod.rs` — the same bounded approximation as
   the ARM7 timer lag (#118).
 - **Bit 0 of an address register.** GBATEK gives the ranges as ending in an even address
   (`0FFFFFFEh`, `07FFFFFEh`) and lists the registers as readable. The model stores bit 0 and reads
-  it back; the transfer aligns it away — `crates/core/src/dma.rs` — verify with a test ROM that
+  it back; the transfer aligns it away — `crates/core/src/io/dma/mod.rs` — verify with a test ROM that
   writes `FFFF_FFFFh` to each address register and reads it back.
 - **ARM7 address widths** (the table in "Registers") follow GBATEK's statement that the ARM7's
   channels keep the GBA's limits; the exact bit that is cut for each channel is as read, not
-  tested — `crates/core/src/dma.rs` — verify with the same test ROM on each ARM7 channel.
+  tested — `crates/core/src/io/dma/mod.rs` — verify with the same test ROM on each ARM7 channel.
 - **HBlank start in the blank lines (192-262).** GBATEK marks the ARM9's HBlank start as paused
   during VBlank, which is what the model does. Whether the first blank line's HBlank counts is
-  not stated — `crates/core/src/lib.rs` — verify with a test ROM that counts HBlank transfers
+  not stated — `crates/core/src/machine/mod.rs` — verify with a test ROM that counts HBlank transfers
   over a frame.
 - **Repeat with Immediate.** The model ignores repeat for Immediate: the channel ends and enable
-  clears — `crates/core/src/dma.rs` — verify with a test ROM.
-- **Source control 3** acts as increment — `crates/core/src/dma.rs`.
+  clears — `crates/core/src/io/dma/mod.rs` — verify with a test ROM.
+- **Source control 3** acts as increment — `crates/core/src/io/dma/mod.rs`.
 - **Unused control bits** (ARM7 bit 27, and the ARM7's third start-timing bit) read 0 and are
-  dropped on write — `crates/core/src/dma.rs`.
+  dropped on write — `crates/core/src/io/dma/mod.rs`.
 - **Same-time channel order** (0 to 3, the ARM9's before the ARM7's) is the model's reading of
-  the priority rule — `crates/core/src/dma.rs`, `crates/core/src/io.rs`.
+  the priority rule — `crates/core/src/io/dma/mod.rs`, `crates/core/src/io/mod.rs`.
 - **What is behind a TCM window.** GBATEK says DMA cannot reach the TCMs; that its access falls
   through to the address behind the window is the model's choice —
-  `crates/core/src/lib.rs` (`run_dma`) — verify with a test ROM that DMAs from a mapped DTCM
+  `crates/core/src/machine/mod.rs` (`run_dma`) — verify with a test ROM that DMAs from a mapped DTCM
   address.
 - **Writes to the channel's own registers during its transfer.** The transfer works on its
   latched copies; at its end enable is cleared or kept by the repeat rule above, whatever the
-  register held — `crates/core/src/dma.rs`.
+  register held — `crates/core/src/io/dma/mod.rs`.
 - **A channel re-armed by its own transfer.** If the transfer clears and sets its own enable, for
   any start timing, the new latched copies and start are kept and the end-of-transfer rules do not
   touch the channel; the transfer's IRQ is still raised from the live control —
-  `crates/core/src/dma.rs`.
+  `crates/core/src/io/dma/mod.rs`.
 - **Half and byte accesses** to a register split into bytes in ascending address order, and the
   enable edge is seen when the byte holding bit 31 is written (`arm9-memory-map.md`,
-  "Unverified") — `crates/core/src/dma.rs`.
-- **IRQ with enable cleared mid-transfer.** The IRQ bit is read at the end — `dma.rs`.
+  "Unverified") — `crates/core/src/io/dma/mod.rs`.
+- **IRQ with enable cleared mid-transfer.** The IRQ bit is read at the end — `io/dma/mod.rs`.
 - **The interrupt-during-DMA note** in GBATEK ("raw TCM-only IRQs may be processed during
   DMA(?)", `interrupts.md`) is not modeled: no CPU runs during an atomic transfer.

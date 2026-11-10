@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Memory Timings" / "DS Technical Data" (clock rates); GBATEK "DS Display
 Dimensions / Timings" (lines, dots, frame length); GBATEK "DS Memory Maps" (ARM7 WRAM).
-Used by: `crates/core/src/scheduler/`, `crates/core/src/lib.rs` (`run_frame`, `step_arm9`),
+Used by: `crates/core/src/scheduler/`, `crates/core/src/machine/mod.rs` (`run_frame`, `step_arm9`),
 `crates/core/src/bus/` (the ARM7 view)   Phase: 3 (#21)
 
 The machine has two processors on one bus clock. The emulator advances them in turns and

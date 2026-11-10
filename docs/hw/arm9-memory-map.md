@@ -153,7 +153,7 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
   enabled DTCM, a load at an overlapping address reads the memory underneath, not the DTCM:
   the ITCM claims the address. — `Memory::load` — verify likewise.
 - **Opcodes already prefetched** when a CP15 write changes a TCM mapping keep the old mapping:
-  the pipeline is not refilled. — `Machine::step_arm9` in `crates/core/src/lib.rs` — verify
+  the pipeline is not refilled. — `Machine::step_arm9` in `crates/core/src/machine/mod.rs` — verify
   likewise.
 - **TCM corner cases** (size field outside 3-23, base not aligned to the size) follow
   `cp15.md`: the region is `[base, base + 512 << N)` as written. — `tcm_offset` in `bus/memory.rs` —

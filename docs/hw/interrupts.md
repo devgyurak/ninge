@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Interrupts" (IME, IE and IF registers, the interrupt bit table);
 GBATEK "ARM CPU Exceptions" for the IRQ entry (see `arm-exceptions-modes.md`).
-Used by: `crates/core/src/irq.rs`, `crates/core/src/io.rs`, `crates/core/src/lib.rs`   Phase: 3 (#23)
+Used by: `crates/core/src/io/irq/mod.rs`, `crates/core/src/io/mod.rs`, `crates/core/src/machine/mod.rs`   Phase: 3 (#23)
 
 Each CPU has its own interrupt controller: three registers that sit at the same addresses on
 both CPUs but are separate hardware. A write by one CPU never shows on the other. This note
@@ -100,28 +100,28 @@ HLE BIOS (#27). #23 stops at the exception entry: IRQ mode, R14_irq, SPSR_irq, a
 
 ## Unverified
 
-- IME bits 1-31 read 0, and IF latches whatever IE and IME say — `crates/core/src/irq.rs` —
+- IME bits 1-31 read 0, and IF latches whatever IE and IME say — `crates/core/src/io/irq/mod.rs` —
   GBATEK says only "not used" for IME and the latch is not described on the DS page; verify
   with a test ROM on hardware.
-- Unused IE bits — `crates/core/src/irq.rs`, IE write and `request`. GBATEK's only stated
+- Unused IE bits — `crates/core/src/io/irq/mod.rs`, IE write and `request`. GBATEK's only stated
   read-back is "trying to set all IE bits gives `FFFF_FFFFh` (DSi7) or `FFFF_FF7Fh` (DSi9)", which would mean IE stores unused bits and only
   ARM9 bit 7 is missing. That is DSi mode; the DS-mode result is not stated. The model keeps
   the mask (IE holds only the bits in the table) because the table is the DS-mode statement and
   the DSi sentence may describe the extended DSi bits. It is a model, not a finding: the
-  maintainer may switch it, which changes `irq.rs`, its tests, and the test ROM's expected
+  maintainer may switch it, which changes `io/irq/mod.rs`, its tests, and the test ROM's expected
   values. Verify with a test ROM that writes `FFFF_FFFFh` to IE on hardware.
 - `0400_0218h` and `0400_021Ch` (IE2, IF2) are DSi7-only; on the DS they are undefined ports
   and read 0 here (no register).
 - GBATEK says "raw TCM-only IRQs may be processed during DMA(?)"; not modeled: a DMA transfer is
   atomic, so no CPU runs during one (`dma.md`, "Unverified").
-- Reset values of IME, IE and IF are not stated — `crates/core/src/irq.rs` — all 0, which is
+- Reset values of IME, IE and IF are not stated — `crates/core/src/io/irq/mod.rs` — all 0, which is
   what a handoff by the BIOS expects; verify by reading the registers in a test ROM on
   hardware before any write.
-- Bit 13 is listed for both CPUs, and bit 7 only for the ARM7 — `crates/core/src/irq.rs` —
+- Bit 13 is listed for both CPUs, and bit 7 only for the ARM7 — `crates/core/src/io/irq/mod.rs` —
   as in the GBATEK table; a DSi-mode difference is out of scope.
 - Whether an IME or IE write reaches the IRQ line instantly or a few cycles later — the model
-  is instant, and the line is read before each instruction — `crates/core/src/lib.rs` —
+  is instant, and the line is read before each instruction — `crates/core/src/machine/mod.rs` —
   verify with a cycle-timed test ROM.
 - The IRQ line is sampled before each instruction, so a request raised during an instruction
-  is taken after it — `crates/core/src/lib.rs` — approximate timing is the goal
+  is taken after it — `crates/core/src/machine/mod.rs` — approximate timing is the goal
   (AGENTS.md §2 rule 7).

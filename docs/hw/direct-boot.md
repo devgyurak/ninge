@@ -3,7 +3,7 @@
 Sources: GBATEK "DS Cartridge Header" (header copy); GBATEK "NDS BIOS RAM Usage" (memory used at
 cartridge boot time, register settings at cartridge boot time); GBATEK "DS Memory Control -
 Cache and TCM"; GBATEK "DS Display Dimensions / Timings"; GBATEK "DS Memory Timings".
-Used by: `crates/core/src/hle/direct_boot.rs`, `crates/core/src/lib.rs` (`load_rom`,
+Used by: `crates/core/src/hle/direct_boot.rs`, `crates/core/src/machine/mod.rs` (`load_rom`,
 `run_frame`)   Phase: 2 (#17), ARM9 only; Phase 3 (#21) starts the ARM7 too
 
 ninge boots without BIOS or firmware: it puts the machine in the state the BIOS and firmware

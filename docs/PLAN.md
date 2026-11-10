@@ -91,9 +91,12 @@
 ninge/
 ├── crates/
 │   ├── core/        # The emulator core. No IO. Pure logic.
+│   │   ├── machine/     # `Machine`: the one struct that owns all state
 │   │   ├── cpu/         # Shared ARMv4T/v5TE interpreter (const generic)
 │   │   ├── bus/         # ARM9 bus view, ARM7 bus view, shared memory
+│   │   ├── io/          # Register devices (IRQ, IPC, timers, DMA, timing) and the address map
 │   │   ├── scheduler/   # Event-driven scheduler
+│   │   ├── savestate/   # Savestate format, save and load
 │   │   ├── gpu2d/       # Engines A/B
 │   │   ├── gpu3d/       # Geometry engine, rasterizer
 │   │   ├── spu/         # Sound

@@ -112,8 +112,8 @@ HLE BIOS (#27). #23 stops at the exception entry: IRQ mode, R14_irq, SPSR_irq, a
   values. Verify with a test ROM that writes `FFFF_FFFFh` to IE on hardware.
 - `0400_0218h` and `0400_021Ch` (IE2, IF2) are DSi7-only; on the DS they are undefined ports
   and read 0 here (no register).
-- GBATEK says "raw TCM-only IRQs may be processed during DMA(?)"; not modeled — revisit with
-  DMA (#26).
+- GBATEK says "raw TCM-only IRQs may be processed during DMA(?)"; not modeled: a DMA transfer is
+  atomic, so no CPU runs during one (`dma.md`, "Unverified").
 - Reset values of IME, IE and IF are not stated — `crates/core/src/irq.rs` — all 0, which is
   what a handoff by the BIOS expects; verify by reading the registers in a test ROM on
   hardware before any write.

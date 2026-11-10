@@ -6,7 +6,9 @@
 //! - `docs/hw/arm9-memory-map.md`: "Alignment", "Main RAM", "Tightly coupled memory",
 //!   "Unmapped addresses and I/O"
 //! - `docs/hw/arm-load-store.md`: "Alignment" (unaligned LDR rotates right by 8 * (addr & 3))
-//! - `docs/hw/vram-banks.md`: bank read/write rules and its "Unverified" section
+//! - `docs/hw/vram-banks.md`: bank read/write rules, the MST 1 BG window and its "Unverified"
+//!   section
+//! - `docs/hw/palette-ram.md`: the palette RAM's widths and mirror
 //! - `docs/hw/cp15.md`: TCM control bits
 //!
 //! Slots the note marks Unverified are in tests whose names say so (`TODO(hw-unverified)`).
@@ -65,8 +67,19 @@ const TABLE: &[(u32, &str, u32)] = &[
     (30, "STRB to VRAM ignored", 0x1122_3344),
     (31, "disabled bank reads zero", 0x0000_0000),
     (32, "undefined I/O reads zero", 0x0000_0000),
-    (33, "progress", 7),
+    (33, "progress", 8),
     (34, "sentinel", 0x6D65_6D21),
+    (35, "palette word", 0x7C1F_03E0),
+    (36, "palette halfword", 0x0000_BEEF),
+    (37, "STRB to palette ignored", 0x1122_3344),
+    (38, "palette 2 KiB mirror", 0x5041_4C31),
+    (39, "palette last repeat in the block", 0x5041_4C31),
+    (40, "engine B half is separate", 0x7C1F_03E0),
+    (41, "LCDC data after the move to MST 1", 0x0000_BEEF),
+    (42, "BG window word", 0x4247_3031),
+    (43, "STRB to the BG window ignored", 0x5566_7788),
+    (44, "BG window at OFS 1", 0x4F46_5331),
+    (45, "LCDC window empty at MST 1", 0x0000_0000),
 ];
 
 /// Mismatches among the given slots.
@@ -144,7 +157,44 @@ fn given_memmap_rom_when_run_one_frame_then_an_undefined_io_port_reads_zero() {
 }
 
 #[test]
-fn given_memmap_rom_when_run_one_frame_then_all_seven_groups_finished() {
+fn given_memmap_rom_when_run_one_frame_then_palette_ram_stores_words_and_halfwords_and_ignores_byte_stores()
+ {
+    assert_eq!(mismatches_in(35, 37), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_memmap_rom_when_run_one_frame_then_palette_ram_repeats_every_2_kib_as_the_note_models_unverified()
+ {
+    // TODO(hw-unverified): palette-ram.md "Unverified", the mirror through the 16 MiB block.
+    assert_eq!(mismatches_in(38, 39), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_memmap_rom_when_run_one_frame_then_engine_bs_palette_half_is_separate_storage() {
+    assert_eq!(mismatches_in(40, 40), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_memmap_rom_when_run_one_frame_then_bank_a_keeps_its_bytes_when_it_moves_to_the_bg_window()
+{
+    assert_eq!(mismatches_in(41, 41), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_memmap_rom_when_run_one_frame_then_the_bg_window_stores_words_and_ignores_byte_stores_and_follows_the_offset()
+ {
+    assert_eq!(mismatches_in(42, 44), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_memmap_rom_when_run_one_frame_then_the_lcdc_window_is_empty_at_mst_1_as_the_note_models_unverified()
+ {
+    // TODO(hw-unverified): vram-banks.md "Unverified", MST other than 0 at the LCDC window.
+    assert_eq!(mismatches_in(45, 45), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_memmap_rom_when_run_one_frame_then_all_eight_groups_finished() {
     assert_eq!(mismatches_in(33, 33), Vec::<Mismatch>::new());
 }
 

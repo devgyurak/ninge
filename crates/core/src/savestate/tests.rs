@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_233;
-const PINNED_HASH: u64 = 0x68b5d11adf67d4da;
+const PINNED_LEN: usize = 4_475_283;
+const PINNED_HASH: u64 = 0x9cd9_7c67_d050_6267;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -37,8 +37,10 @@ const PINNED_HASH: u64 = 0x68b5d11adf67d4da;
 /// program now runs through the BIOS traps, which changes the registers it ends with.
 /// Version 13 (#27) added each core's halted flag and the ARM7's HALTCNT request, three one-byte
 /// bools: both lengths grew by 3 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 4_473_324;
-const PINNED_BOOTED_HASH: u64 = 0xe28659e030f9b85c;
+/// Version 14 (#28) added the palette RAM: 2048 bytes behind a two-byte length, so both lengths
+/// grew by 2050 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 4_475_374;
+const PINNED_BOOTED_HASH: u64 = 0x60aa16b9b9e41577;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -171,7 +173,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &13u32.to_le_bytes(),
+        &14u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -212,7 +214,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 10,
-            expected: 13
+            expected: 14
         })
     );
 }
@@ -223,9 +225,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 10 is not version 13")
+        .expect_err("version 10 is not version 14")
         .to_string();
-    assert!(message.contains("version 10") && message.contains("version 13"));
+    assert!(message.contains("version 10") && message.contains("version 14"));
 }
 
 #[test]
@@ -559,7 +561,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_13_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_14_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -567,14 +569,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 13
+            expected: 14
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_13_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_14_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -582,15 +584,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 13
+            expected: 14
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_13() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_14() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 13u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 14u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.

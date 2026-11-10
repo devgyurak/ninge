@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The memory both CPUs see: main RAM, the two TCMs, VRAM bank A as LCDC, the 32 KiB of shared
-//! WRAM that WRAMCNT hands out, and the ARM7's own WRAM. Each CPU has a page table of its own
-//! (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`, `docs/hw/wramcnt.md`).
+//! The memory both CPUs see: main RAM, the two TCMs, VRAM bank A (as LCDC or as engine A BG), the
+//! palette RAM, the 32 KiB of shared WRAM that WRAMCNT hands out, and the ARM7's own WRAM. Each
+//! CPU has a page table of its own (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`,
+//! `docs/hw/palette-ram.md`, `docs/hw/wramcnt.md`).
 //!
 //! Access order: (ARM9 only) TCM, then the page table. An address neither answers returns
 //! `None` and the bus view sends it to the register devices (`Io`), which read 0 for an address
@@ -58,6 +59,14 @@ const BIOS7_SIZE: u32 = 16 << 10;
 /// VRAM bank A, mapped as LCDC at `0680_0000h`, 128 KiB (`vram-banks.md`, "Behavior").
 const VRAM_A_BASE: u32 = 0x0680_0000;
 const VRAM_A_SIZE: usize = 128 << 10;
+/// Engine A's BG VRAM window: 2 MiB at `0600_0000h`; bank A with MST 1 sits `OFS * 20000h` into
+/// it (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
+const BG_A_BASE: u32 = 0x0600_0000;
+/// Palette RAM: 2 KiB at `0500_0000h`, repeated through its 16 MiB block (`palette-ram.md`,
+/// "Layout" and "Behavior").
+const PALETTE_BASE: u32 = 0x0500_0000;
+const PALETTE_SIZE: usize = 2 << 10;
+const PALETTE_BLOCK_SIZE: usize = 16 << 20;
 /// VRAMCNT_A, at `0400_0240h` (`vram-banks.md`, "Registers").
 pub(crate) const VRAMCNT_A_ADDR: u32 = 0x0400_0240;
 /// VRAMCNT_A bits 0-1: MST. Bit 2 is not used by bank A.
@@ -72,6 +81,8 @@ const VRAMCNT_USED: u8 =
     VRAMCNT_MST_MASK | (VRAMCNT_OFS_MASK << VRAMCNT_OFS_SHIFT) | VRAMCNT_ENABLE;
 /// The MST value that maps bank A for plain CPU access (LCDC mode).
 const MST_LCDC: u8 = 0;
+/// The MST value that maps bank A into engine A's BG VRAM.
+const MST_BG_A: u8 = 1;
 
 /// Which memory a page of the address space is backed by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,8 +91,10 @@ pub enum Region {
     Unmapped,
     /// Main RAM.
     MainRam,
-    /// VRAM bank A, mapped as LCDC.
+    /// VRAM bank A, mapped as LCDC or as engine A BG VRAM; the same buffer either way.
     VramA,
+    /// The palette RAM, 2 KiB repeated through its block (`palette-ram.md`).
+    Palette,
     /// The shared WRAM, as WRAMCNT allocates it to the CPU asking.
     SharedWram,
     /// The BIOS area: synthetic, reads zero, writes are ignored (`hle-swi.md`, "The BIOS area").
@@ -160,6 +173,8 @@ pub struct Memory {
     dtcm: Vec<u8>,
     vram_a: Vec<u8>,
     vramcnt_a: u8,
+    // The palette RAM (`palette-ram.md`); the ARM9 alone sees it.
+    palette: Vec<u8>,
     // The ARM7's own WRAM (64 KiB); only the ARM7 view reaches it.
     wram7: Vec<u8>,
     // The shared WRAM (32 KiB) and the WRAMCNT mode (bits 0-1) that splits it (`wramcnt.md`).
@@ -243,7 +258,7 @@ impl Memory {
     /// Memory in its power-on state.
     // TODO(hw-unverified): all RAM starts at zero, and VRAMCNT_A and WRAMCNT start at 0, which
     // GBATEK does not state (`arm9-memory-map.md`, "Unverified"; `vram-banks.md`, "Unverified";
-    // `wramcnt.md`, "Unverified").
+    // `wramcnt.md`, "Unverified"; `palette-ram.md`, "Unverified").
     pub fn new() -> Self {
         let mut memory = Self {
             main_ram: vec![0; MAIN_RAM_SIZE],
@@ -251,6 +266,7 @@ impl Memory {
             dtcm: vec![0; DTCM_SIZE],
             vram_a: vec![0; VRAM_A_SIZE],
             vramcnt_a: 0,
+            palette: vec![0; PALETTE_SIZE],
             wram7: vec![0; WRAM7_SIZE],
             shared_wram: vec![0; SHARED_WRAM_SIZE],
             wramcnt: 0,
@@ -265,10 +281,13 @@ impl Memory {
     /// VRAMCNT_A write, and after a savestate load (`savestate`); a WRAMCNT write rebuilds only
     /// the shared WRAM block (`build_wram_pages`).
     // Per-CPU tables: the decision is recorded in the PR that added #22.
-    // TODO(phase4): the other VRAM banks and MST values join them (#35).
+    // TODO(phase4): the other VRAM banks and the OBJ mapping join them (#35); texture slots are
+    // `TODO(phase7)`.
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
-    // rule; a disabled bank or MST other than 0 is unmapped; the LCDC window has no mirrors
-    // (`arm9-memory-map.md`, `vram-banks.md`, "Unverified").
+    // rule; a disabled bank or an MST that is not 0 or 1 is unmapped; the LCDC and BG windows
+    // have no mirrors (`arm9-memory-map.md`, `vram-banks.md`, "Unverified").
+    // TODO(hw-unverified): the palette RAM repeats through its 16 MiB block, and the ARM7 has
+    // none (`palette-ram.md`, "Unverified").
     pub(crate) fn build_page_table(&mut self) {
         self.pages9.clear();
         self.pages9.resize(PAGE_COUNT, UNMAPPED_PAGE);
@@ -299,12 +318,27 @@ impl Memory {
             Region::Bios,
             Some((0, PAGE_SIZE)),
         );
+        // The palette RAM is the ARM9's alone; each 16 KiB page of the block points at offset 0 and
+        // `region_bytes` takes the offset modulo its 2 KiB (a page holds eight repeats).
+        map_window(
+            &mut self.pages9,
+            PALETTE_BASE,
+            PALETTE_BASE + PALETTE_BLOCK_SIZE as u32,
+            Region::Palette,
+            Some((0, PALETTE_SIZE)),
+        );
+        // Bank A is seen at one place at a time: where MST says, and only while enabled.
         let bank = self.vram_a();
-        if bank.enabled && bank.mst == MST_LCDC {
+        let base = match (bank.enabled, bank.mst) {
+            (true, MST_LCDC) => Some(VRAM_A_BASE),
+            (true, MST_BG_A) => Some(BG_A_BASE + u32::from(bank.offset) * VRAM_A_SIZE as u32),
+            _ => None,
+        };
+        if let Some(base) = base {
             map_window(
                 &mut self.pages9,
-                VRAM_A_BASE,
-                VRAM_A_BASE + VRAM_A_SIZE as u32,
+                base,
+                base + VRAM_A_SIZE as u32,
                 Region::VramA,
                 Some((0, VRAM_A_SIZE)),
             );
@@ -361,6 +395,12 @@ impl Memory {
         (bank.enabled && bank.mst == MST_LCDC).then_some(self.vram_a.as_slice())
     }
 
+    /// The 2 KiB of palette RAM: engine A's BG and OBJ tables, then engine B's (`palette-ram.md`,
+    /// "Layout"). A debugger's palette panel (#57) shows it.
+    pub fn palette(&self) -> &[u8] {
+        &self.palette
+    }
+
     /// The region backing the page that holds `addr`, as the ARM9 sees it.
     pub fn region(&self, addr: u32) -> Region {
         page_of(&self.pages9, addr).region
@@ -392,6 +432,8 @@ impl Memory {
         let buf = match region {
             Region::MainRam => &self.main_ram,
             Region::VramA => &self.vram_a,
+            // The palette repeats every 2 KiB inside a page too, so the offset wraps here.
+            Region::Palette => return Some(bytes_at(&self.palette, offset % PALETTE_SIZE)),
             Region::SharedWram => &self.shared_wram,
             Region::Wram7 => &self.wram7,
             // The BIOS is synthetic: it reads zero (`hle-swi.md`, "The BIOS area").
@@ -483,9 +525,9 @@ impl Memory {
         let page = page_of(self.pages::<ARM9>(), addr);
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
         match page.region {
-            // VRAM takes 16-bit and 32-bit writes only; a byte write is ignored
-            // (`vram-banks.md`, "Behavior").
-            Region::VramA if N == 1 => false,
+            // VRAM and the palette take 16-bit and 32-bit writes only; a byte write is ignored
+            // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior").
+            Region::VramA | Region::Palette if N == 1 => false,
             Region::Unmapped => false,
             // ROM: the write is taken and dropped, it is not an I/O access.
             Region::Bios => true,
@@ -501,6 +543,10 @@ impl Memory {
         let buf = match region {
             Region::MainRam => &mut self.main_ram,
             Region::VramA => &mut self.vram_a,
+            Region::Palette => {
+                put_bytes(&mut self.palette, offset % PALETTE_SIZE, bytes);
+                return;
+            }
             Region::SharedWram => &mut self.shared_wram,
             Region::Wram7 => &mut self.wram7,
             Region::Bios | Region::Unmapped => return,
@@ -557,6 +603,7 @@ impl Memory {
             && self.itcm.len() == ITCM_SIZE
             && self.dtcm.len() == DTCM_SIZE
             && self.vram_a.len() == VRAM_A_SIZE
+            && self.palette.len() == PALETTE_SIZE
             && self.wram7.len() == WRAM7_SIZE
             && self.shared_wram.len() == SHARED_WRAM_SIZE
             && self.vramcnt_a & !VRAMCNT_USED == 0

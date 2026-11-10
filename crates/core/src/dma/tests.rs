@@ -1468,3 +1468,22 @@ fn given_an_enabled_pending_channel_when_checked_then_it_is_well_formed() {
 fn given_a_default_device_when_compared_to_a_new_one_then_they_are_equal() {
     assert_eq!(Arm9Dma::default(), Arm9Dma::new());
 }
+
+#[test]
+fn given_a_transfer_that_clears_and_sets_its_own_enable_when_it_finishes_then_the_new_start_is_kept_unverified()
+ {
+    let mut dma = Arm9Dma::new();
+    let t = started(&mut dma, 0, MAIN, OTHER, ENABLE | 4);
+    write32(&mut dma, cnt(0), 0);
+    write32(&mut dma, cnt(0), ENABLE | 4);
+    let effect = dma.finish(&t, END);
+    assert_eq!(
+        (
+            effect,
+            dma.pending(0),
+            dma.control(0) >> 31,
+            dma.is_well_formed()
+        ),
+        (Effect::default(), true, 1, true)
+    );
+}

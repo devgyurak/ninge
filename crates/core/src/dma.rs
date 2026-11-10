@@ -320,6 +320,14 @@ impl<const ARM9: bool> Dma<ARM9> {
         // TODO(hw-unverified): the live control register decides the repeat and the IRQ, so a
         // write to the channel's own registers mid-transfer, or an enable cleared then, changes
         // the outcome (`dma.md`, "Unverified").
+        // A transfer can write its own channel's registers through the bus. If it cleared and set
+        // enable again, the channel was re-armed and its new start is queued: leave it alone, or
+        // the start would run on a channel finish had just disabled.
+        // TODO(hw-unverified): a channel re-armed by its own transfer keeps the new start
+        // (`dma.md`, "Unverified").
+        if channel.pending {
+            return Effect::default();
+        }
         let control = channel.control;
         // TODO(hw-unverified): repeat is ignored for an Immediate start (`dma.md`, "Unverified").
         let repeats = control & CONTROL_REPEAT != 0

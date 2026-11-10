@@ -362,7 +362,8 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
     fn slot_fire(&mut self, slot: u8, now: u64) -> Fired {
         let index = usize::from(slot);
         let mut effect = self.settle_timer(index, now);
-        effect.reschedule |= 1 << slot;
+        // A slot past the last timer (a hand-made event) has no bit to set.
+        effect.reschedule |= 1_u8.checked_shl(u32::from(slot)).unwrap_or(0);
         Fired {
             effect,
             transfer: None,

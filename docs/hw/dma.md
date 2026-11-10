@@ -205,6 +205,9 @@ hardware behavior.
 - **Writes to the channel's own registers during its transfer.** The transfer works on its
   latched copies; at its end enable is cleared or kept by the repeat rule above, whatever the
   register held — `crates/core/src/dma.rs`.
+- **A channel re-armed by its own transfer.** If the transfer clears and sets its own enable, the
+  new start is kept and the end-of-transfer rules do not touch the channel —
+  `crates/core/src/dma.rs`.
 - **Half and byte accesses** to a register split into bytes in ascending address order, and the
   enable edge is seen when the byte holding bit 31 is written (`arm9-memory-map.md`,
   "Unverified") — `crates/core/src/dma.rs`.

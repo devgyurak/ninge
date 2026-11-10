@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask. Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask; version 10 adds both CPUs' DMA channels and the `DmaStart` event (#26). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -40,7 +40,7 @@
 //! Memory buffer sizes and the register devices' values, the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
 //! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
-//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, at the later of the overflow time the timer's own counter gives and `now`, and not more than a slice behind it), and the ARM7 clock at `now` or one master cycle past it (booted machines).
+//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, at the later of the overflow time the timer's own counter gives and `now`, and not more than a slice behind it), each DMA channel's start event (`docs/hw/dma.md`: exactly one per channel with a start waiting, none for any other, due within a slice of `now`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -53,13 +53,14 @@
 //! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load.
 
 use crate::Machine;
+use crate::dma::{CHANNEL_COUNT, Dma};
 use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES, SLICE, Scheduler};
 use crate::timers::{TIMER_COUNT, Timers};
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -128,6 +129,22 @@ fn timer_events_are_sane<const ARM9: bool>(scheduler: &Scheduler, timers: &Timer
         match (timers.overflow_time(index), times.as_slice()) {
             (Some(due), [time]) => *time == due.max(now) && now.saturating_sub(due) <= SLICE,
             (None, []) => true,
+            _ => false,
+        }
+    })
+}
+
+/// Whether the queue holds a start event for exactly the channels of `dma` that have one waiting,
+/// each due no earlier than `now` (the scheduler checks that) and within one slice of it
+/// (`dma.md`, "Model"). An event for a channel with nothing waiting would run a transfer nobody
+/// asked for; a waiting channel with none would never start.
+fn dma_events_are_sane<const ARM9: bool>(scheduler: &Scheduler, dma: &Dma<ARM9>) -> bool {
+    let now = scheduler.now();
+    (0..CHANNEL_COUNT).all(|index| {
+        let times = scheduler.times_of(Dma::<ARM9>::event_kind(index));
+        match (dma.pending(index), times.as_slice()) {
+            (true, [time]) => time.saturating_sub(now) <= SLICE,
+            (false, []) => true,
             _ => false,
         }
     })
@@ -208,6 +225,8 @@ impl Machine {
             || !loaded.line_events_are_sane()
             || !timer_events_are_sane(&loaded.scheduler, loaded.io.timers9())
             || !timer_events_are_sane(&loaded.scheduler, loaded.io.timers7())
+            || !dma_events_are_sane(&loaded.scheduler, loaded.io.dma9())
+            || !dma_events_are_sane(&loaded.scheduler, loaded.io.dma7())
             // A booted machine is always settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up.
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())

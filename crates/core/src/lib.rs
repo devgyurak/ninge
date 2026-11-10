@@ -4,6 +4,7 @@
 pub mod bus;
 pub mod cart;
 pub mod cpu;
+pub mod dma;
 pub mod gpu2d;
 mod hle;
 pub mod io;
@@ -16,6 +17,8 @@ pub mod timers;
 use bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
 use cart::Header;
 use cpu::Cpu;
+use dma::{Dma, Trigger};
+use gpu2d::timing::FIRST_VBLANK_LINE;
 use io::Io;
 use irq::InterruptController;
 use scheduler::{
@@ -248,7 +251,7 @@ impl Machine {
         &self.memory
     }
 
-    /// The register devices: display, interrupt controllers, IPC and timers.
+    /// The register devices: display, interrupt controllers, IPC, timers and DMA.
     // The debugger's IO register panel will show them.
     pub fn io(&self) -> &Io {
         &self.io
@@ -297,6 +300,19 @@ impl Machine {
     // shows their overflow events.
     pub fn timers7(&self) -> &Timers<false> {
         self.io.timers7()
+    }
+
+    /// The ARM9's four DMA channels.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
+    // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
+    pub fn dma9(&self) -> &Dma<true> {
+        self.io.dma9()
+    }
+
+    /// The ARM7's four DMA channels.
+    // The debugger's IO register panel shows them with the ARM9's.
+    pub fn dma7(&self) -> &Dma<false> {
+        self.io.dma7()
     }
 
     /// Steps the ARM9 by one instruction and advances the master clock by its cost
@@ -429,22 +445,63 @@ impl Participants for Machine {
         match event.kind {
             EventKind::LineStart => self.line_started(event.time),
             EventKind::HBlankStart => self.hblank_started(event.time),
-            EventKind::TimerOverflow { arm9, index } => {
-                self.io.timer_overflowed(&mut self.scheduler, arm9, index);
+            EventKind::TimerOverflow { .. } | EventKind::DmaStart { .. } => {
+                if let Some(transfer) = self.io.fire(&mut self.scheduler, event.kind) {
+                    self.run_dma(transfer);
+                }
             }
         }
     }
 }
 
 impl Machine {
+    /// Runs a DMA transfer through the owning CPU's bus view with the TCM switched off: DMA
+    /// cannot reach it (`docs/hw/dma.md`, "Transferring"). The view is the CPU's own, so the
+    /// units reach RAM, VRAM and the I/O registers (the DMA registers too) as an instruction's
+    /// accesses would. The channel then repeats or ends and raises its IRQ.
+    ///
+    /// The transfer is atomic: all units move at the event's master time and neither CPU stalls.
+    /// An ARM7 start comes late by what the ARM7 lags the master clock, under one slice.
+    // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
+    // by a lower channel (`docs/hw/dma.md`, "Unverified"); revisit with #115.
+    fn run_dma(&mut self, transfer: dma::Transfer) {
+        let now = self.scheduler.now();
+        let end = if transfer.arm9 {
+            let mut view = Arm9View::new(
+                &mut self.memory,
+                &mut self.io,
+                &mut self.scheduler,
+                TcmConfig::NONE,
+                now,
+            );
+            transfer.run(&mut view)
+        } else {
+            let mut view = Arm7View::new(
+                &mut self.memory,
+                &mut self.io,
+                &mut self.scheduler,
+                self.arm7_clock,
+            );
+            transfer.run(&mut view)
+        };
+        self.io.dma_finished(&transfer, end);
+    }
+
     /// A line begins at `time` (`docs/hw/display-timing.md`). VBlank starts here too, when the
     /// line is the first blank one; this is the one place for it.
     ///
     /// The start of line 0 ends the frame: the screens are drawn and the frame is counted.
-    // TODO(phase3): VBlank-start DMA (#26) and the IntrWait VBlank wait (#27) hook in here.
+    ///
+    /// The first blank line also starts the VBlank-start DMA channels (`docs/hw/dma.md`,
+    /// "Starting").
+    // TODO(phase3): the IntrWait VBlank wait (#27) hooks in here.
     fn line_started(&mut self, time: u64) {
         let requests = self.io.timing_mut().line_started();
         self.io.request_irq(requests);
+        if self.io.timing().vcount() == FIRST_VBLANK_LINE {
+            self.io
+                .trigger_dma(&mut self.scheduler, Trigger::VBlank, time);
+        }
         if self.io.timing().vcount() == 0 {
             self.render_frame();
             self.frame_count = self.frame_count.wrapping_add(1);
@@ -455,11 +512,16 @@ impl Machine {
     }
 
     /// HBlank begins at `time` in the current line (`docs/hw/display-timing.md`); the one place
-    /// for it.
-    // TODO(phase3): HBlank-start DMA (#26) hooks in here.
+    /// for it. In a visible line it starts the HBlank-start DMA channels (`docs/hw/dma.md`,
+    /// "Starting").
+    // TODO(hw-unverified): no HBlank-start DMA in the blank lines (`docs/hw/dma.md`, "Unverified").
     fn hblank_started(&mut self, time: u64) {
         let requests = self.io.timing_mut().hblank_started();
         self.io.request_irq(requests);
+        if self.io.timing().vcount() < FIRST_VBLANK_LINE {
+            self.io
+                .trigger_dma(&mut self.scheduler, Trigger::HBlank, time);
+        }
         self.scheduler
             .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
     }
@@ -617,6 +679,8 @@ mod tests {
 mod testing;
 #[cfg(test)]
 mod tests_arm9;
+#[cfg(test)]
+mod tests_dma;
 #[cfg(test)]
 mod tests_ipc;
 #[cfg(test)]

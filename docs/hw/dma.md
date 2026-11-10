@@ -109,7 +109,9 @@ that polls it waits for the transfer to finish.
 - **HBlank start:** the transfer starts at the start of HBlank in each visible line, 0-191. See
   "Unverified" for the blank lines.
 
-When several channels of one CPU start at the same time, channel 0 goes first, then 1, 2, 3.
+When several channels of one CPU start at the same time, channel 0 goes first, then 1, 2, 3. When
+both CPUs have channels waiting for the same trigger, the ARM9's go before the ARM7's (the tie
+order of `scheduler.md`, "Interleaving").
 
 ### Transferring
 

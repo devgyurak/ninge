@@ -8,9 +8,11 @@
 //! (`timers.md`, "Model"). An overflow is a scheduler event; this module has no way to reach the
 //! scheduler or an interrupt controller, so a write or an overflow hands back an [`Effect`]: the
 //! requests it would raise and the mask of timers whose overflow event must be replaced. `Io`
-//! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]).
+//! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]); that
+//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_kind`,
+//! `slot_due` and `slot_fire`).
 
-use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::{Device, Effect, Fired, Width, read_bytes, write_bytes};
 use crate::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::{EventKind, SLICE};
 use serde::{Deserialize, Serialize};
@@ -341,6 +343,30 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
         write_bytes(offset, width, value, |at, byte| {
             self.write_byte(at, byte, now)
         })
+    }
+
+    fn slot_kind(&self, slot: u8) -> Option<EventKind> {
+        (usize::from(slot) < TIMER_COUNT).then(|| Self::event_kind(usize::from(slot)))
+    }
+
+    fn slot_due(&self, slot: u8) -> Option<u64> {
+        self.overflow_time(usize::from(slot))
+    }
+
+    /// A timer's overflow event fired: it reloads, its IRQ is requested, the timer it feeds ticks
+    /// and its next overflow is scheduled (`timers.md`, "Counting").
+    ///
+    /// Every overflow of this timer due by `now` is processed, not just one: an event queued late
+    /// (an ARM7 write while it lagged) would otherwise catch up one overflow a round with the
+    /// CPUs standing still. The timer is rescheduled whether or not one was due.
+    fn slot_fire(&mut self, slot: u8, now: u64) -> Fired {
+        let index = usize::from(slot);
+        let mut effect = self.settle_timer(index, now);
+        effect.reschedule |= 1 << slot;
+        Fired {
+            effect,
+            transfer: None,
+        }
     }
 }
 

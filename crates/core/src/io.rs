@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The register devices both CPUs reach through the I/O slow path: engine A's display registers,
-//! VCOUNT and DISPSTAT, the two interrupt controllers, IPC and the two sets of timers. They sit
+//! VCOUNT and DISPSTAT, the two interrupt controllers, IPC and the two sets of timers and of DMA
+//! channels. They sit
 //! apart from [`crate::bus::Memory`] (the RAM buffers and the page tables) so a bus view can
 //! borrow memory, devices and the scheduler at once: a register write that changes a device's
 //! schedule schedules it on the spot.
@@ -9,19 +10,29 @@
 //! that owns it and an offset into that device's own register space, once per access, from the
 //! per-CPU tables [`ARM9_PORTS`] and [`ARM7_PORTS`]. A test pins that no two entries overlap.
 //! The device behind a port speaks one interface, [`Device`], and `Io` calls the concrete type
-//! with a `match`: static dispatch, no `dyn` (`AGENTS.md` §2 rule 3).
+//! through one `match` that lives in `device_call!`: static dispatch, no `dyn` (`AGENTS.md` §2
+//! rule 3).
+//!
+//! A device whose registers own scheduler events (the timers, the DMA channels) names them through
+//! the same interface: a slot is one event of the device, [`Device::slot_kind`] gives its
+//! [`EventKind`], [`Device::slot_due`] the time it is next due and [`Device::slot_fire`] what
+//! happens when it fires. `Io` replaces the events of the slots an [`Effect`] names and fires them
+//! ([`Io::fire`]) without knowing which device it is.
 //!
 //! Every IF bit a device raises goes through [`Io::request_irq`], the one path to the two
 //! controllers. A device returns what it would raise in an [`Effect`]; it never reaches a
 //! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
 use crate::bus::VRAMCNT_A_ADDR;
+use crate::dma::{
+    CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, Dma, End, FILL_BYTES, Transfer, Trigger,
+};
 use crate::gpu2d::timing::{DISPSTAT_ADDR, Timing};
 use crate::gpu2d::{DISPCNT_A_ADDR, Gpu2d, POWCNT1_ADDR};
 use crate::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR, Ipc};
 use crate::irq::{IME_ADDR, InterruptController, Requests};
-use crate::scheduler::Scheduler;
-use crate::timers::{TIMER_COUNT, TM0CNT_L_ADDR, Timers};
+use crate::scheduler::{EventKind, Scheduler};
+use crate::timers::{TM0CNT_L_ADDR, Timers};
 use serde::{Deserialize, Serialize};
 
 /// The width of one bus access.
@@ -70,7 +81,7 @@ pub(crate) struct Effect {
     /// The IF bits to raise.
     pub(crate) requests: Requests,
     /// Bit n: the device's event slot n changed and its scheduler event must be replaced. The
-    /// four timers are slots 0-3; DMA's four channels will take the same shape (#26).
+    /// four timers are slots 0-3 of their device, and so are the four DMA channels.
     pub(crate) reschedule: u8,
 }
 
@@ -108,6 +119,35 @@ pub(crate) trait Device<const ARM9: bool> {
 
     /// A CPU's write of `width` at `offset`.
     fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect;
+
+    /// The scheduler event that carries event slot `slot`, or `None` when the device has no such
+    /// slot (a device with no events has none).
+    fn slot_kind(&self, _slot: u8) -> Option<EventKind> {
+        None
+    }
+
+    /// The master time slot `slot`'s event is next due, or `None` when it has none. `Io` never
+    /// queues it before the earliest time the access allows ([`At::floor`]), so a time already
+    /// past, or 0, means "as soon as allowed".
+    fn slot_due(&self, _slot: u8) -> Option<u64> {
+        None
+    }
+
+    /// Slot `slot`'s event fired at master time `now`. Whatever it changes comes back in the
+    /// [`Fired`], the slot's own event included: `Io` does not assume it is replaced.
+    fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {
+        Fired::default()
+    }
+}
+
+/// What a fired event asks of its caller: an [`Effect`], like a register access, and for DMA the
+/// transfer the machine must now move through the owning CPU's bus, which a device cannot reach.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Fired {
+    /// The IF bits to raise and the slots to reschedule.
+    pub(crate) effect: Effect,
+    /// A transfer to run, from a DMA start.
+    pub(crate) transfer: Option<Transfer>,
 }
 
 /// A read of `width` at `offset` built from a device that holds registers one byte at a time:
@@ -152,6 +192,11 @@ pub(crate) enum Port {
     IpcRecv,
     /// The four timers.
     Timers,
+    /// The four DMA channels' address, count and control registers.
+    Dma,
+    /// The ARM9's DMA fill registers: their own entry, because they live in a different block,
+    /// but the same device as [`Port::Dma`].
+    DmaFill,
     /// VRAMCNT_A..G, WRAMCNT (ARM9) and WRAMSTAT (ARM7): owned by `Memory`.
     MemoryControl,
 }
@@ -167,6 +212,7 @@ impl Port {
             Self::Irq => IME_ADDR,
             Self::Ipc | Self::IpcRecv => IPCSYNC_ADDR,
             Self::Timers => TM0CNT_L_ADDR,
+            Self::Dma | Self::DmaFill => DMA0SAD_ADDR,
             Self::MemoryControl => VRAMCNT_A_ADDR,
         }
     }
@@ -203,6 +249,10 @@ macro_rules! device_call {
             }
             Port::Timers if $arm9 => Device::<true>::$method(borrow!($b $io.timers9) $(, $arg)*),
             Port::Timers => Device::<false>::$method(borrow!($b $io.timers7) $(, $arg)*),
+            Port::Dma | Port::DmaFill if $arm9 => {
+                Device::<true>::$method(borrow!($b $io.dma9) $(, $arg)*)
+            }
+            Port::Dma | Port::DmaFill => Device::<false>::$method(borrow!($b $io.dma7) $(, $arg)*),
             Port::Gpu2d | Port::MemoryControl => {
                 debug_assert!(false, "port not reachable through Io");
                 $absent
@@ -218,10 +268,13 @@ pub(crate) type PortEntry = (u32, u32, Port);
 /// length is a multiple of 4, so one aligned access never spans two entries. Holes inside an
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
-// TODO(phase3): the I/O registers of the other blocks arrive with their issues (#26).
-pub(crate) const ARM9_PORTS: [PortEntry; 8] = [
+// TODO(phase3): the I/O registers of the other blocks arrive with their issues.
+pub(crate) const ARM9_PORTS: [PortEntry; 10] = [
     (DISPCNT_A_ADDR, 4, Port::Gpu2d),
     (DISPSTAT_ADDR, 4, Port::Timing),
+    // DMA0SAD..DMA3CNT, twelve bytes a channel, then the fill registers.
+    (DMA0SAD_ADDR, CHANNELS_BYTES, Port::Dma),
+    (DMA0FILL_ADDR, FILL_BYTES, Port::DmaFill),
     (TM0CNT_L_ADDR, 16, Port::Timers),
     // IPCSYNC, IPCFIFOCNT and IPCFIFOSEND, 4 bytes each.
     (IPCSYNC_ADDR, 12, Port::Ipc),
@@ -235,8 +288,9 @@ pub(crate) const ARM9_PORTS: [PortEntry; 8] = [
 
 /// What the ARM7 sees: the same blocks, without engine A, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
-pub(crate) const ARM7_PORTS: [PortEntry; 6] = [
+pub(crate) const ARM7_PORTS: [PortEntry; 7] = [
     (DISPSTAT_ADDR, 4, Port::Timing),
+    (DMA0SAD_ADDR, CHANNELS_BYTES, Port::Dma),
     (TM0CNT_L_ADDR, 16, Port::Timers),
     (IPCSYNC_ADDR, 12, Port::Ipc),
     (IME_ADDR, 16, Port::Irq),
@@ -263,8 +317,8 @@ pub(crate) fn decode<const ARM9: bool>(addr: u32) -> Option<(Port, u32)> {
 pub(crate) struct At {
     /// Master time of the access, as the CPU's own clock has it.
     pub(crate) now: u64,
-    /// An overflow event never lies before the end of the instruction that scheduled it
-    /// (`timers.md`, "Model").
+    /// An event never lies before the end of the instruction that scheduled it (`timers.md`,
+    /// "Model"; `dma.md`, "Model").
     pub(crate) floor: u64,
 }
 
@@ -283,28 +337,9 @@ pub struct Io {
     // Each CPU's four timers: the same addresses, separate state (`timers.md`).
     timers9: Timers<true>,
     timers7: Timers<false>,
-}
-
-/// Replaces the overflow event of each timer in `reschedule` (bit n = timer n) with one at its
-/// next overflow, if it has one. The event never lies before `floor`: a timer an ARM7 write
-/// started while it lagged the master clock can compute a time already past, and the queue's
-/// invariant (`scheduler.md`, "Savestate checks") holds events at `now` or later. The timer keeps
-/// its own tick grid, so only the IRQ is late (`timers.md`, "Model").
-fn schedule_timers<const ARM9: bool>(
-    scheduler: &mut Scheduler,
-    timers: &Timers<ARM9>,
-    reschedule: u8,
-    floor: u64,
-) {
-    (0..TIMER_COUNT)
-        .filter(|&index| reschedule & (1 << index) != 0)
-        .for_each(|index| {
-            let kind = Timers::<ARM9>::event_kind(index);
-            scheduler.cancel(kind);
-            if let Some(time) = timers.overflow_time(index) {
-                scheduler.schedule(time.max(floor), kind);
-            }
-        });
+    // Each CPU's four DMA channels: the same addresses, separate state (`dma.md`).
+    dma9: Dma<true>,
+    dma7: Dma<false>,
 }
 
 impl Io {
@@ -318,6 +353,8 @@ impl Io {
             ipc: Ipc::new(),
             timers9: Timers::new(),
             timers7: Timers::new(),
+            dma9: Dma::new(),
+            dma7: Dma::new(),
         }
     }
 
@@ -361,8 +398,21 @@ impl Io {
         &self.timers7
     }
 
+    /// The ARM9's DMA channels.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
+    // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
+    pub fn dma9(&self) -> &Dma<true> {
+        &self.dma9
+    }
+
+    /// The ARM7's DMA channels.
+    // The debugger's IO register panel shows them with the ARM9's.
+    pub fn dma7(&self) -> &Dma<false> {
+        &self.dma7
+    }
+
     /// Raises the requests in the two masks on the matching controllers: IF latches them. The
-    /// one path every source uses: the LCD, IPC, the timers and (later) DMA.
+    /// one path every source uses: the LCD, IPC, the timers and DMA.
     pub(crate) fn request_irq(&mut self, requests: Requests) {
         self.irq9.request(requests.arm9);
         self.irq7.request(requests.arm7);
@@ -426,8 +476,8 @@ impl Io {
         self.apply::<ARM9>(scheduler, at, port, effect);
     }
 
-    /// Hands an access's effect on: its IF bits to the controllers, and the timers it names to
-    /// the scheduler.
+    /// Hands an access's effect on: its IF bits to the controllers, and the event slots it names
+    /// to the scheduler.
     fn apply<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
@@ -436,44 +486,95 @@ impl Io {
         effect: Effect,
     ) {
         self.request_irq(effect.requests);
-        // Only the timers have event slots today; DMA (#26) extends this.
-        debug_assert!(port == Port::Timers || effect.reschedule == 0);
-        if port == Port::Timers {
-            if ARM9 {
-                schedule_timers(scheduler, &self.timers9, effect.reschedule, at.floor);
-            } else {
-                schedule_timers(scheduler, &self.timers7, effect.reschedule, at.floor);
-            }
+        if effect.reschedule != 0 {
+            self.schedule_slots::<ARM9>(scheduler, port, effect.reschedule, at.floor);
         }
     }
 
-    /// A timer's overflow event fired: it reloads, its IRQ is requested, the timer it feeds ticks
-    /// and its next overflow is scheduled (`timers.md`, "Counting").
-    pub(crate) fn timer_overflowed(&mut self, scheduler: &mut Scheduler, arm9: bool, index: u8) {
-        let index = usize::from(index);
-        // Every overflow of this timer due by now is processed, not just one: an event queued late
-        // (an ARM7 write while it lagged) would otherwise catch up one overflow a round with
-        // the CPUs standing still. The timer is rescheduled whether or not one was due.
-        let now = scheduler.now();
+    /// Replaces the event of each slot of `port`'s device in `mask` (bit n = slot n) with one at
+    /// the time the slot is next due, if it has one. The event never lies before `floor`: a
+    /// timer an ARM7 write started while it lagged the master clock can compute a time already
+    /// past, and the queue's invariant (`scheduler.md`, "Savestate checks") holds events at `now`
+    /// or later. The timer keeps its own tick grid, so only the IRQ is late (`timers.md`,
+    /// "Model"). Slots are replaced in ascending order, so equal times fire in that order.
+    fn schedule_slots<const ARM9: bool>(
+        &self,
+        scheduler: &mut Scheduler,
+        port: Port,
+        mask: u8,
+        floor: u64,
+    ) {
+        (0..u8::BITS as u8)
+            .filter(|slot| mask & (1 << slot) != 0)
+            .for_each(|slot| {
+                let kind = device_call!(self, ARM9, port, ref, slot_kind(slot), None);
+                if let Some(kind) = kind {
+                    scheduler.cancel(kind);
+                    let due = device_call!(self, ARM9, port, ref, slot_due(slot), None);
+                    if let Some(time) = due {
+                        scheduler.schedule(time.max(floor), kind);
+                    }
+                }
+            });
+    }
+
+    /// A device's event fired: it does what the device says ([`Device::slot_fire`]), its IF bits
+    /// are raised and its slots rescheduled from the master clock. A DMA start comes back as the
+    /// transfer the machine must run. An event no device owns (a line or HBlank start) does
+    /// nothing here.
+    pub(crate) fn fire(&mut self, scheduler: &mut Scheduler, kind: EventKind) -> Option<Transfer> {
+        let (arm9, port, slot) = match kind {
+            EventKind::TimerOverflow { arm9, index } => (arm9, Port::Timers, index),
+            EventKind::DmaStart { arm9, channel } => (arm9, Port::Dma, channel),
+            EventKind::LineStart | EventKind::HBlankStart => return None,
+        };
+        // The one place the event's runtime CPU becomes the const generic.
         if arm9 {
-            let effect = self.timers9.settle_timer(index, now);
-            self.request_irq(effect.requests);
-            schedule_timers(
-                scheduler,
-                &self.timers9,
-                effect.reschedule | 1 << index,
-                now,
-            );
+            self.fire_slot::<true>(scheduler, port, slot)
         } else {
-            let effect = self.timers7.settle_timer(index, now);
-            self.request_irq(effect.requests);
-            schedule_timers(
-                scheduler,
-                &self.timers7,
-                effect.reschedule | 1 << index,
-                now,
-            );
+            self.fire_slot::<false>(scheduler, port, slot)
         }
+    }
+
+    fn fire_slot<const ARM9: bool>(
+        &mut self,
+        scheduler: &mut Scheduler,
+        port: Port,
+        slot: u8,
+    ) -> Option<Transfer> {
+        let now = scheduler.now();
+        let fired = device_call!(
+            self,
+            ARM9,
+            port,
+            mut,
+            slot_fire(slot, now),
+            Fired::default()
+        );
+        self.apply::<ARM9>(scheduler, At { now, floor: now }, port, fired.effect);
+        fired.transfer
+    }
+
+    /// `trigger` happened at master time `time`: every channel of both CPUs that waits for it is
+    /// queued to start, the ARM9's first, each in channel order. The event is never before the
+    /// master clock (`scheduler.md`, "Savestate checks").
+    pub(crate) fn trigger_dma(&mut self, scheduler: &mut Scheduler, trigger: Trigger, time: u64) {
+        let floor = time.max(scheduler.now());
+        let arm9 = self.dma9.trigger(trigger);
+        let arm7 = self.dma7.trigger(trigger);
+        self.schedule_slots::<true>(scheduler, Port::Dma, arm9, floor);
+        self.schedule_slots::<false>(scheduler, Port::Dma, arm7, floor);
+    }
+
+    /// The transfer of a CPU's channel ended at `end`: the channel repeats or is disabled, and
+    /// its IRQ is raised (`dma.md`, "The end of a transfer").
+    pub(crate) fn dma_finished(&mut self, transfer: &Transfer, end: End) {
+        let effect = if transfer.arm9 {
+            self.dma9.finish(transfer, end)
+        } else {
+            self.dma7.finish(transfer, end)
+        };
+        self.request_irq(effect.requests);
     }
 
     /// Whether the devices hold only values that exist. A savestate that decodes to anything
@@ -485,6 +586,8 @@ impl Io {
             && self.timing.is_well_formed()
             && self.timers9.is_well_formed()
             && self.timers7.is_well_formed()
+            && self.dma9.is_well_formed()
+            && self.dma7.is_well_formed()
     }
 
     /// Replaces the IPC block, to build a corrupt state in a test.
@@ -585,6 +688,12 @@ mod tests {
             (VCOUNT_ADDR, Some((Port::Timing, 2))),
             (TM0CNT_L_ADDR, Some((Port::Timers, 0))),
             (TM0CNT_L_ADDR + 15, Some((Port::Timers, 15))),
+            // DMA0SAD..DMA3CNT, 12 bytes a channel, then DMA0FILL..DMA3FILL (`dma.md`).
+            (DMA0SAD_ADDR, Some((Port::Dma, 0))),
+            (0x0400_00B8, Some((Port::Dma, 8))),
+            (0x0400_00DF, Some((Port::Dma, 0x2F))),
+            (DMA0FILL_ADDR, Some((Port::DmaFill, 0x30))),
+            (0x0400_00EF, Some((Port::DmaFill, 0x3F))),
             (IPCSYNC_ADDR, Some((Port::Ipc, 0))),
             (IPCFIFOCNT_ADDR, Some((Port::Ipc, 4))),
             (IPCFIFOSEND_ADDR, Some((Port::Ipc, 8))),
@@ -608,6 +717,9 @@ mod tests {
             (DISPSTAT_ADDR, Some((Port::Timing, 0))),
             (VCOUNT_ADDR, Some((Port::Timing, 2))),
             (TM0CNT_L_ADDR + 4, Some((Port::Timers, 4))),
+            // The ARM7 has the DMA channels but no fill registers (`dma.md`, "Registers").
+            (DMA0SAD_ADDR, Some((Port::Dma, 0))),
+            (0x0400_00DF, Some((Port::Dma, 0x2F))),
             (IPCSYNC_ADDR, Some((Port::Ipc, 0))),
             (IPCFIFOSEND_ADDR, Some((Port::Ipc, 8))),
             (
@@ -628,6 +740,8 @@ mod tests {
             (POWCNT1_ADDR, None),
             (WRAMCNT, None),
             (VRAMCNT_G, None),
+            (0x0400_00E0, None),
+            (0x0400_00EF, None),
         ];
         assert_eq!(decode_failures::<false>(&expected), vec![]);
     }
@@ -644,6 +758,9 @@ mod tests {
             (0x0400_0300, None),
             (TM0CNT_L_ADDR - 1, None),
             (TM0CNT_L_ADDR + 16, None),
+            // Just below DMA0SAD and just above the fill block, which ends at 0400_00EFh.
+            (0x0400_00AF, None),
+            (0x0400_00F0, None),
             (IPCSYNC_ADDR - 1, None),
             (IPCFIFOSEND_ADDR + 4, None),
             (IPCFIFORECV_ADDR + 4, None),
@@ -724,6 +841,75 @@ mod tests {
         let mut io = Io::new();
         io.irq9 = InterruptController::with_unchecked_ie(1 << 7);
         assert!(!io.is_well_formed());
+    }
+
+    #[test]
+    fn given_line_and_hblank_events_when_fired_through_io_then_no_transfer_comes_back() {
+        let mut io = Io::new();
+        let mut scheduler = Scheduler::new();
+        assert_eq!(
+            (
+                io.fire(&mut scheduler, EventKind::LineStart),
+                io.fire(&mut scheduler, EventKind::HBlankStart)
+            ),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn given_dma_start_events_for_channels_with_no_start_waiting_when_fired_then_no_transfer_comes_back()
+     {
+        // A start that was cancelled leaves nothing to run (`dma.md`, "Enabling").
+        let mut io = Io::new();
+        let mut scheduler = Scheduler::new();
+        let kind = |arm9, channel| EventKind::DmaStart { arm9, channel };
+        assert_eq!(
+            (
+                io.fire(&mut scheduler, kind(true, 0)),
+                io.fire(&mut scheduler, kind(false, 3))
+            ),
+            (None, None)
+        );
+    }
+
+    /// The times of the ARM9 channel 0 start event after the channel was set to wait for VBlank
+    /// and VBlank was raised at `time`, with the master clock at `now`.
+    fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
+        const ENABLE: u32 = 1 << 31;
+        const ARM9_VBLANK: u32 = 1 << 27;
+        let mut io = Io::new();
+        let mut scheduler = Scheduler::new();
+        scheduler.advance(now);
+        let at = At {
+            now,
+            floor: now + 1,
+        };
+        io.write::<true>(
+            &mut scheduler,
+            at,
+            Port::Dma,
+            8,
+            Width::Word,
+            ENABLE | ARM9_VBLANK | 1,
+        );
+        io.trigger_dma(&mut scheduler, Trigger::VBlank, time);
+        scheduler.times_of(EventKind::DmaStart {
+            arm9: true,
+            channel: 0,
+        })
+    }
+
+    #[test]
+    fn given_a_vblank_raised_before_the_master_clock_when_triggered_then_the_start_is_queued_at_the_clock()
+     {
+        // An event is never before `now` (`scheduler.md`, "Savestate checks").
+        assert_eq!(vblank_start_times(100, 40), vec![100]);
+    }
+
+    #[test]
+    fn given_a_vblank_raised_after_the_master_clock_when_triggered_then_the_start_is_queued_at_that_time()
+     {
+        assert_eq!(vblank_start_times(100, 150), vec![150]);
     }
 
     #[test]

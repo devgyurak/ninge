@@ -15,9 +15,14 @@
 @   8  SP_irq after the last handler returned (the ROM set it to 027C3F00h)
 @   10 1 when an ARM-state SWI 1Eh returned to the next instruction
 @   11 r6 after a Thumb-state SWI 1Eh: 1 when it returned to the next Thumb instruction
-@   12 CPSR flags nibble after the ARM SWI (set to Ah before it)
+@   12 CPSR flags nibble after the ARM SWI
+@   13 1 when VCOUNT >= 192 after VBlankIntrWait returned  14 IRQs the handler took by then (4)
+@   15 IME after VBlankIntrWait (forced to 1)   16 CPSR low byte after it (the caller's, 9Fh)
+@   17 IF bit 0 on waking from SWI Halt with IME = 1 and I set   18 the same with IME = 0
+@   19 IF bit 0 on waking from CP15 wait-for-interrupt with IME = 0 (set to Ah before it)
 @   30 progress (1 when done)  31 sentinel, written last
     .equ REC, 0x02004000
+    .equ FLAGS, 0x027C3FF8
     .equ COUNT, 0x02006000
     .equ DTCM, 0x027C0000
 
@@ -106,6 +111,53 @@ thumb_code:
 back_to_arm:
     str r6, [r8, #44]
 
+
+    @ ---- 13-16: VBlankIntrWait with IME = 0 and I set at the call (F clear). It forces IME to 1 and
+    @ waits for the next V-blank (the old flags are discarded); the caller's CPSR comes back.
+    mov r4, #0
+    str r4, [r9, #0x208]
+    msr cpsr_c, #0x9F          @ System mode, I set, F clear: the IRQ in the wait enters as 92h
+    swi 0x050000
+    ldrh r4, [r9, #6]          @ VCOUNT
+    cmp r4, #192
+    movge r4, #1
+    movlt r4, #0
+    str r4, [r8, #52]          @ 13: VCOUNT >= 192 on return
+    ldr r4, =COUNT
+    ldr r4, [r4]
+    str r4, [r8, #56]          @ 14: the handler has taken 4 IRQs
+    ldr r4, [r9, #0x208]
+    str r4, [r8, #60]          @ 15: IME was forced to 1
+    mrs r4, cpsr
+    and r4, r4, #0xFF
+    str r4, [r8, #64]          @ 16: CPSR low byte as before the call
+    msr cpsr_c, #0xDF
+
+    @ ---- 17-18: SWI Halt wakes on IE & IF whatever IME and the I flag say
+    mov r4, #1
+    str r4, [r9, #0x214]       @ acknowledge V-blank
+    swi 0x060000
+    ldr r4, [r9, #0x214]
+    and r4, r4, #1
+    str r4, [r8, #68]          @ 17: IF bit 0 set on the wake (IME = 1, I set)
+    mov r4, #1
+    str r4, [r9, #0x214]
+    mov r4, #0
+    str r4, [r9, #0x208]       @ IME = 0
+    swi 0x060000
+    ldr r4, [r9, #0x214]
+    and r4, r4, #1
+    str r4, [r8, #72]          @ 18: IF bit 0 set on the wake (IME = 0)
+
+    @ ---- 19: the CPU's own halt
+    mov r4, #1
+    str r4, [r9, #0x214]
+    mov r0, #0
+    mcr p15, 0, r0, c7, c0, 4  @ wait-for-interrupt
+    ldr r4, [r9, #0x214]
+    and r4, r4, #1
+    str r4, [r8, #76]          @ 19: IF bit 0 set on the wake (IME = 0)
+
     mov r0, #1
     str r0, [r8, #120]
     ldr r0, =0x600DF00D
@@ -126,6 +178,10 @@ handler:
     mov r0, #0x04000000
     mov r2, #1
     str r2, [r0, #0x214]
+    ldr r2, =FLAGS
+    ldr r3, [r2]
+    orr r3, r3, #1             @ the IRQ check flags: V-blank happened (IntrWait looks here)
+    str r3, [r2]
     ldr r2, =COUNT
     ldr r3, [r2]
     add r3, r3, #1

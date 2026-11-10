@@ -25,7 +25,7 @@ pub use disasm::{ArmDisassembly, disassemble_arm};
 pub use disasm_thumb::{ThumbDisassembly, disassemble_thumb};
 pub use regs::{Bank, Mode, Registers};
 
-pub(crate) use psr::FLAG_T;
+pub(crate) use psr::{FLAG_I, FLAG_T};
 pub(crate) use regs::{LR, PC, SP};
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +49,9 @@ pub struct Cpu<const ARM9: bool> {
     /// (`docs/hw/arm-exceptions-modes.md`, "Coprocessor instructions"), so the field stays at
     /// its power-on value there.
     cp15: Cp15,
+    /// Whether the core is halted: it executes nothing until the machine wakes it
+    /// (`docs/hw/hle-swi.md`, "Halt, and what wakes a CPU").
+    halted: bool,
 }
 
 impl<const ARM9: bool> Cpu<ARM9> {
@@ -64,6 +67,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
             regs: Registers::new(),
             pipeline: [0; 2],
             cp15: Cp15::new(),
+            halted: false,
         }
     }
 
@@ -81,6 +85,19 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // The debugger's CPU panel (#56) will show it.
     pub fn cp15(&self) -> &Cp15 {
         &self.cp15
+    }
+
+    /// Whether the core is halted. A halted core executes nothing; the machine wakes it when
+    /// `IE & IF` is not zero (`docs/hw/hle-swi.md`, "Halt, and what wakes a CPU").
+    // The debugger's CPU panel (#56) will show it.
+    pub fn halted(&self) -> bool {
+        self.halted
+    }
+
+    /// Halts or wakes the core: what CP15 wait-for-interrupt, HALTCNT and SWI Halt do, and what
+    /// the machine does on a wake.
+    pub(crate) fn set_halted(&mut self, halted: bool) {
+        self.halted = halted;
     }
 
     /// The prefetch pipeline: the opcode that executes next, then the one after it

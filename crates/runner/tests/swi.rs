@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The HLE BIOS observed through our own `swi` test ROM (`testroms/swi/`): VBlank IRQs through the
-//! BIOS dispatcher and SWI calls from ARM and Thumb state, on both CPUs. Each CPU records what it
+//! BIOS dispatcher, SWI calls from ARM and Thumb state, VBlankIntrWait, SWI Halt and each CPU's
+//! own halt (the ARM9's CP15 wait-for-interrupt, the ARM7's HALTCNT), on both CPUs. Each CPU records what it
 //! saw in main RAM (ARM9 at 0x0200_4000, ARM7 at 0x0200_5000; the slot layout is at the top of
 //! `arm9.s` and `arm7.s`). Expected values come from `docs/hw/hle-swi.md` ("SWI", "The IRQ
 //! dispatcher", "Edge cases"), never from running the ROM. This is the first test ROM that takes
@@ -20,13 +21,13 @@ type Mismatch = (u32, &'static str, u32, u32);
 /// Expected record: (slot within the record, name, expected value).
 type Row = (u32, &'static str, u32);
 
-/// A machine that booted the `swi` ROM and ran four frames: three VBlank IRQs per CPU take three
-/// frames, and the rest finishes inside the fourth.
+/// A machine that booted the `swi` ROM and ran twelve frames: three VBlank IRQs per CPU take three
+/// frames, and VBlankIntrWait and the three halts a frame each; the rest finishes inside the last.
 fn boot() -> Machine {
     let rom = load_rom_file(&testrom_path("swi")).expect("swi ROM is built");
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("swi ROM has a valid header");
-    (0..4).for_each(|_| machine.run_frame());
+    (0..12).for_each(|_| machine.run_frame());
     machine
 }
 
@@ -143,5 +144,59 @@ fn given_swi_rom_when_run_then_the_debugger_record_names_the_unimplemented_numbe
             machine.swi_record7().last_unimplemented()
         ),
         (Some(0x1E), Some(0x1E))
+    );
+}
+
+// ------------------------------------------------------------------ the wait SWIs and halt
+
+/// "VBlankIntrWait forces IME to 1, waits for the next V-blank and returns to the caller with its
+/// CPSR" (`hle-swi.md`, "The wait SWIs"): VCOUNT is in the V-blank lines when it returns (192 and
+/// up), the handler has served one more IRQ (the fourth), IME reads 1 and the CPSR low byte is
+/// the caller's (System mode, I set, F clear: 9Fh).
+const VBLANK_INTR_WAIT: &[Row] = &[
+    (13, "VCOUNT >= 192 after VBlankIntrWait", 1),
+    (14, "IRQs the handler took by then", 4),
+    (15, "IME after VBlankIntrWait", 1),
+    (16, "CPSR low byte after VBlankIntrWait", 0x9F),
+];
+
+#[test]
+fn given_swi_rom_when_run_then_the_arm9_vblankintrwait_waits_for_vblank_and_returns_to_its_caller()
+{
+    assert_eq!(arm9_mismatches(VBLANK_INTR_WAIT), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_swi_rom_when_run_then_the_arm7_vblankintrwait_waits_for_vblank_and_returns_to_its_caller()
+{
+    assert_eq!(arm7_mismatches(VBLANK_INTR_WAIT), Vec::<Mismatch>::new());
+}
+
+// TODO(hw-unverified): the wake depends on IE & IF only, whatever IME and the I flag say
+// (`hle-swi.md`, "Halt, and what wakes a CPU", "Unverified").
+const HALT_WAKES: &[Row] = &[
+    (17, "IF bit 0 on waking from SWI Halt, IME 1, I set", 1),
+    (18, "IF bit 0 on waking from SWI Halt, IME 0", 1),
+    (19, "IF bit 0 on waking from the CPU's own halt, IME 0", 1),
+];
+
+#[test]
+fn given_swi_rom_when_run_then_the_arm9_wakes_from_swi_halt_and_wfi_on_ie_and_if_as_the_note_models_unverified()
+ {
+    assert_eq!(arm9_mismatches(HALT_WAKES), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_swi_rom_when_run_then_the_arm7_wakes_from_swi_halt_and_haltcnt_on_ie_and_if_as_the_note_models_unverified()
+ {
+    assert_eq!(arm7_mismatches(HALT_WAKES), Vec::<Mismatch>::new());
+}
+
+#[test]
+fn given_swi_rom_when_run_then_neither_cpu_ends_halted() {
+    let machine = boot();
+    assert_eq!(
+        (machine.arm9().halted(), machine.arm7().halted()),
+        (false, false)
     );
 }

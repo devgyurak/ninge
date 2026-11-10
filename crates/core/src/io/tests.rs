@@ -152,6 +152,23 @@ fn given_arm9_only_registers_when_the_arm7_decodes_them_then_no_port_owns_them()
 }
 
 #[test]
+fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it() {
+    let arm7 = [
+        (0x0400_0300, Some(Owner::Io(Port::Power, 0))),
+        (0x0400_0301, Some(Owner::Io(Port::Power, 1))),
+        (0x0400_0303, Some(Owner::Io(Port::Power, 3))),
+    ];
+    let arm9 = [(0x0400_0300, None), (0x0400_0301, None)];
+    assert_eq!(
+        (
+            decode_failures::<false>(&arm7),
+            decode_failures::<true>(&arm9)
+        ),
+        (vec![], vec![])
+    );
+}
+
+#[test]
 fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
     // Just below and above IME/IE/IF (208-217), the timers (100-10F), IPCSYNC..SEND
     // (180-18B), the 2D registers and the cart-side neighbour of IPCFIFORECV.
@@ -160,7 +177,8 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         (0x0400_0218, None),
         (0x0400_021B, None),
         (0x0400_0200, None),
-        (0x0400_0300, None),
+        // POSTFLG and HALTCNT start at 0400_0300h on the ARM7 only (its own test below).
+        (0x0400_02FF, None),
         (TM0CNT_L_ADDR - 1, None),
         (TM0CNT_L_ADDR + 16, None),
         // Just below DMA0SAD and just above the fill block, which ends at 0400_00EFh.

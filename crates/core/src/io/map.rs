@@ -8,6 +8,7 @@ use crate::gpu2d::{DISPCNT_A_ADDR, POWCNT1_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::IME_ADDR;
+use crate::io::power::{BLOCK_BYTES as POWER_BYTES, POSTFLG_ADDR};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::DISPSTAT_ADDR;
 
@@ -43,6 +44,8 @@ pub(crate) enum Port {
     /// The ARM9's DMA fill registers: their own entry, because they live in a different block,
     /// but the same device as [`Port::Dma`].
     DmaFill,
+    /// HALTCNT, ARM7 only.
+    Power,
 }
 
 impl Port {
@@ -57,6 +60,7 @@ impl Port {
             Self::Ipc | Self::IpcRecv => IPCSYNC_ADDR,
             Self::Timers => TM0CNT_L_ADDR,
             Self::Dma | Self::DmaFill => DMA0SAD_ADDR,
+            Self::Power => POSTFLG_ADDR,
         }
     }
 }
@@ -89,12 +93,14 @@ pub(crate) const ARM9_PORTS: [PortEntry; 10] = [
 
 /// What the ARM7 sees: the same blocks, without engine A, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
-pub(crate) const ARM7_PORTS: [PortEntry; 7] = [
+pub(crate) const ARM7_PORTS: [PortEntry; 8] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
     (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
     (IME_ADDR, 16, Some(Port::Irq)),
+    // POSTFLG and HALTCNT.
+    (POSTFLG_ADDR, POWER_BYTES, Some(Port::Power)),
     // WRAMSTAT sits in the second byte.
     (VRAMCNT_A_ADDR, 4, None),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),

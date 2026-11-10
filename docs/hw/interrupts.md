@@ -19,6 +19,23 @@ the bits (timers (`timers.md`), DMA, IPC, the cartridge, the LCD, ...) arrive wi
 
 The same three addresses exist on the ARM9 and on the ARM7.
 
+The ARM7 also has HALTCNT, a power-down register next to POSTFLG:
+
+| Address | Name | Width | Access | Reset |
+|---|---|---|---|---|
+| `0400_0301h` | HALTCNT (ARM7 only) | 8 | W | not stated |
+
+### HALTCNT bits
+
+| Bits | Meaning |
+|---|---|
+| 0-5 | Not used |
+| 6-7 | Mode: 0 = no function, 1 = enter GBA mode, 2 = halt, 3 = sleep |
+
+A write whose bits 6-7 are 2 halts the ARM7 (below). The other modes do nothing here: GBA mode
+is not an NDS feature and sleep powers down most of the hardware (`TODO(phase5)`). The register
+reads 0. The ARM9 has no such register; it halts with CP15 wait-for-interrupt (`cp15.md`).
+
 ### IME bits
 
 | Bits | Meaning |
@@ -93,6 +110,12 @@ exception entry: IRQ mode, R14_irq, SPSR_irq, and the vector. When the vector is
 ARM7 always, the ARM9 when CP15 bit 13 is set) the machine then does the dispatcher's work; a
 game that keeps its own vectors at `0000_0000h` on the ARM9 never reaches it.
 
+**Halt.** A halted CPU runs no instruction until `IE & IF` is not zero, and the condition does
+not look at IME or at the CPSR I flag (GBATEK's Halt wording). The core then continues with the
+next instruction; with IME = 1 and I clear the IRQ is taken at once, otherwise the request waits
+as usual. A halt with `IE & IF` already not zero ends at once. Details: `hle-swi.md`, "Halt, and
+what wakes a CPU".
+
 ## Edge cases
 
 - IME = 0: IF still latches requests; the line is low and no exception is taken. Setting IME
@@ -102,6 +125,12 @@ game that keeps its own vectors at `0000_0000h` on the ARM9 never reaches it.
 - The two controllers are independent: a request for the ARM9 does not set the ARM7's IF.
 
 ## Unverified
+
+- HALTCNT reads 0 and its GBA-mode and sleep modes do nothing (GBATEK lists the register as
+  readable and the modes as defined) — `crates/core/src/io/power/mod.rs` — the sleep mode is
+  `TODO(phase5)`; verify the read-back with a test ROM on hardware.
+- Wake with IME = 0 or I set: taken from GBATEK's Halt wording, `IE & IF` only —
+  `InterruptController::wakes` in `crates/core/src/io/irq/mod.rs` — verify likewise.
 
 - IME bits 1-31 read 0, and IF latches whatever IE and IME say — `crates/core/src/io/irq/mod.rs` —
   GBATEK says only "not used" for IME and the latch is not described on the DS page; verify

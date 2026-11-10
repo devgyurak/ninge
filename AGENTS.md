@@ -73,8 +73,10 @@ ninge-runner ────┘                        nothing depends on the front
                                           ninge-runner does not depend on ninge-tracediff
 ```
 
-Inside ninge-core: `cpu/` (shared ARMv4T/v5TE interpreter) · `bus/` (ARM9 view, ARM7 view,
-shared memory) · `scheduler/` · `gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/`
+Inside ninge-core: `machine/` (`Machine`, the one struct that owns all state) · `cpu/` (shared
+ARMv4T/v5TE interpreter) · `bus/` (ARM9 view, ARM7 view, shared memory) · `io/` (the register
+devices: `irq/` `ipc/` `timers/` `dma/` `timing/`; the address map `io/map.rs`; the one device
+interface `io/device.rs`) · `savestate/` · `scheduler/` · `gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/`
 (protocol, AUXSPI saves) · `spi/` (synthetic firmware, touch, power) · `hle/` (HLE BIOS SWIs,
 direct boot) · `debug/` (breakpoint and trace hooks).
 
@@ -275,6 +277,12 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
   Every device returns the IF bits it would raise as an `irq::Requests` (a device for one CPU
   builds it with `Requests::for_cpu::<ARM9>`); only `Io::request_irq` hands them to a controller.
 - Visibility is `pub(crate)` by default; `pub` items carry a doc comment.
+- **One module-file style: `mod.rs`.** A module with child modules is a directory with a
+  `mod.rs`; a module without children is a single file. Clippy's `self_named_module_files`
+  is denied in `[workspace.lints.clippy]`, so `foo.rs` beside `foo/` fails the build. A module
+  with tests therefore has children, and is a directory.
+- **Shared constants are defined once.** The register indices `PC`, `LR`, `SP` live in
+  `cpu/regs.rs` and `MODE_MASK` in `cpu/psr.rs`; import them, never redefine them.
 - `#[inline]` / `#[inline(always)]` on the hot path only with a measurement.
 - **Adding a dependency** asks first (`cargo add` is an `ask` permission). It must be
   permissively licensed (§3.7), and ninge-core's list in §2 rule 1 still applies.
@@ -288,8 +296,11 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
 
 Plan §7.3 and §8 rule 7. A `FIX:` comes with a test that failed before the fix. The kinds:
 
-- **Unit** — `#[cfg(test)] mod tests` beside the code: instruction semantics, barrel
-  shifter, flag rules, decoders, scheduler ordering, page-table mapping.
+- **Unit** — in the module's `tests.rs`, declared `#[cfg(test)] mod tests;`: instruction
+  semantics, barrel shifter, flag rules, decoders, scheduler ordering, page-table mapping. A
+  large `tests.rs` becomes `tests/mod.rs` plus `tests/<topic>.rs`. Never an inline
+  `mod tests { … }` and never a `tests_<topic>.rs` sibling — `check_tests.py` enforces both under
+  `crates/`. Machine-level tests live in `machine/tests/`.
 - **CPU JSON suites** — `SingleStepTests/ARM7TDMI` (MIT), pinned to commit `e3097d8`
   (plan §5 Phase 1). About 1 GB of `.json.bin` files, so a script fetches them into
   `tests/data/` (git-ignored) and verifies checksums; never vendored. The suite covers ARMv4T

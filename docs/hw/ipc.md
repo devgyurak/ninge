@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Inter Process Communication (IPC)" (IPCSYNC, IPCFIFOCNT, IPCFIFOSEND,
 IPCFIFORECV, "IPCFIFO Notes"); GBATEK "DS Interrupts" (the IF bit table, bits 16-18).
-Used by: `crates/core/src/ipc.rs`, `crates/core/src/io.rs`, `crates/core/src/irq.rs`   Phase: 3 (#24)
+Used by: `crates/core/src/io/ipc/mod.rs`, `crates/core/src/io/mod.rs`, `crates/core/src/io/irq/mod.rs`   Phase: 3 (#24)
 
 The two CPUs talk through three things that both can reach at the same addresses: a 4-bit
 mailbox each way (IPCSYNC) and two 16-word FIFOs, one for each direction. Each CPU sees the same
@@ -131,29 +131,29 @@ exactly one word.
 Each item carries `TODO(hw-unverified)` at the named site; verify with a test ROM on hardware,
 or a trace against the reference oracle (AGENTS.md §6).
 
-- A send to a full FIFO drops the word — `crates/core/src/ipc.rs`, the send path. GBATEK names
+- A send to a full FIFO drops the word — `crates/core/src/io/ipc/mod.rs`, the send path. GBATEK names
   the error and says nothing about the data.
 - IPCSYNC bit 13 sent while the other CPU's bit 14 is 0: nothing is latched, the request is
-  lost — `crates/core/src/ipc.rs`, the IPCSYNC write. GBATEK only says "Enable IRQ from remote
+  lost — `crates/core/src/io/ipc/mod.rs`, the IPCSYNC write. GBATEK only says "Enable IRQ from remote
   CPU"; the alternatives are latching it for when the enable comes, or latching it in IF
   regardless of the enable.
 - Whether switching an IRQ enable (IPCFIFOCNT bit 2 or bit 10) on while the condition already
   holds raises the flag: the model follows GBATEK's formula literally and raises it —
-  `crates/core/src/ipc.rs`, the edge detection.
+  `crates/core/src/io/ipc/mod.rs`, the edge detection.
 - The edge detector is a model of "changes from 0 to 1": it watches the whole condition,
   including the enable bit; a condition that goes 0, 1, 0 and 1 within one write is taken once —
-  `crates/core/src/ipc.rs`, the edge detection.
+  `crates/core/src/io/ipc/mod.rs`, the edge detection.
 - Reset values: IPCSYNC = 0, IPCFIFOCNT = `0101h` (both FIFOs empty, enables 0, no error, FIFO
-  disabled) — GBATEK states no reset values; `crates/core/src/ipc.rs`, `Ipc::new`.
+  disabled) — GBATEK states no reset values; `crates/core/src/io/ipc/mod.rs`, `Ipc::new`.
 - 8-bit and 16-bit accesses to IPCFIFOSEND and IPCFIFORECV: the model ignores such a write
   (no word, no error) and answers such a read like a word read (one word received, the low
-  bytes of it selected by the address) — `crates/core/src/io.rs`, the IPC slow path.
+  bytes of it selected by the address) — `crates/core/src/io/mod.rs`, the IPC slow path.
 - A read of IPCFIFORECV with the FIFO disabled and nothing in it: the model returns the last
-  received word without setting the error bit — `crates/core/src/ipc.rs`, the receive path.
+  received word without setting the error bit — `crates/core/src/io/ipc/mod.rs`, the receive path.
 - Whether IPCFIFORECV is mirrored over `0410_0000h`-`041F_FFFFh`: the model has it at
-  `0410_0000h` only — `crates/core/src/io.rs`.
+  `0410_0000h` only — `crates/core/src/io/mod.rs`.
 - IPCFIFOCNT bit 3 is a write-only strobe and reads 0; bit 14 acknowledges on a 1 — taken from
   the access column of GBATEK's table, whose "R/W" for bit 14 is ambiguous —
-  `crates/core/src/ipc.rs`, the IPCFIFOCNT write.
+  `crates/core/src/io/ipc/mod.rs`, the IPCFIFOCNT write.
 - Timing: a send is visible to the other CPU at once, with no transfer delay —
-  `crates/core/src/ipc.rs`; approximate timing is the goal (AGENTS.md §2 rule 7).
+  `crates/core/src/io/ipc/mod.rs`; approximate timing is the goal (AGENTS.md §2 rule 7).

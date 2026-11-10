@@ -18,7 +18,8 @@ pub(crate) const FLAG_T: u32 = 1 << 5;
 pub(crate) const FLAGS_BYTE: u32 = 0xFF00_0000;
 /// Mode bits M4–M0 of User mode.
 const USER_MODE: u32 = 0x10;
-const MODE_MASK: u32 = 0x1F;
+/// CPSR mode-bit field, M4–M0 (`docs/hw/cpu-registers.md`, "Mode bits").
+pub(crate) const MODE_MASK: u32 = 0x1F;
 
 /// Whether the 4-bit condition holds for `cpsr` (`docs/hw/cpu-registers.md`, "Condition codes").
 pub(crate) fn condition_holds(cond: u32, cpsr: u32) -> bool {

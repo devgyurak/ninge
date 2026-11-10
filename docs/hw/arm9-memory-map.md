@@ -126,7 +126,7 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 
 - **Main RAM mirroring.** The mirror through the whole 16 MiB block is GBATEK's general rule
   ("usually", "typically"), not a statement about main RAM. — `Memory::build_page_table` in
-  `crates/core/src/bus/memory.rs` — verify by a test ROM on real hardware. The `memmap` ROM records it (slots 10-13, 15-17);
+  `crates/core/src/bus/memory/mod.rs` — verify by a test ROM on real hardware. The `memmap` ROM records it (slots 10-13, 15-17);
   running that ROM on hardware settles it.
 - **Power-on RAM contents** are not stated; all RAM (main RAM, TCM, VRAM) starts at zero. —
   `Memory::new` — verify likewise.
@@ -141,9 +141,9 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
   `Access::write_registers` in `bus/view.rs` — verify likewise.
 - **A fetch from the DTCM region** reads the memory underneath; a fetch from a load-mode ITCM
   reads underneath. GBATEK does not describe the fetch path in either case. —
-  `Memory::fetch` in `bus/memory.rs` — verify likewise.
+  `Memory::fetch` in `bus/memory/mod.rs` — verify likewise.
 - **ITCM priority over the DTCM.** GBATEK words it as "ITCM appears to have priority"; the model
-  takes it as certain. — `Memory::load` and `Memory::store` in `bus/memory.rs` — verify
+  takes it as certain. — `Memory::load` and `Memory::store` in `bus/memory/mod.rs` — verify
   likewise.
 - **I/O blocks are not mirrored.** The `04xx_xxxxh` block is decoded at its exact register
   addresses only, although GBATEK's general 16 MiB rule would suggest mirrors, and it says
@@ -153,10 +153,10 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
   enabled DTCM, a load at an overlapping address reads the memory underneath, not the DTCM:
   the ITCM claims the address. — `Memory::load` — verify likewise.
 - **Opcodes already prefetched** when a CP15 write changes a TCM mapping keep the old mapping:
-  the pipeline is not refilled. — `Machine::step_arm9` in `crates/core/src/lib.rs` — verify
+  the pipeline is not refilled. — `Machine::step_arm9` in `crates/core/src/machine/mod.rs` — verify
   likewise.
 - **TCM corner cases** (size field outside 3-23, base not aligned to the size) follow
-  `cp15.md`: the region is `[base, base + 512 << N)` as written. — `tcm_offset` in `bus/memory.rs` —
+  `cp15.md`: the region is `[base, base + 512 << N)` as written. — `tcm_offset` in `bus/memory/mod.rs` —
   verify likewise.
 - **Default DTCM base.** GBATEK names `027C0000h` as the default base, but does not say whether
   that is a hardware reset value or the value the firmware or software sets; CP15 starts at

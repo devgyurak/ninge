@@ -9,7 +9,7 @@ ARM946E-S TRM for the core-specific notes (PLD, the Q flag). The claims outside 
 (Q-setting rules, the W multiplies, the PLD encoding, the BLX link values) were checked
 against GBATEK in review; the ARM ARM statements were not re-read. Every claim that rests on
 inference is under "Unverified".
-Used by: `crates/core/src/cpu/decode.rs`, `thumb_decode.rs`, `armv5.rs`, `arm.rs`,
+Used by: `crates/core/src/cpu/decode/mod.rs`, `thumb_decode/mod.rs`, `armv5.rs`, `arm.rs`,
 `arm_transfer.rs`, `thumb.rs`, `exception.rs`   Phase: 1
 
 These instructions exist on the ARM9 (ARMv5TE) only. The ARM7 (ARMv4T) keeps the behavior of
@@ -173,17 +173,17 @@ immediate is ignored by the core. On the ARM7 neither encoding is executed.
 - LDM with R15 and S in User/System mode (no SPSR): the loaded bit 0 switches state —
   `arm_transfer.rs`, `block_transfer` — verify by a test ROM.
 - The words of the `1111` condition space other than BLX and PLD are not executed (stepped
-  past); the real core may take Undefined — `crates/core/src/cpu/decode.rs`,
+  past); the real core may take Undefined — `crates/core/src/cpu/decode/mod.rs`,
   `unconditional_kind` — verify by a test ROM.
-- PLD's Rd field (bits 15–12 should be 1111) is not checked — `decode.rs`,
+- PLD's Rd field (bits 15–12 should be 1111) is not checked — `decode/mod.rs`,
   `unconditional_kind`.
 - MSR of bit 27 on the ARM7 is stored; whether the ARM7TDMI keeps the bit is not stated —
   `crates/core/src/cpu/psr.rs`, `FLAG_Q`.
 - LDRD and STRD with R15 as Rm, and the should-be-one fields (bits 19–8) of BLX register,
   CLZ and BKPT's non-immediate bits, are not checked; R15 reads as for any instruction —
-  `arm_transfer.rs`, `double_transfer`; `decode.rs` — verify by a test ROM.
+  `arm_transfer.rs`, `double_transfer`; `decode/mod.rs` — verify by a test ROM.
 - BKPT with a condition field other than AL runs conditionally here; the ARM ARM states it
-  is unconditional — `decode.rs`, `Kind::Breakpoint`.
+  is unconditional — `decode/mod.rs`, `Kind::Breakpoint`.
 - Destination R15 for CLZ, the saturating adds and the halfword multiplies (not allowed): the
   result is written to R15 and the pipeline refills — `armv5.rs`.
 - Thumb BLX suffix with offset bit 0 set (ARM ARM: should be zero): the target is word

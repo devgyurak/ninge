@@ -5,7 +5,7 @@ Sources: GBATEK "DS Technical Data" (video list: two LCD screens, 256x192 pixels
 visible lines); "DS Touch Screen Controller (TSC)" (the touch controller belongs to the lower
 screen); "DS Power Control" (the `4000304h POWCNT1` register, bit 15, display swap between the upper
 and lower screen).
-Used by: `crates/core/src/lib.rs` (`Machine`, `Screen`, `SCREEN_WIDTH`, `SCREEN_HEIGHT`)   Phase: 0
+Used by: `crates/core/src/machine/mod.rs` (`Machine`, `Screen`, `SCREEN_WIDTH`, `SCREEN_HEIGHT`)   Phase: 0
 
 ## Behavior
 

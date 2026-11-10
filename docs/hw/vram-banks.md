@@ -60,7 +60,7 @@ holds the expected values.
 
 - **Reset value of VRAMCNT_A.** GBATEK gives none; the register starts at 0, so bank A is
   disabled and unmapped until software enables it. — `Memory::new` in
-  `crates/core/src/bus/memory.rs` — verify by a test ROM on real hardware.
+  `crates/core/src/bus/memory/mod.rs` — verify by a test ROM on real hardware.
 - **Reads of VRAMCNT_A** return 0: the register is write-only and GBATEK does not say what a
   read gives. — `read_registers` in `bus/view.rs` — verify likewise.
 - **A disabled bank, or one with MST other than 0,** is unmapped at the LCDC address (reads 0,

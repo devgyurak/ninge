@@ -82,9 +82,12 @@
 ninge/
 ├── crates/
 │   ├── core/        # 에뮬레이터 코어. IO 없음. 순수 로직.
+│   │   ├── machine/     # `Machine`: 모든 상태를 소유하는 단일 구조체
 │   │   ├── cpu/         # ARMv4T/v5TE 공통 인터프리터 (const generic)
 │   │   ├── bus/         # ARM9 버스 뷰, ARM7 버스 뷰, 공유 메모리
+│   │   ├── io/          # 레지스터 장치(IRQ, IPC, 타이머, DMA, 타이밍)와 주소 맵
 │   │   ├── scheduler/   # 이벤트 기반 스케줄러
+│   │   ├── savestate/   # 세이브스테이트 포맷, 저장·불러오기
 │   │   ├── gpu2d/       # 엔진 A/B
 │   │   ├── gpu3d/       # geometry engine, rasterizer
 │   │   ├── spu/         # 사운드

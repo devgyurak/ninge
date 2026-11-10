@@ -8,7 +8,7 @@
 use super::bench::Bench;
 use super::*;
 use crate::cpu::{Bus, Tcm};
-use crate::irq::Requests;
+use crate::io::irq::Requests;
 
 const RAM: u32 = 0x0200_0000;
 const RAM_PERIOD: u32 = 0x0040_0000;

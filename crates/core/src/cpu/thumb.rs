@@ -10,15 +10,11 @@ use super::arm::{THUMB_HALFWORD, THUMB_PC_AHEAD};
 use super::exception::Exception;
 use super::multiply_carry::multiply_carry;
 use super::psr::{FLAG_C, FLAG_V, condition_holds, with_flags};
+use super::regs::{LR, PC, SP};
 use super::shifter::{ShiftKind, shift_immediate, shift_register};
 use super::thumb_decode::{ThumbKind, decode};
 use super::{Bus, Cpu};
 
-/// R13 and R14.
-const SP: usize = 13;
-const LR: usize = 14;
-/// R15's index.
-const PC: u32 = 15;
 /// A word offset is scaled by 4; a halfword offset by 2.
 const WORD_SHIFT: u32 = 2;
 const HALFWORD_SHIFT: u32 = 1;
@@ -89,7 +85,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
         // The pipeline holds a Thumb opcode in its low halfword.
         let halfword = self.pipeline[0] as u16; // truncation: a Thumb opcode is 16 bits
         let word = u32::from(halfword);
-        let fetched = bus.fetch16(self.regs.get(15));
+        let fetched = bus.fetch16(self.regs.get(PC));
         self.pipeline = [self.pipeline[1], u32::from(fetched)];
         let wrote_pc = match decode::<ARM9>(halfword) {
             ThumbKind::ShiftImmediate => self.shift_by_immediate(word),
@@ -181,7 +177,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
         // A write to the PC flushes the pipeline; everything else steps to the next instruction.
         match wrote_pc {
             true => {
-                let target = self.regs.get(15);
+                let target = self.regs.get(PC);
                 self.refill(bus);
                 // TODO(hw-unverified): a PC load from an empty register list leaves R15 as the
                 // loaded value + 4 with bit 0 kept, unlike every other Thumb refill (suite;
@@ -192,7 +188,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
             }
             false => self
                 .regs
-                .set(15, self.regs.get(15).wrapping_add(THUMB_HALFWORD)),
+                .set(15, self.regs.get(PC).wrapping_add(THUMB_HALFWORD)),
         }
     }
 
@@ -351,11 +347,11 @@ impl<const ARM9: bool> Cpu<ARM9> {
 
     /// Writes a register; R15 takes the value and the step refills from it. True if R15.
     fn write_register(&mut self, index: u32, value: u32) -> bool {
-        match index {
+        match index as usize {
             PC => self.write_pc(value),
-            _ => self.regs.set(index as usize, value),
+            other => self.regs.set(other, value),
         }
-        index == PC
+        index as usize == PC
     }
 
     /// BX Rs (`docs/hw/thumb.md`, "Format 5 and BX").
@@ -374,7 +370,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// "PC-relative forms").
     fn load_pc<B: Bus>(&mut self, bus: &mut B, word: u32) -> bool {
         let address =
-            (self.operand(PC, 0) & PC_WORD_ALIGN).wrapping_add((word & 0xFF) << WORD_SHIFT);
+            (self.operand(PC as u32, 0) & PC_WORD_ALIGN).wrapping_add((word & 0xFF) << WORD_SHIFT);
         let value = bus.read32(address);
         self.regs.set((word >> 8 & 7) as usize, value);
         false
@@ -385,7 +381,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
         // Bit 11 selects SP; the PC form uses the word-aligned PC.
         let base = match word >> 11 & 1 {
             1 => self.regs.get(SP),
-            _ => self.operand(PC, 0) & PC_WORD_ALIGN,
+            _ => self.operand(PC as u32, 0) & PC_WORD_ALIGN,
         };
         self.regs.set(
             (word >> 8 & 7) as usize,
@@ -415,7 +411,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
             true => {
                 // The casts are the signed reading of the 8-bit offset.
                 let offset = i32::from(word as u8 as i8) << HALFWORD_SHIFT;
-                self.write_pc(self.regs.get(15).wrapping_add_signed(offset));
+                self.write_pc(self.regs.get(PC).wrapping_add_signed(offset));
                 true
             }
             false => false,
@@ -425,14 +421,14 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// Format 18: B; R15 += the signed 11-bit offset * 2.
     fn branch_thumb(&mut self, word: u32) -> bool {
         let offset = offset11(word, HALFWORD_SHIFT);
-        self.write_pc(self.regs.get(15).wrapping_add(offset));
+        self.write_pc(self.regs.get(PC).wrapping_add(offset));
         true
     }
 
     /// Format 19, first halfword: LR = R15 + the signed offset << 12. No branch.
     fn long_branch_prefix(&mut self, word: u32) -> bool {
         let offset = offset11(word, PREFIX_SHIFT);
-        self.regs.set(LR, self.regs.get(15).wrapping_add(offset));
+        self.regs.set(LR, self.regs.get(PC).wrapping_add(offset));
         false
     }
 
@@ -440,7 +436,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     /// with bit 0 set in LR.
     fn long_branch_suffix(&mut self, word: u32) -> bool {
         // R15 is this halfword's address + 4; the next instruction is two bytes past it.
-        let next = self.regs.get(15).wrapping_sub(THUMB_HALFWORD);
+        let next = self.regs.get(PC).wrapping_sub(THUMB_HALFWORD);
         let target = self
             .regs
             .get(LR)
@@ -455,7 +451,7 @@ impl<const ARM9: bool> Cpu<ARM9> {
     // TODO(hw-unverified): offset bit 0 set is dropped by the alignment
     // (`docs/hw/armv5te.md`, "Unverified").
     fn long_branch_exchange_suffix(&mut self, word: u32) -> bool {
-        let next = self.regs.get(15).wrapping_sub(THUMB_HALFWORD);
+        let next = self.regs.get(PC).wrapping_sub(THUMB_HALFWORD);
         let target = self
             .regs
             .get(LR)

@@ -3,8 +3,8 @@
 Sources: GBATEK "DS Video" display dimensions and timings (dot clock, dots and lines per
 frame); GBATEK "LCD I/O Display Status and Interrupt Control" (DISPSTAT, VCOUNT) with its DS
 notes; GBATEK "DS Interrupts" for the three IE/IF bits (see `interrupts.md`).
-Used by: `crates/core/src/gpu2d/timing.rs`, `crates/core/src/scheduler/`,
-`crates/core/src/io.rs`, `crates/core/src/lib.rs`   Phase: 3 (#104)
+Used by: `crates/core/src/io/timing/mod.rs`, `crates/core/src/scheduler/`,
+`crates/core/src/io/mod.rs`, `crates/core/src/machine/mod.rs`   Phase: 3 (#104)
 
 The screens are drawn line by line. Each line has a visible part and a blanking part, and the
 frame ends with a block of lines that are not shown. Two registers report where the display is
@@ -121,23 +121,23 @@ machine.
 - **HBlank flag and IRQ in the VBlank lines.** The flag is modeled as toggling in every line
   and the IRQ as raised in every line. GBATEK's DISPSTAT text for the GBA says HBlank
   conditions occur once per scanline "including the hidden ones" while its timing page says no
-  HBlank interrupts occur in VBlank; the DS pages do not settle it. — `gpu2d/timing.rs`
+  HBlank interrupts occur in VBlank; the DS pages do not settle it. — `io/timing/mod.rs`
   (`hblank_started`) — verify by a hardware test ROM counting HBlank IRQs per frame.
 - **VBlank clears at line 262.** From GBATEK's "not in line 262"; the exact cycle within the
-  line is not stated, taken as the line start. — `gpu2d/timing.rs` (`line_started`).
+  line is not stated, taken as the line start. — `io/timing/mod.rs` (`line_started`).
 - **VCount-match is evaluated at the start of a line only.** A write to the setting while a
   line runs does not change the flag or request an IRQ until the next line start. The flag
   starts 0 at power-on and is not evaluated for line 0 before the first line change. —
-  `gpu2d/timing.rs` (`line_started`) — verify by a hardware test ROM writing the setting
+  `io/timing/mod.rs` (`line_started`) — verify by a hardware test ROM writing the setting
   mid-line.
 - **The VBlank IRQ is requested at the start of line 192**, not at some cycle into it. —
-  `gpu2d/timing.rs` — verify as above.
-- **Reset values.** DISPSTAT is not stated at reset; 0. — `gpu2d/timing.rs` (`Timing::new`).
+  `io/timing/mod.rs` — verify as above.
+- **Reset values.** DISPSTAT is not stated at reset; 0. — `io/timing/mod.rs` (`Timing::new`).
 - **VCOUNT writes.** Ignored, including the in-range (202-212) writes GBATEK describes for
-  console synchronization; what a write does is not stated. — `gpu2d/timing.rs` (`Timing::write_byte`) — verify by a hardware test
+  console synchronization; what a write does is not stated. — `io/timing/mod.rs` (`Timing::write_byte`) — verify by a hardware test
   ROM writing VCOUNT.
 - **DISPSTAT bit 6 and a write to the flag bits** read 0 and change nothing, from the
-  register's description. — `gpu2d/timing.rs` (`Timing::write_byte`).
+  register's description. — `io/timing/mod.rs` (`Timing::write_byte`).
 - **Whether the ARM7's register is the same copy of the hardware.** GBATEK lists DISPSTAT and
   VCOUNT for both CPUs; separate enables per CPU follows from the IRQ being per CPU. —
-  `gpu2d/timing.rs` (`Timing`, fields `arm9` and `arm7`) — verify by writing the ARM9's and reading the ARM7's.
+  `io/timing/mod.rs` (`Timing`, fields `arm9` and `arm7`) — verify by writing the ARM9's and reading the ARM7's.

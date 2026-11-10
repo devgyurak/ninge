@@ -9,7 +9,7 @@ pinned by a test in `crates/runner/tests/cpu_suite.rs`, except four facts that o
 with S and W but no R15, the current-mode base writeback of an LDM that loads R15 with S and W,
 and the +12 after a halfword writeback to R15. The ARM ARM and the two TRMs
 are not re-read for this note.
-Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm_transfer.rs`,
+Used by: `crates/core/src/cpu/decode/mod.rs`, `crates/core/src/cpu/arm_transfer.rs`,
 `crates/core/src/cpu/bus.rs`   Phase: 1 (#10)
 
 Out of scope here: LDRD, STRD and PLD, and the ARMv5 switch to Thumb state on a load into R15

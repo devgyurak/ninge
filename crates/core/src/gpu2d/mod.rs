@@ -8,10 +8,8 @@
 //! Engine A is wired to the ARM9 alone, so `Gpu2d` is a plain type with no CPU const generic: the
 //! "seen by one CPU" class of `AGENTS.md` §4 ("Per-CPU devices").
 
-use crate::io::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
-
-pub mod timing;
 
 /// DISPCNT of engine A, at `0400_0000h` (`display-mode-vram.md`, "Registers").
 pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;

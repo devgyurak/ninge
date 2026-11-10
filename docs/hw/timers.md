@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Timers" (the timer registers, prescaler and count-up bits, the overflow
 description); GBATEK "DS Interrupts" for the IF bits (see `interrupts.md`).
-Used by: `crates/core/src/timers.rs`, `crates/core/src/io.rs`, `crates/core/src/bus/view.rs`, `crates/core/src/lib.rs`,
+Used by: `crates/core/src/io/timers/mod.rs`, `crates/core/src/io/mod.rs`, `crates/core/src/bus/view.rs`, `crates/core/src/machine/mod.rs`,
 `crates/core/src/scheduler/mod.rs`   Phase: 3 (#25)
 
 Each CPU has four 16-bit timers. They sit at the same addresses on the ARM9 and the ARM7 but are
@@ -141,21 +141,21 @@ hardware behavior.
 ## Unverified
 
 - Start delay: whether the first tick comes at once or after a delay (GBATEK is silent) —
-  `crates/core/src/timers.rs` (`TODO(hw-unverified)`) — verify by a test ROM on hardware.
+  `crates/core/src/io/timers/mod.rs` (`TODO(hw-unverified)`) — verify by a test ROM on hardware.
 - Changing the prescaler of a running timer: the new rate applies from the write, with the
-  counter kept — `timers.rs` — verify on hardware.
+  counter kept — `io/timers/mod.rs` — verify on hardware.
 - Whether starting a timer resets the prescaler's phase: modeled as yes (the first tick is one
-  full period after the start) — `timers.rs`.
-- Reset values: 0 for reload, counter and control — `timers.rs`.
-- Count-up on timer 0: bit 2 reads back as written and has no effect — `timers.rs`.
-- Unused bits (3-5, 8-15) of `TMnCNT_H`: dropped on write and read as 0 — `timers.rs`.
+  full period after the start) — `io/timers/mod.rs`.
+- Reset values: 0 for reload, counter and control — `io/timers/mod.rs`.
+- Count-up on timer 0: bit 2 reads back as written and has no effect — `io/timers/mod.rs`.
+- Unused bits (3-5, 8-15) of `TMnCNT_H`: dropped on write and read as 0 — `io/timers/mod.rs`.
 - Byte and halfword access: a byte of `TMnCNT_L` writes that byte of the reload and reads that
   byte of the counter; a byte write to `TMnCNT_H` starts, stops or changes the timer as its
-  value says — `timers.rs`.
+  value says — `io/timers/mod.rs`.
 - A start or stop write by a byte access to the high byte of `TMnCNT_H` does nothing (no
-  control bit lives there) — `timers.rs`.
+  control bit lives there) — `io/timers/mod.rs`.
 - A 32-bit write is split into bytes and the reload lands before the start, so a word that sets
-  both starts the timer with that reload — `bus/view.rs` (`Access::write_registers`), `timers.rs` — verify
+  both starts the timer with that reload — `bus/view.rs` (`Access::write_registers`), `io/timers/mod.rs` — verify
   on hardware.
-- A count-up timer that is stopped ignores the previous timer's overflow — `timers.rs` — verify
+- A count-up timer that is stopped ignores the previous timer's overflow — `io/timers/mod.rs` — verify
   on hardware.

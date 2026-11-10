@@ -11,6 +11,7 @@ use super::multiply_carry::multiply_carry;
 use super::psr::{
     FLAG_C, FLAG_T, FLAG_V, FLAGS_BYTE, condition_holds, field_mask, is_user, with_flags,
 };
+use super::regs::LR;
 use super::shifter::{ShiftKind, rotated_immediate, shift_immediate, shift_register};
 use super::{Bus, Cpu};
 
@@ -35,8 +36,6 @@ pub(super) const LATE_PC_EXTRA: u32 = 4;
 const BRANCH_OFFSET_SHIFT: u32 = 2;
 /// The branch offset field is 24 bits; moving it to the top and back sign-extends it.
 const BRANCH_FIELD_TO_TOP: u32 = 8;
-/// R14, which BL writes.
-pub(super) const LR: usize = 14;
 
 /// The branch offset field of B, BL and BLX (immediate), sign-extended and multiplied by 4.
 pub(super) fn branch_offset(word: u32) -> u32 {

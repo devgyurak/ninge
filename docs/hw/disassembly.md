@@ -189,8 +189,8 @@ meaning hardware leaves open:
   `ThumbKind::ConditionalBranch` — same.
 - **Words the decoder leaves `Unhandled` that hardware may treat as defined** (the ARM9's
   1111 space, the ARMv6 UMAAL space, `thumb.md`'s 1011 space). They are `undefined 0x…` because
-  the decoder is the authority here. — the `TODO(hw-unverified)` markers sit in `decode.rs` and
-  `thumb_decode.rs`, not in the disassemblers, which only follow them; this resolves when the
+  the decoder is the authority here. — the `TODO(hw-unverified)` markers sit in `decode/mod.rs` and
+  `thumb_decode/mod.rs`, not in the disassemblers, which only follow them; this resolves when the
   decoder's own Unverified items do.
 - **Coprocessor words on the ARM7.** The decoder reports `Coprocessor`, but the ARM7 traps them as
   undefined (`arm-exceptions-modes.md`); the text is still the general coprocessor form. —

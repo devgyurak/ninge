@@ -7,7 +7,7 @@
 use super::{Arm7View, Arm9View, Memory, Region, TcmConfig, VramBankState, WramState};
 use crate::cpu::Bus;
 use crate::io::Io;
-use crate::irq::InterruptController;
+use crate::io::irq::InterruptController;
 use crate::scheduler::Scheduler;
 
 /// The three owners a bus view borrows.

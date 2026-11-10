@@ -2,7 +2,7 @@
 
 Sources: GBATEK "DS Memory Timings" / "DS Technical Data" (clock rates); GBATEK "DS Display
 Dimensions / Timings" (lines, dots, frame length); GBATEK "DS Memory Maps" (ARM7 WRAM).
-Used by: `crates/core/src/scheduler/`, `crates/core/src/lib.rs` (`run_frame`, `step_arm9`),
+Used by: `crates/core/src/scheduler/`, `crates/core/src/machine/mod.rs` (`run_frame`, `step_arm9`),
 `crates/core/src/bus/` (the ARM7 view)   Phase: 3 (#21)
 
 The machine has two processors on one bus clock. The emulator advances them in turns and
@@ -174,7 +174,7 @@ A saved machine is refused on load when:
   (`at`) — revisit with the ARM7 own-timer lag when a test ROM depends on it.
 - **ARM7 WRAM mirroring**: the 64 KiB block is modeled as repeating through
   `0380_0000h`-`03FF_FFFFh`, GBATEK's general mirroring rule. Anything else on the ARM7 bus is
-  open bus and reads 0. The shared WRAM window now sits in front of it (`wramcnt.md`). — `crates/core/src/bus/memory.rs`
+  open bus and reads 0. The shared WRAM window now sits in front of it (`wramcnt.md`). — `crates/core/src/bus/memory/mod.rs`
 - **ARM7 entry state**: R13 values come from `direct-boot.md`; the CPSR is chosen as for the
   ARM9 (System mode, ARM state, I and F set). — `crates/core/src/hle/direct_boot.rs` — verify
   as for the ARM9.

@@ -3,7 +3,7 @@
 Sources: GBATEK "ARM CPU Exceptions"; GBATEK "ARM Opcodes: Branch and Branch with Link (B, BL,
 BX, BLX, SWI, BKPT)" (the SWI and undefined-instruction parts); GBATEK "ARM Opcodes: Coprocessor
 (MRC/MCR, LDC/STC, CDP, MCRR/MRRC)"; GBATEK "ARM CP15 Control Register" (bit 13).
-Used by: `crates/core/src/cpu/exception.rs`, `crates/core/src/cpu/decode.rs`,
+Used by: `crates/core/src/cpu/exception.rs`, `crates/core/src/cpu/decode/mod.rs`,
 `crates/core/src/cpu/arm.rs`   Phase: 1 (#12)
 
 The banked registers, the SPSRs, and the CPSR mode bits are in `cpu-registers.md`; the
@@ -190,7 +190,7 @@ and CP15. What a reset does to the CP15 control register is unknown here
   unallocated, and the ARMv5TE encodings that `armv5te.md` does not define (MCRR/MRRC, the `1111`
   condition other than BLX and PLD) are not trapped; they stay unhandled.
   GBATEK itself says not every unused opcode necessarily raises the exception. —
-  `Kind::Unhandled` in `crates/core/src/cpu/decode.rs`, which carries `TODO(phase1)` and
+  `Kind::Unhandled` in `crates/core/src/cpu/decode/mod.rs`, which carries `TODO(phase1)` and
   `TODO(hw-unverified)`.
 - **Suite-measured ARM7 facts.** For SWI and the undefined entry that the coprocessor files trigger, every case with a true
   condition shows: R14 of the entered mode = instruction address + 4, SPSR = the starting

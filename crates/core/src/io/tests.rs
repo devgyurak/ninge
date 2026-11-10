@@ -238,14 +238,14 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
 
 #[test]
 fn given_power_on_devices_when_checked_then_they_are_well_formed() {
-    assert!(Io::new().is_well_formed());
+    assert!(Io::new().is_well_formed(0));
 }
 
 #[test]
 fn given_an_ie_bit_outside_the_arm9_mask_when_checked_then_the_devices_are_not_well_formed() {
     let mut io = Io::new();
     io.irq9 = InterruptController::with_unchecked_ie(1 << 7);
-    assert!(!io.is_well_formed());
+    assert!(!io.is_well_formed(0));
 }
 
 #[test]
@@ -298,10 +298,16 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
         ENABLE | ARM9_VBLANK | 1,
     );
     io.trigger_dma(&mut scheduler, Trigger::VBlank, time);
-    scheduler.times_of(EventKind::DmaStart {
+    let kind = EventKind::DmaStart {
         arm9: true,
         channel: 0,
-    })
+    };
+    scheduler
+        .pending()
+        .iter()
+        .filter(|event| event.kind == kind)
+        .map(|event| event.time)
+        .collect()
 }
 
 #[test]

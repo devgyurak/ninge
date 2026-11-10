@@ -10,8 +10,8 @@ use crate::io::irq::InterruptController;
 use crate::io::timers::Timers;
 use crate::io::timing::FIRST_VBLANK_LINE;
 use crate::scheduler::{
-    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, HBLANK_START_CYCLES,
-    LINE_CYCLES, Participants, Scheduler,
+    ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Event, EventKind, LINE_CYCLES, Participants,
+    Scheduler,
 };
 use serde::{Deserialize, Serialize};
 
@@ -87,10 +87,7 @@ impl Machine {
     ///
     /// Black is a Phase 0 placeholder value, not the hardware power-on state.
     pub fn new() -> Self {
-        let mut scheduler = Scheduler::new();
-        scheduler.schedule(HBLANK_START_CYCLES, EventKind::HBlankStart);
-        scheduler.schedule(LINE_CYCLES, EventKind::LineStart);
-        Self {
+        let mut machine = Self {
             top: blank_screen(),
             bottom: blank_screen(),
             rom: Vec::new(),
@@ -100,9 +97,24 @@ impl Machine {
             io: Io::new(),
             arm7: Cpu::new(),
             arm7_clock: 0,
-            scheduler,
+            scheduler: Scheduler::new(),
             header: None,
-        }
+        };
+        machine.schedule_events();
+        machine
+    }
+
+    /// Queues every event from the device state and `now`, on an empty queue: the next line
+    /// and HBlank starts on their grid, each timer's overflow and each waiting DMA start. The
+    /// queue is not saved, so `new` and `load_state` both build it here (`scheduler.md`,
+    /// "Savestate checks").
+    pub(crate) fn schedule_events(&mut self) {
+        let now = self.scheduler.now();
+        self.scheduler
+            .schedule(Scheduler::next_hblank_start(now), EventKind::HBlankStart);
+        self.scheduler
+            .schedule(Scheduler::next_line_start(now), EventKind::LineStart);
+        self.io.schedule_all(&mut self.scheduler, now);
     }
 
     /// Hands the machine a ROM image, kept verbatim, and direct-boots it.

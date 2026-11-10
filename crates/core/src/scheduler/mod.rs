@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The event scheduler and the ARM9/ARM7 interleaving (`docs/hw/scheduler.md`).
 //!
-//! Events sit in a binary heap ordered by `(time, seq)`. A round runs the ARM9, then the ARM7,
+//! Events sit in a binary heap ordered by `(time, priority of the kind)`. A round runs the ARM9, then the ARM7,
 //! then the events due where the ARM9 stopped: the round's target, or earlier when the ARM9
 //! queued an event before it; see [`run_round`].
 
 use serde::{Deserialize, Serialize};
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 /// ARM9 cycles per line: 355 dots x 6 bus cycles x 2 (`display-timing.md`, "Frame layout").
@@ -36,7 +36,7 @@ const EVENT_CAPACITY: usize = 24;
 pub const MAX_TIME: u64 = 1 << 62;
 
 /// What an event does when it fires.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     /// A line begins: VCOUNT advances and the next line start is scheduled. The start of line 0
     /// ends the frame, which draws the screens (`display-timing.md`).
@@ -61,25 +61,78 @@ pub enum EventKind {
     },
 }
 
-/// One scheduled event, ordered by `(time, seq)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+impl EventKind {
+    /// Where the kind sorts among events at the same time (`scheduler.md`, "Events"): line start,
+    /// HBlank start, timers, then DMA starts, the ARM9's before the ARM7's, lower index first.
+    /// Explicit, not derived: `bool` sorts `false` first, which would put the ARM7 ahead.
+    // TODO(hw-unverified): the order is a model choice (`scheduler.md`, "Unverified").
+    fn priority(self) -> (u8, u8, u8) {
+        match self {
+            Self::LineStart => (0, 0, 0),
+            Self::HBlankStart => (1, 0, 0),
+            Self::TimerOverflow { arm9, index } => (2, u8::from(!arm9), index),
+            Self::DmaStart { arm9, channel } => (3, u8::from(!arm9), channel),
+        }
+    }
+}
+
+/// One scheduled event, ordered by `(time, priority of the kind)`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Event {
     /// Master-clock time at which it fires.
     pub time: u64,
-    /// Order in which it was scheduled; breaks ties between equal times.
+    /// Order in which it was scheduled in this run. Not saved. It is the last tie-break, and
+    /// tells an event queued before a dispatch from one a handler queued during it.
     pub seq: u64,
     /// What it does.
     pub kind: EventKind,
 }
 
-/// A binary heap does not implement `PartialEq`; two queues are equal when their slots are,
-/// which holds for equal histories (the machine is deterministic).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// `seq` is the last key but `PartialEq` ignores it: the queue holds at most one event of each kind,
+// so no two events tie on `(time, kind)` and the two never disagree.
+impl Ord for Event {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time
+            .cmp(&other.time)
+            .then_with(|| self.kind.priority().cmp(&other.kind.priority()))
+            .then_with(|| self.seq.cmp(&other.seq))
+    }
+}
+
+impl PartialOrd for Event {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Two events are equal when they fire at the same time and do the same thing; `seq` is
+/// bookkeeping of one run, so a rebuilt queue equals the one it was rebuilt from.
+impl PartialEq for Event {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time && self.kind == other.kind
+    }
+}
+
+impl Eq for Event {}
+
+/// A binary heap does not implement `PartialEq`. The queue holds at most one event of each kind,
+/// so two queues are equal when each event of one is in the other; no allocation.
+#[derive(Clone, Debug)]
 struct Queue(BinaryHeap<Reverse<Event>>);
+
+impl Queue {
+    fn new() -> Self {
+        Self(BinaryHeap::with_capacity(EVENT_CAPACITY))
+    }
+}
 
 impl PartialEq for Queue {
     fn eq(&self, other: &Self) -> bool {
-        self.0.as_slice() == other.0.as_slice()
+        self.0.len() == other.0.len()
+            && self
+                .0
+                .iter()
+                .all(|event| other.0.iter().any(|other_event| other_event == event))
     }
 }
 
@@ -87,13 +140,27 @@ impl Eq for Queue {}
 
 /// The master clock and the pending events (`docs/hw/scheduler.md`).
 ///
-/// Decided in #102: a binary heap keyed by `(time, seq)`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Decided in #102 (a binary heap) and #112: keyed by `(time, priority of the kind)`, and not
+/// saved. Only `now` is; a load rebuilds the queue from the devices (`Machine::schedule_events`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Scheduler {
     pub(crate) now: u64,
+    // Runtime only: the dispatch guard's counter (see `Event::seq`).
+    #[serde(skip)]
     pub(crate) next_seq: u64,
+    #[serde(skip, default = "Queue::new")]
     queue: Queue,
 }
+
+/// Equal when the clock and the pending events are; `next_seq` is bookkeeping of one run, which
+/// a loaded machine does not share with the one it was saved from.
+impl PartialEq for Scheduler {
+    fn eq(&self, other: &Self) -> bool {
+        self.now == other.now && self.queue == other.queue
+    }
+}
+
+impl Eq for Scheduler {}
 
 impl Scheduler {
     /// A scheduler at time 0 with no events.
@@ -101,7 +168,7 @@ impl Scheduler {
         Self {
             now: 0,
             next_seq: 0,
-            queue: Queue(BinaryHeap::with_capacity(EVENT_CAPACITY)),
+            queue: Queue::new(),
         }
     }
 
@@ -110,7 +177,8 @@ impl Scheduler {
         self.now
     }
 
-    /// Adds an event at `time`. It fires after every event already scheduled for the same time.
+    /// Adds an event at `time`. Among events at the same time it fires in the order of its kind's
+    /// priority, not of scheduling (`scheduler.md`, "Events").
     pub fn schedule(&mut self, time: u64, kind: EventKind) {
         let seq = self.next_seq;
         // A u64 counter cannot realistically wrap; wrapping keeps a hand-made state from panicking.
@@ -150,22 +218,6 @@ impl Scheduler {
         self.now = self.now.saturating_add(cycles);
     }
 
-    /// The times of the queued events of `kind`, in no particular order.
-    pub(crate) fn times_of(&self, kind: EventKind) -> Vec<u64> {
-        self.queue
-            .0
-            .iter()
-            .filter(|Reverse(event)| event.kind == kind)
-            .map(|Reverse(event)| event.time)
-            .collect()
-    }
-
-    /// Restores the queue's reserved capacity after a savestate load decoded it at its length.
-    pub(crate) fn reserve(&mut self) {
-        let spare = EVENT_CAPACITY.saturating_sub(self.queue.0.len());
-        self.queue.0.reserve(spare);
-    }
-
     /// Like [`Scheduler::pop_due`], but only an event scheduled before the sequence number
     /// `before_seq`. An event a handler schedules waits for the next round.
     pub(crate) fn pop_due_before(&mut self, now: u64, before_seq: u64) -> Option<Event> {
@@ -177,13 +229,32 @@ impl Scheduler {
         }
     }
 
-    /// Whether decoded state keeps the invariants the run loop relies on: every queued event is
-    /// not before `now`, and `next_seq` is above every queued sequence number (`scheduler.md`,
-    /// "Savestate checks"). A savestate that decodes to anything else is corrupt.
+    /// Whether decoded state keeps the invariant the run loop relies on: `now` is not above
+    /// `MAX_TIME` (`scheduler.md`, "Savestate checks"). The queue is not saved, so it has none.
     pub(crate) fn is_well_formed(&self) -> bool {
-        self.queue.0.iter().all(|Reverse(event)| {
-            (self.now..=MAX_TIME).contains(&event.time) && event.seq < self.next_seq
-        }) && self.now <= MAX_TIME
+        self.now <= MAX_TIME
+    }
+
+    /// The first line start strictly after `now`: line starts sit on the grid
+    /// `k * LINE_CYCLES` (`scheduler.md`, "Savestate checks").
+    pub(crate) fn next_line_start(now: u64) -> u64 {
+        Self::next_on_grid(now, 0)
+    }
+
+    /// The first HBlank start strictly after `now`, on the grid
+    /// `k * LINE_CYCLES + HBLANK_START_CYCLES`.
+    pub(crate) fn next_hblank_start(now: u64) -> u64 {
+        Self::next_on_grid(now, HBLANK_START_CYCLES)
+    }
+
+    fn next_on_grid(now: u64, offset: u64) -> u64 {
+        match now.checked_sub(offset) {
+            None => offset,
+            Some(since) => (since / LINE_CYCLES)
+                .saturating_add(1)
+                .saturating_mul(LINE_CYCLES)
+                .saturating_add(offset),
+        }
     }
 }
 

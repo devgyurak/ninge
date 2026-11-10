@@ -431,7 +431,8 @@ fn given_a_timer_overflowing_at_the_same_time_as_a_line_start_when_both_fire_the
     let mut m = machine();
     set9(&mut m, 0, 0xF7AE, START);
     step(&mut m, LINE_CYCLES);
-    // Both rescheduled for 8520: the one that fired first was queued first.
+    // Both rescheduled for 8520; a line start precedes a timer overflow by kind priority
+    // (`scheduler.md`, "Events"), not because it was queued first.
     let at_8520: Vec<EventKind> = m
         .scheduler
         .pending()
@@ -443,14 +444,15 @@ fn given_a_timer_overflowing_at_the_same_time_as_a_line_start_when_both_fire_the
 }
 
 #[test]
-fn given_two_timers_with_events_at_the_same_time_when_they_fire_then_they_fire_in_schedule_order_not_index_order()
+fn given_two_timers_with_events_at_the_same_time_when_they_fire_then_they_are_queued_again_in_index_order_not_schedule_order()
  {
     let mut m = machine();
     set9(&mut m, 1, RELOAD_16_TICKS, START);
     set9(&mut m, 0, RELOAD_16_TICKS, START);
     step(&mut m, 32);
-    // Timer 1 was scheduled first, so it fired first and is queued first again.
-    assert_eq!(timer_events(&m), vec![(64, kind9(1)), (64, kind9(0))]);
+    // Timer 1 was scheduled first, but ties go by kind priority: ARM9 timer 0, then 1
+    // (`scheduler.md`, "Events").
+    assert_eq!(timer_events(&m), vec![(64, kind9(0)), (64, kind9(1))]);
 }
 
 /// Six setup instructions, then `stmia r0, {r1, r2}`: r0 = `0400_0100h`, r1 = r2 = `00C0_FFF0h`,
@@ -846,86 +848,43 @@ fn given_an_unmodified_timer_state_when_loaded_then_it_is_accepted() {
 }
 
 #[test]
-fn given_a_running_timer_whose_event_is_missing_when_loaded_then_it_is_refused_as_corrupt() {
-    assert_eq!(
-        load_after(|m| m.scheduler.cancel(kind9(0))),
-        Err(SavestateError::Corrupt)
-    );
-}
-
-#[test]
-fn given_a_running_arm7_timer_whose_event_is_missing_when_loaded_then_it_is_refused_as_corrupt() {
-    assert_eq!(
-        load_after(|m| m.scheduler.cancel(kind7(2))),
-        Err(SavestateError::Corrupt)
-    );
-}
-
-#[test]
-fn given_a_running_timer_with_two_events_when_loaded_then_it_is_refused_as_corrupt() {
-    assert_eq!(
-        load_after(|m| m.scheduler.schedule(100, kind9(0))),
-        Err(SavestateError::Corrupt)
-    );
-}
-
-#[test]
-fn given_an_event_for_a_stopped_timer_when_loaded_then_it_is_refused_as_corrupt() {
-    assert_eq!(
-        load_after(|m| m.scheduler.schedule(100, kind9(3))),
-        Err(SavestateError::Corrupt)
-    );
-}
-
-#[test]
-fn given_an_event_for_a_count_up_timer_when_loaded_then_it_is_refused_as_corrupt() {
-    assert_eq!(
-        load_after(|m| m.scheduler.schedule(100, kind9(1))),
-        Err(SavestateError::Corrupt)
-    );
-}
-
-#[test]
-fn given_a_timer_event_earlier_than_the_overflow_when_loaded_then_it_is_refused_as_corrupt() {
-    // Timer 0's overflow is at 32; an event at 5 would fire it 27 cycles early.
-    assert_eq!(
-        load_after(|m| {
-            m.scheduler.cancel(kind9(0));
-            m.scheduler.schedule(5, kind9(0));
-        }),
-        Err(SavestateError::Corrupt)
-    );
-}
-
-#[test]
 fn given_a_timer_origin_long_before_now_when_loaded_then_it_is_refused_as_corrupt() {
-    // Timer 0's event sits at `now` but its own overflow time is 2^40 cycles in the past: a
-    // dispatch would fire it once per round without the CPU advancing, practically forever.
+    // Timer 0 started at time 0 with reload `FFFFh` overflows at 2, but the clock is 2^40
+    // cycles on: a dispatch would fire it once per round without the CPU advancing, practically
+    // forever (`scheduler.md`, "Savestate checks"). Built from device state and `now` only; the
+    // queue is not saved.
     const FAR: u64 = 1 << 40;
     let mut m = machine();
     set9(&mut m, 0, 0xFFFF, START);
     m.scheduler.now = FAR;
     m.arm7_clock = FAR;
-    m.scheduler.cancel(EventKind::LineStart);
-    m.scheduler.cancel(EventKind::HBlankStart);
-    m.scheduler.schedule(FAR + 50, EventKind::HBlankStart);
-    m.scheduler.schedule(FAR + 100, EventKind::LineStart);
-    m.scheduler.cancel(kind9(0));
-    m.scheduler.schedule(FAR, kind9(0));
     assert_eq!(
         machine().load_state(&m.save_state()),
         Err(SavestateError::Corrupt)
     );
 }
 
+/// What loading a machine whose timer 0 started at time 0 with reload `FFFFh` (overflow due at
+/// 2) gives when the clock has run to `now` without the timer being handled.
+fn load_with_timer_due_at_2_and_clock_at(now: u64) -> Result<(), SavestateError> {
+    let mut m = machine();
+    set9(&mut m, 0, 0xFFFF, START);
+    m.scheduler.now = now;
+    m.arm7_clock = now;
+    machine().load_state(&m.save_state())
+}
+
 #[test]
-fn given_a_timer_event_far_later_than_the_overflow_when_loaded_then_it_is_refused_as_corrupt() {
-    // Timer 0's overflow is at 32; an event at 1,000,000 would drop its IRQ and its cascade.
+fn given_a_timer_overflow_exactly_a_slice_behind_now_when_loaded_then_it_is_accepted() {
+    // The lag an ARM7 write can leave is at most one slice (`scheduler.md`, "Savestate checks").
+    assert_eq!(load_with_timer_due_at_2_and_clock_at(2 + SLICE), Ok(()));
+}
+
+#[test]
+fn given_a_timer_overflow_one_cycle_more_than_a_slice_behind_now_when_loaded_then_it_is_refused_as_corrupt()
+ {
     assert_eq!(
-        load_after(|m| {
-            m.scheduler.cancel(kind9(0));
-            m.scheduler.schedule(1_000_000, kind9(0));
-        }),
+        load_with_timer_due_at_2_and_clock_at(2 + SLICE + 1),
         Err(SavestateError::Corrupt)
     );
 }

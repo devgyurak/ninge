@@ -263,7 +263,7 @@ impl Io {
     /// timer an ARM7 write started while it lagged the master clock can compute a time already
     /// past, and the queue's invariant (`scheduler.md`, "Savestate checks") holds events at `now`
     /// or later. The timer keeps its own tick grid, so only the IRQ is late (`timers.md`,
-    /// "Model"). Slots are replaced in ascending order, so equal times fire in that order.
+    /// "Model").
     fn schedule_slots<const ARM9: bool>(
         &self,
         scheduler: &mut Scheduler,
@@ -283,6 +283,16 @@ impl Io {
                     }
                 }
             });
+    }
+
+    /// Queues the event of every slot of every event device, as at `now`: the timers' overflows
+    /// and the waiting DMA starts of both CPUs. A load calls it on an empty queue to rebuild what
+    /// the savestate does not hold (`scheduler.md`, "Savestate checks").
+    pub(crate) fn schedule_all(&self, scheduler: &mut Scheduler, now: u64) {
+        self.schedule_slots::<true>(scheduler, Port::Timers, u8::MAX, now);
+        self.schedule_slots::<false>(scheduler, Port::Timers, u8::MAX, now);
+        self.schedule_slots::<true>(scheduler, Port::Dma, u8::MAX, now);
+        self.schedule_slots::<false>(scheduler, Port::Dma, u8::MAX, now);
     }
 
     /// A device's event fired: it does what the device says ([`Device::slot_fire`]), its IF bits
@@ -347,13 +357,13 @@ impl Io {
 
     /// Whether the devices hold only values that exist. A savestate that decodes to anything
     /// else is corrupt (`savestate`).
-    pub(crate) fn is_well_formed(&self) -> bool {
+    pub(crate) fn is_well_formed(&self, now: u64) -> bool {
         self.irq9.is_well_formed()
             && self.irq7.is_well_formed()
             && self.ipc.is_well_formed()
             && self.timing.is_well_formed()
-            && self.timers9.is_well_formed()
-            && self.timers7.is_well_formed()
+            && self.timers9.is_well_formed(now)
+            && self.timers7.is_well_formed(now)
             && self.dma9.is_well_formed()
             && self.dma7.is_well_formed()
     }

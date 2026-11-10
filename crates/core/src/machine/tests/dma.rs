@@ -939,11 +939,15 @@ fn given_a_machine_with_waiting_channels_when_saved_mid_frame_and_continued_then
     assert!(resumed.save_state() == uninterrupted.save_state());
 }
 
+// The setup writes the registers without running the clock, so the original's starts sit one
+// instruction past `now`; a real run is settled, and a load queues each waiting start at `now`.
 #[test]
-fn given_a_saved_machine_with_pending_channels_when_loaded_then_the_channels_and_events_match() {
+fn given_a_saved_machine_with_pending_channels_when_loaded_then_the_channels_match_and_each_waiting_start_is_queued_at_now()
+ {
     let original = busy_machine();
     let mut loaded = machine();
     loaded.load_state(&original.save_state()).expect("loads");
+    let now = loaded.scheduler().now();
     assert_eq!(
         (
             loaded.dma9().clone(),
@@ -953,7 +957,7 @@ fn given_a_saved_machine_with_pending_channels_when_loaded_then_the_channels_and
         (
             original.dma9().clone(),
             original.dma7().clone(),
-            dma_events(&original)
+            vec![(now, true, 0), (now, false, 1)]
         )
     );
 }

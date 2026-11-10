@@ -79,8 +79,9 @@ pub(crate) enum Trap {
 }
 
 /// The trap R15 is at for CPU `ARM9`, if any. The common case, R15 outside the vectors, costs
-/// one compare. Only an ARM9 R15 inside `FFFF0000h`-`FFFF7FFFh` can match: a game that keeps its
-/// own vectors at 0 never reaches the BIOS (`hle-swi.md`, "The game's own vectors").
+/// one compare. Each CPU matches only inside its own BIOS area: the ARM9's R15 in
+/// `FFFF0000h`-`FFFF7FFFh` (a game that keeps its vectors at 0 never reaches the BIOS,
+/// `hle-swi.md`, "The game's own vectors"), the ARM7's from 0, where its vectors always are.
 pub(crate) fn trap_at<const ARM9: bool>(pc: u32) -> Option<Trap> {
     let base = match ARM9 {
         true => BIOS9_BASE,
@@ -125,7 +126,8 @@ fn software_interrupt<const ARM9: bool, B: Bus>(
     bus: &mut B,
     record: &mut SwiRecord,
 ) {
-    // The byte at LR - 2 is bits 23-16 of an ARM SWI and bits 7-0 of a Thumb one.
+    // The byte at LR - 2 is bits 23-16 of an ARM SWI and bits 7-0 of a Thumb one. A normal load,
+    // as the BIOS's own, so an I/O address would have its side effect (`hle-swi.md`, "Unverified").
     let number = bus.read8(cpu.regs().get(LR).wrapping_sub(2));
     record.last = Some(number);
     swi::run(number, cpu, bus, record);

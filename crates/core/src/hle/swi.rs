@@ -16,5 +16,7 @@ pub(super) fn run<const ARM9: bool, B: Bus>(
     _bus: &mut B,
     record: &mut SwiRecord,
 ) {
+    // TODO(hw-unverified): every unimplemented number, those above 1Fh included, has no effect
+    // (`hle-swi.md`, "Unverified").
     record.last_unimplemented = Some(number);
 }

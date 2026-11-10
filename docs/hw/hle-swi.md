@@ -1,11 +1,12 @@
 # HLE BIOS: the BIOS area, the vectors, SWI entry and the IRQ dispatcher
 
-Sources: GBATEK "DS Memory Maps" (the NDS9 and NDS7 memory maps, the BIOS rows and the
-"BIOS ROM" sizes), GBATEK "DS Interrupts" (the handler pointer and the IRQ check flags), GBATEK
-"BIOS Interrupt Handling" (the register set the BIOS saves around the user handler, the return
-sequence), GBATEK "ARM Opcodes: Branch and Branch with Link (B, BL, BLX_imm), SWI"
-and "THUMB Opcodes: Software Interrupt (SWI)" (the comment field), GBATEK "ARM CPU Exceptions"
-(via `arm-exceptions-modes.md`), GBATEK "BIOS Function Summary" (the DS function numbers).
+Sources: GBATEK "DS Memory Maps" (the NDS9 and NDS7 BIOS rows and the BIOS ROM sizes) and GBATEK
+"DS Interrupts" (the handler pointer and IRQ check flag addresses), both read; GBATEK "BIOS
+Interrupt Handling" for the GBA (the register set the BIOS saves around the user handler and the
+`SUBS PC, LR, #4` return), read for the GBA only. Written from memory of GBATEK and not re-read
+in this session, so each is under "Unverified": the SWI comment field ("ARM Opcodes ... SWI",
+"THUMB Opcodes ... SWI"), the DS function numbers ("BIOS Function Summary"). Also
+`arm-exceptions-modes.md` for the exception entry.
 Used by: `crates/core/src/hle/`, `crates/core/src/bus/memory/mod.rs`,
 `crates/core/src/machine/mod.rs`   Phase: 3 (#27, part 1 of 3)
 
@@ -192,7 +193,10 @@ checks").
 - **Debug handler.** GBATEK says the unused numbers `00h`-`1Fh` call the debug vector; none is
   called here. — `hle::swi` — verify likewise.
 - **SWI numbers above `1Fh`.** What the BIOS does for them is not stated; they have no effect. —
-  `hle::swi` — verify likewise.
+  `hle::swi::run` (`TODO(hw-unverified)` on its catch-all) — verify likewise.
+- **The SWI number is read with a normal load.** If `LR - 2` points at an I/O register the read has
+  its side effect, as the BIOS's own load would; the model does not use a side-effect-free peek.
+  — `hle::bios::software_interrupt` — verify likewise.
 - **Cost.** One instruction per BIOS entry is a model; the real BIOS runs tens of instructions per
   call. — `hle::ENTRY_INSTRUCTIONS` in `crates/core/src/hle/bios.rs` — revisit with the Phase 8
   timing work.

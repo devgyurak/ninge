@@ -14,7 +14,7 @@ use super::*;
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::savestate::SavestateError;
-use crate::scheduler::{EventKind, LINE_CYCLES};
+use crate::scheduler::{ARM9_INSTRUCTION_COST, EventKind, LINE_CYCLES, run_round};
 use crate::timers::TM0CNT_L_ADDR;
 
 const IME: u32 = 0x0400_0208;
@@ -30,6 +30,8 @@ const RELOAD_16_TICKS: u16 = 0xFFF0;
 const SYSTEM_I_CLEAR: u32 = 0x1F;
 /// IRQ mode, I set, ARM state, flags clear (`arm-exceptions-modes.md`).
 const IRQ_ENTRY_CPSR: u32 = 0x92;
+/// The mode bits of CPSR in IRQ mode.
+const IRQ_MODE_BITS: u32 = 0x12;
 
 /// `mov r0, #0x55`, `mov r1, #0x66`, `b .`.
 const SPIN: [u32; 3] = [0xE3A0_0055, 0xE3A0_1066, 0xEAFF_FFFE];
@@ -641,6 +643,88 @@ fn given_a_timer_irq_with_ime_off_when_the_timer_overflows_then_if_is_set_but_th
     assert_eq!(
         (m.arm9().regs().cpsr() & 0x1F, m.irq9().if_()),
         (SYSTEM_I_CLEAR, IF_TIMER0)
+    );
+}
+
+/// `TIMER_WRITER` with reload `0xFFFF`: the store at index 5 starts timer 0 at F/1 with its IRQ
+/// enabled, so it overflows 1 tick (2 master cycles) after the store (`timers.md`, "Clock").
+const ONE_TICK_WRITER: [u32; 7] = [
+    TIMER_WRITER[0],
+    TIMER_WRITER[1],
+    TIMER_WRITER[2],
+    TIMER_WRITER[3],
+    0xE381_10FF, // orr r1, r1, #0xFF            r1 = 0x00C0_FFFF
+    TIMER_WRITER[5],
+    B_SELF,
+];
+/// The store is the sixth instruction, so it runs at master time 5; the overflow is 2 later.
+const ONE_TICK_OVERFLOW_AT: u64 = 5 + 2;
+
+/// How far past `overflow_at` the ARM9 enters IRQ mode, driving the machine with whole rounds
+/// until the overflow event has fired (IF set), then single steps until the mode is IRQ. `None`
+/// when either does not happen within a bounded number of tries.
+fn irq_entry_lag(m: &mut Machine, overflow_at: u64) -> Option<u64> {
+    (0..8).for_each(|_| {
+        if m.irq9().if_() & IF_TIMER0 == 0 {
+            run_round(m);
+        }
+    });
+    (0..4)
+        .map(|_| {
+            let before = m.scheduler.now();
+            m.step_arm9();
+            (before, m.arm9().regs().cpsr() & 0x1F)
+        })
+        .find(|&(_, mode)| mode == IRQ_MODE_BITS)
+        .map(|(before, _)| before.saturating_sub(overflow_at))
+}
+
+#[test]
+fn given_the_arm9_starts_a_one_tick_timer_mid_round_when_rounds_run_then_the_irq_is_entered_within_one_instruction_of_the_overflow()
+ {
+    // `scheduler.md`, "Interleaving": the ARM9 must not run past an event it queued. The overflow
+    // is at 7; an ARM9 instruction costs 1 (`scheduler.md`, "Cost per instruction"), so the IRQ
+    // entry (`interrupts.md`, "Behavior") follows within one instruction of it.
+    let mut m = booted(&rom_with(&ONE_TICK_WRITER, &SPIN));
+    m.bus9().write32(IME, 1);
+    m.bus9().write32(IE, IF_TIMER0);
+    m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
+    let lag = irq_entry_lag(&mut m, ONE_TICK_OVERFLOW_AT);
+    assert!(
+        lag.is_some_and(|late| late <= ARM9_INSTRUCTION_COST),
+        "IRQ entry lag was {lag:?}"
+    );
+}
+
+/// An ARM7 program that counts: `mov r0, #0`, then 40 `add r0, r0, #1`, then `b .`.
+fn arm7_counter() -> Vec<u32> {
+    [0xE3A0_0000]
+        .into_iter()
+        .chain(std::iter::repeat_n(0xE280_0001, 40))
+        .chain([B_SELF])
+        .collect()
+}
+
+/// Whole rounds until the master clock has reached `time`.
+fn rounds_until_now_reaches(m: &mut Machine, time: u64) {
+    (0..64).for_each(|_| {
+        if m.scheduler.now() < time {
+            run_round(m);
+        }
+    });
+}
+
+#[test]
+fn given_the_arm9_queues_an_event_mid_round_when_the_round_ends_then_the_arm7_ran_only_up_to_that_event()
+ {
+    // The ARM9 queues the overflow at 7 during the first round. The ARM7 runs to 7, not to the
+    // old target 64: its instructions start at clocks 0, 2, 4 and 6, and the one at 6 finishes
+    // at 8, past the event (`scheduler.md`, "Cost per instruction"). `mov` + 3 `add` give r0 = 3.
+    let mut m = booted(&rom_with(&ONE_TICK_WRITER, &arm7_counter()));
+    rounds_until_now_reaches(&mut m, ONE_TICK_OVERFLOW_AT);
+    assert_eq!(
+        (m.arm7().regs().get(0), m.arm7_clock(), m.scheduler.now()),
+        (3, 8, ONE_TICK_OVERFLOW_AT)
     );
 }
 

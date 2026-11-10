@@ -2,7 +2,8 @@
 //! The event scheduler and the ARM9/ARM7 interleaving (`docs/hw/scheduler.md`).
 //!
 //! Events sit in a binary heap ordered by `(time, seq)`. A round runs the ARM9, then the ARM7,
-//! then the events due at the target; see [`run_round`].
+//! then the events due where the ARM9 stopped: the round's target, or earlier when the ARM9
+//! queued an event before it; see [`run_round`].
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -188,9 +189,11 @@ impl Default for Scheduler {
 /// recorder to pin the order of a round. Static dispatch only (AGENTS.md §2 rule 3).
 pub(crate) trait Participants {
     fn scheduler(&mut self) -> &mut Scheduler;
-    /// Runs the ARM9 until the master clock reaches `target`.
+    /// Runs the ARM9 until the master clock reaches `target` or the earliest queued event,
+    /// whichever is earlier, checked before every instruction. It may queue events while it runs.
     fn run_arm9_until(&mut self, target: u64);
-    /// Runs the ARM7 until its clock reaches `target`.
+    /// Runs the ARM7 until its clock reaches `target`: where the ARM9 stopped, not the round's
+    /// original target.
     fn run_arm7_until(&mut self, target: u64);
     /// Handles a fired event.
     fn dispatch(&mut self, event: Event);
@@ -207,9 +210,10 @@ fn dispatch_due<P: Participants>(participants: &mut P, at: u64) {
     }
 }
 
-/// One round: ARM9, then ARM7, then every event due at the target (`scheduler.md`,
+/// One round: ARM9, then ARM7, then every event due where the ARM9 stopped (`scheduler.md`,
 /// "Interleaving"). The target is the earlier of the next event and `now + SLICE`, and never
-/// before `now`.
+/// before `now`. The ARM9 stops at `stop`, the earlier of the target and any event it queued;
+/// the ARM7 and the events use its actual clock, so a later multi-cycle cost stays right.
 pub(crate) fn run_round<P: Participants>(participants: &mut P) {
     let scheduler = participants.scheduler();
     let horizon = scheduler.now.saturating_add(SLICE);
@@ -218,8 +222,9 @@ pub(crate) fn run_round<P: Participants>(participants: &mut P) {
         .map_or(horizon, |time| time.min(horizon))
         .max(scheduler.now);
     participants.run_arm9_until(target);
-    participants.run_arm7_until(target);
-    dispatch_due(participants, target);
+    let stop = participants.scheduler().now;
+    participants.run_arm7_until(stop);
+    dispatch_due(participants, stop);
 }
 
 /// Brings the ARM7 up to the ARM9 clock and fires what is due, after a lone ARM9 step

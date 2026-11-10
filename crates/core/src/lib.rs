@@ -406,11 +406,21 @@ impl Participants for Machine {
     }
 
     fn run_arm9_until(&mut self, target: u64) {
-        while self.scheduler.now() < target {
+        // An instruction can queue an event before `target` (a timer write, #109); stop at it so
+        // it sees every earlier instruction and none after (`scheduler.md`, "Interleaving").
+        // See #118. `next_time` is a heap peek: O(1), no allocation.
+        while self.scheduler.now() < target
+            && self
+                .scheduler
+                .next_time()
+                .is_none_or(|time| self.scheduler.now() < time)
+        {
             self.step_arm9_instruction();
         }
     }
 
+    // TODO(hw-unverified): an event the ARM7 queues is not checked mid-run (`scheduler.md`,
+    // "Unverified").
     fn run_arm7_until(&mut self, target: u64) {
         while self.arm7_clock < target {
             self.step_arm7_instruction();

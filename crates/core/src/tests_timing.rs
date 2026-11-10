@@ -509,3 +509,14 @@ fn given_two_runs_of_the_same_frame_when_each_ends_then_the_savestate_bytes_matc
     b.run_frame();
     assert_eq!(a.save_state(), b.save_state());
 }
+
+#[test]
+fn given_no_event_within_a_slice_and_none_queued_when_a_round_runs_then_both_cpus_advance_a_full_slice()
+ {
+    // The first queued event is HBlank at 3,212, far past one slice, and both programs are `b .`,
+    // so nothing is queued mid-round: the ARM9 and the ARM7 both reach now + SLICE
+    // (`scheduler.md`, "Interleaving").
+    let mut m = machine();
+    run_round(&mut m);
+    assert_eq!((m.scheduler.now(), m.arm7_clock()), (SLICE, SLICE));
+}

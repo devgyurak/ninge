@@ -106,8 +106,8 @@ fn data_routine<const ARM9: bool, B: Bus>(number: u8, cpu: &mut Cpu<ARM9>, bus: 
         IS_DEBUGGER => cpu.regs_mut().set(0, 0),
         LZ77_WRAM => lz77::decode_wram(bus, r0, r1),
         LZ77_VRAM => lz77::decode_vram(bus, r0, r1),
-        // `run` sends only the numbers above here.
-        _ => {}
+        // `run` sends only the numbers in its data arm, each matched above.
+        _ => unreachable!("`run` sends data_routine only the numbers it matches itself"),
     }
 }
 

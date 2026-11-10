@@ -167,7 +167,7 @@ Chosen from what #27 lists (Div, CpuSet, CpuFastSet, Sqrt, LZ77 in its two forms
 survey made for this note: a libnds console `printf` program built with the BlocksDS v1.24.0 image
 that `scripts/build_testroms.sh` pins, its ARM9 ELF and the image's stock ARM7 ELF disassembled
 for `swi`/`svc`. The ARM9 calls `0Fh` and `03h`; the ARM7 calls `03h`, `06h`, `07h`, `08h` and
-`0Eh` (and DSi-only `24h`-`27h` stubs it never reaches). So GetCRC16 and IsDebugger are added. Every one runs
+`0Eh`, and no number above `1Fh`. So GetCRC16 and IsDebugger are added. Every one runs
 through the calling CPU's own bus view, so a write reaches I/O registers and VRAM as an instruction's
 would, and costs one instruction (see "Cost").
 
@@ -341,7 +341,7 @@ checks").
   `hle::swi::run` — `TODO(hw-unverified)`; revisit with the Phase 8 timing work.
 - **The IntrWait loop address `base + 24h`.** ninge's own. — `hle::bios::INTR_WAIT_VECTOR` —
   invisible to a game unless it reads `LR` inside IntrWait.
-- **Div by zero and `-80000000h / -1`.** The BIOS's results are not established here. The model
+- **Div by zero and `-80000000h / -1`.** The model
   returns, for a zero denominator, `R0 = 1` (`-1` for a negative numerator), `R1` = the numerator,
   `R3 = 1`, and for the overflow case the wrapped result (`R0 = 80000000h`, `R1 = 0`,
   `R3 = 80000000h`); both are choices, not findings. — `hle::swi::math::divide` — verify by a

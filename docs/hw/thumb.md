@@ -9,7 +9,7 @@ Pointer", "Push/Pop Registers", "Multiple Load/Store", "Conditional Branch", "So
 Interrupt", "Unconditional Branch", "Long Branch with Link"); GBATEK "ARM CPU Register Set"
 (R15 in Thumb state). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT)
 as oracle evidence, not hardware evidence.
-Used by: `crates/core/src/cpu/thumb_decode.rs`, `crates/core/src/cpu/thumb.rs`
+Used by: `crates/core/src/cpu/thumb_decode/mod.rs`, `crates/core/src/cpu/thumb.rs`
 (`step_thumb`), `crates/core/src/cpu/mod.rs` (`Cpu::step`)   Phase: 1 (#13)
 
 Out of scope here: the ARMv5 Thumb forms (the two BLX encodings, `POP {PC}` switching state on
@@ -201,7 +201,7 @@ reference emulator.
   `thumb.rs`.
 - **Format 5 BX with H1 = 1.** The suite shows BX with H1 = 1 and op 3 running as BX on the
   register `H2 : Rs`, H1 ignored (128 halfwords, 25,102 cases). That encoding is BLX (register)
-  on ARMv5; the ARM9 differs (`armv5te.md`). — `thumb_decode.rs`, `branch_exchange_thumb`.
+  on ARMv5; the ARM9 differs (`armv5te.md`). — `thumb_decode/mod.rs`, `branch_exchange_thumb`.
 - **BX R15 and BX with non-zero Rd bits.** GBATEK says the PC is aligned as
   `(address + 4) AND NOT 2` and that BX R15 should be issued from a word-aligned address only.
   The suite contradicts the alignment: with it, 1,607 `thumb_bx` cases fail, all BX R15 run
@@ -212,7 +212,7 @@ reference emulator.
 - **Format 16 with condition 1110.** The suite shows a branch that is always taken, with the
   usual target and no exception (50,000 cases); the documentation calls the encoding
   undefined. The suite is ARMv4T only, so the ARM9 may differ (it may take the Undefined
-  exception). — `thumb_decode.rs`.
+  exception). — `thumb_decode/mod.rs`.
 - **MUL's C and V.** C after MUL is "meaningless" per GBATEK on ARMv4T; it follows the model in
   `arm-multiply.md` (oracle evidence only, see its "Unverified"); V is unchanged. — `alu_register`
   in `thumb.rs`.
@@ -225,7 +225,7 @@ reference emulator.
 - **Encodings with no Thumb meaning on ARMv4T** besides the 1110 conditional branch: the
   `1011` space outside formats 13 and 14 (later architectures give it extend, hint and BKPT
   meanings) and the BLX suffix `11101`. They run as a plain step here, which is a guess about
-  hardware. — `thumb_decode.rs`.
+  hardware. — `thumb_decode/mod.rs`.
 - **Fetch transactions.** The step fetches one halfword at R15 before executing and a refill
   fetches two, in 16-bit width; this matches the suite and is oracle evidence only, as in
   `arm-branch-pipeline.md`. — `step_thumb`, `refill`.

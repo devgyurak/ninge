@@ -103,9 +103,9 @@ instructions are conditional.
   against the reference emulator; carries `TODO(hw-unverified)`.
 - What an SPSR read gives in User/System mode — `Registers` exposes no SPSR there. The MRS
   handler reads the CPSR instead, which is what the JSON suite shows (see
-  `arm-data-processing.md`, "Unverified"). — `Registers::spsr` and `Registers::set_spsr` in `crates/core/src/cpu/regs.rs`, which
+  `arm-data-processing.md`, "Unverified"). — `Registers::spsr` and `Registers::set_spsr` in `crates/core/src/cpu/regs/mod.rs`, which
   carry `TODO(hw-unverified)` — verify by a test ROM on real hardware.
 - R0–R14 and N, Z, C, V after a reset: GBATEK "ARM CPU Exceptions" fixes the mode, I, F and
-  T but not these. The emulator starts them at zero. — `crates/core/src/cpu/regs.rs`
+  T but not these. The emulator starts them at zero. — `crates/core/src/cpu/regs/mod.rs`
   (`POWER_ON_CPSR`) — verify by a test ROM on real hardware or a trace against the reference
   emulator; carries `TODO(hw-unverified)`.

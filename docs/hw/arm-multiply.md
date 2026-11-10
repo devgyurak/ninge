@@ -7,7 +7,7 @@ background; not re-read for this note. For the ARM7TDMI carry only, the research
 read the TRM (DDI 0029G) §6.6 and Table 6-23 (the `m` rule) and its block diagram (32 x 8
 multiplier), and: US 5,583,804, US 5,528,529 and
 US 5,557,563 (see "ARM7TDMI multiply carry"). Measured facts come from the pinned SingleStepTests/ARM7TDMI suite (MIT).
-Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
+Used by: `crates/core/src/cpu/decode/mod.rs`, `crates/core/src/cpu/arm.rs` (handlers `multiply`,
 `multiply_long`)   Phase: 1 (#9)
 
 The v5TE DSP multiplies (SMULxy and friends, `armv5te.md`) are a different encoding space and are not

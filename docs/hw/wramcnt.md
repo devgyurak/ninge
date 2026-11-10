@@ -74,7 +74,7 @@ their own contents (the "first" half is bytes 0-16383 of the 32 KiB, the "second
 
 - **WRAMCNT after reset.** GBATEK's WRAM section gives no value. Power-on state is 0 (all to the
   ARM9), a plain reset choice; direct boot then sets 3 (below). — `Memory::new`
-  in `crates/core/src/bus/memory.rs` — verify by a test ROM on hardware reading it first.
+  in `crates/core/src/bus/memory/mod.rs` — verify by a test ROM on hardware reading it first.
 - **WRAMCNT after direct boot** is set to 3 (all 32 KiB to the ARM7); GBATEK does not state the
   value. It is inferred: GBATEK's "NDS BIOS RAM Usage" lists, at cartridge boot, the ARM7 boot
   area `037F_8000h`-`0380_7DFFh`, the ARM7 stacks `0380_FD80h`/`0380_FF80h`/`0380_FFC0h` and the

@@ -4,7 +4,7 @@ Sources: GBATEK "ARM Opcodes: Branch and Branch with Link (B, BL, BLX_imm)"; GBA
 Opcodes: Branch and Exchange (BX, BLX_reg)"; GBATEK "ARM CPU Register Set" (R15 and the
 pipeline); GBATEK "ARM CPU Instruction Set Overview". Measured facts come from the pinned
 SingleStepTests/ARM7TDMI suite (MIT), as oracle evidence, not hardware evidence.
-Used by: `crates/core/src/cpu/decode.rs`, `crates/core/src/cpu/arm.rs` (`step_arm`, `branch`,
+Used by: `crates/core/src/cpu/decode/mod.rs`, `crates/core/src/cpu/arm.rs` (`step_arm`, `branch`,
 `branch_exchange`, `refill`), `crates/core/src/cpu/mod.rs` (`pipeline`)   Phase: 1 (#11)
 
 Out of scope here: Thumb execution (`thumb.md`); BLX and the ARMv5 interworking loads (`LDR PC`,
@@ -113,7 +113,7 @@ against the reference emulator.
   unpredictable. — `mrs` in `arm.rs`.
 - **BX with should-be-one fields that are not all ones.** The decoder keys on bits 27-20 and
   7-4 only, so any such word runs as BX; what hardware does with other values in bits 19-8 is
-  unknown. — `decode.rs` (and `branch_exchange`).
+  unknown. — `decode/mod.rs` (and `branch_exchange`).
 - **Late R15 reads of multiply operands and SWP registers.** GBATEK gives the register-shift
   and store cases only; the +12 reads of multiply and SWP operands are the suite's. —
   `LATE_PC_EXTRA` in `arm.rs` — verify by a test ROM on real hardware.

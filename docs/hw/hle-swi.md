@@ -8,15 +8,14 @@ not read, so each is under "Unverified": the SWI comment field ("ARM Opcodes ...
 Opcodes ... SWI") and the DS function numbers ("BIOS Function Summary"). Also
 `arm-exceptions-modes.md` for the exception entry.
 Used by: `crates/core/src/hle/`, `crates/core/src/bus/memory/mod.rs`,
-`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 and 2 of 3)
+`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 to 3 of 3)
 
 ninge boots without a BIOS dump (AGENTS.md §3.2). The BIOS is high-level emulated: the CPU
 enters its exception vectors exactly as on hardware, and the machine does in Rust what the BIOS
 code at those addresses would do. No BIOS image exists in ninge, and no instruction of it is
 written down anywhere. This note covers the BIOS area, the vectors, how an SWI number is found,
-the IRQ dispatcher, the wait routines (Halt, WaitByLoop, IntrWait, VBlankIntrWait) and the SWI
-numbers nothing implements. The copy, math and decompression routines are the next part (#27,
-PR 3); until then they take the "Unimplemented number" path below.
+the IRQ dispatcher, the wait routines (Halt, WaitByLoop, IntrWait, VBlankIntrWait), the copy,
+math, checksum and decompression routines, and the SWI numbers nothing implements.
 
 ## The BIOS area
 
@@ -162,6 +161,65 @@ IntrWait loop address (`+24h`, trap `+2Ch`), so no extra state is saved.
 
 `R1` survives the IRQ because the dispatcher saves and restores `R0-R3`.
 
+## The copy, math and decompression SWIs
+
+Chosen from what #27 lists (Div, CpuSet, CpuFastSet, Sqrt, LZ77 in its two forms) and from a
+survey made for this note: a libnds console `printf` program built with the BlocksDS v1.24.0 image
+that `scripts/build_testroms.sh` pins, its ARM9 ELF and the image's stock ARM7 ELF disassembled
+for `swi`/`svc`. The ARM9 calls `0Fh` and `03h`; the ARM7 calls `03h`, `06h`, `07h`, `08h` and
+`0Eh`, and no number above `1Fh`. So GetCRC16 and IsDebugger are added. Every one runs
+through the calling CPU's own bus view, so a write reaches I/O registers and VRAM as an instruction's
+would, and costs one instruction (see "Cost").
+
+| Number | Name | Arguments | Result |
+|---|---|---|---|
+| `09h` | Div | `R0` numerator, `R1` denominator, both signed | `R0` quotient, `R1` remainder, `R3` absolute quotient |
+| `0Bh` | CpuSet | `R0` source, `R1` destination, `R2` control | memory |
+| `0Ch` | CpuFastSet | same | memory |
+| `0Dh` | Sqrt | `R0` unsigned | `R0` integer square root |
+| `0Eh` | GetCRC16 | `R0` initial value, `R1` address, `R2` length in bytes | `R0` the CRC |
+| `0Fh` | IsDebugger | none | `R0 = 0` |
+| `11h` | LZ77 to 8-bit writes | `R0` source, `R1` destination | memory |
+| `12h` | LZ77 to 16-bit writes | same | memory |
+
+**Div.** The quotient is the numerator divided by the denominator, truncated toward zero; the
+remainder has the sign of the numerator; `R3` is the absolute value of the quotient as an
+unsigned number. A zero denominator and `-80000000h / -1` are under "Unverified".
+
+**Sqrt.** The largest `r` with `r * r <= R0`, at most `FFFFh`.
+
+**CpuSet.** `R2` bits 0-20 hold the unit count, bit 24 selects fill (1) or copy (0), bit 26 selects
+32-bit (1) or 16-bit (0) units; the other bits are ignored. Copy moves `count` units from the source
+to the destination, in increasing order. Fill reads one unit at the source and writes it `count`
+times. The addresses are used with their low bits dropped to the unit size (the bus ignores them,
+`arm9-memory-map.md`, "Alignment"). A count of 0 does nothing. The registers are left as they were.
+
+**CpuFastSet.** The same, but always 32-bit units, and the count is rounded up to a multiple of 8
+words: a count of 9 moves 16 words, a count of 1 fills 8.
+
+**GetCRC16.** CRC-16/MODBUS (`cart-header.md`, "The header CRC16") continued from `R0`, over `R2`
+bytes read as halfwords from `R1`: for each halfword the low byte, then the high byte. `R2` is
+halved. Only `R0` changes. An odd length and the registers other than `R0` are under
+"Unverified".
+
+**IsDebugger.** Retail hardware has no debugger: `R0 = 0`.
+
+**LZ77.** The source starts with a word: bits 4-7 are the type (1 for LZ77) and bits 8-31 the
+decompressed size in bytes; the data follows. Data is read in groups: a flag byte whose bits are
+used from bit 7 down to bit 0, each followed by one item. A 0 bit is a literal byte. A 1 bit is a
+block of two bytes `b0`, `b1`: the length is `(b0 >> 4) + 3` and the distance is
+`((b0 & 0Fh) << 8 | b1) + 1`; the length bytes are copied from `distance` bytes behind the output
+position, one byte at a time, so a block may overlap the bytes it is writing (distance 1 repeats
+the last byte). Decoding stops when the output reaches the size; a block that would pass the
+size is cut at it. A size of 0 does nothing. A distance reaching before the start of the output
+reads the memory there, as the BIOS would.
+
+- `11h` writes each output byte with a byte write (the "WRAM" form): to VRAM or palette memory
+  the byte is lost (`vram-banks.md`, "Behavior").
+- `12h` collects output bytes in pairs and writes each pair with one halfword write (the "VRAM"
+  form), low byte first. A block copy reads bytes already collected in the pair or already
+  written. A size that is odd leaves the last byte unwritten.
+
 ## The IRQ dispatcher
 
 Hardware: the BIOS IRQ code saves `R0-R3`, `R12` and `LR` on the IRQ-mode stack, loads the
@@ -283,6 +341,29 @@ checks").
   `hle::swi::run` — `TODO(hw-unverified)`; revisit with the Phase 8 timing work.
 - **The IntrWait loop address `base + 24h`.** ninge's own. — `hle::bios::INTR_WAIT_VECTOR` —
   invisible to a game unless it reads `LR` inside IntrWait.
+- **Div by zero and `-80000000h / -1`.** The model
+  returns, for a zero denominator, `R0 = 1` (`-1` for a negative numerator), `R1` = the numerator,
+  `R3 = 1`, and for the overflow case the wrapped result (`R0 = 80000000h`, `R1 = 0`,
+  `R3 = 80000000h`); both are choices, not findings. — `hle::swi::math::divide` — verify by a
+  test ROM on hardware.
+- **CpuSet and CpuFastSet details.** That a count of 0 does nothing, that `R2` bits other than 0-20,
+  24 and 26 are ignored, and that CpuFastSet rounds its count up to a multiple of 8 words are the
+  model's (GBATEK may state the multiple of 8 as a requirement on the caller instead of a
+  round-up). Misaligned addresses are aligned down by the bus; the registers after the call are
+  left unchanged although the BIOS leaves them undefined; the source of a fill at an unaligned
+  address is aligned down. — `hle::swi::copy` — verify likewise.
+- **GetCRC16.** `R2` bytes are taken as `R2 / 2` halfwords, so an odd length leaves its last byte
+  out; only `R0` is set and `R1`-`R3` are left as they were. — `hle::swi::misc` — verify
+  likewise.
+- **LZ77.** A type other than 1 is decoded anyway; the 16-bit form's distance-1 block and an odd
+  size follow the model above; on the DS GBATEK describes `12h` as reading through callbacks given
+  in `R3` (`LZ77UnCompReadByCallbackWrite16bit`) and the model reads memory directly and ignores
+  `R3`, as it also treats `11h`. — `hle::swi::lz77` — verify likewise.
+- **Not implemented.** Sleep (`07h`, `TODO(phase5)`), SoundBias (`08h`, `TODO(phase6)`), BitUnPack,
+  Huffman and run-length decompression (`10h`, `13h`-`15h`), the DSi-only numbers, and the other
+  GBA-compatible numbers take the "Unimplemented number" path.
+- **The hardware divider and square root** (`DIVCNT`, `SQRTCNT` at `04000280h`/`040002B0h`, ARM9)
+  are not modeled; nothing in the console survey reads them.
 - **Cost.** One instruction per BIOS entry is a model; the real BIOS runs tens of instructions per
   call. — `hle::ENTRY_INSTRUCTIONS` in `crates/core/src/hle/bios.rs` — revisit with the Phase 8
   timing work.

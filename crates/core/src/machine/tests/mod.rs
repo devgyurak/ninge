@@ -12,6 +12,7 @@ mod ipc;
 mod irq;
 mod rebuild;
 mod scheduler;
+mod swi_data;
 mod timers;
 mod timing;
 

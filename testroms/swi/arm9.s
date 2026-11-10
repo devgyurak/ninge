@@ -21,6 +21,18 @@
 @   17 IF bit 0 on waking from SWI Halt with IME = 1 and I set   18 the same with IME = 0
 @   19 IF bit 0 on waking from CP15 wait-for-interrupt with IME = 0 (set to Ah before it)
 @   30 progress (1 when done)  31 sentinel, written last
+@
+@ Data SWIs, results at RES (one word per line, offsets in bytes; the area starts as AAh bytes):
+@   +00 CpuSet copy of three halfwords: 22221111h, AAAA3333h   +10 a 32-bit fill, count 3: DEADBEEFh x3
+@   +20 CpuFastSet copy, count 9: words 1-16 (the 17th stays AAAAAAAAh at +60)
+@   +80 CpuFastSet fill, count 1: DEADBEEFh x8 (+A0 stays AAAAAAAAh)   +C0 CpuSet count 0: untouched
+@   +D0 Div -7/2: quotient, remainder, absolute quotient   +DC Div 7/-2: the same
+@   +F0 Sqrt(1000000)   +F4 Sqrt(FFFFFFFFh)   +F8 Sqrt(0)
+@   +100 GetCRC16 of "12345678" from FFFFh   +104 IsDebugger (r0 preset to 55h)
+@   +110 LZ77 with byte writes: "ABABABABAB" then AAh   +130 LZ77 with halfword writes: the same
+@   ARM9 only: +150 first word of VRAM bank A after a byte-write LZ77 into it (the write is lost)
+@   +160, +164, +168 three words of VRAM bank A after a halfword-write LZ77 at its +10h
+    .equ RES, 0x02008000
     .equ REC, 0x02004000
     .equ FLAGS, 0x027C3FF8
     .equ COUNT, 0x02006000
@@ -158,6 +170,100 @@ back_to_arm:
     and r4, r4, #1
     str r4, [r8, #76]          @ 19: IF bit 0 set on the wake (IME = 0)
 
+
+    @ ---- data SWIs: results in memory at RES (layout above); the area is filled with AAh first
+    ldr r10, =RES
+    ldr r0, =0xAAAAAAAA
+    mov r1, #0
+fill_results:
+    str r0, [r10, r1]
+    add r1, r1, #4
+    cmp r1, #0x400
+    bne fill_results
+    @ CpuSet: three 16-bit units copied
+    ldr r0, =src16
+    mov r1, r10
+    mov r2, #3
+    swi 0x0B0000
+    @ CpuSet: a 32-bit word filled three times
+    ldr r0, =fill_word
+    add r1, r10, #0x10
+    ldr r2, =0x05000003
+    swi 0x0B0000
+    @ CpuFastSet: a count of 9 copies 16 words
+    ldr r0, =fast_src
+    add r1, r10, #0x20
+    mov r2, #9
+    swi 0x0C0000
+    @ CpuFastSet: a fill of count 1 writes 8 words
+    ldr r0, =fill_word
+    add r1, r10, #0x80
+    ldr r2, =0x01000001
+    swi 0x0C0000
+    @ CpuSet: a count of 0 writes nothing
+    ldr r0, =src16
+    add r1, r10, #0xC0
+    mov r2, #0x04000000
+    swi 0x0B0000
+    @ Div: -7 / 2 and 7 / -2
+    mvn r0, #6
+    mov r1, #2
+    swi 0x090000
+    str r0, [r10, #0xD0]
+    str r1, [r10, #0xD4]
+    str r3, [r10, #0xD8]
+    mov r0, #7
+    mvn r1, #1
+    swi 0x090000
+    str r0, [r10, #0xDC]
+    str r1, [r10, #0xE0]
+    str r3, [r10, #0xE4]
+    @ Sqrt of 1000000, of FFFFFFFFh and of 0
+    ldr r0, =1000000
+    swi 0x0D0000
+    str r0, [r10, #0xF0]
+    mvn r0, #0
+    swi 0x0D0000
+    str r0, [r10, #0xF4]
+    mov r0, #0
+    swi 0x0D0000
+    str r0, [r10, #0xF8]
+    @ GetCRC16 of the eight ASCII digits from FFFFh, and IsDebugger with r0 preset
+    ldr r0, =0xFFFF
+    ldr r1, =digits
+    mov r2, #8
+    swi 0x0E0000
+    str r0, [r10, #0x100]
+    mov r0, #0x55
+    swi 0x0F0000
+    str r0, [r10, #0x104]
+    @ LZ77: the same stream decoded with byte writes and with halfword writes
+    ldr r0, =lz_stream
+    add r1, r10, #0x110
+    swi 0x110000
+    ldr r0, =lz_stream
+    add r1, r10, #0x130
+    swi 0x120000
+    @ VRAM bank A as LCDC at 0x06800000 (VRAMCNT_A = 80h): the byte-write form loses its writes,
+    @ the halfword form lands
+    mov r0, #0x80
+    strb r0, [r9, #0x240]
+    ldr r11, =0x06800000
+    ldr r0, =lz_stream
+    mov r1, r11
+    swi 0x110000
+    ldr r3, [r11]
+    str r3, [r10, #0x150]
+    ldr r0, =lz_stream
+    add r1, r11, #0x10
+    swi 0x120000
+    ldr r3, [r11, #0x10]
+    str r3, [r10, #0x160]
+    ldr r3, [r11, #0x14]
+    str r3, [r10, #0x164]
+    ldr r3, [r11, #0x18]
+    str r3, [r10, #0x168]
+
     mov r0, #1
     str r0, [r8, #120]
     ldr r0, =0x600DF00D
@@ -169,6 +275,19 @@ done:
     @ The user handler: called by the BIOS dispatcher in IRQ mode. It records what it sees,
     @ acknowledges VBlank in IF, counts, clobbers the registers the dispatcher saved and returns
     @ with BX LR.
+    .ltorg
+    .balign 4
+src16:
+    .word 0x22221111, 0x44443333
+fill_word:
+    .word 0xDEADBEEF
+fast_src:
+    .word 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+digits:
+    .ascii "12345678"
+lz_stream:
+    .word 0x00000A10, 0x50424120, 0x00000001
+
 handler:
     ldr r1, =REC
     str r0, [r1, #28]

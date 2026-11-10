@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The event queue and the round order. Expected values come from `docs/hw/scheduler.md`:
 //! "Events" (order is (timestamp, sequence), the counter only goes up), "Interleaving" (target
-//! is the smaller of the next event and now + SLICE, `now` when an event is already due; ARM9,
-//! then ARM7, then events), "Debugger single-step" and "Savestate checks", plus its "Edge
-//! cases".
+//! is the smaller of the next event and now + SLICE, `now` when an event is already due; the ARM9
+//! stops early at an event it queues before the target, and the ARM7 and the dispatch then use
+//! that stop; ARM9, then ARM7, then events), "Debugger single-step" and "Savestate checks", plus
+//! its "Edge cases".
 
 use super::*;
 
@@ -545,6 +546,49 @@ fn given_a_handler_scheduling_a_due_event_when_running_two_rounds_then_each_roun
         .filter(|step| matches!(step, Step::Dispatch(..)))
         .count();
     assert_eq!(dispatched, 2);
+}
+
+/// Participants whose ARM9 queues an event at `queued_at` while it runs and stops there, as the
+/// real ARM9 does when it must not run past an event it queued.
+struct Arm9Queues {
+    inner: Recorder,
+    queued_at: u64,
+}
+
+impl Participants for Arm9Queues {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        self.inner.scheduler()
+    }
+    fn run_arm9_until(&mut self, target: u64) {
+        self.inner.log.push(Step::Arm9(target));
+        self.inner
+            .scheduler
+            .schedule(self.queued_at, EventKind::LineStart);
+        self.inner.scheduler.now = self.queued_at;
+    }
+    fn run_arm7_until(&mut self, target: u64) {
+        self.inner.run_arm7_until(target);
+    }
+    fn dispatch(&mut self, event: Event) {
+        self.inner.dispatch(event);
+    }
+}
+
+#[test]
+fn given_the_arm9_queues_an_event_before_the_target_when_running_a_round_then_arm7_and_dispatch_use_the_stop()
+ {
+    // `scheduler.md`, "Interleaving": the ARM9 stops at the event it queued (20), so the ARM7
+    // runs to 20 and the event fires at 20, not at the old target (now + SLICE).
+    let mut participants = Arm9Queues {
+        inner: Recorder::at(0),
+        queued_at: 20,
+    };
+    let seq = participants.inner.scheduler.next_seq;
+    run_round(&mut participants);
+    assert_eq!(
+        participants.inner.log,
+        vec![Step::Arm9(SLICE), Step::Arm7(20), Step::Dispatch(20, seq)]
+    );
 }
 
 // ------------------------------------------------------------------- settle

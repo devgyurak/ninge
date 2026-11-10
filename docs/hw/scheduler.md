@@ -87,15 +87,26 @@ One round works like this:
 
 1. `target` = the smaller of the next event's time and `now + SLICE`, where SLICE is 64 master
    cycles. If an event is already due (its time is not after `now`), `target` is `now`.
-2. The ARM9 runs until its clock reaches `target`.
-3. The ARM7 runs until its clock reaches `target`. An ARM7 instruction that starts before
-   `target` finishes even if it ends one master cycle past it; the ARM7 simply starts the next
+2. The ARM9 runs until its clock reaches `target` or the earliest queued event, whichever is
+   earlier, checked before every instruction. That includes an event the ARM9 itself queues
+   during the round: it stops at the first instruction boundary at or after that event's time.
+   Call the clock where it stopped `stop`; it is the ARM9's actual clock, so it stays right when
+   an instruction costs more than one master cycle.
+3. The ARM7 runs until its clock reaches `stop`. An ARM7 instruction that starts before
+   `stop` finishes even if it ends one master cycle past it; the ARM7 simply starts the next
    round that much ahead.
-4. Every event due at `target` is dispatched, in (timestamp, sequence) order.
+4. Every event due at `stop` is dispatched, in (timestamp, sequence) order. An event a handler
+   queues waits for the next round.
 
 **Tie order is explicit: ARM9, then ARM7, then events.** An event at time T therefore sees
 the effects of every instruction either CPU ran before T, and no instruction that starts at or
 after T.
+
+**The exception is the ARM7.** The ARM9 runs ahead to `stop` before the ARM7 starts, so an event
+the ARM7 queues is floored at `now`, which is already `stop` (`timers.md`, "Model"). A timer
+whose computed overflow lies before `now` therefore fires at the end of the round instead of
+at its time. That lag is a known, bounded approximation (under one slice) and is not changed by
+the early ARM9 stop; an overflow that lies after `now` is queued at its time and fires on time.
 
 SLICE bounds how far one CPU runs ahead of the other. It is a trade-off between interleaving
 fidelity and per-round overhead, not a hardware fact.
@@ -156,6 +167,10 @@ A saved machine is refused on load when:
 - **SLICE = 64 master cycles** is a model choice. — `crates/core/src/scheduler/mod.rs`
   (`SLICE`) — not a hardware quantity; revisit when a test ROM depends on how closely the two
   CPUs interleave (shared-memory races, IPC).
+- **An ARM7 event is floored at the ARM9's clock.** The ARM9 reaches `stop` before the ARM7
+  runs, so an ARM7 event computed behind it is raised to `now` and fires up to one slice late
+  (`timers.md`, "Model"). A model choice, not a hardware quantity. — `crates/core/src/bus/view.rs`
+  (`at`) — revisit with the ARM7 own-timer lag when a test ROM depends on it.
 - **ARM7 WRAM mirroring**: the 64 KiB block is modeled as repeating through
   `0380_0000h`-`03FF_FFFFh`, GBATEK's general mirroring rule. Anything else on the ARM7 bus is
   open bus and reads 0. The shared WRAM window now sits in front of it (`wramcnt.md`). — `crates/core/src/bus/memory.rs`

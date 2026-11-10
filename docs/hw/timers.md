@@ -124,9 +124,12 @@ hardware behavior.
   overflow of its timer already due, at most `SLICE`, so the queue always moves forward. A saved
   state is refused unless each timer's event is at the later of its overflow time and `now`, and
   that overflow time is at most one slice behind `now`.
-- **A write in that gap settles first.** An event fires at the end of a round, so a register
-  write can land after an overflow's time but before its event. Any write to a timer register
-  first processes the overflows already due at the write's time, with the settings they
+- **A write in that gap settles first.** The ARM9 stops at a queued event, so for its own timers
+  an event fires at the first instruction boundary at or after its time (`scheduler.md`,
+  "Interleaving"). The gap arises only for an ARM7 timer whose computed overflow lies before the
+  master clock: its event is raised to the master clock and fires at the end of a round, so a
+  register write can land after an overflow's time but before its event. Any write to a timer
+  register first processes the overflows already due at the write's time, with the settings they
   happened under: their IF bits are raised and a count-up timer behind them ticks. A reload or
   control change then applies to what follows. The gap is under one slice, so at most `SLICE / 2`
   overflows are settled this way. A read in the gap computes a clock-driven counter from time and is

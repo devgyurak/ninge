@@ -925,3 +925,10 @@ mod properties {
         }
     }
 }
+
+#[test]
+fn given_an_event_for_a_slot_past_the_last_timer_when_it_fires_then_no_slot_is_rescheduled() {
+    let mut timers = Arm9Timers::new();
+    let fired = timers.slot_fire(200, 0);
+    assert_eq!(fired.effect, Effect::default());
+}

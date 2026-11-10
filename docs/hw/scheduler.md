@@ -72,9 +72,10 @@ Events due at the target fire in order, but only those queued when the dispatch 
 event a handler schedules waits for the next round. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Three kinds exist so far, `LineStart` (every 4,260 master cycles), `HBlankStart` (once per
-line, 3,212 master cycles after it; see `display-timing.md`) and `TimerOverflow` (one per
-started, clock-driven timer of either CPU, so at most eight; see `timers.md`). A pending event of
+Four kinds exist so far, `LineStart` (every 4,260 master cycles), `HBlankStart` (once per
+line, 3,212 master cycles after it; see `display-timing.md`), `TimerOverflow` (one per
+started, clock-driven timer of either CPU, so at most eight; see `timers.md`) and `DmaStart` (one
+per channel whose transfer is waiting to run, at most eight; see `dma.md`). A pending event of
 a kind can be cancelled, which a timer write uses to replace its overflow: the bus view holds the
 scheduler, so the write schedules at once, never before the end of the writing instruction
 (`timers.md`, "Model"). The `LineStart` that begins line 0

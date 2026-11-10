@@ -98,7 +98,8 @@ hardware. The VBlank start (line 192) is a separate event that raises the flag a
 ### Hooks for later features
 
 The start of VBlank and the start of HBlank are where VBlank-start and HBlank-start DMA
-(#26) and the IntrWait SWIs (#27) will attach. Each is handled in one place in the machine.
+(`dma.md`, "Starting") and the IntrWait SWIs (#27) attach. Each is handled in one place in the
+machine.
 
 ## Edge cases
 

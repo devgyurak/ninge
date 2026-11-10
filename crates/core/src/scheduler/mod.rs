@@ -27,9 +27,9 @@ pub const ARM9_INSTRUCTION_COST: u64 = 1;
 /// Master cycles one ARM7 instruction costs (`scheduler.md`, "Cost per instruction").
 // TODO(hw-unverified): ignores waitstates and multi-cycle instructions (`scheduler.md`, "Unverified").
 pub const ARM7_INSTRUCTION_COST: u64 = 2;
-/// Events the queue holds without growing: a line start, an HBlank start and eight timers.
-/// Reserved up front so scheduling on the hot path does not allocate.
-const EVENT_CAPACITY: usize = 16;
+/// Events the queue holds without growing: a line start, an HBlank start, eight timers and eight
+/// DMA starts. Reserved up front so scheduling on the hot path does not allocate.
+const EVENT_CAPACITY: usize = 24;
 
 /// The latest time the clock or an event may hold, about 2,180 years of emulated time. A
 /// savestate beyond it is refused, so line starts never reach the saturation point of `u64`.
@@ -50,6 +50,14 @@ pub enum EventKind {
         arm9: bool,
         /// Which timer, 0-3.
         index: u8,
+    },
+    /// A DMA channel's transfer starts: the data moves and the channel repeats or ends
+    /// (`dma.md`, "Model"). The two CPUs have four channels each.
+    DmaStart {
+        /// Whether it is the ARM9's channel; the ARM7's otherwise.
+        arm9: bool,
+        /// Which channel, 0-3.
+        channel: u8,
     },
 }
 
@@ -123,7 +131,7 @@ impl Scheduler {
         }
     }
 
-    /// Removes every pending event of `kind`. The queue holds at most 16 events, so the scan is
+    /// Removes every pending event of `kind`. The queue holds at most 24 events, so the scan is
     /// cheap and allocates nothing.
     pub(crate) fn cancel(&mut self, kind: EventKind) {
         self.queue.0.retain(|Reverse(event)| event.kind != kind);

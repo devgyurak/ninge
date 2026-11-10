@@ -16,8 +16,8 @@ use crate::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_172;
-const PINNED_HASH: u64 = 0x5fc9af6061107700;
+const PINNED_LEN: usize = 4_473_236;
+const PINNED_HASH: u64 = 0xdf815eda4ec3325b;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -28,8 +28,10 @@ const PINNED_HASH: u64 = 0x5fc9af6061107700;
 /// (4 timers of 4 one-byte fields and a one-byte dirty mask, twice), so both lengths grew by 34.
 /// Version 9 (#109) split the devices out of the memory block without moving a byte and dropped the dirty mask: one byte per timer set, so both lengths
 /// shrank by 2 and both hashes moved (the version field changed too).
-const PINNED_BOOTED_LEN: usize = 4_473_259;
-const PINNED_BOOTED_HASH: u64 = 0xfc9d22880f12b0b5;
+/// Version 10 (#26) added both CPUs' DMA channels: 7 one-byte fields a channel and four fill
+/// words for each CPU, so both lengths grew by 2 x (4 x 7 + 4) = 64 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 4_473_323;
+const PINNED_BOOTED_HASH: u64 = 0x7fb1a05bd2131e30;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -162,7 +164,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &9u32.to_le_bytes(),
+        &10u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -197,13 +199,13 @@ fn given_a_state_with_a_wrong_magic_when_loaded_then_it_is_refused_as_bad_magic(
 #[test]
 fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &11u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
     assert_eq!(
         result,
         Err(SavestateError::VersionMismatch {
-            found: 10,
-            expected: 9
+            found: 11,
+            expected: 10
         })
     );
 }
@@ -211,12 +213,12 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
 #[test]
 fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &11u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 10 is not version 9")
+        .expect_err("version 11 is not version 10")
         .to_string();
-    assert!(message.contains("version 10") && message.contains("version 9"));
+    assert!(message.contains("version 11") && message.contains("version 10"));
 }
 
 #[test]
@@ -550,7 +552,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_9_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_10_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -558,14 +560,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_9
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 9
+            expected: 10
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_9_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_10_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -573,15 +575,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_9
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 9
+            expected: 10
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_9() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_10() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 9u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 10u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -1195,5 +1197,307 @@ fn given_a_state_with_a_sync_output_above_15_when_loaded_then_it_is_corrupt_and_
     assert_eq!(
         load_with_ipc(crate::ipc::Ipc::with_corrupt_sync_out(0x10)),
         (Err(SavestateError::Corrupt), true)
+    );
+}
+
+// ------------------------------------------------------------------------------------ DMA
+
+/// ARM9 channel 0 copies one word to `0x0230_0000` as soon as it runs: `ENABLE | WORD | 1`.
+const DMA_IMMEDIATE_WORD: u32 = (1 << 31) | (1 << 26) | 1;
+const DMA0SAD: u32 = 0x0400_00B0;
+const DMA0DAD: u32 = 0x0400_00B4;
+const DMA0CNT: u32 = 0x0400_00B8;
+
+fn dma_kind(arm9: bool, channel: u8) -> crate::scheduler::EventKind {
+    crate::scheduler::EventKind::DmaStart { arm9, channel }
+}
+
+/// A booted machine one frame in, with an Immediate start queued on ARM9 channel 0.
+fn with_pending_arm9_dma() -> Machine {
+    let mut machine = booted(&counter_rom(), 1);
+    machine.bus9().write32(DMA0SAD, 0x0220_0000);
+    machine.bus9().write32(DMA0DAD, 0x0230_0000);
+    machine.bus9().write32(DMA0CNT, DMA_IMMEDIATE_WORD);
+    machine
+}
+
+/// The same on ARM7 channel 0, written at the ARM7's own clock.
+fn with_pending_arm7_dma() -> Machine {
+    let mut machine = booted(&counter_rom(), 1);
+    let at = machine.arm7_clock();
+    machine.bus7(at).write32(DMA0SAD, 0x0220_0000);
+    machine.bus7(at).write32(DMA0DAD, 0x0230_0000);
+    machine.bus7(at).write32(DMA0CNT, DMA_IMMEDIATE_WORD);
+    machine
+}
+
+#[test]
+fn given_a_state_with_a_pending_dma_channel_and_its_start_event_when_loaded_then_it_is_accepted() {
+    let saver = with_pending_arm9_dma();
+    assert_eq!(load_onto_fresh(&counter_rom(), &saver).0, Ok(()));
+}
+
+#[test]
+fn given_a_state_with_a_pending_arm9_dma_channel_and_no_start_event_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = with_pending_arm9_dma();
+    saver.scheduler.cancel(dma_kind(true, 0));
+    assert_eq!(
+        load_onto_fresh(&counter_rom(), &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_pending_arm7_dma_channel_and_no_start_event_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = with_pending_arm7_dma();
+    saver.scheduler.cancel(dma_kind(false, 0));
+    assert_eq!(
+        load_onto_fresh(&counter_rom(), &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_dma_start_event_for_a_channel_with_nothing_waiting_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = booted(&counter_rom(), 1);
+    let now = saver.scheduler.now();
+    saver.scheduler.schedule(now, dma_kind(true, 2));
+    assert_eq!(
+        load_onto_fresh(&counter_rom(), &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_an_arm7_dma_start_event_for_a_channel_with_nothing_waiting_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = booted(&counter_rom(), 1);
+    let now = saver.scheduler.now();
+    saver.scheduler.schedule(now, dma_kind(false, 3));
+    assert_eq!(
+        load_onto_fresh(&counter_rom(), &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_two_start_events_for_one_pending_channel_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = with_pending_arm9_dma();
+    let now = saver.scheduler.now();
+    saver.scheduler.schedule(now + 1, dma_kind(true, 0));
+    assert_eq!(
+        load_onto_fresh(&counter_rom(), &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+/// A pending ARM9 channel whose start event sits `ahead` master cycles past `now`.
+fn with_dma_event_ahead(ahead: u64) -> Machine {
+    let mut saver = with_pending_arm9_dma();
+    let now = saver.scheduler.now();
+    saver.scheduler.cancel(dma_kind(true, 0));
+    saver.scheduler.schedule(now + ahead, dma_kind(true, 0));
+    saver
+}
+
+#[test]
+fn given_a_state_with_a_dma_start_event_far_beyond_a_slice_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let saver = with_dma_event_ahead(crate::scheduler::SLICE + 1);
+    assert_eq!(
+        load_onto_fresh(&counter_rom(), &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_dma_start_event_exactly_a_slice_ahead_when_loaded_then_it_is_accepted() {
+    let saver = with_dma_event_ahead(crate::scheduler::SLICE);
+    assert_eq!(load_onto_fresh(&counter_rom(), &saver).0, Ok(()));
+}
+
+/// The part of a channel's saved encoding the tests below rebuild, field for field as `dma.rs`
+/// declares it: postcard is positional, so only the order and the types matter.
+#[derive(serde::Serialize)]
+struct ChannelBytes {
+    source: u32,
+    destination: u32,
+    control: u32,
+    source_now: u32,
+    destination_now: u32,
+    count_now: u32,
+    pending: bool,
+}
+
+#[derive(serde::Serialize)]
+struct DmaBytes {
+    channels: [ChannelBytes; 4],
+    fill: [u32; 4],
+}
+
+const fn idle_channel() -> ChannelBytes {
+    ChannelBytes {
+        source: 0,
+        destination: 0,
+        control: 0,
+        source_now: 0,
+        destination_now: 0,
+        count_now: 0,
+        pending: false,
+    }
+}
+
+/// The saved bytes of `machine` with the one encoding of `real` inside them replaced by that of
+/// `replacement`, or `None` when `real` does not occur exactly once.
+fn bytes_with_replaced<T: serde::Serialize, U: serde::Serialize>(
+    machine: &Machine,
+    real: &T,
+    replacement: &U,
+) -> Option<Vec<u8>> {
+    let needle = postcard::to_allocvec(real).expect("plain data encodes");
+    let bytes = machine.save_state();
+    let hits: Vec<usize> = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle.as_slice())
+        .map(|(at, _)| at)
+        .collect();
+    let at = *hits.first().filter(|_| hits.len() == 1)?;
+    let new = postcard::to_allocvec(replacement).expect("plain data encodes");
+    Some([&bytes[..at], &new, &bytes[at + needle.len()..]].concat())
+}
+
+/// A booted machine whose two DMA sets differ from each other and from power-on, so each one's
+/// encoding is found once: ARM9 channel 0 holds source `0x0220_0000`, ARM7 channel 0 `0x0230_0000`.
+fn with_distinct_dma() -> Machine {
+    let mut machine = booted(&counter_rom(), 1);
+    machine.bus9().write32(DMA0SAD, 0x0220_0000);
+    machine
+        .bus7(machine.arm7_clock())
+        .write32(DMA0SAD, 0x0230_0000);
+    machine
+}
+
+/// The ARM9 encoding with channel 0's registers as given and everything else idle.
+fn arm9_bytes(channel0: ChannelBytes) -> DmaBytes {
+    DmaBytes {
+        channels: [channel0, idle_channel(), idle_channel(), idle_channel()],
+        fill: [0; 4],
+    }
+}
+
+/// Loads `bytes` (a state from `with_distinct_dma`) onto a fresh machine.
+fn load_bytes(bytes: Option<Vec<u8>>) -> Result<(), SavestateError> {
+    booted(&counter_rom(), 0).load_state(&bytes.expect("the DMA block is found once"))
+}
+
+#[test]
+fn given_a_state_whose_dma_block_is_replaced_by_an_equal_encoding_when_loaded_then_it_is_accepted()
+{
+    // Proves the splice finds and rebuilds the right bytes, so the refusals below are about the
+    // one bit each of them breaks.
+    let machine = with_distinct_dma();
+    let same = arm9_bytes(ChannelBytes {
+        source: 0x0220_0000,
+        ..idle_channel()
+    });
+    assert_eq!(
+        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &same)),
+        Ok(())
+    );
+}
+
+#[test]
+fn given_a_state_with_an_arm9_dma_source_bit_that_does_not_exist_when_loaded_then_it_is_corrupt() {
+    // The ARM9's addresses are 28 bits (`dma.md`, "Address masks"): bit 28 cannot be set.
+    let machine = with_distinct_dma();
+    let corrupt = arm9_bytes(ChannelBytes {
+        source: 0x1220_0000,
+        ..idle_channel()
+    });
+    assert_eq!(
+        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &corrupt)),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_with_an_arm9_dma_latched_count_above_the_field_when_loaded_then_it_is_corrupt() {
+    // The ARM9's count is 21 bits, so the latched count is at most 200000h.
+    let machine = with_distinct_dma();
+    let corrupt = arm9_bytes(ChannelBytes {
+        source: 0x0220_0000,
+        count_now: 0x20_0001,
+        ..idle_channel()
+    });
+    assert_eq!(
+        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &corrupt)),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+/// The ARM7 encoding with channel 0's registers and the fill block as given.
+fn arm7_bytes(channel0: ChannelBytes, fill: [u32; 4]) -> DmaBytes {
+    DmaBytes {
+        channels: [channel0, idle_channel(), idle_channel(), idle_channel()],
+        fill,
+    }
+}
+
+#[test]
+fn given_a_state_with_an_arm7_dma_control_bit_that_does_not_exist_when_loaded_then_it_is_corrupt() {
+    // The ARM7's start timing has two bits, from bit 28; bit 27 does not exist (`dma.md`,
+    // "DMAnCNT control bits").
+    let machine = with_distinct_dma();
+    let corrupt = arm7_bytes(
+        ChannelBytes {
+            source: 0x0230_0000,
+            control: 1 << 27,
+            ..idle_channel()
+        },
+        [0; 4],
+    );
+    assert_eq!(
+        load_bytes(bytes_with_replaced(&machine, machine.dma7(), &corrupt)),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_with_an_arm7_dma_fill_register_set_when_loaded_then_it_is_corrupt() {
+    // The ARM7 has no fill registers (`dma.md`, "Registers").
+    let machine = with_distinct_dma();
+    let corrupt = arm7_bytes(
+        ChannelBytes {
+            source: 0x0230_0000,
+            ..idle_channel()
+        },
+        [1, 0, 0, 0],
+    );
+    assert_eq!(
+        load_bytes(bytes_with_replaced(&machine, machine.dma7(), &corrupt)),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_dma_channel_pending_but_disabled_when_loaded_then_it_is_corrupt() {
+    // A waiting start needs enable, which is the busy flag (`dma.md`, "Enabling"). A start event
+    // is queued, so only the channel itself is wrong.
+    let mut machine = with_distinct_dma();
+    let now = machine.scheduler.now();
+    machine.scheduler.schedule(now, dma_kind(true, 0));
+    let corrupt = arm9_bytes(ChannelBytes {
+        source: 0x0220_0000,
+        pending: true,
+        ..idle_channel()
+    });
+    assert_eq!(
+        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &corrupt)),
+        Err(SavestateError::Corrupt)
     );
 }

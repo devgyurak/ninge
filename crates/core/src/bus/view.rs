@@ -75,7 +75,7 @@ fn unpack<const N: usize>(value: u32) -> [u8; N] {
 
 /// The register devices' answer for a read of `N` bytes at `addr`, with no side effect: the
 /// address is decoded once and one device (or `Memory`, for the memory-control block) answers.
-// TODO(phase3): the I/O registers of the other blocks arrive with their phases.
+// TODO(phase3): the I/O registers of the other blocks arrive with their issues.
 fn read_registers<const ARM9: bool, const N: usize>(
     memory: &Memory,
     io: &Io,
@@ -164,7 +164,8 @@ impl<const ARM9: bool> Access<'_, ARM9> {
     // TODO(hw-unverified): an ARM7 event is floored at the master clock, which the ARM9 has
     // already carried to the round's stop (`scheduler.md`, "Unverified").
     // TODO(#115): this assumes every ARM9 access is one fixed-cost instruction; a step that
-    // returns its own cost, or a DMA write (#26), must hand the floor in instead.
+    // returns its own cost must hand the floor in instead. A DMA unit's write takes the same
+    // floor (`dma.md`, "Model"), which only matters for an event it queues.
     fn at(&self) -> At {
         let floor = if ARM9 {
             self.scheduler.now().saturating_add(ARM9_INSTRUCTION_COST)

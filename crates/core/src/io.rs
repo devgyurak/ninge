@@ -176,8 +176,19 @@ pub(crate) fn write_bytes(
     })
 }
 
-/// Who owns an address. Memory-control registers are a port so the map is complete, but their
-/// state stays in `Memory` (#109): the bus view sends that port to `Memory`, not to `Io`.
+/// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..G,
+/// WRAMCNT, WRAMSTAT) stays in `Memory` because the page tables derive from it (#109), every
+/// other register belongs to a device behind a [`Port`]. [`decode`] says which, so no `Io` access
+/// ever sees an address `Memory` owns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Owner {
+    /// `Memory`, at this many bytes past VRAMCNT_A.
+    Memory(u32),
+    /// A device, at this offset into its register space ([`Port::base`] is offset 0).
+    Io(Port, u32),
+}
+
+/// Which device holds a register. [`Port::base`] is where its register space starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Port {
     /// DISPCNT of engine A and POWCNT1 (two table entries, one device).
@@ -197,8 +208,6 @@ pub(crate) enum Port {
     /// The ARM9's DMA fill registers: their own entry, because they live in a different block,
     /// but the same device as [`Port::Dma`].
     DmaFill,
-    /// VRAMCNT_A..G, WRAMCNT (ARM9) and WRAMSTAT (ARM7): owned by `Memory`.
-    MemoryControl,
 }
 
 impl Port {
@@ -213,7 +222,6 @@ impl Port {
             Self::Ipc | Self::IpcRecv => IPCSYNC_ADDR,
             Self::Timers => TM0CNT_L_ADDR,
             Self::Dma | Self::DmaFill => DMA0SAD_ADDR,
-            Self::MemoryControl => VRAMCNT_A_ADDR,
         }
     }
 }
@@ -231,7 +239,7 @@ macro_rules! borrow {
 /// The one place a [`Port`] meets its device for one CPU: calls `Device::<cpu>::$method` on the
 /// field `$io` keeps for `$port`, borrowing it as `$b` says (`ref` or `mut`), and evaluates to
 /// the call's result. `$arm9` is the const generic naming the CPU that asks. A port the CPU's
-/// `Io` does not own (the memory-control block, or engine A seen from the ARM7) is a bug in the
+/// `Io` does not own (engine A seen from the ARM7) is a bug in the
 /// caller: it asserts in a debug build and evaluates to `$absent`.
 ///
 /// A macro and not a function because each arm calls a different concrete device type. It is
@@ -253,7 +261,7 @@ macro_rules! device_call {
                 Device::<true>::$method(borrow!($b $io.dma9) $(, $arg)*)
             }
             Port::Dma | Port::DmaFill => Device::<false>::$method(borrow!($b $io.dma7) $(, $arg)*),
-            Port::Gpu2d | Port::MemoryControl => {
+            Port::Gpu2d => {
                 debug_assert!(false, "port not reachable through Io");
                 $absent
             }
@@ -261,8 +269,9 @@ macro_rules! device_call {
     };
 }
 
-/// One entry of the address map: the first address, the length in bytes, and the owner.
-pub(crate) type PortEntry = (u32, u32, Port);
+/// One entry of the address map: the first address, the length in bytes, and the device that owns
+/// it, or `None` for the memory-control block that `Memory` owns.
+pub(crate) type PortEntry = (u32, u32, Option<Port>);
 
 /// What the ARM9 sees, in ascending address order. Every entry is a 4-byte-aligned block whose
 /// length is a multiple of 4, so one aligned access never spans two entries. Holes inside an
@@ -270,44 +279,46 @@ pub(crate) type PortEntry = (u32, u32, Port);
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
 pub(crate) const ARM9_PORTS: [PortEntry; 10] = [
-    (DISPCNT_A_ADDR, 4, Port::Gpu2d),
-    (DISPSTAT_ADDR, 4, Port::Timing),
+    (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
+    (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // DMA0SAD..DMA3CNT, twelve bytes a channel, then the fill registers.
-    (DMA0SAD_ADDR, CHANNELS_BYTES, Port::Dma),
-    (DMA0FILL_ADDR, FILL_BYTES, Port::DmaFill),
-    (TM0CNT_L_ADDR, 16, Port::Timers),
+    (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
+    (DMA0FILL_ADDR, FILL_BYTES, Some(Port::DmaFill)),
+    (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
     // IPCSYNC, IPCFIFOCNT and IPCFIFOSEND, 4 bytes each.
-    (IPCSYNC_ADDR, 12, Port::Ipc),
+    (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
     // IME, a hole, IE and IF.
-    (IME_ADDR, 16, Port::Irq),
+    (IME_ADDR, 16, Some(Port::Irq)),
     // VRAMCNT_A..D and VRAMCNT_E, F, G and WRAMCNT.
-    (VRAMCNT_A_ADDR, 8, Port::MemoryControl),
-    (POWCNT1_ADDR, 4, Port::Gpu2d),
-    (IPCFIFORECV_ADDR, 4, Port::IpcRecv),
+    (VRAMCNT_A_ADDR, 8, None),
+    (POWCNT1_ADDR, 4, Some(Port::Gpu2d)),
+    (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
 ];
 
 /// What the ARM7 sees: the same blocks, without engine A, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
 pub(crate) const ARM7_PORTS: [PortEntry; 7] = [
-    (DISPSTAT_ADDR, 4, Port::Timing),
-    (DMA0SAD_ADDR, CHANNELS_BYTES, Port::Dma),
-    (TM0CNT_L_ADDR, 16, Port::Timers),
-    (IPCSYNC_ADDR, 12, Port::Ipc),
-    (IME_ADDR, 16, Port::Irq),
+    (DISPSTAT_ADDR, 4, Some(Port::Timing)),
+    (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
+    (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
+    (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
+    (IME_ADDR, 16, Some(Port::Irq)),
     // WRAMSTAT sits in the second byte.
-    (VRAMCNT_A_ADDR, 4, Port::MemoryControl),
-    (IPCFIFORECV_ADDR, 4, Port::IpcRecv),
+    (VRAMCNT_A_ADDR, 4, None),
+    (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
 ];
 
-/// The port that owns `addr` for CPU `ARM9` and the offset of `addr` in that device's register
-/// space, or `None` when no device holds it (it reads 0 and ignores writes).
+/// The owner of `addr` for CPU `ARM9` and its offset there, or `None` when nothing holds it (it reads 0 and ignores writes).
 // TODO(hw-unverified): an undefined I/O port reads 0 (GBATEK says so); unmapped memory is
 // "undefined" there and reads 0 here (`arm9-memory-map.md`, "Unverified").
-pub(crate) fn decode<const ARM9: bool>(addr: u32) -> Option<(Port, u32)> {
+pub(crate) fn decode<const ARM9: bool>(addr: u32) -> Option<Owner> {
     let ports: &[PortEntry] = if ARM9 { &ARM9_PORTS } else { &ARM7_PORTS };
     ports.iter().find_map(|&(start, len, port)| {
         let within = addr.checked_sub(start).filter(|&d| d < len)?;
-        Some((port, start.wrapping_sub(port.base()).wrapping_add(within)))
+        Some(match port {
+            Some(port) => Owner::Io(port, start.wrapping_sub(port.base()).wrapping_add(within)),
+            None => Owner::Memory(start.wrapping_sub(VRAMCNT_A_ADDR).wrapping_add(within)),
+        })
     })
 }
 
@@ -647,7 +658,10 @@ mod tests {
         table
             .iter()
             .filter(|&&(start, len, port)| {
-                start % 4 != 0 || len % 4 != 0 || len == 0 || start < port.base()
+                start % 4 != 0
+                    || len % 4 != 0
+                    || len == 0
+                    || start < port.map_or(VRAMCNT_A_ADDR, Port::base)
             })
             .map(|&(start, len, _)| (start, len))
             .collect()
@@ -667,8 +681,8 @@ mod tests {
 
     /// The cases where `decode` answers something other than `expected`, as (address, got).
     fn decode_failures<const ARM9: bool>(
-        expected: &[(u32, Option<(Port, u32)>)],
-    ) -> Vec<(u32, Option<(Port, u32)>)> {
+        expected: &[(u32, Option<Owner>)],
+    ) -> Vec<(u32, Option<Owner>)> {
         expected
             .iter()
             .filter(|&&(addr, want)| decode::<ARM9>(addr) != want)
@@ -679,35 +693,35 @@ mod tests {
     #[test]
     fn given_each_arm9_register_address_when_decoded_then_the_expected_port_and_offset_answer() {
         let expected = [
-            (DISPCNT_A_ADDR, Some((Port::Gpu2d, 0))),
-            (DISPCNT_A_ADDR + 3, Some((Port::Gpu2d, 3))),
+            (DISPCNT_A_ADDR, Some(Owner::Io(Port::Gpu2d, 0))),
+            (DISPCNT_A_ADDR + 3, Some(Owner::Io(Port::Gpu2d, 3))),
             (
                 POWCNT1_ADDR,
-                Some((Port::Gpu2d, POWCNT1_ADDR - DISPCNT_A_ADDR)),
+                Some(Owner::Io(Port::Gpu2d, POWCNT1_ADDR - DISPCNT_A_ADDR)),
             ),
-            (DISPSTAT_ADDR, Some((Port::Timing, 0))),
-            (VCOUNT_ADDR, Some((Port::Timing, 2))),
-            (TM0CNT_L_ADDR, Some((Port::Timers, 0))),
-            (TM0CNT_L_ADDR + 15, Some((Port::Timers, 15))),
+            (DISPSTAT_ADDR, Some(Owner::Io(Port::Timing, 0))),
+            (VCOUNT_ADDR, Some(Owner::Io(Port::Timing, 2))),
+            (TM0CNT_L_ADDR, Some(Owner::Io(Port::Timers, 0))),
+            (TM0CNT_L_ADDR + 15, Some(Owner::Io(Port::Timers, 15))),
             // DMA0SAD..DMA3CNT, 12 bytes a channel, then DMA0FILL..DMA3FILL (`dma.md`).
-            (DMA0SAD_ADDR, Some((Port::Dma, 0))),
-            (0x0400_00B8, Some((Port::Dma, 8))),
-            (0x0400_00DF, Some((Port::Dma, 0x2F))),
-            (DMA0FILL_ADDR, Some((Port::DmaFill, 0x30))),
-            (0x0400_00EF, Some((Port::DmaFill, 0x3F))),
-            (IPCSYNC_ADDR, Some((Port::Ipc, 0))),
-            (IPCFIFOCNT_ADDR, Some((Port::Ipc, 4))),
-            (IPCFIFOSEND_ADDR, Some((Port::Ipc, 8))),
+            (DMA0SAD_ADDR, Some(Owner::Io(Port::Dma, 0))),
+            (0x0400_00B8, Some(Owner::Io(Port::Dma, 8))),
+            (0x0400_00DF, Some(Owner::Io(Port::Dma, 0x2F))),
+            (DMA0FILL_ADDR, Some(Owner::Io(Port::DmaFill, 0x30))),
+            (0x0400_00EF, Some(Owner::Io(Port::DmaFill, 0x3F))),
+            (IPCSYNC_ADDR, Some(Owner::Io(Port::Ipc, 0))),
+            (IPCFIFOCNT_ADDR, Some(Owner::Io(Port::Ipc, 4))),
+            (IPCFIFOSEND_ADDR, Some(Owner::Io(Port::Ipc, 8))),
             (
                 IPCFIFORECV_ADDR,
-                Some((Port::IpcRecv, IPCFIFORECV_ADDR - IPCSYNC_ADDR)),
+                Some(Owner::Io(Port::IpcRecv, IPCFIFORECV_ADDR - IPCSYNC_ADDR)),
             ),
-            (IME_ADDR, Some((Port::Irq, 0))),
-            (IE_ADDR, Some((Port::Irq, 8))),
-            (IF_ADDR, Some((Port::Irq, 12))),
-            (VRAMCNT_A_ADDR, Some((Port::MemoryControl, 0))),
-            (VRAMCNT_G, Some((Port::MemoryControl, 6))),
-            (WRAMCNT, Some((Port::MemoryControl, 7))),
+            (IME_ADDR, Some(Owner::Io(Port::Irq, 0))),
+            (IE_ADDR, Some(Owner::Io(Port::Irq, 8))),
+            (IF_ADDR, Some(Owner::Io(Port::Irq, 12))),
+            (VRAMCNT_A_ADDR, Some(Owner::Memory(0))),
+            (VRAMCNT_G, Some(Owner::Memory(6))),
+            (WRAMCNT, Some(Owner::Memory(7))),
         ];
         assert_eq!(decode_failures::<true>(&expected), vec![]);
     }
@@ -715,21 +729,21 @@ mod tests {
     #[test]
     fn given_each_arm7_register_address_when_decoded_then_the_expected_port_and_offset_answer() {
         let expected = [
-            (DISPSTAT_ADDR, Some((Port::Timing, 0))),
-            (VCOUNT_ADDR, Some((Port::Timing, 2))),
-            (TM0CNT_L_ADDR + 4, Some((Port::Timers, 4))),
+            (DISPSTAT_ADDR, Some(Owner::Io(Port::Timing, 0))),
+            (VCOUNT_ADDR, Some(Owner::Io(Port::Timing, 2))),
+            (TM0CNT_L_ADDR + 4, Some(Owner::Io(Port::Timers, 4))),
             // The ARM7 has the DMA channels but no fill registers (`dma.md`, "Registers").
-            (DMA0SAD_ADDR, Some((Port::Dma, 0))),
-            (0x0400_00DF, Some((Port::Dma, 0x2F))),
-            (IPCSYNC_ADDR, Some((Port::Ipc, 0))),
-            (IPCFIFOSEND_ADDR, Some((Port::Ipc, 8))),
+            (DMA0SAD_ADDR, Some(Owner::Io(Port::Dma, 0))),
+            (0x0400_00DF, Some(Owner::Io(Port::Dma, 0x2F))),
+            (IPCSYNC_ADDR, Some(Owner::Io(Port::Ipc, 0))),
+            (IPCFIFOSEND_ADDR, Some(Owner::Io(Port::Ipc, 8))),
             (
                 IPCFIFORECV_ADDR,
-                Some((Port::IpcRecv, IPCFIFORECV_ADDR - IPCSYNC_ADDR)),
+                Some(Owner::Io(Port::IpcRecv, IPCFIFORECV_ADDR - IPCSYNC_ADDR)),
             ),
-            (IME_ADDR, Some((Port::Irq, 0))),
-            (IF_ADDR, Some((Port::Irq, 12))),
-            (WRAMSTAT, Some((Port::MemoryControl, 1))),
+            (IME_ADDR, Some(Owner::Io(Port::Irq, 0))),
+            (IF_ADDR, Some(Owner::Io(Port::Irq, 12))),
+            (WRAMSTAT, Some(Owner::Memory(1))),
         ];
         assert_eq!(decode_failures::<false>(&expected), vec![]);
     }
@@ -781,19 +795,20 @@ mod tests {
     fn given_every_byte_of_ime_ie_and_if_when_decoded_then_the_irq_port_owns_it() {
         let unowned: Vec<u32> = (0..4)
             .flat_map(|i| [IME_ADDR + i, IE_ADDR + i, IF_ADDR + i])
-            .filter(|&addr| decode::<true>(addr).map(|(port, _)| port) != Some(Port::Irq))
+            .filter(|&addr| !matches!(decode::<true>(addr), Some(Owner::Io(Port::Irq, _))))
             .collect();
         assert_eq!(unowned, Vec::<u32>::new());
     }
 
     #[test]
-    fn given_a_word_at_the_second_memory_control_block_when_decoded_then_one_port_owns_all_four_bytes()
+    fn given_a_word_at_the_second_memory_control_block_when_decoded_then_memory_owns_all_four_bytes()
      {
         // VRAMCNT_E/F/G and WRAMCNT share one aligned word, so one access never splits.
-        let ports: Vec<Option<Port>> = (0..4)
-            .map(|i| decode::<true>(0x0400_0244 + i).map(|(port, _)| port))
-            .collect();
-        assert_eq!(ports, vec![Some(Port::MemoryControl); 4]);
+        let owners: Vec<Option<Owner>> = (0..4).map(|i| decode::<true>(0x0400_0244 + i)).collect();
+        assert_eq!(
+            owners,
+            (4..8).map(|i| Some(Owner::Memory(i))).collect::<Vec<_>>()
+        );
     }
 
     #[test]

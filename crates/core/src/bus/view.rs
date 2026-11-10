@@ -5,7 +5,7 @@
 
 use super::Memory;
 use crate::cpu::{Bus, Cp15, Tcm};
-use crate::io::{At, Io, Port, Width, decode};
+use crate::io::{At, Io, Owner, Width, decode};
 use crate::scheduler::{ARM9_INSTRUCTION_COST, Scheduler};
 
 /// Both TCM regions as CP15 resolves them (`docs/hw/cp15.md`).
@@ -73,21 +73,35 @@ fn unpack<const N: usize>(value: u32) -> [u8; N] {
     std::array::from_fn(|i| value.wrapping_shr(8 * i as u32) as u8)
 }
 
-/// The register devices' answer for a read of `N` bytes at `addr`, with no side effect: the
-/// address is decoded once and one device (or `Memory`, for the memory-control block) answers.
+/// What `owner` answers for a read of `width`, with no side effect: `Memory` for the
+/// memory-control block, a device for any other register, 0 where nothing holds the address.
+/// The one place an [`Owner`] is routed for a read; a data read that has a side effect
+/// ([`Access::read_registers`]) handles its devices itself and sends the rest here.
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
+fn peek_owner<const ARM9: bool>(
+    memory: &Memory,
+    io: &Io,
+    now: u64,
+    owner: Option<Owner>,
+    width: Width,
+) -> u32 {
+    match owner {
+        Some(Owner::Memory(offset)) => memory.read_control::<ARM9>(offset, width),
+        Some(Owner::Io(port, offset)) => io.peek::<ARM9>(port, offset, width, now),
+        None => 0,
+    }
+}
+
+/// The register devices' answer for a read of `N` bytes at `addr`, with no side effect: the
+/// address is decoded once and one owner answers.
 fn read_registers<const ARM9: bool, const N: usize>(
     memory: &Memory,
     io: &Io,
     now: u64,
     addr: u32,
 ) -> [u8; N] {
-    let width = Width::of::<N>();
-    unpack(match decode::<ARM9>(addr) {
-        Some((Port::MemoryControl, offset)) => memory.read_control::<ARM9>(offset, width),
-        Some((port, offset)) => io.peek::<ARM9>(port, offset, width, now),
-        None => 0,
-    })
+    let owner = decode::<ARM9>(addr);
+    unpack(peek_owner::<ARM9>(memory, io, now, owner, Width::of::<N>()))
 }
 
 /// One CPU's access to the bus for a step: the logic both views share, generic over which CPU.
@@ -128,13 +142,12 @@ impl<const ARM9: bool> Access<'_, ARM9> {
     fn read_registers<const N: usize>(&mut self, addr: u32) -> [u8; N] {
         let width = Width::of::<N>();
         unpack(match decode::<ARM9>(addr) {
-            Some((Port::MemoryControl, offset)) => self.memory.read_control::<ARM9>(offset, width),
-            Some((port, offset)) => {
+            Some(Owner::Io(port, offset)) => {
                 let at = self.at();
                 self.io
                     .read::<ARM9>(self.scheduler, at, port, offset, width)
             }
-            None => 0,
+            owner => peek_owner::<ARM9>(self.memory, self.io, self.now, owner, width),
         })
     }
 
@@ -145,10 +158,10 @@ impl<const ARM9: bool> Access<'_, ARM9> {
         let width = Width::of::<N>();
         let value = pack(bytes);
         match decode::<ARM9>(addr) {
-            Some((Port::MemoryControl, offset)) => {
+            Some(Owner::Memory(offset)) => {
                 self.memory.write_control::<ARM9>(offset, width, value);
             }
-            Some((port, offset)) => {
+            Some(Owner::Io(port, offset)) => {
                 let at = self.at();
                 self.io
                     .write::<ARM9>(self.scheduler, at, port, offset, width, value);

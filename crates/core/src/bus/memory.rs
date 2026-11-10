@@ -482,7 +482,7 @@ impl Memory {
 
     /// What CPU `ARM9` reads from the memory-control block at `offset` bytes past VRAMCNT_A:
     /// WRAMCNT for the ARM9, WRAMSTAT for the ARM7. VRAMCNT_A is write-only and reads 0. This is
-    /// the `MemoryControl` port of the I/O map, kept here because the page tables derive from
+    /// the memory-control block of the I/O map (`Owner::Memory`), kept here because the page tables derive from
     /// these registers (#109); it has no side effect, so a peek and a read are the same.
     // WRAMCNT is documented R/W in one place and write-only in another; it reads back.
     // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").

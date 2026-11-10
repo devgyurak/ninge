@@ -263,6 +263,8 @@ impl<const ARM9: bool> Dma<ARM9> {
     /// Marks every enabled channel that waits for `trigger` and has no start queued yet, and
     /// returns their slot mask. The machine schedules them in ascending channel order, so equal
     /// times fire 0 to 3 (`dma.md`, "Starting").
+    // TODO(hw-unverified): channels that start together go in ascending order (`dma.md`,
+    // "Unverified").
     pub(crate) fn trigger(&mut self, trigger: Trigger) -> u8 {
         self.channels
             .iter_mut()
@@ -315,7 +317,11 @@ impl<const ARM9: bool> Dma<ARM9> {
         let Some(channel) = self.channels.get_mut(index) else {
             return Effect::default();
         };
+        // TODO(hw-unverified): the live control register decides the repeat and the IRQ, so a
+        // write to the channel's own registers mid-transfer, or an enable cleared then, changes
+        // the outcome (`dma.md`, "Unverified").
         let control = channel.control;
+        // TODO(hw-unverified): repeat is ignored for an Immediate start (`dma.md`, "Unverified").
         let repeats = control & CONTROL_REPEAT != 0
             && control & CONTROL_ENABLE != 0
             && Self::start_of(control) != Start::Immediate;
@@ -363,6 +369,8 @@ impl<const ARM9: bool> Dma<ARM9> {
         let Some((index, register, shift)) = Self::register_at(offset) else {
             return 0;
         };
+        // TODO(hw-unverified): the address registers read back what was written, masked
+        // (`dma.md`, "Unverified").
         let value = match register {
             Register::Source => self.source(index),
             Register::Destination => self.destination(index),

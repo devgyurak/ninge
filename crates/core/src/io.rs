@@ -558,6 +558,7 @@ impl Io {
     /// `trigger` happened at master time `time`: every channel of both CPUs that waits for it is
     /// queued to start, the ARM9's first, each in channel order. The event is never before the
     /// master clock (`scheduler.md`, "Savestate checks").
+    // TODO(hw-unverified): the ARM9's channels go before the ARM7's (`dma.md`, "Unverified").
     pub(crate) fn trigger_dma(&mut self, scheduler: &mut Scheduler, trigger: Trigger, time: u64) {
         let floor = time.max(scheduler.now());
         let arm9 = self.dma9.trigger(trigger);

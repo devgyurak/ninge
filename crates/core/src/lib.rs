@@ -463,7 +463,8 @@ impl Machine {
     /// The transfer is atomic: all units move at the event's master time and neither CPU stalls.
     /// An ARM7 start comes late by what the ARM7 lags the master clock, under one slice.
     // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
-    // by a lower channel (`docs/hw/dma.md`, "Unverified"); revisit with #115.
+    // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
+    // revisit with #115.
     fn run_dma(&mut self, transfer: dma::Transfer) {
         let now = self.scheduler.now();
         let end = if transfer.arm9 {

@@ -125,9 +125,9 @@ the other devices alike), then moves the addresses by the unit's size (2 or 4 by
 - Source control 3 is prohibited. The model treats it as increment (see "Unverified").
 - Addresses are aligned down to the unit's size (halfword or word) before use.
 
-DMA cannot reach the ARM9's tightly-coupled memories: its accesses see the bus as it is with both
-TCM regions switched off, so an address inside a mapped ITCM or DTCM window reads and writes the
-address behind it (`arm9-memory-map.md`, `cp15.md`).
+DMA cannot reach the ARM9's tightly-coupled memories. The model gives its accesses the bus as it
+is with both TCM regions switched off, so an address inside a mapped ITCM or DTCM window reads and
+writes the address behind it (`arm9-memory-map.md`, `cp15.md`); see "Unverified".
 
 ### Fill (ARM9)
 
@@ -153,7 +153,8 @@ When the last unit is written:
   channel's, or the fill registers) goes through the same bus as any access and takes effect as a
   register write would; the transfer works on its latched copies.
 - **A transfer whose destination is an IPC FIFO** sends one word per unit through the same path as
-  a CPU write (`ipc.md`); a full FIFO sets its error bit.
+  a CPU write, so a full FIFO sets its error bit as `ipc.md` ("Behavior") says it does for a
+  write.
 - **Two channels due at once** run one after the other in channel order; each finishes before the
   next starts.
 
@@ -195,8 +196,12 @@ hardware behavior.
 - **Source control 3** acts as increment — `crates/core/src/dma.rs`.
 - **Unused control bits** (ARM7 bit 27, and the ARM7's third start-timing bit) read 0 and are
   dropped on write — `crates/core/src/dma.rs`.
-- **Same-time channel order** (0 to 3) is the model's reading of the priority rule —
-  `crates/core/src/lib.rs`.
+- **Same-time channel order** (0 to 3, the ARM9's before the ARM7's) is the model's reading of
+  the priority rule — `crates/core/src/dma.rs`, `crates/core/src/io.rs`.
+- **What is behind a TCM window.** GBATEK says DMA cannot reach the TCMs; that its access falls
+  through to the address behind the window is the model's choice —
+  `crates/core/src/lib.rs` (`run_dma`) — verify with a test ROM that DMAs from a mapped DTCM
+  address.
 - **Writes to the channel's own registers during its transfer.** The transfer works on its
   latched copies; at its end enable is cleared or kept by the repeat rule above, whatever the
   register held — `crates/core/src/dma.rs`.

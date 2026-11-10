@@ -126,8 +126,9 @@ fn software_interrupt<const ARM9: bool, B: Bus>(
     bus: &mut B,
     record: &mut SwiRecord,
 ) {
-    // The byte at LR - 2 is bits 23-16 of an ARM SWI and bits 7-0 of a Thumb one. A normal load,
-    // as the BIOS's own, so an I/O address would have its side effect (`hle-swi.md`, "Unverified").
+    // TODO(hw-unverified): the byte at LR - 2 is bits 23-16 of an ARM SWI and bits 7-0 of a Thumb
+    // one. A normal load, as the BIOS's own, so an I/O address would have its side effect
+    // (`hle-swi.md`, "Unverified").
     let number = bus.read8(cpu.regs().get(LR).wrapping_sub(2));
     record.last = Some(number);
     swi::run(number, cpu, bus, record);

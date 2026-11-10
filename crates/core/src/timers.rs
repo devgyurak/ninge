@@ -2,10 +2,9 @@
 //! One CPU's four timers (`docs/hw/timers.md`).
 //!
 //! Each CPU owns one set at the same addresses; they never see each other: the "an independent
-//! copy per CPU" class of `AGENTS.md` §4 ("Per-CPU devices"), two instances of
-//! `Timers<const ARM9: bool>`. The counter is not
-//! stepped: a running timer stores the counter it had at an origin time and every read works the
-//! value out from the clock it is given (`timers.md`, "Model"). An overflow is a scheduler event;
+//! copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"), two instances of
+//! `Timers<const ARM9: bool>`. The counter is not stepped: a running timer stores the counter it
+//! had at an origin time and every read works the value out from the clock it is given (`timers.md`, "Model"). An overflow is a scheduler event;
 //! this module has no way to reach the scheduler or an interrupt controller, so a write or an
 //! overflow hands back an [`Outcome`]: the requests it would raise and the mask of timers whose
 //! overflow event must be replaced. `Io` schedules them, asking each timer for its next overflow

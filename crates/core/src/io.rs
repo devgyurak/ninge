@@ -6,7 +6,7 @@
 //! schedule schedules it on the spot.
 //!
 //! Every IF bit a device raises goes through [`Io::request_irq`], the one path to the two
-//! controllers. A device returns what it would raise as an [`Requests`]; it never reaches a
+//! controllers. A device returns what it would raise as a [`Requests`]; it never reaches a
 //! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
 use crate::gpu2d::Gpu2d;

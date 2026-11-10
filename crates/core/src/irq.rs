@@ -2,7 +2,7 @@
 //! One CPU's interrupt controller: IME, IE and IF (`docs/hw/interrupts.md`).
 //!
 //! Each CPU owns one; they sit at the same addresses and never see each other. That is the
-//! "an independent copy per CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two instances of
+//! "an independent copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two instances of
 //! `InterruptController<const ARM9: bool>`.
 
 use serde::{Deserialize, Serialize};

@@ -81,15 +81,15 @@ fn chain(irq: [bool; 4], reloads: [u16; 4]) -> Arm9Timers {
 }
 
 /// IF bits 3 to 6 are the timers' overflows (`timers.md`, "IF bits").
-/// What an ARM9 timer set returns for the IF `mask`: the ARM9 side only (`AGENTS.md` §4).
-fn nine(mask: u32) -> Requests {
-    Requests::for_cpu::<true>(mask)
-}
-
 const IF0: u32 = 1 << 3;
 const IF1: u32 = 1 << 4;
 const IF2: u32 = 1 << 5;
 const IF3: u32 = 1 << 6;
+
+/// What an ARM9 timer set returns for the IF `mask`: the ARM9 side only (`AGENTS.md` §4).
+fn nine(mask: u32) -> Requests {
+    Requests::for_cpu::<true>(mask)
+}
 
 // ------------------------------------------------------------------ overflow time per prescaler
 

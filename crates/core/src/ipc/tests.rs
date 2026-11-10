@@ -36,10 +36,7 @@ fn write_half<const ARM9: bool>(ipc: &mut Ipc, addr: u32, value: u16) -> Request
     let [low, high] = value.to_le_bytes();
     let first = ipc.write_byte::<ARM9>(addr, low);
     let second = ipc.write_byte::<ARM9>(addr + 1, high);
-    Requests {
-        arm9: first.arm9 | second.arm9,
-        arm7: first.arm7 | second.arm7,
-    }
+    first.merge(second)
 }
 
 /// Both CPUs with their FIFOs enabled and nothing else set.

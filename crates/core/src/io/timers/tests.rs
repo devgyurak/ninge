@@ -853,26 +853,26 @@ fn given_the_arm7_timers_when_driven_like_the_arm9_then_they_overflow_at_the_sam
 
 #[test]
 fn given_new_timers_when_checked_then_they_are_well_formed() {
-    assert!(Arm9Timers::new().is_well_formed());
+    assert!(Arm9Timers::new().is_well_formed(0));
 }
 
 #[test]
 fn given_timers_written_when_checked_then_they_are_well_formed() {
-    assert!(chain([true; 4], [0xFFF0; 4]).is_well_formed());
+    assert!(chain([true; 4], [0xFFF0; 4]).is_well_formed(0));
 }
 
 #[test]
 fn given_a_control_with_an_unused_bit_when_checked_then_they_are_not_well_formed() {
     let mut timers = Arm9Timers::new();
     timers.timers[2].control = 0x0008;
-    assert!(!timers.is_well_formed());
+    assert!(!timers.is_well_formed(0));
 }
 
 #[test]
 fn given_a_control_with_a_high_bit_when_checked_then_they_are_not_well_formed() {
     let mut timers = Arm9Timers::new();
     timers.timers[0].control = 0x8000;
-    assert!(!timers.is_well_formed());
+    assert!(!timers.is_well_formed(0));
 }
 
 // ------------------------------------------------------------------------------- properties

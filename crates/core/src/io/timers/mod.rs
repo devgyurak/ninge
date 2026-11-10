@@ -323,12 +323,18 @@ impl<const ARM9: bool> Timers<ARM9> {
         (offset < BLOCK_BYTES).then_some(((offset / 4) as usize, offset % 4 >= 2, (offset % 2) * 8))
     }
 
-    /// Whether the decoded timers hold only bits that exist. A savestate that decodes to
-    /// anything else is corrupt (`savestate`).
-    pub(crate) fn is_well_formed(&self) -> bool {
+    /// Whether the decoded timers hold only bits that exist, and none overflowed more than one
+    /// slice before `now`: that cannot arise, and the run loop would take forever to catch up
+    /// (`scheduler.md`, "Savestate checks"). A savestate that decodes to anything else is corrupt
+    /// (`savestate`).
+    pub(crate) fn is_well_formed(&self, now: u64) -> bool {
         self.timers
             .iter()
             .all(|timer| timer.control & !CONTROL_MASK == 0)
+            && (0..TIMER_COUNT).all(|index| {
+                self.overflow_time(index)
+                    .is_none_or(|due| now.saturating_sub(due) <= SLICE)
+            })
     }
 }
 

@@ -8,6 +8,7 @@ mod arm9;
 mod dma;
 mod ipc;
 mod irq;
+mod rebuild;
 mod scheduler;
 mod timers;
 mod timing;

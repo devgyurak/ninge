@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_473_236;
-const PINNED_HASH: u64 = 0xdf815eda4ec3325b;
+const PINNED_LEN: usize = 4_473_226;
+const PINNED_HASH: u64 = 0xe0745c5d3d8003fc;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -30,8 +30,10 @@ const PINNED_HASH: u64 = 0xdf815eda4ec3325b;
 /// shrank by 2 and both hashes moved (the version field changed too).
 /// Version 10 (#26) added both CPUs' DMA channels: 7 one-byte fields a channel and four fill
 /// words for each CPU, so both lengths grew by 2 x (4 x 7 + 4) = 64 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 4_473_323;
-const PINNED_BOOTED_HASH: u64 = 0x7fb1a05bd2131e30;
+/// Version 11 (#112) no longer saves the event queue, so both lengths shrank (the power-on state by
+/// its two queued events and the sequence counter, the booted one by more) and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 4_473_306;
+const PINNED_BOOTED_HASH: u64 = 0x11bb72c520b9e42;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -164,7 +166,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &10u32.to_le_bytes(),
+        &11u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -199,13 +201,13 @@ fn given_a_state_with_a_wrong_magic_when_loaded_then_it_is_refused_as_bad_magic(
 #[test]
 fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &11u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
     assert_eq!(
         result,
         Err(SavestateError::VersionMismatch {
-            found: 11,
-            expected: 10
+            found: 10,
+            expected: 11
         })
     );
 }
@@ -213,12 +215,12 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
 #[test]
 fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions() {
     let rom = counter_rom();
-    let bytes = patched(&booted(&rom, 0).save_state(), 8, &11u32.to_le_bytes());
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 11 is not version 10")
+        .expect_err("version 10 is not version 11")
         .to_string();
-    assert!(message.contains("version 11") && message.contains("version 10"));
+    assert!(message.contains("version 10") && message.contains("version 11"));
 }
 
 #[test]
@@ -552,7 +554,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_10_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_11_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -560,14 +562,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 10
+            expected: 11
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_10_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_11_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -575,15 +577,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 10
+            expected: 11
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_10() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_11() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 10u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 11u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -598,35 +600,6 @@ fn load_onto_fresh(rom: &[u8], saver: &Machine) -> (Result<(), SavestateError>, 
     let before = target.clone();
     let result = target.load_state(&saver.save_state());
     (result, target == before)
-}
-
-#[test]
-fn given_a_state_whose_sequence_counter_is_not_above_a_queued_seq_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let rom = counter_rom();
-    let mut saver = booted(&rom, 1);
-    let queued = saver.scheduler.pending()[0].seq;
-    saver.scheduler.next_seq = queued;
-    assert_eq!(
-        load_onto_fresh(&rom, &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_with_a_queued_event_before_now_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let rom = counter_rom();
-    let mut saver = booted(&rom, 1);
-    // The queued line events lie just past one frame; move the clock (and the ARM7 with it, so
-    // that only the event rule is broken) one cycle past them.
-    let past = crate::scheduler::FRAME_CYCLES + crate::scheduler::LINE_CYCLES + 1;
-    saver.scheduler.now = past;
-    saver.arm7_clock = past;
-    assert_eq!(
-        load_onto_fresh(&rom, &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
 }
 
 #[test]
@@ -685,19 +658,6 @@ fn given_a_machine_stopped_mid_frame_when_saved_and_loaded_then_the_clocks_and_q
     );
 }
 
-#[test]
-fn given_a_booted_state_with_no_line_start_queued_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    // Without a LineStart, `run_frame` would never see a frame finish.
-    let rom = counter_rom();
-    let mut saver = booted(&rom, 1);
-    saver.scheduler.pop_due(u64::MAX);
-    assert_eq!(
-        load_onto_fresh(&rom, &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
 /// A booted machine whose queue holds an HBlank start at `now` and line starts at `events`
 /// (times), at clock `now`.
 fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
@@ -717,35 +677,12 @@ fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
 }
 
 #[test]
-fn given_a_state_with_two_line_starts_at_the_same_time_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    // Both would fire in one round and a line would be skipped.
-    let rom = counter_rom();
-    let saver = with_queue(&rom, 100, &[5_000, 5_000]);
-    assert_eq!(
-        load_onto_fresh(&rom, &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
 fn given_a_state_whose_clock_is_near_u64_max_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
  {
     // The next line start would saturate at u64::MAX and stay due forever.
     let rom = counter_rom();
     let now = u64::MAX - 10;
     let saver = with_queue(&rom, now, &[u64::MAX - 5]);
-    assert_eq!(
-        load_onto_fresh(&rom, &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_with_a_line_start_more_than_a_line_ahead_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let rom = counter_rom();
-    let saver = with_queue(&rom, 100, &[100 + (1 << 60)]);
     assert_eq!(
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
@@ -1068,20 +1005,6 @@ fn given_a_state_with_a_dispstat_bit_that_does_not_exist_when_loaded_then_it_is_
     );
 }
 
-#[test]
-fn given_a_booted_state_with_no_hblank_start_queued_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let rom = counter_rom();
-    let mut saver = booted(&rom, 1);
-    saver
-        .scheduler
-        .pop_due(crate::scheduler::FRAME_CYCLES + crate::scheduler::HBLANK_START_CYCLES);
-    assert_eq!(
-        load_onto_fresh(&rom, &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
 // ------------------------------------------------------------------------- IPC (#24)
 
 const IPC_CNT: u32 = 0x0400_0184;
@@ -1238,86 +1161,17 @@ fn given_a_state_with_a_pending_dma_channel_and_its_start_event_when_loaded_then
 }
 
 #[test]
-fn given_a_state_with_a_pending_arm9_dma_channel_and_no_start_event_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+fn given_a_state_with_a_pending_arm7_dma_channel_when_loaded_then_its_start_is_queued_as_in_the_saved_machine()
  {
-    let mut saver = with_pending_arm9_dma();
-    saver.scheduler.cancel(dma_kind(true, 0));
+    // The queue is rebuilt on load, not saved (`scheduler.md`, "Savestate checks"): the waiting
+    // start comes back from the channel itself.
+    let saver = with_pending_arm7_dma();
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saver.save_state());
     assert_eq!(
-        load_onto_fresh(&counter_rom(), &saver),
-        (Err(SavestateError::Corrupt), true)
+        (result, target.scheduler().pending()),
+        (Ok(()), saver.scheduler().pending())
     );
-}
-
-#[test]
-fn given_a_state_with_a_pending_arm7_dma_channel_and_no_start_event_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let mut saver = with_pending_arm7_dma();
-    saver.scheduler.cancel(dma_kind(false, 0));
-    assert_eq!(
-        load_onto_fresh(&counter_rom(), &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_with_a_dma_start_event_for_a_channel_with_nothing_waiting_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let mut saver = booted(&counter_rom(), 1);
-    let now = saver.scheduler.now();
-    saver.scheduler.schedule(now, dma_kind(true, 2));
-    assert_eq!(
-        load_onto_fresh(&counter_rom(), &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_with_an_arm7_dma_start_event_for_a_channel_with_nothing_waiting_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let mut saver = booted(&counter_rom(), 1);
-    let now = saver.scheduler.now();
-    saver.scheduler.schedule(now, dma_kind(false, 3));
-    assert_eq!(
-        load_onto_fresh(&counter_rom(), &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_with_two_start_events_for_one_pending_channel_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let mut saver = with_pending_arm9_dma();
-    let now = saver.scheduler.now();
-    saver.scheduler.schedule(now + 1, dma_kind(true, 0));
-    assert_eq!(
-        load_onto_fresh(&counter_rom(), &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-/// A pending ARM9 channel whose start event sits `ahead` master cycles past `now`.
-fn with_dma_event_ahead(ahead: u64) -> Machine {
-    let mut saver = with_pending_arm9_dma();
-    let now = saver.scheduler.now();
-    saver.scheduler.cancel(dma_kind(true, 0));
-    saver.scheduler.schedule(now + ahead, dma_kind(true, 0));
-    saver
-}
-
-#[test]
-fn given_a_state_with_a_dma_start_event_far_beyond_a_slice_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
- {
-    let saver = with_dma_event_ahead(crate::scheduler::SLICE + 1);
-    assert_eq!(
-        load_onto_fresh(&counter_rom(), &saver),
-        (Err(SavestateError::Corrupt), true)
-    );
-}
-
-#[test]
-fn given_a_state_with_a_dma_start_event_exactly_a_slice_ahead_when_loaded_then_it_is_accepted() {
-    let saver = with_dma_event_ahead(crate::scheduler::SLICE);
-    assert_eq!(load_onto_fresh(&counter_rom(), &saver).0, Ok(()));
 }
 
 /// The part of a channel's saved encoding the tests below rebuild, field for field as `io/dma/mod.rs`

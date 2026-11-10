@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask; version 10 adds both CPUs' DMA channels and the `DmaStart` event (#26). Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask; version 10 adds both CPUs' DMA channels and the `DmaStart` event (#26); version 11 drops the event queue (#112). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -37,10 +37,8 @@
 //!
 //! # Checked on load
 //!
-//! Memory buffer sizes and the register devices' values, the header/ROM presence rule, both CPUs' banks against their CPSR
-//! modes, and the scheduler (`docs/hw/scheduler.md`, "Savestate checks"): no queued event before
-//! `now`, `next_seq` above every queued sequence number, exactly one line start and one HBlank start
-//! due within a line of `now`, VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), each timer's overflow event (`docs/hw/timers.md`: exactly one per started, clock-driven timer, none for any other, at the later of the overflow time the timer's own counter gives and `now`, and not more than a slice behind it), each DMA channel's start event (`docs/hw/dma.md`: exactly one per channel with a start waiting, none for any other, due within a slice of `now`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
+//! Memory buffer sizes and the register devices' values (a started timer whose overflow lies more than a slice behind `now` included, `docs/hw/timers.md`), the header/ROM presence rule, both CPUs' banks against their CPSR
+//! modes, `now` against `MAX_TIME` (`docs/hw/scheduler.md`, "Savestate checks"), VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
 //! unowned register banks) are taken as written: they are
 //! plain data the accessors handle totally, so a hand-made state can be odd but cannot panic.
@@ -50,17 +48,17 @@
 //! # Not saved
 //!
 //! The frame buffers are derived output: a load leaves both screens black until the next
-//! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load.
+//! frame is drawn. The two memory page tables are derived from VRAMCNT_A and WRAMCNT and are rebuilt on load. So is the
+//! event queue (#112): the line starts, timer overflows and DMA starts follow from the device state and `now`, and a load
+//! queues them again (`docs/hw/scheduler.md`, "Savestate checks").
 
 use crate::Machine;
-use crate::io::dma::{CHANNEL_COUNT, Dma};
-use crate::io::timers::{TIMER_COUNT, Timers};
-use crate::scheduler::{ARM7_INSTRUCTION_COST, EventKind, LINE_CYCLES, SLICE, Scheduler};
+use crate::scheduler::ARM7_INSTRUCTION_COST;
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -116,57 +114,7 @@ fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
         .map(u64::from_le_bytes)
 }
 
-/// Whether the queue holds an overflow event for exactly the timers of `timers` that have one,
-/// each at the later of the overflow time the timer itself gives and `now` (`timers.md`,
-/// "Model"), and that time no more than one slice behind `now`. An event before it would fire a
-/// period early, one after it would drop an IRQ and a cascade, and an overflow time further
-/// behind than a slice cannot arise and would take the run loop forever to catch up. An event
-/// for a stopped or count-up timer would count a phantom overflow.
-fn timer_events_are_sane<const ARM9: bool>(scheduler: &Scheduler, timers: &Timers<ARM9>) -> bool {
-    let now = scheduler.now();
-    (0..TIMER_COUNT).all(|index| {
-        let times = scheduler.times_of(Timers::<ARM9>::event_kind(index));
-        match (timers.overflow_time(index), times.as_slice()) {
-            (Some(due), [time]) => *time == due.max(now) && now.saturating_sub(due) <= SLICE,
-            (None, []) => true,
-            _ => false,
-        }
-    })
-}
-
-/// Whether the queue holds a start event for exactly the channels of `dma` that have one waiting,
-/// each due no earlier than `now` (the scheduler checks that) and within one slice of it
-/// (`dma.md`, "Model"). An event for a channel with nothing waiting would run a transfer nobody
-/// asked for; a waiting channel with none would never start.
-fn dma_events_are_sane<const ARM9: bool>(scheduler: &Scheduler, dma: &Dma<ARM9>) -> bool {
-    let now = scheduler.now();
-    (0..CHANNEL_COUNT).all(|index| {
-        let times = scheduler.times_of(Dma::<ARM9>::event_kind(index));
-        match (dma.pending(index), times.as_slice()) {
-            (true, [time]) => time.saturating_sub(now) <= SLICE,
-            (false, []) => true,
-            _ => false,
-        }
-    })
-}
-
 impl Machine {
-    /// Whether the queue holds exactly one line start and one HBlank start, each due within one
-    /// line of `now` (`scheduler.md`, "Savestate checks"). Anything else would skip a line or
-    /// wait on a far-off one. The time limit is checked with the scheduler
-    /// (`Scheduler::is_well_formed`), which keeps `now + LINE_CYCLES` from overflowing.
-    fn line_events_are_sane(&self) -> bool {
-        let now = self.scheduler.now();
-        [EventKind::LineStart, EventKind::HBlankStart]
-            .into_iter()
-            .all(|kind| {
-                matches!(
-                    self.scheduler.times_of(kind).as_slice(),
-                    [time] if now.checked_add(LINE_CYCLES).is_some_and(|end| (now..=end).contains(time))
-                )
-            })
-    }
-
     /// Serializes the whole machine, ROM excluded, into a savestate.
     ///
     /// Saving is not on the hot path, so it allocates.
@@ -218,15 +166,10 @@ impl Machine {
         if !rest.is_empty()
             || loaded.header.is_some() != !self.rom.is_empty()
             || !loaded.memory.is_well_formed()
-            || !loaded.io.is_well_formed()
+            || !loaded.scheduler.is_well_formed()
+            || !loaded.io.is_well_formed(loaded.scheduler.now())
             || !loaded.arm9.is_well_formed()
             || !loaded.arm7.is_well_formed()
-            || !loaded.scheduler.is_well_formed()
-            || !loaded.line_events_are_sane()
-            || !timer_events_are_sane(&loaded.scheduler, loaded.io.timers9())
-            || !timer_events_are_sane(&loaded.scheduler, loaded.io.timers7())
-            || !dma_events_are_sane(&loaded.scheduler, loaded.io.dma9())
-            || !dma_events_are_sane(&loaded.scheduler, loaded.io.dma7())
             // A booted machine is always settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up.
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())
@@ -236,7 +179,8 @@ impl Machine {
         }
         loaded.rom = std::mem::take(&mut self.rom);
         loaded.memory.build_page_table();
-        loaded.scheduler.reserve();
+        // The queue is not saved: it is rebuilt from the devices and `now`.
+        loaded.schedule_events();
         *self = loaded;
         Ok(())
     }

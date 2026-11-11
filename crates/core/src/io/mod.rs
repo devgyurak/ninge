@@ -18,6 +18,7 @@ pub(crate) mod device;
 pub mod dma;
 pub mod ipc;
 pub mod irq;
+pub mod keypad;
 pub(crate) mod map;
 pub mod power;
 #[cfg(test)]
@@ -31,6 +32,7 @@ use device::{Device, Effect, Fired, Width};
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
 use irq::{InterruptController, Requests};
+use keypad::Keypad;
 use map::Port;
 use power::Power;
 use serde::{Deserialize, Serialize};
@@ -72,6 +74,8 @@ macro_rules! device_call {
                 Device::<true>::$method(borrow!($b $io.dma9) $(, $arg)*)
             }
             Port::Dma | Port::DmaFill => Device::<false>::$method(borrow!($b $io.dma7) $(, $arg)*),
+            Port::Keypad if $arm9 => Device::<true>::$method(borrow!($b $io.keypad9) $(, $arg)*),
+            Port::Keypad => Device::<false>::$method(borrow!($b $io.keypad7) $(, $arg)*),
             Port::Power if !$arm9 => Device::<false>::$method(borrow!($b $io.power) $(, $arg)*),
             Port::Gpu2d | Port::Power => {
                 debug_assert!(false, "port not reachable through Io");
@@ -110,6 +114,10 @@ pub struct Io {
     // Each CPU's four DMA channels: the same addresses, separate state (`dma.md`).
     dma9: Dma<true>,
     dma7: Dma<false>,
+    // Each CPU's KEYINPUT and KEYCNT, and the ARM7's EXTKEYIN: the same addresses, separate
+    // KEYCNT (`keypad.md`).
+    keypad9: Keypad<true>,
+    keypad7: Keypad<false>,
     // The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
     power: Power,
 }
@@ -127,6 +135,8 @@ impl Io {
             timers7: Timers::new(),
             dma9: Dma::new(),
             dma7: Dma::new(),
+            keypad9: Keypad::new(),
+            keypad7: Keypad::new(),
             power: Power::new(),
         }
     }
@@ -182,6 +192,17 @@ impl Io {
     // The debugger's IO register panel shows them with the ARM9's.
     pub(crate) fn dma7(&self) -> &Dma<false> {
         &self.dma7
+    }
+
+    /// The ARM9's keypad registers.
+    // The debugger's IO register panel will show them with the other devices'.
+    pub(crate) fn keypad9(&self) -> &Keypad<true> {
+        &self.keypad9
+    }
+
+    /// The ARM7's keypad registers.
+    pub(crate) fn keypad7(&self) -> &Keypad<false> {
+        &self.keypad7
     }
 
     /// The ARM7's HALTCNT.

@@ -434,11 +434,17 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   and a PR with one approval — which the admin (`devgyurak`) may bypass when merging a PR.
   Direct pushes are blocked for everyone.
 - **Repository** — `github.com/devgyurak/ninge`.
-- **Releases** (decided) — SemVer `0.x`; a `vX.Y.Z` tag on `main` is the release, and the
-  release PR bumps `[workspace.package] version`. The first release, `0.1.0`, follows the
-  Phase 3 DoD. Each release publishes macOS arm64 and Linux x86_64 binaries to GitHub
-  Releases and all crates to crates.io in lockstep (`cargo install ninge`); a Homebrew tap
-  comes later. The release workflow is added with the first release, not before.
+- **Releases** (decided) — SemVer `0.x`; a `vX.Y.Z` tag on `main` is the release. The release
+  PR bumps `[workspace.package] version` **and** the `ninge-core` entry's `version` in
+  `[workspace.dependencies]`, sets `[workspace.package] publish` to `true`, and refreshes
+  `Cargo.lock` (`cargo update -w`). The first release, `0.1.0`, follows the Phase 3 DoD. The tag
+  runs `.github/workflows/release.yml`: one `cargo publish` of **ninge-core and ninge**
+  (`cargo install ninge`), after a reviewer approves the `crates-io` environment that holds
+  the token. **ninge-runner and ninge-tracediff are not published** (decided 2026-11-11):
+  their tests and golden frames need the repository's `testroms/`, and publishing would put
+  their command line and report format under SemVer while both still change; publishing one
+  later is a one-line change. macOS arm64 and Linux x86_64 binaries on GitHub Releases and a
+  Homebrew tap come later.
 - **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS. The
   Rust toolchain, `cargo-nextest`, and `cargo-llvm-cov` steps switch on the moment
   `Cargo.toml` exists.

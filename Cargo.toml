@@ -6,7 +6,11 @@ members = ["crates/core", "crates/runner", "crates/frontend", "crates/tracediff"
 version = "0.0.0"
 edition = "2024"
 license = "Apache-2.0"
-# Guards against publishing 0.0.0; the first release PR (AGENTS.md §7) removes it.
+# Guards against publishing 0.0.0: the first release PR (AGENTS.md §7) sets it to `true` with the
+# version bump (here, and the `ninge-core` entry below) and refreshes `Cargo.lock`
+# (`cargo update -w`). ninge-runner and ninge-tracediff say
+# `publish = false` themselves and stay unpublished; the release workflow checks that only
+# ninge-core and ninge are publishable.
 publish = false
 repository = "https://github.com/devgyurak/ninge"
 

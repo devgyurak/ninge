@@ -18,6 +18,7 @@ use crate::machine::Machine;
 pub use crate::bus::{VramBankState, WramShare, WramState};
 pub use crate::gpu2d::{Gpu2d, TextBg};
 pub use crate::hle::SwiRecord;
+pub use crate::io::divsqrt::DivSqrt;
 pub use crate::io::dma::Dma;
 pub use crate::io::ipc::Ipc;
 pub use crate::io::irq::InterruptController;
@@ -153,6 +154,12 @@ impl<'a> Inspect<'a> {
     // The debugger's IO register panel shows them with the ARM9's.
     pub fn dma7(&self) -> &'a Dma<false> {
         self.machine.io.dma7()
+    }
+
+    /// The ARM9's divider and square-root unit.
+    // The debugger's IO register panel shows its registers with the other devices'.
+    pub fn divsqrt(&self) -> &'a DivSqrt {
+        self.machine.io.divsqrt()
     }
 
     /// The ARM9's KEYCNT.

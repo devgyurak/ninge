@@ -114,8 +114,9 @@ Facts to confirm while building Phase 0, not decisions:
       text traces, compared per CPU. Whether the stub reaches both CPUs is checked when the
       track starts. (AGENTS.md §6.)
 - [x] **Releases** — SemVer `0.x`, tag-driven; `0.1.0` after the Phase 3 DoD; a `vX.Y.Z` tag
-      on `main` publishes ninge-core and ninge to crates.io. ninge-runner and ninge-tracediff
-      are not published (2026-11-11). GitHub Releases binaries (macOS arm64, Linux x86_64) and
+      on `main` publishes ninge-core and ninge to crates.io; the release PR bumps both
+      versions, sets `publish = true` and refreshes `Cargo.lock`. ninge-runner and
+      ninge-tracediff are not published (2026-11-11). GitHub Releases binaries (macOS arm64, Linux x86_64) and
       a Homebrew tap later. (AGENTS.md §7.)
 
 ## Open decisions

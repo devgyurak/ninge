@@ -4,8 +4,8 @@ name: release
 # ninge-runner and ninge-tracediff are repository tools and are not published. The tag is
 # the release: the release PR (develop -> main) has already bumped `[workspace.package]
 # version` and set `publish = true`, and CI was green on it. This workflow only checks that,
-# then publishes both crates in one `cargo publish`, so both are verified before anything is
-# uploaded (a version on crates.io can never be replaced). It is safe to re-run after a partial
+# then dry-runs and publishes both crates in one `cargo publish`, so both are verified before
+# anything is uploaded (a version on crates.io can never be replaced). It is safe to re-run after a partial
 # failure: a crate whose version is already on crates.io is skipped.
 #
 # The job runs in the `crates-io` environment: the token lives there, and the environment's
@@ -30,7 +30,7 @@ jobs:
     environment: crates-io
     steps:
       # Pinned to a commit: this workflow holds the publish token.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
@@ -77,26 +77,41 @@ jobs:
           cmp LICENSE crates/core/LICENSE
           cmp LICENSE crates/frontend/LICENSE
 
+      # Which crates still need publishing: a version already on crates.io is skipped, so a
+      # re-run after a partial failure is safe. 200 skips, 404 publishes, anything else
+      # (a network error, a 5xx, a rate limit) fails the job instead of guessing.
+      - name: Which crates are not yet on crates.io
+        run: |
+          packages=""
+          for crate in ninge-core ninge; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A "ninge-release (https://github.com/devgyurak/ninge)" \
+              "https://crates.io/api/v1/crates/$crate/$VERSION")
+            echo "$crate $VERSION: HTTP $code"
+            case "$code" in
+              200) echo "$crate $VERSION is already on crates.io, skipping" ;;
+              404) packages="$packages -p $crate" ;;
+              *) echo "unexpected status $code for $crate"; exit 1 ;;
+            esac
+          done
+          echo "PACKAGES=$packages" >> "$GITHUB_ENV"
+
       # Both crates in one command: `cargo publish` verifies every package before it uploads
       # any, in dependency order, so a failure in ninge cannot leave ninge-core alone on
-      # crates.io. The dry run is inside the check, so a re-run after ninge-core went out does not
-      # stop on it.
-      - name: Publish ninge-core and ninge
+      # crates.io. The build runs here, in a step that has no token: build scripts and proc
+      # macros run in it, and a version on crates.io can never be replaced.
+      - name: Dry run
+        if: env.PACKAGES != ''
+        run: |
+          read -ra packages <<< "$PACKAGES"
+          cargo publish --dry-run --locked "${packages[@]}"
+
+      # The only step that sees the token. The dry run already built and verified the packages,
+      # so this one uploads without building again.
+      - name: Publish
+        if: env.PACKAGES != ''
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          packages=()
-          for crate in ninge-core ninge; do
-            if curl -fsS -A "ninge-release (https://github.com/devgyurak/ninge)" \
-                "https://crates.io/api/v1/crates/$crate/$VERSION" >/dev/null; then
-              echo "$crate $VERSION is already on crates.io, skipping"
-            else
-              packages+=(-p "$crate")
-            fi
-          done
-          if [ "${#packages[@]}" -eq 0 ]; then
-            echo "nothing to publish"
-            exit 0
-          fi
-          cargo publish --dry-run --locked "${packages[@]}"
-          cargo publish --locked "${packages[@]}"
+          read -ra packages <<< "$PACKAGES"
+          cargo publish --locked --no-verify "${packages[@]}"

@@ -10,7 +10,7 @@
 //! glyphs look right is a visual check by the maintainer in a terminal, recorded in the PR.
 
 use ninge_core::{Machine, SCREEN_WIDTH, Screen};
-use ninge_runner::golden::assert_frame_hash;
+use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
 use ninge_runner::{load_rom_file, testrom_path};
 
 /// Screen block 31 of engine A's BG window: `0600_0000h + 31 * 2 KiB`.
@@ -43,29 +43,33 @@ fn row_text(machine: &Machine, row: u32) -> String {
 }
 
 #[test]
-fn given_console_rom_when_120_frames_run_then_the_map_rows_spell_the_printed_lines() {
+fn given_console_rom_when_10_frames_run_then_the_map_rows_spell_the_printed_lines() {
     let machine = boot_frames();
-    let rows: Vec<String> = (0..4).map(|row| row_text(&machine, row)).collect();
+    let rows: Vec<String> = (0..6).map(|row| row_text(&machine, row)).collect();
     assert_eq!(
         rows,
         vec![
             "ninge console test",
             "sum: 20 + 22 = 42",
             "hex: 00C0FFEE",
+            // Printed after five VBlank waits: the ARM9 VBlank IRQ reaches the ROM.
+            "vblank: 5",
+            // Printed after a FIFO round trip: the ARM7 is alive and answers.
+            "fifo: ok",
             ""
         ]
     );
 }
 
 #[test]
-fn given_console_rom_when_120_frames_run_then_the_rows_below_the_text_are_blank() {
+fn given_console_rom_when_10_frames_run_then_the_rows_below_the_text_are_blank() {
     let machine = boot_frames();
-    let rows: Vec<String> = (4..24).map(|row| row_text(&machine, row)).collect();
-    assert_eq!(rows, vec![String::new(); 20]);
+    let rows: Vec<String> = (6..24).map(|row| row_text(&machine, row)).collect();
+    assert_eq!(rows, vec![String::new(); 18]);
 }
 
 #[test]
-fn given_console_rom_when_120_frames_run_then_the_upper_screen_is_drawn_and_the_lower_is_black() {
+fn given_console_rom_when_10_frames_run_then_the_upper_screen_is_drawn_and_the_lower_is_black() {
     // The text is drawn on engine A, which POWCNT1 puts on the upper screen at power-on; engine B
     // is a black placeholder in Phase 3.
     let machine = boot_frames();
@@ -85,20 +89,19 @@ fn given_console_rom_when_120_frames_run_then_the_upper_screen_is_drawn_and_the_
 }
 
 #[test]
-fn given_console_rom_when_run_twice_for_10_frames_then_both_screens_are_identical() {
-    let (a, b) = (boot_frames(), boot_frames());
-    assert_eq!(
-        (
-            a.frame(Screen::Top) == b.frame(Screen::Top),
-            a.frame(Screen::Bottom) == b.frame(Screen::Bottom)
-        ),
-        (true, true)
-    );
+fn given_console_rom_when_run_twice_for_10_frames_then_every_frame_hash_matches() {
+    assert_deterministic("console", FRAMES);
+}
+
+#[test]
+fn given_console_rom_when_saved_after_5_frames_and_resumed_then_it_matches_an_uninterrupted_run() {
+    assert_savestate_round_trip("console", 5, 5);
 }
 
 #[test]
 fn given_console_rom_when_run_for_10_frames_then_both_screens_match_golden() {
     // The hash was recorded after the maintainer checked the screen by eye in Ghostty: three
-    // lines reading "ninge console test", "sum: 20 + 22 = 42" and "hex: 00C0FFEE", glyphs intact.
+    // lines reading "ninge console test", "sum: 20 + 22 = 42" and "hex: 00C0FFEE", then
+    // "vblank: 5" and "fifo: ok", glyphs intact.
     assert_frame_hash("console", 10);
 }

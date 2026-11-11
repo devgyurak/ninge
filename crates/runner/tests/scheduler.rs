@@ -18,8 +18,7 @@
 //!
 //! The ROM draws nothing, so it has no golden frame hash.
 
-use ninge_core::scheduler::FRAME_CYCLES;
-use ninge_core::{Machine, Screen};
+use ninge_core::{FRAME_CYCLES, Machine, Screen};
 use ninge_runner::golden::{assert_deterministic, assert_savestate_round_trip};
 use ninge_runner::{load_rom_file, testrom_path};
 

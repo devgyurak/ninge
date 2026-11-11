@@ -76,8 +76,17 @@ impl<const ARM9: bool> Cpu<ARM9> {
         &self.regs
     }
 
-    /// The register file, for the host and the test harness to set up state.
+    /// The register file, for the host and the test harness to set up state. Public only with the
+    /// `test-support` feature: a host that could write a machine's registers would break the
+    /// invariants the machine keeps, so `Machine::inspect` hands out `&Cpu` and nothing here.
+    #[cfg(feature = "test-support")]
     pub fn regs_mut(&mut self) -> &mut Registers {
+        &mut self.regs
+    }
+
+    /// The register file, for the machine's own set-up code and the tests in this crate.
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) fn regs_mut(&mut self) -> &mut Registers {
         &mut self.regs
     }
 
@@ -107,8 +116,16 @@ impl<const ARM9: bool> Cpu<ARM9> {
         self.pipeline
     }
 
-    /// Sets the prefetch pipeline, for the host and the test harness to set up state.
+    /// Sets the prefetch pipeline, for the host and the test harness to set up state. Public only
+    /// with the `test-support` feature, like [`Cpu::regs_mut`].
+    #[cfg(feature = "test-support")]
     pub fn set_pipeline(&mut self, pipeline: [u32; 2]) {
+        self.pipeline = pipeline;
+    }
+
+    /// Sets the prefetch pipeline, for the tests in this crate.
+    #[cfg(all(test, not(feature = "test-support")))]
+    pub(crate) fn set_pipeline(&mut self, pipeline: [u32; 2]) {
         self.pipeline = pipeline;
     }
 

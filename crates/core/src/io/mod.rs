@@ -116,7 +116,7 @@ pub struct Io {
 
 impl Io {
     /// The devices in their power-on state.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             gpu2d: Gpu2d::new(),
             timing: Timing::new(),
@@ -133,12 +133,12 @@ impl Io {
 
     /// Engine A's display registers.
     // The debugger's IO register panel will show them (#58 shows the VRAM view).
-    pub fn gpu2d(&self) -> &Gpu2d {
+    pub(crate) fn gpu2d(&self) -> &Gpu2d {
         &self.gpu2d
     }
 
     /// VCOUNT and each CPU's DISPSTAT.
-    pub fn timing(&self) -> &Timing {
+    pub(crate) fn timing(&self) -> &Timing {
         &self.timing
     }
 
@@ -147,45 +147,45 @@ impl Io {
     }
 
     /// The ARM9's interrupt controller.
-    pub fn irq9(&self) -> &InterruptController<true> {
+    pub(crate) fn irq9(&self) -> &InterruptController<true> {
         &self.irq9
     }
 
     /// The ARM7's interrupt controller.
-    pub fn irq7(&self) -> &InterruptController<false> {
+    pub(crate) fn irq7(&self) -> &InterruptController<false> {
         &self.irq7
     }
 
     /// IPCSYNC and the two IPC FIFOs, for the debugger.
-    pub fn ipc(&self) -> &Ipc {
+    pub(crate) fn ipc(&self) -> &Ipc {
         &self.ipc
     }
 
     /// The ARM9's timers.
-    pub fn timers9(&self) -> &Timers<true> {
+    pub(crate) fn timers9(&self) -> &Timers<true> {
         &self.timers9
     }
 
     /// The ARM7's timers.
-    pub fn timers7(&self) -> &Timers<false> {
+    pub(crate) fn timers7(&self) -> &Timers<false> {
         &self.timers7
     }
 
     /// The ARM9's DMA channels.
     // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
     // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
-    pub fn dma9(&self) -> &Dma<true> {
+    pub(crate) fn dma9(&self) -> &Dma<true> {
         &self.dma9
     }
 
     /// The ARM7's DMA channels.
     // The debugger's IO register panel shows them with the ARM9's.
-    pub fn dma7(&self) -> &Dma<false> {
+    pub(crate) fn dma7(&self) -> &Dma<false> {
         &self.dma7
     }
 
     /// The ARM7's HALTCNT.
-    pub fn power(&self) -> &Power {
+    pub(crate) fn power(&self) -> &Power {
         &self.power
     }
 

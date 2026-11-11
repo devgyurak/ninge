@@ -57,7 +57,7 @@ fn rounds(m: &mut Machine, count: u32) {
 /// Whole rounds until the machine is at the start of `line` in frame 0.
 fn run_until_line(m: &mut Machine, line: u16) {
     (0..200_000).for_each(|_| {
-        if m.frame_count() != 0 || m.vcount() != line {
+        if m.frame_count() != 0 || m.inspect().vcount() != line {
             run_round(m);
         }
     });
@@ -65,7 +65,8 @@ fn run_until_line(m: &mut Machine, line: u16) {
 
 /// The pending events as `(time, kind)`, in firing order.
 fn pending_pairs(m: &Machine) -> Vec<(u64, EventKind)> {
-    m.scheduler()
+    m.inspect()
+        .scheduler()
         .pending()
         .iter()
         .map(|event| (event.time, event.kind))
@@ -216,7 +217,7 @@ fn given_a_vblank_dma_start_queued_by_the_line_handler_when_saved_and_loaded_the
     };
     assert_eq!(
         (
-            original.scheduler().now(),
+            original.inspect().scheduler().now(),
             is_dma(&r.loaded_pending),
             is_dma(&r.original_pending),
             r.bytes_equal_after
@@ -233,7 +234,9 @@ fn given_a_vblank_dma_start_waiting_at_now_when_loaded_and_a_round_runs_then_the
     let mut loaded = machine();
     loaded.load_state(&original.save_state()).expect("loads");
     run_round(&mut loaded);
-    let copied: Vec<u32> = (0..4).map(|i| loaded.arm9_peek32(DST + 4 * i)).collect();
+    let copied: Vec<u32> = (0..4)
+        .map(|i| loaded.inspect().arm9_peek32(DST + 4 * i))
+        .collect();
     assert_eq!(copied, vec![1, 2, 3, 4]);
 }
 

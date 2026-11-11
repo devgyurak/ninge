@@ -51,11 +51,11 @@ fn send9(m: &mut Machine, words: &[u32]) {
 }
 
 fn cnt7(m: &Machine) -> u16 {
-    m.arm7_peek16(0, IPCFIFOCNT_ADDR)
+    m.inspect().arm7_peek16(0, IPCFIFOCNT_ADDR)
 }
 
 fn cnt9(m: &Machine) -> u16 {
-    m.arm9_peek16(IPCFIFOCNT_ADDR)
+    m.inspect().arm9_peek16(IPCFIFOCNT_ADDR)
 }
 
 // ----------------------------------------------------------------------- IPCSYNC
@@ -65,7 +65,7 @@ fn given_the_arm9_writes_ipcsync_through_the_bus_when_the_arm7_reads_it_then_bit
  {
     let mut m = machine();
     m.bus9().write16(IPCSYNC_ADDR, 0x0A00);
-    assert_eq!(m.arm7_peek16(0, IPCSYNC_ADDR), 0x000A);
+    assert_eq!(m.inspect().arm7_peek16(0, IPCSYNC_ADDR), 0x000A);
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn given_the_arm7_writes_ipcsync_through_the_bus_when_the_arm9_reads_it_through_
 fn given_a_word_write_to_ipcsync_when_read_back_then_the_two_bytes_past_it_are_not_a_register() {
     let mut m = machine();
     m.bus9().write32(IPCSYNC_ADDR, 0xFFFF_0F00);
-    assert_eq!(m.arm9_peek32(IPCSYNC_ADDR), 0x0000_0F00);
+    assert_eq!(m.inspect().arm9_peek32(IPCSYNC_ADDR), 0x0000_0F00);
 }
 
 #[test]
@@ -89,7 +89,10 @@ fn given_the_arm9_sends_the_sync_irq_when_the_arm7_enabled_it_then_only_the_arm7
     let mut m = machine();
     m.bus7(0).write16(IPCSYNC_ADDR, 0x4000);
     m.bus9().write16(IPCSYNC_ADDR, 0x2000);
-    assert_eq!((m.irq9().if_(), m.irq7().if_()), (0, IPCSYNC_IRQ));
+    assert_eq!(
+        (m.inspect().irq9().if_(), m.inspect().irq7().if_()),
+        (0, IPCSYNC_IRQ)
+    );
 }
 
 #[test]
@@ -98,7 +101,10 @@ fn given_the_arm7_sends_the_sync_irq_when_the_arm9_enabled_it_then_only_the_arm9
     let mut m = machine();
     m.bus9().write16(IPCSYNC_ADDR, 0x4000);
     m.bus7(0).write16(IPCSYNC_ADDR, 0x2000);
-    assert_eq!((m.irq9().if_(), m.irq7().if_()), (IPCSYNC_IRQ, 0));
+    assert_eq!(
+        (m.inspect().irq9().if_(), m.inspect().irq7().if_()),
+        (IPCSYNC_IRQ, 0)
+    );
 }
 
 // ----------------------------------------------------------------- the FIFO through the bus
@@ -125,8 +131,8 @@ fn given_a_word_in_the_fifo_when_the_arm9_peeks_ipcfiforecv_twice_then_both_peek
     let mut m = enabled();
     m.bus7(0).write32(IPCFIFOSEND_ADDR, 0x1234_5678);
     let peeks = [
-        m.arm9_peek32(IPCFIFORECV_ADDR),
-        m.arm9_peek32(IPCFIFORECV_ADDR),
+        m.inspect().arm9_peek32(IPCFIFORECV_ADDR),
+        m.inspect().arm9_peek32(IPCFIFORECV_ADDR),
     ];
     assert_eq!(
         (peeks, m.bus9().read32(IPCFIFORECV_ADDR)),
@@ -159,8 +165,8 @@ fn given_two_words_in_flight_when_the_arm7_reads_two_words_then_the_second_comes
 fn given_a_word_in_flight_when_it_is_peeked_twice_then_both_peeks_show_it_and_the_fifo_keeps_it() {
     let mut m = enabled();
     send9(&mut m, &[0xB7]);
-    let first = m.arm7_peek32(0, IPCFIFORECV_ADDR);
-    let second = m.arm7_peek32(0, IPCFIFORECV_ADDR);
+    let first = m.inspect().arm7_peek32(0, IPCFIFORECV_ADDR);
+    let second = m.inspect().arm7_peek32(0, IPCFIFORECV_ADDR);
     assert_eq!((first, second, cnt7(&m) & RECV_EMPTY), (0xB7, 0xB7, 0));
 }
 
@@ -168,14 +174,14 @@ fn given_a_word_in_flight_when_it_is_peeked_twice_then_both_peeks_show_it_and_th
 fn given_a_word_in_flight_when_the_arm7_peeks_and_then_reads_then_the_read_still_gets_the_word() {
     let mut m = enabled();
     send9(&mut m, &[0xB7]);
-    m.arm7_peek32(0, IPCFIFORECV_ADDR);
+    m.inspect().arm7_peek32(0, IPCFIFORECV_ADDR);
     assert_eq!(m.bus7(0).read32(IPCFIFORECV_ADDR), 0xB7);
 }
 
 #[test]
 fn given_an_empty_receive_fifo_when_it_is_peeked_then_no_error_is_set() {
     let m = enabled();
-    m.arm7_peek32(0, IPCFIFORECV_ADDR);
+    m.inspect().arm7_peek32(0, IPCFIFORECV_ADDR);
     assert_eq!(cnt7(&m) & ERROR, 0);
 }
 
@@ -192,8 +198,8 @@ fn given_the_arm9_peeks_ipcfifocnt_through_arm9_peek16_when_the_fifo_is_empty_th
     let m = enabled();
     assert_eq!(
         (
-            m.arm9_peek16(IPCFIFOCNT_ADDR),
-            m.arm9_peek32(IPCFIFORECV_ADDR),
+            m.inspect().arm9_peek16(IPCFIFOCNT_ADDR),
+            m.inspect().arm9_peek32(IPCFIFORECV_ADDR),
             cnt9(&m) & ERROR
         ),
         (ENABLE | 0x0101, 0, 0)
@@ -254,7 +260,10 @@ fn given_the_receive_irq_enabled_when_the_arm9_sends_then_if18_is_set_on_the_arm
     let mut m = enabled();
     m.bus7(0).write16(IPCFIFOCNT_ADDR, ENABLE | RECV_IRQ_ENABLE);
     send9(&mut m, &[1]);
-    assert_eq!((m.irq9().if_(), m.irq7().if_()), (0, RECV_NOT_EMPTY_IRQ));
+    assert_eq!(
+        (m.inspect().irq9().if_(), m.inspect().irq7().if_()),
+        (0, RECV_NOT_EMPTY_IRQ)
+    );
 }
 
 #[test]
@@ -264,7 +273,10 @@ fn given_the_send_empty_irq_enabled_with_a_word_in_flight_when_the_arm7_takes_it
     send9(&mut m, &[1]);
     m.bus9().write16(IPCFIFOCNT_ADDR, ENABLE | SEND_IRQ_ENABLE);
     m.bus7(0).read32(IPCFIFORECV_ADDR);
-    assert_eq!((m.irq9().if_(), m.irq7().if_()), (SEND_EMPTY_IRQ, 0));
+    assert_eq!(
+        (m.inspect().irq9().if_(), m.inspect().irq7().if_()),
+        (SEND_EMPTY_IRQ, 0)
+    );
 }
 
 #[test]
@@ -276,7 +288,7 @@ fn given_if18_acknowledged_while_the_condition_holds_when_a_second_word_arrives_
     m.bus7(0)
         .write32(crate::io::irq::IF_ADDR, RECV_NOT_EMPTY_IRQ);
     send9(&mut m, &[2]);
-    assert_eq!(m.irq7().if_(), 0);
+    assert_eq!(m.inspect().irq7().if_(), 0);
 }
 
 // -------------------------------------------------------------- ARM7 delivery
@@ -293,7 +305,10 @@ fn arm7_listening(ie: u32) -> Machine {
 /// (CPSR, r0) of the ARM7 after one step.
 fn arm7_after_step(m: &mut Machine) -> (u32, u32) {
     m.step_arm7_instruction();
-    (m.arm7().regs().cpsr(), m.arm7().regs().get(0))
+    (
+        m.inspect().arm7().regs().cpsr(),
+        m.inspect().arm7().regs().get(0),
+    )
 }
 
 #[test]
@@ -312,7 +327,7 @@ fn given_the_arm9_sends_a_word_when_the_arm7_listens_for_the_receive_irq_then_th
     m.bus7(0).write16(IPCFIFOCNT_ADDR, ENABLE | RECV_IRQ_ENABLE);
     send9(&mut m, &[0x42]);
     m.step_arm7_instruction();
-    let r = m.arm7().regs();
+    let r = m.inspect().arm7().regs();
     assert_eq!(
         (r.cpsr(), r.banked(crate::cpu::Bank::Irq, 14), r.get(15)),
         (IRQ_ENTRY_CPSR, ENTRY7 + 4, IRQ_VECTOR_PC)
@@ -335,7 +350,7 @@ fn given_the_arm9_sends_the_sync_irq_when_only_the_arm7_listens_then_the_arm9_is
     m.bus9().write16(IPCSYNC_ADDR, 0x2000);
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     m.step_arm9_instruction();
-    assert_eq!(m.arm9().regs().get(0), 0x55);
+    assert_eq!(m.inspect().arm9().regs().get(0), 0x55);
 }
 
 // --------------------------------------------------------------- debugger accessor
@@ -346,7 +361,10 @@ fn given_a_word_in_flight_when_the_debugger_reads_the_ipc_accessor_then_it_shows
     send9(&mut m, &[1]);
     m.bus9().write16(IPCSYNC_ADDR, 0x0300);
     assert_eq!(
-        (m.ipc().control::<true>(), m.ipc().sync::<false>()),
+        (
+            m.inspect().ipc().control::<true>(),
+            m.inspect().ipc().sync::<false>()
+        ),
         (ENABLE | RECV_EMPTY, 0x0003)
     );
 }

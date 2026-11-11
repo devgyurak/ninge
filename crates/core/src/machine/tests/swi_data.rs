@@ -40,7 +40,7 @@ fn arm7_after(number: u32, regs: [u32; 4]) -> Machine {
 }
 
 fn r9(m: &Machine) -> [u32; 4] {
-    [0, 1, 2, 3].map(|i| m.arm9().regs().get(i))
+    [0, 1, 2, 3].map(|i| m.inspect().arm9().regs().get(i))
 }
 
 // ------------------------------------------------------------------------------------ Div
@@ -56,7 +56,7 @@ fn given_swi_div_when_minus_7_is_divided_by_2_then_r0_r1_and_r3_hold_quotient_re
 fn given_swi_div_on_the_arm7_when_7_is_divided_by_minus_2_then_the_results_are_in_the_arm7_registers()
  {
     let m = arm7_after(0x09, [7, -2i32 as u32, 0, 0]);
-    let regs = [0, 1, 2, 3].map(|i| m.arm7().regs().get(i));
+    let regs = [0, 1, 2, 3].map(|i| m.inspect().arm7().regs().get(i));
     assert_eq!(regs, [-3i32 as u32, 1, 0, 3]);
 }
 
@@ -93,7 +93,7 @@ fn arm9_with_source(words: &[u32], number: u32, regs: [u32; 4]) -> Machine {
 #[test]
 fn given_swi_cpuset_when_a_word_is_copied_to_ime_then_the_write_reaches_the_register() {
     let m = arm9_with_source(&[1], 0x0B, [SRC, IME, WORD | 1, 0]);
-    assert!(m.irq9().ime());
+    assert!(m.inspect().irq9().ime());
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn given_swi_cpuset_when_it_returns_then_r0_to_r2_are_unchanged_and_the_caller_c
     let mut m = arm9_with_source(&[5, 6], 0x0B, [SRC, DST, WORD | 2, 0]);
     step9(&mut m, 1);
     assert_eq!(
-        (r9(&m)[..3].to_vec(), m.arm9().regs().get(6)),
+        (r9(&m)[..3].to_vec(), m.inspect().arm9().regs().get(6)),
         (vec![SRC, DST, WORD | 2], 0x99)
     );
 }
@@ -110,7 +110,10 @@ fn given_swi_cpuset_when_it_returns_then_r0_to_r2_are_unchanged_and_the_caller_c
 fn given_swi_cpuset_when_16_bit_units_are_copied_then_the_destination_holds_them() {
     let m = arm9_with_source(&[0x4444_3333, 0x2222_1111], 0x0B, [SRC, DST, 3, 0]);
     assert_eq!(
-        (m.arm9_peek32(DST), m.arm9_peek16(DST + 4)),
+        (
+            m.inspect().arm9_peek32(DST),
+            m.inspect().arm9_peek16(DST + 4)
+        ),
         (0x4444_3333, 0x1111)
     );
 }
@@ -118,7 +121,7 @@ fn given_swi_cpuset_when_16_bit_units_are_copied_then_the_destination_holds_them
 #[test]
 fn given_swi_cpuset_when_a_word_is_filled_then_count_words_hold_it() {
     let m = arm9_with_source(&[0xCAFE_F00D], 0x0B, [SRC, DST, FILL | WORD | 3, 0]);
-    let words = [0, 4, 8, 12].map(|o| m.arm9_peek32(DST + o));
+    let words = [0, 4, 8, 12].map(|o| m.inspect().arm9_peek32(DST + o));
     assert_eq!(words, [0xCAFE_F00D, 0xCAFE_F00D, 0xCAFE_F00D, 0]);
 }
 
@@ -126,7 +129,7 @@ fn given_swi_cpuset_when_a_word_is_filled_then_count_words_hold_it() {
 fn given_swi_cpufastset_when_nine_words_are_copied_then_sixteen_move() {
     let source: Vec<u32> = (1..=20).collect();
     let m = arm9_with_source(&source, 0x0C, [SRC, DST, 9, 0]);
-    let words = [60, 64].map(|o| m.arm9_peek32(DST + o));
+    let words = [60, 64].map(|o| m.inspect().arm9_peek32(DST + o));
     assert_eq!(words, [16, 0]);
 }
 
@@ -149,7 +152,7 @@ fn set_arm7_registers(m: &mut Machine, regs: &[u32]) {
 #[test]
 fn given_swi_cpuset_on_the_arm7_when_words_are_copied_then_the_arm7_view_receives_them() {
     let m = arm7_with_source(0x1234_5678, 0x0B, [SRC, DST, WORD | 1]);
-    assert_eq!(m.arm7_peek32(0, DST), 0x1234_5678);
+    assert_eq!(m.inspect().arm7_peek32(0, DST), 0x1234_5678);
 }
 
 // ------------------------------------------------------------------------------- GetCRC16
@@ -173,7 +176,10 @@ fn set_arm9_registers(m: &mut Machine, regs: &[u32]) {
 #[test]
 fn given_swi_getcrc16_when_the_ascii_digits_are_summed_then_r0_is_the_crc_continued_from_r0() {
     // The CRC-16/MODBUS of "12345678" from FFFFh (`cart-header.md`).
-    assert_eq!(arm9_after_getcrc16().arm9().regs().get(0), crc_of_digits());
+    assert_eq!(
+        arm9_after_getcrc16().inspect().arm9().regs().get(0),
+        crc_of_digits()
+    );
 }
 
 /// CRC-16/MODBUS of "12345678", bit by bit.
@@ -216,21 +222,21 @@ fn arm9_decoding(number: u32, destination: u32) -> Machine {
 #[test]
 fn given_swi_lz77_8bit_when_decoding_to_main_ram_then_the_overlapping_block_repeats() {
     let m = arm9_decoding(0x11, DST);
-    let bytes = [0, 2, 4, 6, 8].map(|o| m.arm9_peek16(DST + o));
+    let bytes = [0, 2, 4, 6, 8].map(|o| m.inspect().arm9_peek16(DST + o));
     assert_eq!(bytes, [0x4241; 5]);
 }
 
 #[test]
 fn given_swi_lz77_16bit_when_decoding_to_vram_then_the_halfword_writes_land() {
     let m = arm9_decoding(0x12, VRAM_A);
-    let halfwords = [0, 2, 4, 6, 8].map(|o| m.arm9_peek16(VRAM_A + o));
+    let halfwords = [0, 2, 4, 6, 8].map(|o| m.inspect().arm9_peek16(VRAM_A + o));
     assert_eq!(halfwords, [0x4241; 5]);
 }
 
 #[test]
 fn given_swi_lz77_8bit_when_decoding_to_vram_then_the_byte_writes_are_ignored() {
     let m = arm9_decoding(0x11, VRAM_A);
-    assert_eq!(m.arm9_peek16(VRAM_A), 0);
+    assert_eq!(m.inspect().arm9_peek16(VRAM_A), 0);
 }
 
 // ----------------------------------------------------------------- numbers left unimplemented
@@ -241,6 +247,7 @@ fn given_the_implemented_data_numbers_when_called_then_none_is_recorded_as_unimp
         .iter()
         .map(|&n| {
             arm9_after(n, [0, 0, 0, 0])
+                .inspect()
                 .swi_record9()
                 .last_unimplemented()
         })
@@ -255,6 +262,7 @@ fn given_sleep_soundbias_and_the_other_decompressors_when_called_then_each_is_re
         .iter()
         .map(|&n| {
             arm7_after(n, [0, 0, 0, 0])
+                .inspect()
                 .swi_record7()
                 .last_unimplemented()
         })

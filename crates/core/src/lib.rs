@@ -4,6 +4,7 @@
 pub mod bus;
 pub mod cart;
 pub mod cpu;
+pub mod debug;
 pub mod gpu2d;
 mod hle;
 pub mod io;

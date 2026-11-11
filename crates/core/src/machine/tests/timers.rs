@@ -126,14 +126,14 @@ fn if9_after(steps: u64, control: u16) -> u32 {
     let mut m = machine();
     set9(&mut m, 0, RELOAD_16_TICKS, control);
     step(&mut m, steps);
-    m.irq9().if_()
+    m.inspect().irq9().if_()
 }
 
 fn if7_after(steps: u64, control: u16) -> u32 {
     let mut m = machine();
     set7(&mut m, 0, RELOAD_16_TICKS, control);
     step(&mut m, steps);
-    m.irq7().if_()
+    m.inspect().irq7().if_()
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn given_timer_1_with_irq_enable_when_it_overflows_then_if_bit_4_is_set_and_bit_
     let mut m = machine();
     set9(&mut m, 1, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 32);
-    assert_eq!(m.irq9().if_(), IF_TIMER1);
+    assert_eq!(m.inspect().irq9().if_(), IF_TIMER1);
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn given_a_timer_without_irq_enable_when_it_overflows_then_it_keeps_overflowing_
     step(&mut m, 100);
     // Overflows at 32, 64 and 96: the counter is 4 cycles = 2 ticks into the fourth period.
     assert_eq!(
-        (timer_events(&m), m.timers9().counter(0, 100)),
+        (timer_events(&m), m.inspect().timers9().counter(0, 100)),
         (vec![(128, kind9(0))], 0xFFF2)
     );
 }
@@ -203,7 +203,11 @@ fn given_a_chained_pair_when_timer_0_overflows_through_the_machine_then_timer_1_
     set9(&mut m, 1, 0x0005, START | COUNT_UP | IRQ);
     step(&mut m, 32);
     assert_eq!(
-        (m.timers9().counter(1, 32), m.irq9().if_(), timer_events(&m)),
+        (
+            m.inspect().timers9().counter(1, 32),
+            m.inspect().irq9().if_(),
+            timer_events(&m)
+        ),
         (6, IF_TIMER0, vec![(64, kind9(0))])
     );
 }
@@ -217,9 +221,9 @@ fn given_an_arm9_timer_with_irq_when_it_overflows_then_the_arm7_if_and_timers_ar
     step(&mut m, 40);
     assert_eq!(
         (
-            m.irq7().if_(),
-            m.timers7().control(0),
-            m.timers7().reload(0)
+            m.inspect().irq7().if_(),
+            m.inspect().timers7().control(0),
+            m.inspect().timers7().reload(0)
         ),
         (0, 0, 0)
     );
@@ -232,9 +236,9 @@ fn given_an_arm7_timer_with_irq_when_it_overflows_then_the_arm9_if_and_timers_ar
     step(&mut m, 40);
     assert_eq!(
         (
-            m.irq9().if_(),
-            m.timers9().control(0),
-            m.timers9().reload(0)
+            m.inspect().irq9().if_(),
+            m.inspect().timers9().control(0),
+            m.inspect().timers9().reload(0)
         ),
         (0, 0, 0)
     );
@@ -247,8 +251,8 @@ fn given_the_arm9_writes_a_reload_when_the_arm7_reads_the_same_address_then_it_r
     set9(&mut m, 0, 0x1234, 0);
     assert_eq!(
         (
-            m.arm9_peek16(reload_addr(0)),
-            m.arm7_peek16(0, reload_addr(0))
+            m.inspect().arm9_peek16(reload_addr(0)),
+            m.inspect().arm7_peek16(0, reload_addr(0))
         ),
         (0, 0)
     );
@@ -262,7 +266,10 @@ fn given_the_arm9_writes_a_reload_when_it_is_read_back_without_start_then_the_co
     let mut m = machine();
     set9(&mut m, 0, 0x1234, 0);
     assert_eq!(
-        (m.arm9_peek16(reload_addr(0)), m.timers9().reload(0)),
+        (
+            m.inspect().arm9_peek16(reload_addr(0)),
+            m.inspect().timers9().reload(0)
+        ),
         (0, 0x1234)
     );
 }
@@ -275,7 +282,11 @@ fn given_both_cpus_start_the_same_timer_when_run_then_each_overflows_on_its_own_
     set7(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 32);
     assert_eq!(
-        (m.irq9().if_(), m.irq7().if_(), timer_events(&m)),
+        (
+            m.inspect().irq9().if_(),
+            m.inspect().irq7().if_(),
+            timer_events(&m)
+        ),
         (IF_TIMER0, IF_TIMER0, vec![(64, kind9(0)), (64, kind7(0))])
     );
 }
@@ -301,10 +312,10 @@ fn given_equal_timers_on_both_cpus_when_read_after_21_arm9_steps_then_the_arm7_r
     let arm7_now = m.arm7_clock;
     assert_eq!(
         (
-            m.scheduler().now(),
+            m.inspect().scheduler().now(),
             arm7_now,
-            m.arm9_peek16(reload_addr(0)),
-            m.arm7_peek16(arm7_now, reload_addr(0))
+            m.inspect().arm9_peek16(reload_addr(0)),
+            m.inspect().arm7_peek16(arm7_now, reload_addr(0))
         ),
         (21, 22, 0xFFFA, 0xFFFB)
     );
@@ -316,9 +327,9 @@ fn given_an_arm7_timer_when_read_at_two_arm7_clocks_then_the_counter_follows_the
     set7_at(&mut m, 0, 0, RELOAD_16_TICKS, START);
     assert_eq!(
         (
-            m.arm7_peek16(0, reload_addr(0)),
-            m.arm7_peek16(10, reload_addr(0)),
-            m.arm7_peek16(11, reload_addr(0))
+            m.inspect().arm7_peek16(0, reload_addr(0)),
+            m.inspect().arm7_peek16(10, reload_addr(0)),
+            m.inspect().arm7_peek16(11, reload_addr(0))
         ),
         (0xFFF0, 0xFFF5, 0xFFF5)
     );
@@ -494,9 +505,9 @@ fn arm9_one_tick_timer() -> (u64, Vec<(u64, EventKind)>, [u32; 2]) {
     set9(&mut m, 0, 0xFFFF, START | IRQ);
     let queued = timer_events(&m);
     step(&mut m, 1);
-    let after_one = m.irq9().if_();
+    let after_one = m.inspect().irq9().if_();
     step(&mut m, 1);
-    (at, queued, [after_one, m.irq9().if_()])
+    (at, queued, [after_one, m.inspect().irq9().if_()])
 }
 
 #[test]
@@ -548,7 +559,10 @@ fn given_a_late_event_when_it_fires_then_the_next_overflow_is_on_the_timers_own_
     // Overflows were due at 2, 4, ... 128 (one event settles at most SLICE of them), so the
     // next is 130 on the timer's own grid, not late-based.
     assert_eq!(
-        (m.irq7().if_(), m.timers7().overflow_time(0)),
+        (
+            m.inspect().irq7().if_(),
+            m.inspect().timers7().overflow_time(0)
+        ),
         (IF_TIMER0, Some(130))
     );
 }
@@ -562,8 +576,8 @@ fn given_a_reload_written_in_the_gap_before_the_late_event_fires_when_it_is_writ
     // It latched IF with the reload it happened under, and the next one is one tick on (4).
     assert_eq!(
         (
-            m.irq7().if_(),
-            m.timers7().overflow_time(0),
+            m.inspect().irq7().if_(),
+            m.inspect().timers7().overflow_time(0),
             timer_events(&m)
         ),
         (IF_TIMER0, Some(4), vec![(1000, kind7(0))])
@@ -575,7 +589,10 @@ fn given_a_stop_written_in_the_gap_before_the_late_event_fires_when_it_is_writte
  {
     let mut m = lagging_arm7_timer(START | IRQ);
     m.bus7(3).write16(control_addr(0), 0);
-    assert_eq!((m.irq7().if_(), timer_events(&m)), (IF_TIMER0, vec![]));
+    assert_eq!(
+        (m.inspect().irq7().if_(), timer_events(&m)),
+        (IF_TIMER0, vec![])
+    );
 }
 
 #[test]
@@ -588,7 +605,10 @@ fn given_an_arm7_timer_whose_overflows_are_all_past_when_its_event_fires_then_ev
     set7_at(&mut m, 0, 0, 0xFFFF, START | IRQ);
     step(&mut m, 1);
     assert_eq!(
-        (m.irq7().if_(), m.timers7().overflow_time(0)),
+        (
+            m.inspect().irq7().if_(),
+            m.inspect().timers7().overflow_time(0)
+        ),
         (IF_TIMER0, Some(42))
     );
 }
@@ -600,9 +620,9 @@ fn given_a_running_timer_0_when_only_its_ignored_count_up_bit_is_set_then_its_ov
     let mut m = machine();
     set9(&mut m, 0, 0, START | 3);
     step(&mut m, 1000);
-    let before = m.timers9().overflow_time(0);
+    let before = m.inspect().timers9().overflow_time(0);
     m.bus9().write16(control_addr(0), START | 3 | COUNT_UP);
-    assert_eq!(m.timers9().overflow_time(0), before);
+    assert_eq!(m.inspect().timers9().overflow_time(0), before);
 }
 
 // ---------------------------------------------------------- ARM9 IRQ reaches the CPU
@@ -617,7 +637,7 @@ fn given_a_timer_irq_enabled_in_ie_and_ime_when_the_timer_overflows_then_the_arm
     set9(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 33);
     assert_eq!(
-        (m.arm9().regs().cpsr(), m.irq9().if_()),
+        (m.inspect().arm9().regs().cpsr(), m.inspect().irq9().if_()),
         (IRQ_ENTRY_CPSR, IF_TIMER0)
     );
 }
@@ -631,7 +651,7 @@ fn given_a_timer_irq_enabled_in_ie_when_one_cycle_before_the_overflow_then_the_a
     m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
     set9(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 31);
-    assert_eq!(m.arm9().regs().cpsr() & 0x1F, SYSTEM_I_CLEAR);
+    assert_eq!(m.inspect().arm9().regs().cpsr() & 0x1F, SYSTEM_I_CLEAR);
 }
 
 #[test]
@@ -643,7 +663,10 @@ fn given_a_timer_irq_with_ime_off_when_the_timer_overflows_then_if_is_set_but_th
     set9(&mut m, 0, RELOAD_16_TICKS, START | IRQ);
     step(&mut m, 40);
     assert_eq!(
-        (m.arm9().regs().cpsr() & 0x1F, m.irq9().if_()),
+        (
+            m.inspect().arm9().regs().cpsr() & 0x1F,
+            m.inspect().irq9().if_()
+        ),
         (SYSTEM_I_CLEAR, IF_TIMER0)
     );
 }
@@ -667,7 +690,7 @@ const ONE_TICK_OVERFLOW_AT: u64 = 5 + 2;
 /// when either does not happen within a bounded number of tries.
 fn irq_entry_time(m: &mut Machine) -> Option<u64> {
     (0..8).for_each(|_| {
-        if m.irq9().if_() & IF_TIMER0 == 0 {
+        if m.inspect().irq9().if_() & IF_TIMER0 == 0 {
             run_round(m);
         }
     });
@@ -675,7 +698,7 @@ fn irq_entry_time(m: &mut Machine) -> Option<u64> {
         .map(|_| {
             let before = m.scheduler.now();
             m.step_arm9();
-            (before, m.arm9().regs().cpsr() & 0x1F)
+            (before, m.inspect().arm9().regs().cpsr() & 0x1F)
         })
         .find(|&(_, mode)| mode == IRQ_MODE_BITS)
         .map(|(before, _)| before)
@@ -715,7 +738,10 @@ fn given_the_arm9_queues_an_event_past_the_target_when_a_round_runs_then_both_cp
     // "Interleaving").
     let mut m = booted(&rom_with(&SLOW_TICK_WRITER, &SPIN));
     run_round(&mut m);
-    assert_eq!((m.scheduler.now(), m.arm7_clock()), (SLICE, SLICE));
+    assert_eq!(
+        (m.scheduler.now(), m.inspect().arm7_clock()),
+        (SLICE, SLICE)
+    );
 }
 
 /// An ARM7 program that counts: `mov r0, #0`, then 40 `add r0, r0, #1`, then `b .`.
@@ -745,7 +771,11 @@ fn given_the_arm9_queues_an_event_mid_round_when_the_round_ends_then_the_arm7_ra
     let mut m = booted(&rom_with(&ONE_TICK_WRITER, &arm7_counter()));
     rounds_until_now_reaches(&mut m, ONE_TICK_OVERFLOW_AT);
     assert_eq!(
-        (m.arm7().regs().get(0), m.arm7_clock(), m.scheduler.now()),
+        (
+            m.inspect().arm7().regs().get(0),
+            m.inspect().arm7_clock(),
+            m.scheduler.now()
+        ),
         (3, 8, ONE_TICK_OVERFLOW_AT)
     );
 }
@@ -787,13 +817,13 @@ fn given_a_saved_machine_with_timers_when_loaded_then_the_timers_and_events_matc
     loaded.load_state(&original.save_state()).expect("loads");
     assert_eq!(
         (
-            loaded.timers9().clone(),
-            loaded.timers7().clone(),
+            loaded.inspect().timers9().clone(),
+            loaded.inspect().timers7().clone(),
             loaded.scheduler.pending()
         ),
         (
-            original.timers9().clone(),
-            original.timers7().clone(),
+            original.inspect().timers9().clone(),
+            original.inspect().timers7().clone(),
             original.scheduler.pending()
         )
     );
@@ -895,7 +925,7 @@ fn bytes_with_arm9_control(control: u8) -> Option<Vec<u8>> {
     let mut m = machine();
     // Stopped, reload 0x0012 (one varint byte), control 0x04: a distinctive encoding.
     set9(&mut m, 0, 0x0012, COUNT_UP);
-    let needle = postcard::to_allocvec(m.timers9()).expect("plain data encodes");
+    let needle = postcard::to_allocvec(m.inspect().timers9()).expect("plain data encodes");
     let bytes = m.save_state();
     let hits: Vec<usize> = bytes
         .windows(needle.len())

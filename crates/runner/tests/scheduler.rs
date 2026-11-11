@@ -59,7 +59,7 @@ const AFTER_TWO_FRAMES: &[(&str, u32, u32)] = &[
 fn mismatches(machine: &Machine, table: &[(&'static str, u32, u32)]) -> Vec<Mismatch> {
     table
         .iter()
-        .map(|&(name, address, expected)| (name, expected, machine.arm9_peek32(address)))
+        .map(|&(name, address, expected)| (name, expected, machine.inspect().arm9_peek32(address)))
         .filter(|&(_, expected, got)| expected != got)
         .collect()
 }
@@ -89,7 +89,10 @@ fn given_sched_rom_when_run_one_frame_then_the_arm7_clock_is_half_the_arm9_clock
     let mut machine = booted();
     machine.run_frame();
     assert_eq!(
-        (machine.scheduler().now(), machine.arm7_clock() / 2),
+        (
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock() / 2
+        ),
         (FRAME_CYCLES, FRAME_CYCLES / 2)
     );
 }

@@ -85,8 +85,8 @@ fn given_an_mcr_enabling_the_dtcm_when_the_next_str_runs_then_the_word_is_in_the
     );
     // The same RAM byte through the mirror 4 MiB up lies outside the DTCM region.
     let seen = (
-        machine.arm9_peek32(dtcm),
-        machine.arm9_peek32(dtcm + RAM_PERIOD),
+        machine.inspect().arm9_peek32(dtcm),
+        machine.inspect().arm9_peek32(dtcm + RAM_PERIOD),
     );
     assert_eq!(seen, (X, 0));
 }
@@ -107,9 +107,11 @@ fn given_a_dtcm_enabled_by_the_cpu_when_a_ldr_follows_the_str_then_the_register_
 fn given_a_str_to_main_ram_when_read_through_a_mirror_then_the_word_is_there() {
     let machine = run(&[STR_R3_R2], &[(2, ENTRY + 0x100), (3, X)], 1);
     let seen = (
-        machine.arm9_peek32(ENTRY + 0x100),
-        machine.arm9_peek32(ENTRY + 0x100 + RAM_PERIOD),
-        machine.arm9_peek32(ENTRY + 0x100 + 3 * RAM_PERIOD),
+        machine.inspect().arm9_peek32(ENTRY + 0x100),
+        machine.inspect().arm9_peek32(ENTRY + 0x100 + RAM_PERIOD),
+        machine
+            .inspect()
+            .arm9_peek32(ENTRY + 0x100 + 3 * RAM_PERIOD),
     );
     assert_eq!(seen, (X, X, X));
 }
@@ -164,7 +166,10 @@ fn given_opcodes_stored_into_an_enabled_itcm_when_the_cpu_jumps_to_address_0_the
 fn given_opcodes_stored_into_an_enabled_itcm_when_read_by_the_peek_then_the_itcm_holds_them() {
     let machine = run_from_itcm();
     assert_eq!(
-        (machine.arm9_peek32(0), machine.arm9_peek32(4)),
+        (
+            machine.inspect().arm9_peek32(0),
+            machine.inspect().arm9_peek32(4)
+        ),
         (MOV_R6_55, MOV_R7_66)
     );
 }
@@ -191,7 +196,7 @@ fn run_vram_stores() -> Machine {
 fn given_a_strb_to_vramcnt_a_when_executed_then_bank_a_is_enabled_in_lcdc_mode() {
     let machine = run_vram_stores();
     assert_eq!(
-        machine.vram_a(),
+        machine.inspect().vram_a(),
         crate::bus::VramBankState {
             enabled: true,
             mst: 0,
@@ -205,8 +210,8 @@ fn given_vram_a_enabled_by_the_cpu_when_str_and_strh_store_then_the_word_and_hal
     let machine = run_vram_stores();
     assert_eq!(
         (
-            machine.arm9_peek32(0x0680_0000),
-            machine.arm9_peek16(0x0680_0004)
+            machine.inspect().arm9_peek32(0x0680_0000),
+            machine.inspect().arm9_peek16(0x0680_0004)
         ),
         (0xA1B2_C3D4, 0xC3D4)
     );
@@ -215,13 +220,13 @@ fn given_vram_a_enabled_by_the_cpu_when_str_and_strh_store_then_the_word_and_hal
 #[test]
 fn given_vram_a_enabled_by_the_cpu_when_a_strb_stores_to_it_then_the_byte_is_ignored() {
     let machine = run_vram_stores();
-    assert_eq!(machine.arm9_peek8(0x0680_0008), 0);
+    assert_eq!(machine.inspect().arm9_peek8(0x0680_0008), 0);
 }
 
 #[test]
 fn given_vram_a_enabled_by_the_cpu_when_a_byte_is_peeked_then_it_is_the_stored_low_byte() {
     let machine = run_vram_stores();
-    assert_eq!(machine.arm9_peek8(0x0680_0000), 0xD4);
+    assert_eq!(machine.inspect().arm9_peek8(0x0680_0000), 0xD4);
 }
 
 /// A machine with `X` stored at `ENTRY + 0x20` through the bus.
@@ -235,11 +240,11 @@ fn machine_with_word() -> Machine {
 fn given_a_word_in_main_ram_when_peeked_at_each_width_then_the_bytes_and_alignment_match_the_bus() {
     let machine = machine_with_word();
     let seen = (
-        machine.arm9_peek32(ENTRY + 0x20),
-        machine.arm9_peek32(ENTRY + 0x23),
-        machine.arm9_peek16(ENTRY + 0x22),
-        machine.arm9_peek16(ENTRY + 0x23),
-        machine.arm9_peek8(ENTRY + 0x21),
+        machine.inspect().arm9_peek32(ENTRY + 0x20),
+        machine.inspect().arm9_peek32(ENTRY + 0x23),
+        machine.inspect().arm9_peek16(ENTRY + 0x22),
+        machine.inspect().arm9_peek16(ENTRY + 0x23),
+        machine.inspect().arm9_peek8(ENTRY + 0x21),
     );
     assert_eq!(seen, (X, X, 0x1122, 0x1122, 0x33));
 }
@@ -253,7 +258,10 @@ fn given_a_peek_through_a_dtcm_when_the_tcm_is_enabled_then_it_sees_the_tcm_word
         3,
     );
     assert_eq!(
-        (machine.arm9_peek32(dtcm + 4), machine.arm9_peek32(dtcm)),
+        (
+            machine.inspect().arm9_peek32(dtcm + 4),
+            machine.inspect().arm9_peek32(dtcm)
+        ),
         (X, 0)
     );
 }

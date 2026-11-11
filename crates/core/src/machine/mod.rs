@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The whole emulated machine: [`Machine`], the one struct that owns all emulator state.
 
-use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramBankState, WramState};
+use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
-use crate::hle::{BiosState, SwiRecord};
+use crate::hle::BiosState;
 use crate::io::Io;
-use crate::io::dma::Dma;
-use crate::io::irq::InterruptController;
-use crate::io::timers::Timers;
 use crate::scheduler::{EventKind, Scheduler};
 use serde::{Deserialize, Serialize};
 
@@ -233,139 +230,9 @@ impl Machine {
         self.present_frame();
     }
 
-    /// VCOUNT: the current line, 0-262 (`docs/hw/display-timing.md`).
-    // The debugger's IO register panel and the scheduler timeline (#59) will show it.
-    pub fn vcount(&self) -> u16 {
-        self.io.timing().vcount()
-    }
-
-    /// DISPSTAT as the ARM9 reads it.
-    // The debugger's IO register panel will show it.
-    pub fn dispstat9(&self) -> u16 {
-        self.io.timing().dispstat::<true>()
-    }
-
-    /// DISPSTAT as the ARM7 reads it.
-    // The debugger's IO register panel will show it.
-    pub fn dispstat7(&self) -> u16 {
-        self.io.timing().dispstat::<false>()
-    }
-
-    /// Engine A's display registers.
-    // The debugger's IO register panel will show them.
-    pub fn gpu2d(&self) -> &crate::gpu2d::Gpu2d {
-        self.io.gpu2d()
-    }
-
     /// Returns how many frames [`Machine::run_frame`] has completed.
     pub fn frame_count(&self) -> u64 {
         self.frame_count
-    }
-
-    /// The ARM9 core.
-    // The debugger's CPU panel (#56) will show it.
-    pub fn arm9(&self) -> &Cpu<true> {
-        &self.arm9
-    }
-
-    /// The ARM7 core.
-    // The debugger's scheduler event timeline (#59) will show it with the scheduler.
-    pub fn arm7(&self) -> &Cpu<false> {
-        &self.arm7
-    }
-
-    /// The ARM7's clock in master cycles (ARM9 cycles).
-    pub fn arm7_clock(&self) -> u64 {
-        self.arm7_clock
-    }
-
-    /// What the HLE BIOS recorded of the ARM9's SWIs: the last number and the last one no
-    /// routine implements.
-    // The debugger's CPU panel (#56) will show it.
-    pub fn swi_record9(&self) -> &SwiRecord {
-        &self.bios.arm9
-    }
-
-    /// What the HLE BIOS recorded of the ARM7's SWIs.
-    // The debugger's CPU panel (#56) will show it.
-    pub fn swi_record7(&self) -> &SwiRecord {
-        &self.bios.arm7
-    }
-
-    /// The master clock and the pending events.
-    // The debugger's scheduler event timeline (#59) will show it.
-    pub fn scheduler(&self) -> &crate::scheduler::Scheduler {
-        &self.scheduler
-    }
-
-    /// The RAM both CPUs see.
-    // The debugger's memory viewer (#57) will show it.
-    pub fn memory(&self) -> &Memory {
-        &self.memory
-    }
-
-    /// The register devices: display, interrupt controllers, IPC, timers and DMA.
-    // The debugger's IO register panel will show them.
-    pub fn io(&self) -> &Io {
-        &self.io
-    }
-
-    /// VRAMCNT_A as decoded.
-    // The debugger's VRAM bank map (#58) will show it.
-    pub fn vram_a(&self) -> VramBankState {
-        self.memory.vram_a()
-    }
-
-    /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.
-    // The debugger's memory viewer (#57) shows each CPU's window from it.
-    pub fn wramcnt(&self) -> WramState {
-        self.memory.wramcnt()
-    }
-
-    /// The ARM9's interrupt controller (IME, IE, IF).
-    // The debugger's CPU panel (#56) shows it beside the ARM9's registers.
-    pub fn irq9(&self) -> &InterruptController<true> {
-        self.io.irq9()
-    }
-
-    /// The ARM7's interrupt controller (IME, IE, IF).
-    // The debugger's CPU panel (#56) shows it beside the ARM7's registers.
-    pub fn irq7(&self) -> &InterruptController<false> {
-        self.io.irq7()
-    }
-
-    /// IPCSYNC and the two IPC FIFOs.
-    // The debugger's IPC panel (#56 CPU panel until one exists) shows the sync nibbles, both
-    // FIFOs' contents and the flags of both CPUs.
-    pub fn ipc(&self) -> &crate::io::ipc::Ipc {
-        self.io.ipc()
-    }
-
-    /// The ARM9's four timers.
-    // The debugger's IO register panel (#56 CPU panel until one exists) shows each timer's
-    // counter, reload and control; the scheduler timeline (#59) shows their overflow events.
-    pub fn timers9(&self) -> &Timers<true> {
-        self.io.timers9()
-    }
-
-    /// The ARM7's four timers.
-    // The debugger's IO register panel shows them with the ARM9's; the scheduler timeline (#59)
-    // shows their overflow events.
-    pub fn timers7(&self) -> &Timers<false> {
-        self.io.timers7()
-    }
-
-    /// The ARM9's four DMA channels.
-    // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
-    // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
-    pub fn dma9(&self) -> &Dma<true> {
-        self.io.dma9()
-    }
-
-    /// The ARM7's four DMA channels.
-    // The debugger's IO register panel shows them with the ARM9's.
-    pub fn dma7(&self) -> &Dma<false> {
-        self.io.dma7()
     }
 
     /// Steps the ARM9 by one instruction and advances the master clock by its cost
@@ -466,36 +333,6 @@ impl Machine {
         if self.io.power_mut().take_halt() {
             self.arm7.set_halted(true);
         }
-    }
-
-    /// Reads `N` bytes as the ARM9 data bus would, without side effects: IPCFIFORECV shows its
-    /// next word without taking it, and nothing needs the scheduler.
-    fn arm9_peek<const N: usize>(&self, addr: u32) -> [u8; N] {
-        crate::bus::peek::<true, N>(
-            &self.memory,
-            &self.io,
-            &TcmConfig::from_cp15(self.arm9.cp15()),
-            self.scheduler.now(),
-            addr,
-        )
-    }
-
-    /// Reads a byte as the ARM9 data bus would, without side effects.
-    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
-    pub fn arm9_peek8(&self, addr: u32) -> u8 {
-        u8::from_le_bytes(self.arm9_peek(addr))
-    }
-
-    /// Reads a halfword as the ARM9 data bus would, without side effects.
-    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
-    pub fn arm9_peek16(&self, addr: u32) -> u16 {
-        u16::from_le_bytes(self.arm9_peek(addr))
-    }
-
-    /// Reads a word as the ARM9 data bus would, without side effects.
-    // The debugger's memory viewer (#57) and the runner's boot memory-dump test use it.
-    pub fn arm9_peek32(&self, addr: u32) -> u32 {
-        u32::from_le_bytes(self.arm9_peek(addr))
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.

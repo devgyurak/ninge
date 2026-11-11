@@ -20,7 +20,7 @@ fn boot_one_frame() -> Machine {
 }
 
 fn record(machine: &Machine, slot: u32) -> u32 {
-    machine.arm9_peek32(RECORD + slot * 4)
+    machine.inspect().arm9_peek32(RECORD + slot * 4)
 }
 
 /// Recorded r0..r11 that are not zero, as (register, value).
@@ -87,7 +87,7 @@ fn given_boot_rom_when_loaded_then_the_first_opcode_is_at_the_entry_address() {
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("valid header");
     // `str r0, [pc, #0xF8]`: the record is 0x100 past the entry and pc reads entry + 8.
-    assert_eq!(machine.arm9_peek32(ENTRY), 0xE58F_00F8);
+    assert_eq!(machine.inspect().arm9_peek32(ENTRY), 0xE58F_00F8);
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn given_boot_rom_when_loaded_then_the_header_copy_is_at_027ffe00() {
     let first_word = u32::from_le_bytes([rom[0], rom[1], rom[2], rom[3]]);
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("valid header");
-    assert_eq!(machine.arm9_peek32(0x027F_FE00), first_word);
+    assert_eq!(machine.inspect().arm9_peek32(0x027F_FE00), first_word);
 }
 
 #[test]

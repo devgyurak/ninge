@@ -71,7 +71,7 @@ fn enable7(m: &mut Machine, ime: u32, ie: u32) {
 type Seen = (u32, u32, Option<u32>, u32, u32, u32);
 
 fn seen9(m: &Machine) -> Seen {
-    let r = m.arm9().regs();
+    let r = m.inspect().arm9().regs();
     (
         r.cpsr(),
         r.banked(Bank::Irq, 14),
@@ -83,7 +83,7 @@ fn seen9(m: &Machine) -> Seen {
 }
 
 fn seen7(m: &Machine) -> Seen {
-    let r = m.arm7().regs();
+    let r = m.inspect().arm7().regs();
     (
         r.cpsr(),
         r.banked(Bank::Irq, 14),
@@ -174,7 +174,7 @@ fn gating_failures9() -> Vec<Setup> {
         .filter(|&(s, taken)| {
             let mut m = prepared9(s);
             m.step_arm9();
-            in_irq_mode(m.arm9().regs().cpsr()) != taken
+            in_irq_mode(m.inspect().arm9().regs().cpsr()) != taken
         })
         .map(|(s, _)| s)
         .collect()
@@ -186,7 +186,7 @@ fn gating_failures7() -> Vec<Setup> {
         .filter(|&(s, taken)| {
             let mut m = prepared7(s);
             m.step_arm7_instruction();
-            in_irq_mode(m.arm7().regs().cpsr()) != taken
+            in_irq_mode(m.inspect().arm7().regs().cpsr()) != taken
         })
         .map(|(s, _)| s)
         .collect()
@@ -238,7 +238,13 @@ fn given_an_enabled_pending_irq_when_the_arm9_steps_then_the_entry_replaces_the_
     let mut m = prepared9(ALL_ON);
     m.step_arm9();
     // r0 is still 0: `mov r0, #0x55` did not run. ARM9 cost 1 master cycle.
-    assert_eq!((m.arm9().regs().get(0), m.scheduler().now()), (0, 1));
+    assert_eq!(
+        (
+            m.inspect().arm9().regs().get(0),
+            m.inspect().scheduler().now()
+        ),
+        (0, 1)
+    );
 }
 
 #[test]
@@ -265,7 +271,10 @@ fn given_an_enabled_pending_irq_when_the_arm7_steps_then_the_entry_replaces_the_
     let mut m = prepared7(ALL_ON);
     m.step_arm7_instruction();
     // ARM7 cost 2 master cycles.
-    assert_eq!((m.arm7().regs().get(0), m.arm7_clock()), (0, 2));
+    assert_eq!(
+        (m.inspect().arm7().regs().get(0), m.inspect().arm7_clock()),
+        (0, 2)
+    );
 }
 
 #[test]
@@ -274,7 +283,11 @@ fn given_an_irq_taken_when_if_is_read_then_the_entry_has_not_cleared_it_and_the_
     let mut m = prepared9(ALL_ON);
     m.step_arm9();
     assert_eq!(
-        (m.irq9().if_(), m.irq9().line(), m.arm9_peek32(IF)),
+        (
+            m.inspect().irq9().if_(),
+            m.inspect().irq9().line(),
+            m.inspect().arm9_peek32(IF)
+        ),
         (TIMER0, true, TIMER0)
     );
 }
@@ -283,7 +296,10 @@ fn given_an_irq_taken_when_if_is_read_then_the_entry_has_not_cleared_it_and_the_
 fn given_an_irq_taken_on_the_arm7_when_if_is_read_then_the_entry_has_not_cleared_it() {
     let mut m = prepared7(ALL_ON);
     m.step_arm7_instruction();
-    assert_eq!((m.irq7().if_(), m.irq7().line()), (TIMER0, true));
+    assert_eq!(
+        (m.inspect().irq7().if_(), m.inspect().irq7().line()),
+        (TIMER0, true)
+    );
 }
 
 // ---------------------------------------------------------------- IME = 0
@@ -298,10 +314,10 @@ fn given_ime_off_and_a_request_when_the_arm9_steps_then_the_instruction_runs_and
     m.step_arm9();
     assert_eq!(
         (
-            m.arm9().regs().get(0),
-            m.arm9().regs().cpsr(),
-            m.irq9().if_(),
-            m.irq9().line()
+            m.inspect().arm9().regs().get(0),
+            m.inspect().arm9().regs().cpsr(),
+            m.inspect().irq9().if_(),
+            m.inspect().irq9().line()
         ),
         (0x55, SYSTEM_I_CLEAR, TIMER0, false)
     );
@@ -343,10 +359,10 @@ fn given_i_set_and_a_pending_irq_when_the_arm9_steps_then_the_instruction_runs_a
     m.step_arm9();
     assert_eq!(
         (
-            m.arm9().regs().get(0),
-            m.arm9().regs().cpsr(),
-            m.irq9().line(),
-            m.irq9().if_()
+            m.inspect().arm9().regs().get(0),
+            m.inspect().arm9().regs().cpsr(),
+            m.inspect().irq9().line(),
+            m.inspect().irq9().if_()
         ),
         (0x55, SYSTEM_I_SET, true, TIMER0)
     );
@@ -409,9 +425,9 @@ fn given_a_request_for_a_source_ie_does_not_enable_when_the_arm9_steps_then_it_i
     m.step_arm9();
     assert_eq!(
         (
-            m.arm9().regs().get(0),
-            m.arm9().regs().cpsr(),
-            m.irq9().if_()
+            m.inspect().arm9().regs().get(0),
+            m.inspect().arm9().regs().cpsr(),
+            m.inspect().irq9().if_()
         ),
         (0x55, SYSTEM_I_CLEAR, TIMER0)
     );
@@ -424,9 +440,9 @@ fn given_a_request_acknowledged_before_the_step_when_the_arm9_steps_then_the_req
     m.step_arm9();
     assert_eq!(
         (
-            m.arm9().regs().get(0),
-            m.arm9().regs().cpsr(),
-            m.irq9().if_()
+            m.inspect().arm9().regs().get(0),
+            m.inspect().arm9().regs().cpsr(),
+            m.inspect().irq9().if_()
         ),
         (0x55, SYSTEM_I_CLEAR, 0)
     );
@@ -444,9 +460,9 @@ fn given_a_request_on_the_arm9_when_both_cpus_run_then_the_arm7_is_never_interru
     m.step_arm9();
     assert_eq!(
         (
-            in_irq_mode(m.arm9().regs().cpsr()),
-            m.arm7().regs().cpsr(),
-            m.irq7().if_()
+            in_irq_mode(m.inspect().arm9().regs().cpsr()),
+            m.inspect().arm7().regs().cpsr(),
+            m.inspect().irq7().if_()
         ),
         (true, SYSTEM_I_CLEAR, 0)
     );
@@ -463,10 +479,10 @@ fn given_a_request_on_the_arm7_when_both_cpus_run_then_the_arm9_is_never_interru
     m.step_arm9_instruction();
     assert_eq!(
         (
-            in_irq_mode(m.arm7().regs().cpsr()),
-            m.arm9().regs().cpsr(),
-            m.arm9().regs().get(0),
-            m.irq9().if_()
+            in_irq_mode(m.inspect().arm7().regs().cpsr()),
+            m.inspect().arm9().regs().cpsr(),
+            m.inspect().arm9().regs().get(0),
+            m.inspect().irq9().if_()
         ),
         (true, SYSTEM_I_CLEAR, 0x55, 0)
     );
@@ -486,9 +502,9 @@ fn given_the_same_request_on_both_cpus_with_only_the_arm9_enabled_when_both_run_
     m.step_arm7_instruction();
     assert_eq!(
         (
-            in_irq_mode(m.arm9().regs().cpsr()),
-            in_irq_mode(m.arm7().regs().cpsr()),
-            m.irq7().if_()
+            in_irq_mode(m.inspect().arm9().regs().cpsr()),
+            in_irq_mode(m.inspect().arm7().regs().cpsr()),
+            m.inspect().irq7().if_()
         ),
         (true, false, TIMER0)
     );
@@ -524,7 +540,7 @@ fn given_a_pending_enabled_request_on_each_cpu_when_a_frame_runs_then_both_enter
         (
             (s9.0, s9.1, s9.4),
             (s7.0, s7.1, s7.4),
-            (m.irq9().if_(), m.irq7().if_())
+            (m.inspect().irq9().if_(), m.inspect().irq7().if_())
         ),
         (
             (IRQ_ENTRY_CPSR, ENTRY9 + 4, 0),
@@ -551,7 +567,7 @@ fn given_the_arm9_in_thumb_state_when_an_irq_is_taken_then_lr_is_the_next_instru
     enable9(&mut m, 1, TIMER0);
     m.step_arm9_instruction();
     m.step_arm9_instruction();
-    let thumb_cpsr = m.arm9().regs().cpsr() & !0x80;
+    let thumb_cpsr = m.inspect().arm9().regs().cpsr() & !0x80;
     m.arm9.regs_mut().set_cpsr(thumb_cpsr);
     m.io.request_irq(Requests {
         arm9: TIMER0,
@@ -602,7 +618,7 @@ fn if_after_lcd_ipc_and_timer() -> (u32, u32) {
     m.bus7(0).write16(IPCSYNC, SYNC_IRQ_ENABLE);
     m.bus9().write16(IPCSYNC, SYNC_SEND_IRQ);
     (0..4000).for_each(|_| m.step_arm9());
-    (m.irq9().if_(), m.irq7().if_())
+    (m.inspect().irq9().if_(), m.inspect().irq7().if_())
 }
 
 #[test]

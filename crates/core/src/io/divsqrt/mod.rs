@@ -130,8 +130,8 @@ impl DivSqrt {
     }
 
     /// DIVCNT as a read at `now` sees it: the mode bits, the zero flag, and the busy bit.
-    // TODO(hw-unverified): the mode bits read back as written, mode 3 included (`divsqrt.md`,
-    // "Unverified").
+    // TODO(hw-unverified): the mode bits read back as written, mode 3 included, and the unused
+    // bits read 0 (`divsqrt.md`, "Unverified").
     pub fn divcnt(&self, now: u64) -> u32 {
         u32::from(self.div_mode)
             | if self.div0 { DIV0_BIT } else { 0 }
@@ -143,6 +143,7 @@ impl DivSqrt {
     }
 
     /// SQRTCNT as a read at `now` sees it.
+    // TODO(hw-unverified): the unused bits read 0 (`divsqrt.md`, "Unverified").
     pub fn sqrtcnt(&self, now: u64) -> u32 {
         u32::from(self.sqrt_mode)
             | if now < self.sqrt_busy_until {

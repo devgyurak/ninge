@@ -20,8 +20,7 @@ Both units belong to the ARM9 only. The ARM7 has no such registers.
 | 0x0400_02B8 | SQRT_PARAM | 64 | R/W | 0 |
 
 The 64-bit registers are read and written as two words, low word first in memory. DIVCNT and
-SQRTCNT are 16 bits wide: bits 16-31 of their words are not used (the other halves of the words
-read 0 and drop writes). Access in smaller pieces than the register is not described by GBATEK;
+SQRTCNT are 16 bits wide: bits 16-31 of their words are not used. Access in smaller pieces than the register is not described by GBATEK;
 see "Unverified".
 
 ### DIVCNT bits
@@ -103,6 +102,9 @@ Code sites are in `crates/core/src/io/divsqrt/mod.rs`; each carries `TODO(hw-unv
 - What a result register returns when read while the unit is busy — GBATEK does not say; the
   finished value here — `DivSqrt::byte` — verify by a test ROM that reads the result before the
   busy bit clears.
+- What the unused bits read: DIVCNT bits 2-13, SQRTCNT bits 1-14, and bits 16-31 of both
+  words (GBATEK says only "not used"; they read 0 and drop writes here) —
+  `DivSqrt::divcnt`, `DivSqrt::sqrtcnt`.
 - Reset values of all registers (all zero here) — `DivSqrt::new`.
 - Whether DIVCNT bits 0-1 read back as written when the mode is 3 — `DivSqrt::divcnt`.
 - A denominator whose low half is zero and whose upper half is not, in modes 0 and 1: the

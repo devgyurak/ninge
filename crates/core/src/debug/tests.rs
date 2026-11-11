@@ -7,7 +7,7 @@
 use super::*;
 use crate::cpu::Bus;
 use crate::io::dma::DMA0SAD_ADDR;
-use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
+use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR};
 use crate::io::irq::{IE_ADDR, IME_ADDR, VBLANK_IRQ};
 use crate::io::power::POSTFLG_ADDR;
 use crate::io::timers::TM0CNT_L_ADDR;
@@ -339,9 +339,26 @@ fn given_a_running_arm7_timer_when_the_arm7_peeks_its_counter_then_it_reads_as_o
 }
 
 #[test]
-fn given_a_machine_when_the_arm9_peeks_then_the_machine_is_unchanged() {
-    let m = after_arm9_write32(MAIN_RAM, WORD);
-    let before = m.clone();
-    let _ = m.inspect().arm9_peek32(MAIN_RAM);
-    assert_eq!(m, before);
+fn given_a_word_in_the_arm7_send_fifo_when_the_arm9_peeks_the_receive_port_twice_then_the_cpu_read_still_gets_it()
+ {
+    let mut m = Machine::new();
+    m.bus9().write16(IPCFIFOCNT_ADDR, FIFO_ENABLE);
+    m.bus7(0).write16(IPCFIFOCNT_ADDR, FIFO_ENABLE);
+    m.bus7(0).write32(IPCFIFOSEND_ADDR, WORD);
+    let peeks = (
+        m.inspect().arm9_peek32(IPCFIFORECV_ADDR),
+        m.inspect().arm9_peek32(IPCFIFORECV_ADDR),
+    );
+    assert_eq!(
+        (peeks, m.bus9().read32(IPCFIFORECV_ADDR)),
+        ((WORD, WORD), WORD)
+    );
+}
+
+#[test]
+fn given_a_running_arm9_timer_and_an_advanced_clock_when_the_arm9_peeks_its_counter_then_it_reads_as_of_the_master_clock()
+ {
+    let mut m = with_timer_started(true);
+    m.scheduler.advance(THREE_TICKS);
+    assert_eq!(m.inspect().arm9_peek16(TM0CNT_L_ADDR), RELOAD_16_TICKS + 3);
 }

@@ -2,7 +2,12 @@
 
 <div align="center">
 
-<h1 align="center">ninge</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/ninge-lockup-white.svg">
+    <img src="docs/logo/ninge-lockup.svg" alt="ninge" width="360">
+  </picture>
+</h1>
 
 **A terminal-native dual-screen handheld emulator, written from scratch in Rust**
 
@@ -122,7 +127,7 @@ crates/tracediff/  ninge-tracediff  trace comparison against a reference emulato
 testroms/          our own bare-metal test ROM sources
 tests/             integration tests, golden-frame hashes
 docs/hw/           hardware notes in our own words
-docs/              the plan, the current status, release notes
+docs/              the plan, the current status, release notes, the logo
 scripts/           verify.sh, test-ROM build, agent hooks
 AGENTS.md          project conventions for every coding agent and contributor
 ```

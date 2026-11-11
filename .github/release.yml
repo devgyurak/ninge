@@ -1,0 +1,29 @@
+# Groups the notes GitHub generates for a release by PR label (AGENTS.md section 8, commit skill
+# section 7). The release workflow puts docs/release-notes/<version>.md above them.
+changelog:
+  exclude:
+    labels:
+      - decision
+      - investigation
+  categories:
+    - title: "✨ Features"
+      labels:
+        - feature
+    - title: "🐛 Bug fixes"
+      labels:
+        - bug
+    - title: "🧹 Internal"
+      labels:
+        - refactor
+        - ci
+        - test
+    - title: "📝 Documentation"
+      labels:
+        - documentation
+    - title: "📦 Dependencies"
+      labels:
+        - dependencies
+    # A PR with none of the labels above still shows up.
+    - title: "Other changes"
+      labels:
+        - "*"

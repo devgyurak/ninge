@@ -12,7 +12,8 @@
 [![Terminals: Ghostty · kitty](https://img.shields.io/badge/terminals-Ghostty%20%C2%B7%20kitty-informational)](#run)
 [![Last commit](https://img.shields.io/github/last-commit/devgyurak/ninge/develop)](https://github.com/devgyurak/ninge/commits/develop)
 
-[Korean](README-KO.md)
+[Status](#status) · [Install](#install) · [Run](#run) · [Documentation](#documentation) ·
+[Contributing](#contributing) · [Korean](README-KO.md)
 
 </div>
 
@@ -125,6 +126,19 @@ docs/              the plan, the current status, release notes
 scripts/           verify.sh, test-ROM build, agent hooks
 AGENTS.md          project conventions for every coding agent and contributor
 ```
+
+## Documentation
+
+| Document | What is in it |
+|---|---|
+| [`docs/PLAN.md`](docs/PLAN.md) ([Korean](docs/PLAN-KO.md)) | Goals, architecture, the phased roadmap ([§5](docs/PLAN.md#5-roadmap)), references ([§9](docs/PLAN.md#9-references)) |
+| [`docs/STATUS.md`](docs/STATUS.md) | The current phase, each phase's done-when, settled decisions |
+| [`docs/release-notes/`](docs/release-notes/) | What each release can and cannot do |
+| [`docs/hw/`](docs/hw/README.md) | Hardware notes in our own words: the clean-room boundary |
+| [`AGENTS.md`](AGENTS.md) | Architecture rules ([§2](AGENTS.md#2-architecture--never-violate)), clean room ([§3](AGENTS.md#3-clean-room-and-legal-invariants--the-most-dangerous-part)), tests ([§5](AGENTS.md#5-tests--enforced-rules)) |
+| [`testroms/README.md`](testroms/README.md) | Each test ROM and what it checks |
+| [`tests/golden/README.md`](tests/golden/README.md) | How golden-frame hashes are made and when they may change |
+| [Issues labeled `decision`](https://github.com/devgyurak/ninge/issues?q=label%3Adecision) | Design decisions with their context and alternatives |
 
 ## Contributing
 

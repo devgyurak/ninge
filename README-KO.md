@@ -12,6 +12,7 @@
 [![Terminals: Ghostty · kitty](https://img.shields.io/badge/terminals-Ghostty%20%C2%B7%20kitty-informational)](#실행)
 [![Last commit](https://img.shields.io/github/last-commit/devgyurak/ninge/develop)](https://github.com/devgyurak/ninge/commits/develop)
 
+[현재 상태](#현재-상태) · [설치](#설치) · [실행](#실행) · [문서](#문서) · [기여](#기여) ·
 [English](README.md)
 
 </div>
@@ -124,6 +125,19 @@ docs/              계획, 현재 상태, 릴리스 노트
 scripts/           verify.sh, 테스트 ROM 빌드, 에이전트 훅
 AGENTS.md          모든 코딩 에이전트와 기여자를 위한 프로젝트 규칙
 ```
+
+## 문서
+
+| 문서 | 내용 |
+|---|---|
+| [`docs/PLAN-KO.md`](docs/PLAN-KO.md) ([English](docs/PLAN.md)) | 목표, 아키텍처, 단계별 로드맵([§5](docs/PLAN-KO.md#5-로드맵)), 레퍼런스([§9](docs/PLAN-KO.md#9-레퍼런스)) |
+| [`docs/STATUS.md`](docs/STATUS.md) | 현재 단계, 단계별 완료 조건, 확정된 결정 |
+| [`docs/release-notes/`](docs/release-notes/) | 릴리스마다 되는 것과 안 되는 것 |
+| [`docs/hw/`](docs/hw/README.md) | 자체 표현으로 쓴 하드웨어 노트: 클린룸의 경계 |
+| [`AGENTS.md`](AGENTS.md) | 아키텍처 규칙([§2](AGENTS.md#2-architecture--never-violate)), 클린룸([§3](AGENTS.md#3-clean-room-and-legal-invariants--the-most-dangerous-part)), 테스트([§5](AGENTS.md#5-tests--enforced-rules)) |
+| [`testroms/README.md`](testroms/README.md) | 테스트 ROM 각각과 그것이 확인하는 것 |
+| [`tests/golden/README.md`](tests/golden/README.md) | 골든 프레임 해시를 만드는 법과 바꿀 수 있는 때 |
+| [`decision` 라벨 이슈](https://github.com/devgyurak/ninge/issues?q=label%3Adecision) | 맥락과 대안을 함께 남긴 설계 결정 |
 
 ## 기여
 

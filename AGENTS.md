@@ -78,7 +78,8 @@ ARMv4T/v5TE interpreter) · `bus/` (ARM9 view, ARM7 view, shared memory) · `io/
 devices: `irq/` `ipc/` `timers/` `dma/` `timing/`; the address map `io/map.rs`; the one device
 interface `io/device.rs`) · `savestate/` · `scheduler/` · `gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/`
 (protocol, AUXSPI saves) · `spi/` (synthetic firmware, touch, power) · `hle/` (HLE BIOS SWIs,
-direct boot) · `debug/` (breakpoint and trace hooks).
+direct boot) · `debug/` (the read-only inspect API, `Machine::inspect`; breakpoint and trace
+hooks come later).
 
 ### Rules you must keep (plan §4.2, §8)
 

@@ -52,7 +52,7 @@ fn byte_mismatches(
     expected: impl Fn(usize) -> u8,
 ) -> Vec<usize> {
     (0..len)
-        .filter(|&i| m.arm9_peek8(base + i as u32) != expected(i))
+        .filter(|&i| m.inspect().arm9_peek8(base + i as u32) != expected(i))
         .collect()
 }
 
@@ -61,13 +61,13 @@ fn stray_nonzero_words(m: &Machine, allowed: &[(u32, u32)]) -> Vec<u32> {
     (RAM..RAM_END)
         .step_by(4)
         .filter(|&a| !allowed.iter().any(|&(s, l)| a >= s && a < s + l))
-        .filter(|&a| m.arm9_peek32(a) != 0)
+        .filter(|&a| m.inspect().arm9_peek32(a) != 0)
         .collect()
 }
 
 fn nonzero_core_registers(m: &Machine) -> Vec<(usize, u32)> {
     (0..=11)
-        .map(|i| (i, m.arm9().regs().get(i)))
+        .map(|i| (i, m.inspect().arm9().regs().get(i)))
         .filter(|&(_, v)| v != 0)
         .collect()
 }
@@ -77,7 +77,7 @@ fn header_copy_mismatches(m: &Machine, image: &[u8]) -> Vec<usize> {
     (0..HEADER_LEN / 4)
         .filter(|&w| {
             let b = &image[w * 4..w * 4 + 4];
-            m.arm9_peek32(HEADER_COPY + (w * 4) as u32)
+            m.inspect().arm9_peek32(HEADER_COPY + (w * 4) as u32)
                 != u32::from_le_bytes([b[0], b[1], b[2], b[3]])
         })
         .collect()
@@ -110,7 +110,12 @@ fn given_valid_image_when_loading_then_the_first_0x170_bytes_are_copied_to_027ff
 fn given_valid_image_when_loading_then_header_copy_stops_at_0x170() {
     let machine = booted(&Image::valid());
     // Image bytes 0x170.. are 0xEE reserved filler; they must not be copied.
-    assert_eq!(machine.arm9_peek32(HEADER_COPY + HEADER_LEN as u32), 0);
+    assert_eq!(
+        machine
+            .inspect()
+            .arm9_peek32(HEADER_COPY + HEADER_LEN as u32),
+        0
+    );
 }
 
 #[test]
@@ -122,7 +127,7 @@ fn given_valid_image_when_loading_then_header_copy_is_also_visible_at_the_main_r
         header_byte(2),
         header_byte(3),
     ]);
-    assert_eq!(machine.arm9_peek32(0x023F_FE00), expected);
+    assert_eq!(machine.inspect().arm9_peek32(0x023F_FE00), expected);
 }
 
 #[test]
@@ -141,7 +146,7 @@ fn given_arm9_ram_address_differs_from_rom_offset_when_loading_then_binary_is_at
 #[test]
 fn given_valid_image_when_loading_then_arm9_binary_copy_does_not_run_past_its_size() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9_peek32(RAM + 0x100), 0);
+    assert_eq!(machine.inspect().arm9_peek32(RAM + 0x100), 0);
 }
 
 #[test]
@@ -156,7 +161,7 @@ fn given_arm7_in_main_ram_when_loading_then_binary_is_copied_to_its_ram_address(
 #[test]
 fn given_arm7_binary_in_main_ram_when_loading_then_the_byte_after_it_is_zero() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9_peek32(0x0238_0080), 0);
+    assert_eq!(machine.inspect().arm9_peek32(0x0238_0080), 0);
 }
 
 #[test]
@@ -224,32 +229,35 @@ fn given_valid_image_when_loading_then_r0_to_r11_are_zero() {
 #[test]
 fn given_entry_differs_from_ram_address_when_loading_then_r12_is_the_entry() {
     let machine = booted(&distinct_image());
-    assert_eq!(machine.arm9().regs().get(12), 0x0201_0040);
+    assert_eq!(machine.inspect().arm9().regs().get(12), 0x0201_0040);
 }
 
 #[test]
 fn given_entry_differs_from_ram_address_when_loading_then_r14_is_the_entry() {
     let machine = booted(&distinct_image());
-    assert_eq!(machine.arm9().regs().get(14), 0x0201_0040);
+    assert_eq!(machine.inspect().arm9().regs().get(14), 0x0201_0040);
 }
 
 #[test]
 fn given_valid_image_when_loading_then_running_mode_r13_is_03002f7c() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9().regs().get(13), 0x0300_2F7C);
+    assert_eq!(machine.inspect().arm9().regs().get(13), 0x0300_2F7C);
 }
 
 #[test]
 fn given_valid_image_when_loading_then_irq_stack_pointer_is_03003f80() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9().regs().banked(Bank::Irq, 13), 0x0300_3F80);
+    assert_eq!(
+        machine.inspect().arm9().regs().banked(Bank::Irq, 13),
+        0x0300_3F80
+    );
 }
 
 #[test]
 fn given_valid_image_when_loading_then_supervisor_stack_pointer_is_03003fc0() {
     let machine = booted(&Image::valid());
     assert_eq!(
-        machine.arm9().regs().banked(Bank::Supervisor, 13),
+        machine.inspect().arm9().regs().banked(Bank::Supervisor, 13),
         0x0300_3FC0
     );
 }
@@ -257,7 +265,7 @@ fn given_valid_image_when_loading_then_supervisor_stack_pointer_is_03003fc0() {
 #[test]
 fn given_valid_image_when_loading_then_r14_irq_and_r14_svc_are_zero() {
     let machine = booted(&Image::valid());
-    let regs = machine.arm9().regs();
+    let regs = machine.inspect().arm9().regs();
     assert_eq!(
         (
             regs.banked(Bank::Irq, 14),
@@ -270,7 +278,7 @@ fn given_valid_image_when_loading_then_r14_irq_and_r14_svc_are_zero() {
 #[test]
 fn given_valid_image_when_loading_then_spsr_irq_and_spsr_svc_are_zero() {
     let machine = booted(&Image::valid());
-    let regs = machine.arm9().regs();
+    let regs = machine.inspect().arm9().regs();
     assert_eq!(
         (regs.spsr(Bank::Irq), regs.spsr(Bank::Supervisor)),
         (Some(0), Some(0))
@@ -280,13 +288,13 @@ fn given_valid_image_when_loading_then_spsr_irq_and_spsr_svc_are_zero() {
 #[test]
 fn given_valid_image_when_loading_then_cpsr_is_system_arm_with_i_and_f_set() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9().regs().cpsr(), 0x0000_00DF);
+    assert_eq!(machine.inspect().arm9().regs().cpsr(), 0x0000_00DF);
 }
 
 #[test]
 fn given_valid_image_when_loading_then_the_register_bank_in_use_is_user_system() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9().regs().bank(), Bank::UserSystem);
+    assert_eq!(machine.inspect().arm9().regs().bank(), Bank::UserSystem);
 }
 
 // ---- Pipeline ----
@@ -297,13 +305,16 @@ fn given_code_at_the_entry_when_loading_then_pipeline_holds_the_first_two_opcode
     let mut image = distinct_image();
     image.arm9_code = [vec![0; 0x40], words(&[0xE1A0_0000, 0xE1A0_1001])].concat();
     let machine = booted(&image);
-    assert_eq!(machine.arm9().pipeline(), [0xE1A0_0000, 0xE1A0_1001]);
+    assert_eq!(
+        machine.inspect().arm9().pipeline(),
+        [0xE1A0_0000, 0xE1A0_1001]
+    );
 }
 
 #[test]
 fn given_entry_differs_from_ram_address_when_loading_then_r15_is_entry_plus_8() {
     let machine = booted(&distinct_image());
-    assert_eq!(machine.arm9().regs().get(15), 0x0201_0048);
+    assert_eq!(machine.inspect().arm9().regs().get(15), 0x0201_0048);
 }
 
 // ---- CP15 ----
@@ -311,14 +322,14 @@ fn given_entry_differs_from_ram_address_when_loading_then_r15_is_entry_plus_8() 
 #[test]
 fn given_valid_image_when_loading_then_both_tcms_are_disabled() {
     let machine = booted(&Image::valid());
-    let cp15 = machine.arm9().cp15();
+    let cp15 = machine.inspect().arm9().cp15();
     assert_eq!((cp15.itcm().enabled, cp15.dtcm().enabled), (false, false));
 }
 
 #[test]
 fn given_valid_image_when_loading_then_cp15_control_is_the_power_on_value_0x78() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.arm9().cp15().control(), 0x78);
+    assert_eq!(machine.inspect().arm9().cp15().control(), 0x78);
 }
 
 // ---- Refusal ----
@@ -375,7 +386,7 @@ fn given_refused_header_when_running_a_frame_then_the_arm9_is_not_stepped() {
     let mut machine = Machine::new();
     machine.load_rom(vec![0; 16]).ok();
     machine.run_frame();
-    assert_eq!(machine.arm9(), Machine::new().arm9());
+    assert_eq!(machine.inspect().arm9(), Machine::new().inspect().arm9());
 }
 
 // ---- Second load ----
@@ -384,14 +395,14 @@ fn given_refused_header_when_running_a_frame_then_the_arm9_is_not_stepped() {
 fn given_a_booted_program_when_loading_another_then_the_first_programs_ram_is_zero() {
     let mut machine = booted(&distinct_image());
     machine.load_rom(Image::valid().build()).expect("valid");
-    assert_eq!(machine.arm9_peek32(0x0201_0000), 0);
+    assert_eq!(machine.inspect().arm9_peek32(0x0201_0000), 0);
 }
 
 #[test]
 fn given_a_booted_program_when_loading_another_then_registers_are_the_new_programs() {
     let mut machine = booted(&distinct_image());
     machine.load_rom(Image::valid().build()).expect("valid");
-    assert_eq!(machine.arm9().regs().get(12), 0x0200_0000);
+    assert_eq!(machine.inspect().arm9().regs().get(12), 0x0200_0000);
 }
 
 // ---- Running ----
@@ -401,7 +412,7 @@ fn given_a_counting_loop_when_running_one_frame_then_r0_is_560190() {
     let mut machine = booted(&loop_image());
     machine.run_frame();
     // 263 * 355 * 6 * 2 = 1,120,380 steps; the loop is two instructions per count.
-    assert_eq!(machine.arm9().regs().get(0), 560_190);
+    assert_eq!(machine.inspect().arm9().regs().get(0), 560_190);
 }
 
 #[test]
@@ -409,7 +420,7 @@ fn given_a_counting_loop_when_running_two_frames_then_r0_is_1120380() {
     let mut machine = booted(&loop_image());
     machine.run_frame();
     machine.run_frame();
-    assert_eq!(machine.arm9().regs().get(0), 1_120_380);
+    assert_eq!(machine.inspect().arm9().regs().get(0), 1_120_380);
 }
 
 #[test]
@@ -429,7 +440,7 @@ fn given_a_booted_program_when_cloned_after_one_frame_then_both_copies_agree_aft
     let mut copy = resumed.clone();
     copy.run_frame();
     assert_eq!(
-        (straight == copy, copy.arm9().regs().get(0)),
+        (straight == copy, copy.inspect().arm9().regs().get(0)),
         (true, 1_120_380)
     );
 }
@@ -453,7 +464,7 @@ fn arm7_byte_mismatches(
     expected: impl Fn(usize) -> u8,
 ) -> Vec<usize> {
     (0..len)
-        .filter(|&i| m.arm7_peek8(0, base + i as u32) != expected(i))
+        .filter(|&i| m.inspect().arm7_peek8(0, base + i as u32) != expected(i))
         .collect()
 }
 
@@ -496,7 +507,7 @@ fn given_an_arm7_binary_that_crosses_0380_0000_when_loading_then_it_continues_in
 #[test]
 fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_byte_after_it_is_zero() {
     let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
-    assert_eq!(machine.arm7_peek8(0, 0x037F_8080), 0);
+    assert_eq!(machine.inspect().arm7_peek8(0, 0x037F_8080), 0);
 }
 
 #[test]
@@ -506,9 +517,9 @@ fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm9_owns_no_shared_w
     let machine = booted(&arm7_in_wram(0x037F_8000, 0x80));
     assert_eq!(
         (
-            machine.arm9_peek32(0x037F_8000),
-            machine.arm9_peek32(0x0300_0000),
-            machine.memory().wramcnt().mode
+            machine.inspect().arm9_peek32(0x037F_8000),
+            machine.inspect().arm9_peek32(0x0300_0000),
+            machine.inspect().wramcnt().mode
         ),
         (0, 0, 3)
     );
@@ -517,7 +528,7 @@ fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm9_owns_no_shared_w
 #[test]
 fn given_direct_boot_of_any_image_when_loading_then_wramcnt_mode_is_3() {
     let machine = booted(&Image::valid());
-    assert_eq!(machine.memory().wramcnt().mode, 3);
+    assert_eq!(machine.inspect().wramcnt().mode, 3);
 }
 
 #[test]
@@ -533,8 +544,8 @@ fn given_an_arm7_binary_larger_than_7d80_bytes_at_037f_8000_when_loading_then_ev
             arm7_byte_mismatches(&machine, 0x037F_8000, 0x100, arm7_byte),
             arm7_byte_mismatches(&machine, 0x037F_FF80, 0x80, |i| arm7_byte(0x7F80 + i)),
             arm7_byte_mismatches(&machine, 0x0380_0000, 0x100, seam),
-            machine.arm7_peek8(0, 0x037F_FD80),
-            machine.arm7_peek8(0, 0x0380_FD80),
+            machine.inspect().arm7_peek8(0, 0x037F_FD80),
+            machine.inspect().arm7_peek8(0, 0x0380_FD80),
         ),
         (
             Vec::<usize>::new(),
@@ -554,7 +565,7 @@ fn given_an_arm7_binary_at_037f_8000_when_loading_then_the_arm7_starts_on_its_fi
     image.arm7_code = words(&[ADD_R0_1, ADD_R0_1, B_BACK_ONE]);
     let mut machine = booted(&image);
     machine.step_arm7_instruction();
-    assert_eq!(machine.arm7().regs().get(0), 1);
+    assert_eq!(machine.inspect().arm7().regs().get(0), 1);
 }
 
 // ------------------------------------------------------------------ the BIOS trap addresses

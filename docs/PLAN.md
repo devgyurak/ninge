@@ -103,7 +103,7 @@ ninge/
 │   │   ├── cart/        # Cartridge protocol, AUXSPI saves
 │   │   ├── spi/         # Firmware (synthetic), touch controller, power
 │   │   ├── hle/         # HLE BIOS (SWI), direct boot
-│   │   └── debug/       # Debugger hooks (breakpoints, traces)
+│   │   └── debug/       # Debugger: read-only inspect API now; breakpoint and trace hooks later
 │   ├── runner/      # Headless runner. Tests, traces, golden frames
 │   ├── frontend/    # TUI app: renderer, input, audio, layout, debugger panels
 │   └── tracediff/   # Trace comparison tool

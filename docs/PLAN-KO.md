@@ -94,7 +94,7 @@ ninge/
 │   │   ├── cart/        # 카트리지 프로토콜, AUXSPI 세이브
 │   │   ├── spi/         # 펌웨어(합성), 터치 컨트롤러, 전원
 │   │   ├── hle/         # HLE BIOS(SWI), direct boot
-│   │   └── debug/       # 디버거 훅 (브레이크포인트, 트레이스)
+│   │   └── debug/       # 디버거: 지금은 읽기 전용 inspect API, 브레이크포인트·트레이스 훅은 이후
 │   ├── runner/      # headless 실행기. 테스트·트레이스·골든 프레임
 │   ├── frontend/    # TUI 앱: 렌더러, 입력, 오디오, 레이아웃, 디버거 패널
 │   └── tracediff/   # 트레이스 비교 도구

@@ -14,14 +14,14 @@ use crate::scheduler::Scheduler;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TcmConfig {
     /// Instruction TCM.
-    pub itcm: Tcm,
+    pub(crate) itcm: Tcm,
     /// Data TCM.
-    pub dtcm: Tcm,
+    pub(crate) dtcm: Tcm,
 }
 
 impl TcmConfig {
     /// No TCM at all: what the ARM7 has.
-    pub const NONE: Self = Self {
+    pub(crate) const NONE: Self = Self {
         itcm: Tcm {
             base: 0,
             size: 0,
@@ -37,7 +37,7 @@ impl TcmConfig {
     };
 
     /// Copies both regions from CP15. A CP15 write therefore takes effect from the next step.
-    pub fn from_cp15(cp15: &Cp15) -> Self {
+    pub(crate) fn from_cp15(cp15: &Cp15) -> Self {
         Self {
             itcm: cp15.itcm(),
             dtcm: cp15.dtcm(),
@@ -207,7 +207,7 @@ pub struct Arm9View<'a> {
 impl<'a> Arm9View<'a> {
     /// Builds the view for one step taken at the ARM9 clock `now`, in master cycles. `floor` is
     /// the earliest an event the step schedules may fire: the end of the step.
-    pub fn new(
+    pub(crate) fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
@@ -282,7 +282,7 @@ impl<'a> Arm7View<'a> {
     /// Builds the view for one step taken at the ARM7 clock `now`, in master cycles. `floor` is
     /// the earliest an event the step schedules may fire: the master clock, which the step leaves
     /// where it is.
-    pub fn new(
+    pub(crate) fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,

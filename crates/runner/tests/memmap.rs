@@ -88,7 +88,12 @@ fn mismatches(machine: &Machine, slots: &[u32]) -> Vec<Mismatch> {
         .iter()
         .filter(|(slot, _, _)| slots.contains(slot))
         .map(|&(slot, name, expected)| {
-            (slot, name, expected, machine.arm9_peek32(RECORD + slot * 4))
+            (
+                slot,
+                name,
+                expected,
+                machine.inspect().arm9_peek32(RECORD + slot * 4),
+            )
         })
         .filter(|&(_, _, expected, got)| expected != got)
         .collect()

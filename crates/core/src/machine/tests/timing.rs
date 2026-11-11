@@ -59,7 +59,7 @@ fn write9(m: &mut Machine, addr: u32, value: u16) {
 }
 
 fn read9(m: &Machine, addr: u32) -> u16 {
-    m.arm9_peek16(addr)
+    m.inspect().arm9_peek16(addr)
 }
 
 /// A line number's start time.
@@ -84,6 +84,7 @@ fn observe(times: &[u64], read: impl Fn(&Machine) -> u16) -> Vec<u16> {
 #[test]
 fn given_a_booted_machine_when_nothing_ran_then_the_pending_events_are_hblank_then_the_next_line() {
     let pending: Vec<(u64, EventKind)> = machine()
+        .inspect()
         .scheduler()
         .pending()
         .iter()
@@ -103,7 +104,7 @@ fn given_a_booted_machine_when_reading_vcount_at_each_line_start_of_a_frame_then
  {
     let times: Vec<u64> = (0..=263).map(line_start).collect();
     let expected: Vec<u16> = (0..263).chain(0..1).collect();
-    assert_eq!(observe(&times, |m| m.vcount()), expected);
+    assert_eq!(observe(&times, |m| m.inspect().vcount()), expected);
 }
 
 #[test]
@@ -111,7 +112,7 @@ fn given_a_booted_machine_when_reading_vcount_one_cycle_before_each_line_start_t
  {
     let times: Vec<u64> = (1..=263).map(|n| line_start(n) - 1).collect();
     let expected: Vec<u16> = (0..263).collect();
-    assert_eq!(observe(&times, |m| m.vcount()), expected);
+    assert_eq!(observe(&times, |m| m.inspect().vcount()), expected);
 }
 
 #[test]
@@ -119,7 +120,7 @@ fn given_a_booted_machine_when_one_frame_runs_then_it_ends_at_the_frame_length_a
     let mut m = machine();
     m.run_frame();
     assert_eq!(
-        (m.scheduler().now(), m.frame_count(), FRAME_CYCLES),
+        (m.inspect().scheduler().now(), m.frame_count(), FRAME_CYCLES),
         (line_start(263), 1, 1_120_380)
     );
 }
@@ -130,6 +131,7 @@ fn given_a_frame_run_when_listing_pending_then_line_1_events_follow_the_wrap_fro
     let mut m = machine();
     m.run_frame();
     let pending: Vec<(u64, EventKind)> = m
+        .inspect()
         .scheduler()
         .pending()
         .iter()
@@ -148,9 +150,12 @@ fn given_a_frame_run_when_listing_pending_then_line_1_events_follow_the_wrap_fro
 fn given_the_last_line_when_the_frame_wraps_then_vcount_is_zero_and_the_screens_are_drawn_once() {
     let mut m = machine();
     run_to(&mut m, line_start(262));
-    let before = (m.vcount(), m.frame_count());
+    let before = (m.inspect().vcount(), m.frame_count());
     run_to(&mut m, line_start(263));
-    assert_eq!((before, (m.vcount(), m.frame_count())), ((262, 0), (0, 1)));
+    assert_eq!(
+        (before, (m.inspect().vcount(), m.frame_count())),
+        ((262, 0), (0, 1))
+    );
 }
 
 #[test]
@@ -159,7 +164,7 @@ fn given_two_frames_when_run_then_the_second_frame_ends_at_twice_the_frame_lengt
     m.run_frame();
     m.run_frame();
     assert_eq!(
-        (m.scheduler().now(), m.frame_count()),
+        (m.inspect().scheduler().now(), m.frame_count()),
         (2 * FRAME_CYCLES, 2)
     );
 }
@@ -175,7 +180,7 @@ fn given_a_booted_machine_when_reading_the_vblank_flag_around_lines_192_and_262_
         line_start(262) - 1,
         line_start(262),
     ];
-    let flags = observe(&times, |m| m.dispstat9() & VBLANK_FLAG);
+    let flags = observe(&times, |m| m.inspect().dispstat9() & VBLANK_FLAG);
     assert_eq!(flags, vec![0, 1, 1, 0]);
 }
 
@@ -188,7 +193,7 @@ fn given_a_booted_machine_when_reading_the_hblank_flag_in_line_1_then_it_sets_32
         line_start(2) - 1,
         line_start(2),
     ];
-    let flags = observe(&times, |m| (m.dispstat9() & HBLANK_FLAG) >> 1);
+    let flags = observe(&times, |m| (m.inspect().dispstat9() & HBLANK_FLAG) >> 1);
     assert_eq!(flags, vec![0, 1, 1, 0]);
 }
 
@@ -200,7 +205,7 @@ fn given_a_booted_machine_when_reading_the_hblank_flag_in_a_vblank_line_then_it_
         line_start(200) + HBLANK_AT,
         line_start(201),
     ];
-    let flags = observe(&times, |m| (m.dispstat9() & HBLANK_FLAG) >> 1);
+    let flags = observe(&times, |m| (m.inspect().dispstat9() & HBLANK_FLAG) >> 1);
     assert_eq!(flags, vec![0, 1, 0]);
 }
 
@@ -214,7 +219,7 @@ fn given_the_vcount_setting_100_when_reading_the_match_flag_around_line_100_then
         .iter()
         .map(|&t| {
             run_to(&mut m, t);
-            (m.dispstat9() & VCOUNT_FLAG) >> 2
+            (m.inspect().dispstat9() & VCOUNT_FLAG) >> 2
         })
         .collect();
     assert_eq!(flags, vec![0, 1, 0]);
@@ -226,7 +231,10 @@ fn given_a_vblank_flag_set_when_the_arm7_reads_dispstat_then_it_sees_the_same_fl
     let mut m = machine();
     run_to(&mut m, line_start(200) + HBLANK_AT);
     assert_eq!(
-        (m.arm7_peek16(0, DISPSTAT), m.dispstat7()),
+        (
+            m.inspect().arm7_peek16(0, DISPSTAT),
+            m.inspect().dispstat7()
+        ),
         (VBLANK_FLAG | HBLANK_FLAG, VBLANK_FLAG | HBLANK_FLAG)
     );
 }
@@ -244,7 +252,7 @@ fn given_the_arm9_when_writing_ffff_to_dispstat_then_only_the_enables_and_the_se
 fn given_the_arm7_when_writing_ffff_to_dispstat_then_only_the_enables_and_the_setting_stay() {
     let mut m = machine();
     m.bus7(0).write16(DISPSTAT, 0xFFFF);
-    assert_eq!(m.arm7_peek16(0, DISPSTAT), 0xFFB8);
+    assert_eq!(m.inspect().arm7_peek16(0, DISPSTAT), 0xFFB8);
 }
 
 #[test]
@@ -258,7 +266,7 @@ fn given_the_arm9_when_writing_ones_to_the_flag_bits_and_bit_6_then_dispstat_sta
 fn given_the_arm9_when_writing_dispstat_then_the_arm7_register_is_unchanged() {
     let mut m = machine();
     write9(&mut m, DISPSTAT, 0xFFFF);
-    assert_eq!(m.arm7_peek16(0, DISPSTAT), 0);
+    assert_eq!(m.inspect().arm7_peek16(0, DISPSTAT), 0);
 }
 
 #[test]
@@ -288,14 +296,20 @@ fn given_a_setting_of_262_when_written_as_bit_7_and_the_low_byte_then_dispstat_r
 fn given_line_200_when_each_cpu_reads_vcount_then_both_see_200() {
     let mut m = machine();
     run_to(&mut m, line_start(200));
-    assert_eq!((read9(&m, VCOUNT), m.arm7_peek16(0, VCOUNT)), (200, 200));
+    assert_eq!(
+        (read9(&m, VCOUNT), m.inspect().arm7_peek16(0, VCOUNT)),
+        (200, 200)
+    );
 }
 
 #[test]
 fn given_line_262_when_each_cpu_reads_vcount_then_the_ninth_bit_shows_on_both() {
     let mut m = machine();
     run_to(&mut m, line_start(262));
-    assert_eq!((read9(&m, VCOUNT), m.arm7_peek16(0, VCOUNT)), (262, 262));
+    assert_eq!(
+        (read9(&m, VCOUNT), m.inspect().arm7_peek16(0, VCOUNT)),
+        (262, 262)
+    );
 }
 
 #[test]
@@ -304,7 +318,7 @@ fn given_line_3_when_each_cpu_writes_vcount_then_it_is_ignored_as_the_note_stubs
     run_to(&mut m, line_start(3));
     write9(&mut m, VCOUNT, 100);
     m.bus7(0).write16(VCOUNT, 50);
-    assert_eq!(m.vcount(), 3);
+    assert_eq!(m.inspect().vcount(), 3);
 }
 
 // ------------------------------------------------------------------ IRQ requests
@@ -314,7 +328,7 @@ fn ifs_at(time: u64, setup: impl Fn(&mut Machine)) -> (u32, u32) {
     let mut m = machine();
     setup(&mut m);
     run_to(&mut m, time);
-    (m.irq9().if_(), m.irq7().if_())
+    (m.inspect().irq9().if_(), m.inspect().irq7().if_())
 }
 
 #[test]
@@ -352,7 +366,7 @@ fn given_the_vblank_enable_when_a_whole_frame_runs_then_the_request_is_latched_o
     run_to(&mut m, line_start(192));
     m.bus9().write8(0x0400_0214, 0x01);
     run_to(&mut m, line_start(263));
-    assert_eq!(m.irq9().if_(), 0);
+    assert_eq!(m.inspect().irq9().if_(), 0);
 }
 
 #[test]
@@ -403,7 +417,7 @@ fn given_the_setting_100_without_the_enable_when_line_100_starts_then_the_flag_i
     write9(&mut m, DISPSTAT, 100 << 8);
     run_to(&mut m, line_start(100));
     assert_eq!(
-        (read9(&m, DISPSTAT) & VCOUNT_FLAG, m.irq9().if_()),
+        (read9(&m, DISPSTAT) & VCOUNT_FLAG, m.inspect().irq9().if_()),
         (VCOUNT_FLAG, 0)
     );
 }
@@ -434,7 +448,7 @@ fn given_the_arm7_vblank_request_with_ime_and_ie_when_the_arm7_runs_on_then_it_e
     m.bus7(0).write32(0x0380_FFFC, 0x0238_0000);
     run_to(&mut m, line_start(192));
     run_round(&mut m);
-    assert_eq!(m.arm7().regs().cpsr() & 0x1F, IRQ_MODE);
+    assert_eq!(m.inspect().arm7().regs().cpsr() & 0x1F, IRQ_MODE);
 }
 
 #[test]
@@ -446,7 +460,7 @@ fn given_the_arm9_vblank_request_with_ime_and_ie_when_the_arm9_runs_on_then_it_e
     m.arm9.regs_mut().set_cpsr(0x1F);
     run_to(&mut m, line_start(192));
     run_round(&mut m);
-    assert_eq!(m.arm9().regs().cpsr() & 0x1F, IRQ_MODE);
+    assert_eq!(m.inspect().arm9().regs().cpsr() & 0x1F, IRQ_MODE);
 }
 
 // ------------------------------------------------------------------ savestates mid-frame
@@ -495,7 +509,11 @@ fn given_a_save_mid_frame_when_loaded_then_vcount_and_dispstat_are_restored() {
     let mut resumed = machine();
     let loaded = resumed.load_state(&saver.save_state());
     assert_eq!(
-        (loaded, resumed.vcount(), resumed.dispstat9()),
+        (
+            loaded,
+            resumed.inspect().vcount(),
+            resumed.inspect().dispstat9()
+        ),
         (
             Ok(()),
             150,
@@ -520,5 +538,8 @@ fn given_no_event_within_a_slice_and_none_queued_when_a_round_runs_then_both_cpu
     // (`scheduler.md`, "Interleaving").
     let mut m = machine();
     run_round(&mut m);
-    assert_eq!((m.scheduler.now(), m.arm7_clock()), (SLICE, SLICE));
+    assert_eq!(
+        (m.scheduler.now(), m.inspect().arm7_clock()),
+        (SLICE, SLICE)
+    );
 }

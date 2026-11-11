@@ -61,7 +61,7 @@ fn mismatches(machine: &Machine, base: u32, rows: &[Row]) -> Vec<Mismatch> {
                 slot,
                 name,
                 expected & mask,
-                machine.arm9_peek32(base + slot * 4) & mask,
+                machine.inspect().arm9_peek32(base + slot * 4) & mask,
             )
         })
         .filter(|&(_, _, expected, got)| expected != got)

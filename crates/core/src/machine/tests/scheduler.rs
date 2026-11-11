@@ -140,13 +140,13 @@ fn step(machine: &mut Machine, steps: u64) {
 
 fn counters(machine: &Machine) -> (u32, u32) {
     (
-        machine.arm9_peek32(ARM9_COUNTER),
-        machine.arm9_peek32(ARM7_COUNTER),
+        machine.inspect().arm9_peek32(ARM9_COUNTER),
+        machine.inspect().arm9_peek32(ARM7_COUNTER),
     )
 }
 
 fn record(machine: &Machine, slot: u32) -> u32 {
-    machine.arm9_peek32(RECORD + slot * 4)
+    machine.inspect().arm9_peek32(RECORD + slot * 4)
 }
 
 // ------------------------------------------------------------- one frame
@@ -157,7 +157,10 @@ fn given_one_frame_when_run_then_arm7_clock_is_exactly_half_of_arm9() {
     machine.run_frame();
     // ARM9 cycles = scheduler.now = 1,120,380; ARM7 cycles = arm7_clock / 2 = 560,190.
     assert_eq!(
-        (machine.scheduler().now(), machine.arm7_clock() / 2),
+        (
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock() / 2
+        ),
         (1_120_380, 560_190)
     );
 }
@@ -167,7 +170,10 @@ fn given_one_frame_when_run_then_both_clocks_are_one_frame_in_master_cycles() {
     let mut machine = booted(&counting_rom());
     machine.run_frame();
     assert_eq!(
-        (machine.scheduler().now(), machine.arm7_clock()),
+        (
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock()
+        ),
         (FRAME_CYCLES, FRAME_CYCLES)
     );
 }
@@ -177,7 +183,10 @@ fn given_two_frames_when_run_then_both_clocks_are_two_frames_in_master_cycles() 
     let mut machine = booted(&counting_rom());
     run_frames(&mut machine, 2);
     assert_eq!(
-        (machine.scheduler().now(), machine.arm7_clock()),
+        (
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock()
+        ),
         (2 * FRAME_CYCLES, 2 * FRAME_CYCLES)
     );
 }
@@ -208,8 +217,8 @@ fn given_booted_machine_when_nothing_runs_then_both_clocks_are_zero_and_no_count
     let machine = booted(&counting_rom());
     assert_eq!(
         (
-            machine.scheduler().now(),
-            machine.arm7_clock(),
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock(),
             counters(&machine)
         ),
         (0, 0, (0, 0))
@@ -225,8 +234,8 @@ fn given_machine_without_rom_when_running_a_frame_then_the_clock_stays_zero_and_
     machine.run_frame();
     assert_eq!(
         (
-            machine.scheduler().now(),
-            machine.arm7_clock(),
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock(),
             machine.frame_count()
         ),
         (0, 0, 1)
@@ -238,7 +247,10 @@ fn given_machine_without_rom_when_running_three_frames_then_the_clock_stays_zero
  {
     let mut machine = Machine::new();
     run_frames(&mut machine, 3);
-    assert_eq!((machine.scheduler().now(), machine.frame_count()), (0, 3));
+    assert_eq!(
+        (machine.inspect().scheduler().now(), machine.frame_count()),
+        (0, 3)
+    );
 }
 
 // ----------------------------------------------------------- line events
@@ -248,6 +260,7 @@ fn given_a_booted_machine_when_nothing_ran_then_hblank_and_the_next_line_start_a
  {
     let machine = booted(&counting_rom());
     let pending: Vec<(u64, EventKind)> = machine
+        .inspect()
         .scheduler()
         .pending()
         .iter()
@@ -267,6 +280,7 @@ fn given_one_frame_run_when_listing_pending_then_the_next_line_events_follow_the
     let mut machine = booted(&counting_rom());
     machine.run_frame();
     let pending: Vec<(u64, EventKind)> = machine
+        .inspect()
         .scheduler()
         .pending()
         .iter()
@@ -286,6 +300,7 @@ fn given_two_frames_run_when_listing_pending_then_the_next_line_events_follow_tw
     let mut machine = booted(&counting_rom());
     run_frames(&mut machine, 2);
     let times: Vec<u64> = machine
+        .inspect()
         .scheduler()
         .pending()
         .iter()
@@ -306,14 +321,14 @@ fn given_two_frames_run_when_listing_pending_then_the_next_line_events_follow_tw
 fn given_booted_machine_when_stepping_the_arm9_three_times_then_now_advances_by_exactly_three() {
     let mut machine = booted(&counting_rom());
     step(&mut machine, 3);
-    assert_eq!(machine.scheduler().now(), 3);
+    assert_eq!(machine.inspect().scheduler().now(), 3);
 }
 
 #[test]
 fn given_booted_machine_when_stepping_the_arm9_once_then_now_is_one() {
     let mut machine = booted(&counting_rom());
     step(&mut machine, 1);
-    assert_eq!(machine.scheduler().now(), 1);
+    assert_eq!(machine.inspect().scheduler().now(), 1);
 }
 
 #[test]
@@ -321,7 +336,7 @@ fn given_booted_machine_when_stepping_the_arm9_once_then_the_arm7_ran_one_instru
     // The ARM7 starts at 0 < 1, runs one instruction (2 master cycles) and ends 1 past now.
     let mut machine = booted(&counting_rom());
     step(&mut machine, 1);
-    assert_eq!(machine.arm7_clock(), 2);
+    assert_eq!(machine.inspect().arm7_clock(), 2);
 }
 
 #[test]
@@ -329,14 +344,26 @@ fn given_booted_machine_when_the_arm7_steps_one_instruction_then_its_clock_advan
  {
     let mut machine = booted(&counting_rom());
     machine.step_arm7_instruction();
-    assert_eq!((machine.arm7_clock(), machine.scheduler().now()), (2, 0));
+    assert_eq!(
+        (
+            machine.inspect().arm7_clock(),
+            machine.inspect().scheduler().now()
+        ),
+        (2, 0)
+    );
 }
 
 #[test]
 fn given_booted_machine_when_stepping_the_arm9_four_times_then_the_arm7_clock_equals_now() {
     let mut machine = booted(&counting_rom());
     step(&mut machine, 4);
-    assert_eq!((machine.scheduler().now(), machine.arm7_clock()), (4, 4));
+    assert_eq!(
+        (
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock()
+        ),
+        (4, 4)
+    );
 }
 
 #[test]
@@ -344,7 +371,7 @@ fn given_booted_machine_when_stepping_the_arm9_three_times_then_the_arm7_is_one_
     // ARM7 instructions start at 0 and 2 (both < 3); the second ends at 4.
     let mut machine = booted(&counting_rom());
     step(&mut machine, 3);
-    assert_eq!(machine.arm7_clock(), 4);
+    assert_eq!(machine.inspect().arm7_clock(), 4);
 }
 
 #[test]
@@ -354,7 +381,7 @@ fn given_booted_machine_when_stepping_the_arm9_six_times_then_the_arm7_has_run_t
     // and r0 = 0 are the visible proof (three prologue instructions).
     let mut machine = booted(&counting_rom());
     step(&mut machine, 6);
-    let regs = machine.arm7().regs();
+    let regs = machine.inspect().arm7().regs();
     assert_eq!((regs.get(1), regs.get(0)), (0x0200_2000, 0));
 }
 
@@ -378,6 +405,7 @@ fn given_debug_steps_crossing_the_frame_end_time_when_listing_pending_then_the_n
     let mut machine = booted(&counting_rom());
     step(&mut machine, FRAME_CYCLES);
     let times: Vec<u64> = machine
+        .inspect()
         .scheduler()
         .pending()
         .iter()
@@ -399,8 +427,8 @@ fn given_100_debug_steps_when_running_a_frame_then_it_ends_at_one_frame_of_maste
     machine.run_frame();
     assert_eq!(
         (
-            machine.scheduler().now(),
-            machine.arm7_clock(),
+            machine.inspect().scheduler().now(),
+            machine.inspect().arm7_clock(),
             machine.frame_count()
         ),
         (FRAME_CYCLES, FRAME_CYCLES, 1)
@@ -421,20 +449,20 @@ fn given_a_mid_frame_debug_step_state_when_two_frames_run_then_the_counters_matc
 #[test]
 fn given_valid_image_when_loading_then_arm7_r12_and_r14_are_the_entry() {
     let machine = booted(&Image::valid().build());
-    let regs = machine.arm7().regs();
+    let regs = machine.inspect().arm7().regs();
     assert_eq!((regs.get(12), regs.get(14)), (0x0238_0000, 0x0238_0000));
 }
 
 #[test]
 fn given_valid_image_when_loading_then_arm7_r15_is_the_entry_plus_8() {
     let machine = booted(&Image::valid().build());
-    assert_eq!(machine.arm7().regs().get(15), 0x0238_0008);
+    assert_eq!(machine.inspect().arm7().regs().get(15), 0x0238_0008);
 }
 
 #[test]
 fn given_valid_image_when_loading_then_arm7_stack_pointers_are_0380fd80_0380ff80_0380ffc0() {
     let machine = booted(&Image::valid().build());
-    let regs = machine.arm7().regs();
+    let regs = machine.inspect().arm7().regs();
     assert_eq!(
         (
             regs.get(13),
@@ -448,13 +476,13 @@ fn given_valid_image_when_loading_then_arm7_stack_pointers_are_0380fd80_0380ff80
 #[test]
 fn given_valid_image_when_loading_then_arm7_cpsr_is_system_arm_with_i_and_f_set() {
     let machine = booted(&Image::valid().build());
-    assert_eq!(machine.arm7().regs().cpsr(), 0x0000_00DF);
+    assert_eq!(machine.inspect().arm7().regs().cpsr(), 0x0000_00DF);
 }
 
 #[test]
 fn given_valid_image_when_loading_then_arm7_r0_to_r11_are_zero() {
     let machine = booted(&Image::valid().build());
-    let regs = machine.arm7().regs();
+    let regs = machine.inspect().arm7().regs();
     let values: Vec<u32> = (0..12).map(|index| regs.get(index)).collect();
     // R12 is the entry, so it is not in the zero list; checking it ties this to a booted ARM7.
     assert_eq!((values, regs.get(12)), (vec![0; 12], 0x0238_0000));
@@ -463,7 +491,7 @@ fn given_valid_image_when_loading_then_arm7_r0_to_r11_are_zero() {
 #[test]
 fn given_valid_image_when_loading_then_arm7_banked_lr_and_spsr_of_irq_and_svc_are_zero() {
     let machine = booted(&Image::valid().build());
-    let regs = machine.arm7().regs();
+    let regs = machine.inspect().arm7().regs();
     assert_eq!(
         (
             regs.banked(Bank::Irq, 14),
@@ -481,13 +509,22 @@ fn given_code_at_the_arm7_entry_when_loading_then_its_pipeline_holds_the_first_t
     let mut image = Image::valid();
     image.arm7_code = words(&[0xE1A0_0000, 0xE1A0_1001]);
     let machine = booted(&image.build());
-    assert_eq!(machine.arm7().pipeline(), [0xE1A0_0000, 0xE1A0_1001]);
+    assert_eq!(
+        machine.inspect().arm7().pipeline(),
+        [0xE1A0_0000, 0xE1A0_1001]
+    );
 }
 
 #[test]
 fn given_valid_image_when_loading_then_the_arm7_clock_and_now_are_zero() {
     let machine = booted(&Image::valid().build());
-    assert_eq!((machine.arm7_clock(), machine.scheduler().now()), (0, 0));
+    assert_eq!(
+        (
+            machine.inspect().arm7_clock(),
+            machine.inspect().scheduler().now()
+        ),
+        (0, 0)
+    );
 }
 
 #[test]
@@ -495,7 +532,13 @@ fn given_machine_that_ran_a_frame_when_loading_a_rom_then_both_clocks_restart_at
     let mut machine = booted(&counting_rom());
     machine.run_frame();
     machine.load_rom(counting_rom()).expect("valid image");
-    assert_eq!((machine.arm7_clock(), machine.scheduler().now()), (0, 0));
+    assert_eq!(
+        (
+            machine.inspect().arm7_clock(),
+            machine.inspect().scheduler().now()
+        ),
+        (0, 0)
+    );
 }
 
 // ------------------------------------------------------------ ARM7 memory
@@ -556,7 +599,7 @@ fn given_arm7_stores_to_main_ram_when_it_reads_at_plus_4_mib_then_it_reads_the_m
 fn given_arm7_stores_to_main_ram_when_the_arm9_peeks_it_then_both_cpus_see_the_same_word() {
     let mut machine = booted(&arm7_memory_rom());
     machine.run_frame();
-    assert_eq!(machine.arm9_peek32(RECORD + 0x100), 0xA5);
+    assert_eq!(machine.inspect().arm9_peek32(RECORD + 0x100), 0xA5);
 }
 
 /// Runs two frames of a machine whose clock sits at the very edge of `u64`, as only a

@@ -35,7 +35,9 @@ fn boot_frames() -> Machine {
 fn row_text(machine: &Machine, row: u32) -> String {
     let text: String = (0..ROW_CELLS)
         .map(|cell| {
-            let entry = machine.arm9_peek16(MAP + (row * ROW_CELLS + cell) * 2);
+            let entry = machine
+                .inspect()
+                .arm9_peek16(MAP + (row * ROW_CELLS + cell) * 2);
             char::from_u32(u32::from(entry & 0x3FF) + 32).unwrap_or('?')
         })
         .collect();

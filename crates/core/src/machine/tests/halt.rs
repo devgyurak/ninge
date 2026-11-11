@@ -42,21 +42,21 @@ const VBLANK: u32 = 1;
 fn given_an_arm9_wfi_at_c7_c0_4_when_executed_then_the_arm9_is_halted() {
     let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
     step9(&mut m, 1);
-    assert!(m.arm9().halted());
+    assert!(m.inspect().arm9().halted());
 }
 
 #[test]
 fn given_an_arm9_wfi_at_c7_c8_2_when_executed_then_the_arm9_is_halted() {
     let mut m = arm9_running(&[WFI_C8_2, MOV_R1, SPIN]);
     step9(&mut m, 1);
-    assert!(m.arm9().halted());
+    assert!(m.inspect().arm9().halted());
 }
 
 #[test]
 fn given_a_cache_command_in_c7_when_executed_then_the_arm9_is_not_halted() {
     let mut m = arm9_running(&[INVALIDATE_ICACHE, MOV_R1, SPIN]);
     step9(&mut m, 1);
-    assert!(!m.arm9().halted());
+    assert!(!m.inspect().arm9().halted());
 }
 
 #[test]
@@ -64,17 +64,23 @@ fn given_a_halted_arm9_with_nothing_pending_when_a_round_runs_then_no_instructio
     let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
     step9(&mut m, 1);
     run_round(&mut m);
-    assert_eq!((m.arm9().regs().get(1), m.arm9().halted()), (0, true));
+    assert_eq!(
+        (
+            m.inspect().arm9().regs().get(1),
+            m.inspect().arm9().halted()
+        ),
+        (0, true)
+    );
 }
 
 #[test]
 fn given_a_halted_arm9_when_a_round_runs_then_its_clock_skips_to_the_round_target() {
     let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
     step9(&mut m, 1);
-    let started = m.scheduler().now();
+    let started = m.inspect().scheduler().now();
     run_round(&mut m);
     // The round's target is one slice (64 master cycles) ahead: no event is nearer.
-    assert_eq!(m.scheduler().now() - started, 64);
+    assert_eq!(m.inspect().scheduler().now() - started, 64);
 }
 
 /// The master clock after each of `rounds` rounds.
@@ -82,7 +88,7 @@ fn clocks_after_rounds(m: &mut Machine, rounds: usize) -> Vec<u64> {
     (0..rounds)
         .map(|_| {
             run_round(m);
-            m.scheduler().now()
+            m.inspect().scheduler().now()
         })
         .collect()
 }
@@ -107,7 +113,13 @@ fn given_a_halted_arm9_when_ie_and_if_are_nonzero_with_ime_0_and_i_set_then_it_w
         arm7: 0,
     });
     step9(&mut m, 1);
-    assert_eq!((m.arm9().halted(), m.arm9().regs().get(1)), (false, 0x66));
+    assert_eq!(
+        (
+            m.inspect().arm9().halted(),
+            m.inspect().arm9().regs().get(1)
+        ),
+        (false, 0x66)
+    );
 }
 
 #[test]
@@ -117,9 +129,9 @@ fn given_a_halted_arm9_when_ie_and_if_are_nonzero_with_ime_1_and_i_clear_then_th
     step9(&mut m, 1);
     request_timer0_on_arm9(&mut m);
     step9(&mut m, 1);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
-        (m.arm9().halted(), regs.get(1), regs.cpsr() & 0x1F),
+        (m.inspect().arm9().halted(), regs.get(1), regs.cpsr() & 0x1F),
         (false, 0, 0x12)
     );
 }
@@ -133,7 +145,13 @@ fn given_a_halted_arm9_when_if_is_set_but_ie_is_not_then_it_stays_halted() {
         arm7: 0,
     });
     step9(&mut m, 2);
-    assert_eq!((m.arm9().halted(), m.arm9().regs().get(1)), (true, 0));
+    assert_eq!(
+        (
+            m.inspect().arm9().halted(),
+            m.inspect().arm9().regs().get(1)
+        ),
+        (true, 0)
+    );
 }
 
 #[test]
@@ -146,16 +164,22 @@ fn given_an_irq_already_pending_and_enabled_when_the_arm9_executes_wfi_then_it_w
         arm7: 0,
     });
     step9(&mut m, 3);
-    assert_eq!((m.arm9().halted(), m.arm9().regs().get(1)), (false, 0x66));
+    assert_eq!(
+        (
+            m.inspect().arm9().halted(),
+            m.inspect().arm9().regs().get(1)
+        ),
+        (false, 0x66)
+    );
 }
 
 #[test]
 fn given_a_halted_arm9_when_single_stepped_then_the_clock_advances_by_one_cost_unit() {
     let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
     step9(&mut m, 1);
-    let before = m.scheduler().now();
+    let before = m.inspect().scheduler().now();
     step9(&mut m, 1);
-    assert_eq!(m.scheduler().now() - before, 1);
+    assert_eq!(m.inspect().scheduler().now() - before, 1);
 }
 
 // ------------------------------------------------------------------------------ ARM7 HALTCNT
@@ -173,19 +197,19 @@ fn arm7_after_haltcnt_write(value: u32) -> Machine {
 
 #[test]
 fn given_a_haltcnt_write_of_80h_when_the_arm7_stores_it_then_the_arm7_is_halted() {
-    assert!(arm7_after_haltcnt_write(0x80).arm7().halted());
+    assert!(arm7_after_haltcnt_write(0x80).inspect().arm7().halted());
 }
 
 #[test]
 fn given_a_haltcnt_write_with_bits_0_to_5_set_when_the_mode_is_2_then_the_arm7_is_halted() {
-    assert!(arm7_after_haltcnt_write(0xBF).arm7().halted());
+    assert!(arm7_after_haltcnt_write(0xBF).inspect().arm7().halted());
 }
 
 #[test]
 fn given_haltcnt_modes_0_1_and_3_when_written_then_the_arm7_is_not_halted() {
     let halted: Vec<bool> = [0x00, 0x40, 0xC0]
         .iter()
-        .map(|&value| arm7_after_haltcnt_write(value).arm7().halted())
+        .map(|&value| arm7_after_haltcnt_write(value).inspect().arm7().halted())
         .collect();
     assert_eq!(halted, [false, false, false]);
 }
@@ -194,14 +218,17 @@ fn given_haltcnt_modes_0_1_and_3_when_written_then_the_arm7_is_not_halted() {
 fn given_the_arm9_when_it_writes_0400_0301h_then_nothing_halts() {
     let mut m = arm9_running(&haltcnt_program(0x80));
     step9(&mut m, 3);
-    assert_eq!((m.arm9().halted(), m.arm7().halted()), (false, false));
+    assert_eq!(
+        (m.inspect().arm9().halted(), m.inspect().arm7().halted()),
+        (false, false)
+    );
 }
 
 #[test]
 fn given_a_halted_arm7_when_a_round_runs_then_its_clock_reaches_the_arm9_clock() {
     let mut m = arm7_after_haltcnt_write(0x80);
     run_round(&mut m);
-    assert_eq!(m.arm7_clock(), m.scheduler().now());
+    assert_eq!(m.inspect().arm7_clock(), m.inspect().scheduler().now());
 }
 
 #[test]
@@ -213,14 +240,26 @@ fn given_a_halted_arm7_when_ie_and_if_are_nonzero_with_ime_0_then_it_wakes_and_r
         arm7: TIMER0,
     });
     step7(&mut m, 1);
-    assert_eq!((m.arm7().halted(), m.arm7().regs().get(2)), (false, 0x66));
+    assert_eq!(
+        (
+            m.inspect().arm7().halted(),
+            m.inspect().arm7().regs().get(2)
+        ),
+        (false, 0x66)
+    );
 }
 
 #[test]
 fn given_a_halted_arm7_with_nothing_pending_when_stepped_then_it_stays_halted() {
     let mut m = arm7_after_haltcnt_write(0x80);
     step7(&mut m, 3);
-    assert_eq!((m.arm7().halted(), m.arm7().regs().get(2)), (true, 0));
+    assert_eq!(
+        (
+            m.inspect().arm7().halted(),
+            m.inspect().arm7().regs().get(2)
+        ),
+        (true, 0)
+    );
 }
 
 #[test]
@@ -230,7 +269,7 @@ fn given_a_halted_cpu_when_a_state_is_saved_and_loaded_then_it_is_halted_again()
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");
     let result = loaded.load_state(&m.save_state());
-    assert_eq!((result, loaded.arm7().halted()), (Ok(()), true));
+    assert_eq!((result, loaded.inspect().arm7().halted()), (Ok(()), true));
 }
 
 // -------------------------------------------------------------------------------- SWI Halt, 03h
@@ -239,9 +278,14 @@ fn given_a_halted_cpu_when_a_state_is_saved_and_loaded_then_it_is_halted_again()
 fn given_swi_halt_when_executed_then_it_returns_and_the_cpu_is_halted() {
     let mut m = arm9_running(&[arm_swi(0x06_0000), MOV_R1, SPIN]);
     step9(&mut m, 2);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
-        (m.arm9().halted(), regs.cpsr(), regs.get(15), regs.get(1)),
+        (
+            m.inspect().arm9().halted(),
+            regs.cpsr(),
+            regs.get(15),
+            regs.get(1)
+        ),
         (true, SYSTEM_FLAGS, ENTRY9 + 4 + 8, 0)
     );
 }
@@ -256,7 +300,7 @@ fn given_swi_halt_on_the_arm9_when_an_enabled_irq_is_pending_then_the_next_instr
         arm7: 0,
     });
     step9(&mut m, 1);
-    assert_eq!(m.arm9().regs().get(1), 0x66);
+    assert_eq!(m.inspect().arm9().regs().get(1), 0x66);
 }
 
 #[test]
@@ -265,9 +309,9 @@ fn given_swi_halt_on_the_arm7_when_executed_then_the_arm7_is_halted_and_nothing_
     step7(&mut m, 2);
     assert_eq!(
         (
-            m.arm7().halted(),
-            m.arm9().halted(),
-            m.swi_record7().last_unimplemented()
+            m.inspect().arm7().halted(),
+            m.inspect().arm9().halted(),
+            m.inspect().swi_record7().last_unimplemented()
         ),
         (true, false, None)
     );
@@ -279,10 +323,10 @@ fn given_swi_waitbyloop_when_executed_then_it_returns_without_halting_and_is_not
     step9(&mut m, 3);
     assert_eq!(
         (
-            m.arm9().halted(),
-            m.arm9().regs().get(1),
-            m.swi_record9().last(),
-            m.swi_record9().last_unimplemented(),
+            m.inspect().arm9().halted(),
+            m.inspect().arm9().regs().get(1),
+            m.inspect().swi_record9().last(),
+            m.inspect().swi_record9().last_unimplemented(),
         ),
         (false, 0x66, Some(3), None)
     );
@@ -373,10 +417,10 @@ fn raise_arm7(m: &mut Machine) {
 fn given_intrwait_with_nothing_set_when_executed_then_the_arm9_halts_in_the_wait_loop() {
     let mut m = arm9_waiting(&wait_program(0, 8, 4), 8);
     step9(&mut m, 5);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (
-            m.arm9().halted(),
+            m.inspect().arm9().halted(),
             regs.cpsr() & 0x1F,
             regs.cpsr() & 0x80,
             regs.get(6)
@@ -389,7 +433,7 @@ fn given_intrwait_with_nothing_set_when_executed_then_the_arm9_halts_in_the_wait
 fn given_intrwait_when_executed_then_ime_is_forced_to_1() {
     let mut m = arm9_waiting(&wait_program(0, 8, 4), 8);
     step9(&mut m, 4);
-    assert!(m.irq9().ime());
+    assert!(m.inspect().irq9().ime());
 }
 
 #[test]
@@ -398,13 +442,13 @@ fn given_intrwait_halted_when_the_enabled_irq_arrives_then_the_handler_runs_and_
     step9(&mut m, 5);
     raise_arm9(&mut m);
     step9(&mut m, 40);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (
             regs.get(6),
             regs.cpsr(),
-            m.arm9().halted(),
-            m.arm9_peek32(FLAGS9)
+            m.inspect().arm9().halted(),
+            m.inspect().arm9_peek32(FLAGS9)
         ),
         (0x99, SYSTEM_FLAGS | 0x80, false, 0)
     );
@@ -415,7 +459,13 @@ fn given_intrwait_returning_when_the_flag_word_held_other_bits_then_only_the_wai
     let mut m = arm9_waiting(&wait_program(0, 8, 4), 8);
     m.bus9().write32(FLAGS9, 0x108);
     step9(&mut m, 5);
-    assert_eq!((m.arm9().regs().get(6), m.arm9_peek32(FLAGS9)), (0, 0x100));
+    assert_eq!(
+        (
+            m.inspect().arm9().regs().get(6),
+            m.inspect().arm9_peek32(FLAGS9)
+        ),
+        (0, 0x100)
+    );
 }
 
 #[test]
@@ -425,9 +475,9 @@ fn given_intrwait_with_the_flag_already_set_and_r0_0_when_executed_then_it_retur
     step9(&mut m, 6);
     assert_eq!(
         (
-            m.arm9().regs().get(6),
-            m.arm9().halted(),
-            m.arm9_peek32(FLAGS9)
+            m.inspect().arm9().regs().get(6),
+            m.inspect().arm9().halted(),
+            m.inspect().arm9_peek32(FLAGS9)
         ),
         (0x99, false, 0)
     );
@@ -438,14 +488,17 @@ fn given_intrwait_with_r0_1_when_old_flags_are_set_then_they_are_discarded_and_i
     let mut m = arm9_waiting(&wait_program(1, 8, 4), 8);
     m.bus9().write32(FLAGS9, 0x108);
     step9(&mut m, 5);
-    assert_eq!((m.arm9().halted(), m.arm9_peek32(FLAGS9)), (true, 0x100));
+    assert_eq!(
+        (m.inspect().arm9().halted(), m.inspect().arm9_peek32(FLAGS9)),
+        (true, 0x100)
+    );
 }
 
 #[test]
 fn given_intrwait_when_it_waits_then_ie_and_if_are_not_changed_by_the_bios() {
     let mut m = arm9_waiting(&wait_program(0, 8, 4), 8);
     step9(&mut m, 5);
-    let irq = m.irq9();
+    let irq = m.inspect().irq9();
     assert_eq!((irq.ie(), irq.if_()), (0, 0));
 }
 
@@ -460,7 +513,10 @@ fn given_vblankintrwait_when_executed_with_other_register_values_then_it_waits_f
     step9(&mut m, 5);
     // R0 = 1 and R1 = 1 are forced: the V-blank bit is waited for and the old flags are
     // discarded, so the unrelated bit 3 stays and the wait halts.
-    assert_eq!((m.arm9().halted(), m.arm9_peek32(FLAGS9)), (true, 0x8));
+    assert_eq!(
+        (m.inspect().arm9().halted(), m.inspect().arm9_peek32(FLAGS9)),
+        (true, 0x8)
+    );
 }
 
 #[test]
@@ -476,7 +532,7 @@ fn given_vblankintrwait_halted_when_a_vblank_irq_arrives_then_it_returns() {
         arm7: 0,
     });
     step9(&mut m, 40);
-    assert_eq!(m.arm9().regs().get(6), 0x99);
+    assert_eq!(m.inspect().arm9().regs().get(6), 0x99);
 }
 
 #[test]
@@ -493,7 +549,10 @@ fn given_vblankintrwait_on_the_arm7_halted_when_a_vblank_irq_arrives_then_it_ret
     });
     step7(&mut m, 40);
     assert_eq!(
-        (m.arm7().regs().get(6), m.arm7_peek32(0, FLAGS7)),
+        (
+            m.inspect().arm7().regs().get(6),
+            m.inspect().arm7_peek32(0, FLAGS7)
+        ),
         (0x99, 0)
     );
 }
@@ -507,9 +566,9 @@ fn given_intrwait_on_the_arm7_halted_when_the_irq_arrives_then_the_flag_is_consu
     step7(&mut m, 40);
     assert_eq!(
         (
-            m.arm7().regs().get(6),
-            m.arm7().halted(),
-            m.arm7_peek32(0, FLAGS7)
+            m.inspect().arm7().regs().get(6),
+            m.inspect().arm7().halted(),
+            m.inspect().arm7_peek32(0, FLAGS7)
         ),
         (0x99, false, 0)
     );
@@ -519,8 +578,11 @@ fn given_intrwait_on_the_arm7_halted_when_the_irq_arrives_then_the_flag_is_consu
 fn given_intrwait_on_the_arm7_when_executed_then_it_halts_in_svc_mode_with_irqs_open() {
     let mut m = arm7_waiting(&wait_program(0, 8, 4), 8);
     step7(&mut m, 5);
-    let regs = m.arm7().regs();
-    assert_eq!((m.arm7().halted(), regs.cpsr() & 0x9F), (true, 0x13));
+    let regs = m.inspect().arm7().regs();
+    assert_eq!(
+        (m.inspect().arm7().halted(), regs.cpsr() & 0x9F),
+        (true, 0x13)
+    );
 }
 
 // --------------------------------------------------------------- savestate while waiting (§5.5)
@@ -561,7 +623,7 @@ fn given_a_machine_saved_while_waiting_when_loaded_then_it_is_still_halted() {
         .load_rom(waiting.rom().to_vec())
         .expect("same image");
     let loaded = resumed.load_state(&waiting.save_state());
-    assert_eq!((loaded, resumed.arm9().halted()), (Ok(()), true));
+    assert_eq!((loaded, resumed.inspect().arm9().halted()), (Ok(()), true));
 }
 
 #[test]
@@ -577,7 +639,7 @@ fn given_the_same_wait_run_twice_when_saved_then_the_bytes_are_identical() {
 fn given_a_halted_arm9_when_a_frame_runs_then_the_frame_completes_and_the_cpu_stays_halted() {
     let mut m = machine_with(&[WFI_C0_4, MOV_R1, SPIN], &[SPIN]);
     m.run_frame();
-    assert_eq!((m.frame_count(), m.arm9().halted()), (1, true));
+    assert_eq!((m.frame_count(), m.inspect().arm9().halted()), (1, true));
 }
 
 #[test]
@@ -588,8 +650,8 @@ fn given_a_halted_arm7_when_a_frame_runs_then_the_frame_completes_and_the_arm7_c
     assert_eq!(
         (
             m.frame_count(),
-            m.arm7().halted(),
-            m.arm7_clock() >= m.scheduler().now()
+            m.inspect().arm7().halted(),
+            m.inspect().arm7_clock() >= m.inspect().scheduler().now()
         ),
         (1, true, true)
     );
@@ -620,7 +682,10 @@ fn given_the_arm9_starts_a_timer_and_halts_in_one_round_when_the_round_ends_then
     run_round(&mut m);
     // The clock stops at the overflow, inside the slice, not at the slice's end.
     assert_eq!(
-        (m.arm9().halted(), m.scheduler().now() < SLICE),
+        (
+            m.inspect().arm9().halted(),
+            m.inspect().scheduler().now() < SLICE
+        ),
         (true, true)
     );
 }
@@ -632,7 +697,13 @@ fn given_the_arm9_starts_a_timer_with_its_irq_enabled_and_halts_when_rounds_run_
     m.arm9.regs_mut().set_cpsr(0x9F);
     m.bus9().write32(IE, TIMER0);
     clocks_after_rounds(&mut m, 3);
-    assert_eq!((m.arm9().halted(), m.arm9().regs().get(1)), (false, 0x66));
+    assert_eq!(
+        (
+            m.inspect().arm9().halted(),
+            m.inspect().arm9().regs().get(1)
+        ),
+        (false, 0x66)
+    );
 }
 
 /// An ARM7 whose DMA channel 0 copies one halfword, 8000h, to POSTFLG/HALTCNT, so the high byte
@@ -647,7 +718,10 @@ fn arm7_halted_by_dma() -> (bool, bool) {
     (0..8)
         .map(|_| {
             run_round(&mut m);
-            (m.arm7().halted(), m.io().power().halt_requested())
+            (
+                m.inspect().arm7().halted(),
+                m.inspect().power().halt_requested(),
+            )
         })
         .find(|&(halted, pending)| halted || pending)
         .unwrap_or((false, false))

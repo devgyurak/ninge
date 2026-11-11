@@ -47,6 +47,10 @@ step "cargo fmt"
 cargo fmt --all -- --check
 step "cargo clippy"
 cargo clippy --workspace --all-targets --locked -- -D warnings
+# The workspace build always has ninge-core's `test-support` on (the runner enables it), so lint
+# the feature-off combinations a host gets from `-p` builds and `cargo install ninge` too.
+cargo clippy -p ninge-core --all-targets --locked -- -D warnings
+cargo clippy -p ninge --all-targets --locked -- -D warnings
 
 need() {
   "$@" >/dev/null 2>&1 || { printf '%s is required: %s\n' "$1 $2" "$INSTALL" >&2; exit 1; }

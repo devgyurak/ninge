@@ -175,7 +175,7 @@ fn given_a_scroll_written_with_bits_above_8_when_decoded_then_only_the_low_9_bit
     let mut m = Machine::new();
     w16(&mut m, BG0HOFS, 0xFFFF);
     w16(&mut m, BG0HOFS + 2, 0xFE12);
-    let layer = m.gpu2d().text_bg(0);
+    let layer = m.inspect().gpu2d().text_bg(0);
     assert_eq!((layer.hofs, layer.vofs), (0x1FF, 0x012));
 }
 
@@ -184,7 +184,7 @@ fn given_a_scroll_with_a_byte_written_when_decoded_then_the_other_byte_is_kept()
     let mut m = Machine::new();
     w16(&mut m, BG0HOFS, 0x01FF);
     w8(&mut m, BG0HOFS, 0x01);
-    assert_eq!(m.gpu2d().text_bg(0).hofs, 0x101);
+    assert_eq!(m.inspect().gpu2d().text_bg(0).hofs, 0x101);
 }
 
 /// Scrolls layer n to (10 + n, 20 + n) and returns what each layer decodes to.
@@ -195,7 +195,12 @@ fn scrolled_layers() -> Vec<(u16, u16)> {
         w16(&mut m, BG0HOFS + 4 * n + 2, 20 + n as u16);
     });
     (0..4)
-        .map(|n| (m.gpu2d().text_bg(n).hofs, m.gpu2d().text_bg(n).vofs))
+        .map(|n| {
+            (
+                m.inspect().gpu2d().text_bg(n).hofs,
+                m.inspect().gpu2d().text_bg(n).vofs,
+            )
+        })
         .collect()
 }
 
@@ -226,7 +231,7 @@ fn given_bg_registers_written_when_decoded_then_the_layer_state_follows_the_note
         bgcnt_addr(1),
         2 | (5 << 2) | 0x80 | (7 << 8) | (3 << 14),
     );
-    let layer = m.gpu2d().text_bg(1);
+    let layer = m.inspect().gpu2d().text_bg(1);
     assert_eq!(
         (
             layer.priority,
@@ -246,7 +251,10 @@ fn given_each_screen_size_when_decoded_then_the_layer_is_the_size_the_note_lists
     let sizes: Vec<(u16, u16)> = (0..4u16)
         .map(|size| {
             w16(&mut m, BG0CNT, size << 14);
-            (m.gpu2d().text_bg(0).width, m.gpu2d().text_bg(0).height)
+            (
+                m.inspect().gpu2d().text_bg(0).width,
+                m.inspect().gpu2d().text_bg(0).height,
+            )
         })
         .collect();
     assert_eq!(sizes, vec![(256, 256), (512, 256), (256, 512), (512, 512)]);
@@ -872,7 +880,7 @@ fn given_layers_on_the_bottom_screen_when_powcnt1_bit_15_is_clear_then_the_pictu
 
 /// Runs rounds until the frame is at line `line`.
 fn run_to_line(m: &mut Machine, line: u16) {
-    while m.vcount() < line {
+    while m.inspect().vcount() < line {
         crate::scheduler::run_round(m);
     }
 }

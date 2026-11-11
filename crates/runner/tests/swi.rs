@@ -35,7 +35,14 @@ fn boot() -> Machine {
 /// Mismatches between `rows` and the record that starts at `base`.
 fn mismatches(machine: &Machine, base: u32, rows: &[Row]) -> Vec<Mismatch> {
     rows.iter()
-        .map(|&(slot, name, expected)| (slot, name, expected, machine.arm9_peek32(base + slot * 4)))
+        .map(|&(slot, name, expected)| {
+            (
+                slot,
+                name,
+                expected,
+                machine.inspect().arm9_peek32(base + slot * 4),
+            )
+        })
         .filter(|&(_, _, expected, got)| expected != got)
         .collect()
 }
@@ -141,8 +148,8 @@ fn given_swi_rom_when_run_then_the_debugger_record_names_the_unimplemented_numbe
     let machine = boot();
     assert_eq!(
         (
-            machine.swi_record9().last_unimplemented(),
-            machine.swi_record7().last_unimplemented()
+            machine.inspect().swi_record9().last_unimplemented(),
+            machine.inspect().swi_record7().last_unimplemented()
         ),
         (Some(0x1E), Some(0x1E))
     );
@@ -197,7 +204,10 @@ fn given_swi_rom_when_run_then_the_arm7_wakes_from_swi_halt_and_haltcnt_on_ie_an
 fn given_swi_rom_when_run_then_neither_cpu_ends_halted() {
     let machine = boot();
     assert_eq!(
-        (machine.arm9().halted(), machine.arm7().halted()),
+        (
+            machine.inspect().arm9().halted(),
+            machine.inspect().arm7().halted()
+        ),
         (false, false)
     );
 }
@@ -219,7 +229,12 @@ fn result_mismatches(base: u32, rows: &[ResultRow]) -> Vec<ResultMismatch> {
     let machine = boot();
     rows.iter()
         .map(|&(offset, name, expected)| {
-            (offset, name, expected, machine.arm9_peek32(base + offset))
+            (
+                offset,
+                name,
+                expected,
+                machine.inspect().arm9_peek32(base + offset),
+            )
         })
         .filter(|&(_, _, expected, got)| expected != got)
         .collect()

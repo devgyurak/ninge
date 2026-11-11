@@ -16,6 +16,7 @@
 
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::dma::Dma;
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
 use crate::machine::*;
 use crate::scheduler::{LINE_CYCLES, run_round};
@@ -105,11 +106,15 @@ fn poke_halfwords(m: &mut Machine, addr: u32, values: &[u16]) {
 }
 
 fn peek_words(m: &Machine, addr: u32, count: u32) -> Vec<u32> {
-    (0..count).map(|i| m.arm9_peek32(addr + 4 * i)).collect()
+    (0..count)
+        .map(|i| m.inspect().arm9_peek32(addr + 4 * i))
+        .collect()
 }
 
 fn peek_halfwords(m: &Machine, addr: u32, count: u32) -> Vec<u16> {
-    (0..count).map(|i| m.arm9_peek16(addr + 2 * i)).collect()
+    (0..count)
+        .map(|i| m.inspect().arm9_peek16(addr + 2 * i))
+        .collect()
 }
 
 /// Writes ARM9 channel `ch`'s three registers as a program would, at the current master time.
@@ -134,7 +139,7 @@ fn rounds(m: &mut Machine, count: u32) {
 /// after that line's start event.
 fn run_until(m: &mut Machine, frame: u64, line: u16) {
     (0..200_000).for_each(|_| {
-        if m.frame_count() != frame || m.vcount() != line {
+        if m.frame_count() != frame || m.inspect().vcount() != line {
             run_round(m);
         }
     });
@@ -146,7 +151,8 @@ fn run_frames(m: &mut Machine, frames: u32) {
 
 /// The pending DMA start events as `(time, arm9, channel)`, in firing order.
 fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
-    m.scheduler()
+    m.inspect()
+        .scheduler()
         .pending()
         .iter()
         .filter_map(|event| match event.kind {
@@ -158,7 +164,7 @@ fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
 
 /// DMAnCNT's enable bit as the ARM9 reads it, for channel `n`.
 fn busy9(m: &Machine, n: u32) -> u32 {
-    m.arm9_peek32(cnt_addr(n)) >> 31
+    m.inspect().arm9_peek32(cnt_addr(n)) >> 31
 }
 
 // ---------------------------------------------------------------- Immediate start, ARM9
@@ -189,7 +195,11 @@ fn given_an_immediate_write_when_nothing_has_run_yet_then_the_destination_is_unt
  {
     let m = immediate9();
     assert_eq!(
-        (peek_words(&m, DST, 4), busy9(&m, 0), m.dma9().pending(0)),
+        (
+            peek_words(&m, DST, 4),
+            busy9(&m, 0),
+            m.inspect().dma9().pending(0)
+        ),
         (vec![0; 4], 1, true)
     );
 }
@@ -209,7 +219,7 @@ fn given_a_queued_immediate_start_when_one_round_runs_then_enable_clears_and_no_
     let mut m = immediate9();
     run_round(&mut m);
     assert_eq!(
-        (busy9(&m, 0), m.dma9().pending(0), dma_events(&m)),
+        (busy9(&m, 0), m.inspect().dma9().pending(0), dma_events(&m)),
         (0, false, vec![])
     );
 }
@@ -271,9 +281,9 @@ fn given_an_arm7_start_written_while_it_lags_the_clock_when_the_round_ends_then_
     set7(&mut m, 10, 0, SRC, DST, ENABLE | WORD | 1);
     assert_eq!(
         (
-            m.scheduler().now(),
+            m.inspect().scheduler().now(),
             dma_events(&m),
-            m.arm7_peek32(10, cnt_addr(0)) >> 31
+            m.inspect().arm7_peek32(10, cnt_addr(0)) >> 31
         ),
         (64, vec![(64, false, 0)], 1)
     );
@@ -286,13 +296,13 @@ fn given_an_arm7_start_queued_late_when_the_next_round_runs_then_the_words_are_c
     run_round(&mut m);
     poke_words(&mut m, SRC, &[0x0BAD_CAFE]);
     set7(&mut m, 10, 0, SRC, DST, ENABLE | WORD | 1);
-    let before = (peek_words(&m, DST, 1), m.dma7().pending(0));
+    let before = (peek_words(&m, DST, 1), m.inspect().dma7().pending(0));
     run_round(&mut m);
     assert_eq!(
         (
             before,
             peek_words(&m, DST, 1),
-            m.arm7_peek32(64, cnt_addr(0)) >> 31,
+            m.inspect().arm7_peek32(64, cnt_addr(0)) >> 31,
             dma_events(&m)
         ),
         ((vec![0], true), vec![0x0BAD_CAFE], 0, vec![])
@@ -309,7 +319,7 @@ fn arm9_irq_failures() -> Vec<(u32, u32)> {
             let mut m = machine();
             set9(&mut m, ch, SRC, DST, ENABLE | IRQ | WORD | 1);
             rounds(&mut m, 1);
-            let got = m.irq9().if_();
+            let got = m.inspect().irq9().if_();
             (got != if_dma(ch)).then_some((ch, got))
         })
         .collect()
@@ -327,8 +337,8 @@ fn arm7_irq_failures() -> Vec<(u32, u32)> {
             let mut m = machine();
             set7(&mut m, 0, ch, SRC, DST, ENABLE | IRQ | WORD | 1);
             rounds(&mut m, 1);
-            let got = m.irq7().if_();
-            (got != if_dma(ch) || m.irq9().if_() != 0).then_some((ch, got))
+            let got = m.inspect().irq7().if_();
+            (got != if_dma(ch) || m.inspect().irq9().if_() != 0).then_some((ch, got))
         })
         .collect()
 }
@@ -344,7 +354,7 @@ fn given_an_arm9_channel_with_the_irq_bit_when_the_start_is_queued_but_not_run_t
  {
     let mut m = machine();
     set9(&mut m, 1, SRC, DST, ENABLE | IRQ | WORD | 1);
-    assert_eq!((m.irq9().if_(), m.irq7().if_()), (0, 0));
+    assert_eq!((m.inspect().irq9().if_(), m.inspect().irq7().if_()), (0, 0));
 }
 
 #[test]
@@ -352,7 +362,7 @@ fn given_an_arm9_channel_without_the_irq_bit_when_its_transfer_ends_then_if_stay
     let mut m = machine();
     set9(&mut m, 0, SRC, DST, ENABLE | WORD | 1);
     rounds(&mut m, 1);
-    assert_eq!((m.irq9().if_(), m.irq7().if_()), (0, 0));
+    assert_eq!((m.inspect().irq9().if_(), m.inspect().irq7().if_()), (0, 0));
 }
 
 // ------------------------------------------------------------------------------ VBlank
@@ -371,9 +381,9 @@ fn given_a_vblank_channel_when_line_191_has_started_then_nothing_is_queued_and_e
     run_until(&mut m, 0, 191);
     assert_eq!(
         (
-            m.vcount(),
+            m.inspect().vcount(),
             dma_events(&m),
-            m.dma9().pending(0),
+            m.inspect().dma9().pending(0),
             busy9(&m, 0),
             peek_words(&m, DST, 4)
         ),
@@ -386,7 +396,7 @@ fn given_a_vblank_channel_when_line_192_starts_then_its_start_is_queued_at_that_
     let mut m = vblank9();
     run_until(&mut m, 0, 192);
     assert_eq!(
-        (m.vcount(), dma_events(&m), peek_words(&m, DST, 4)),
+        (m.inspect().vcount(), dma_events(&m), peek_words(&m, DST, 4)),
         (192, vec![(192 * LINE_CYCLES, true, 0)], vec![0; 4])
     );
 }
@@ -423,8 +433,8 @@ fn given_an_arm7_vblank_channel_when_line_192_starts_and_a_round_runs_then_the_w
         (
             queued,
             peek_words(&m, DST, 2),
-            m.irq7().if_(),
-            m.irq9().if_()
+            m.inspect().irq7().if_(),
+            m.inspect().irq9().if_()
         ),
         (
             vec![(192 * LINE_CYCLES, false, 1)],
@@ -464,13 +474,13 @@ fn given_a_vblank_channel_enabled_during_vblank_when_the_frame_wraps_then_nothin
     poke_words(&mut m, SRC, &[1, 2, 3, 4]);
     run_until(&mut m, 0, 200);
     set9(&mut m, 0, SRC, DST, ENABLE | WORD | ARM9_VBLANK | 4);
-    let waiting = (m.dma9().pending(0), dma_events(&m));
+    let waiting = (m.inspect().dma9().pending(0), dma_events(&m));
     run_until(&mut m, 1, 191);
     assert_eq!(
         (
             waiting,
             peek_words(&m, DST, 4),
-            m.dma9().pending(0),
+            m.inspect().dma9().pending(0),
             busy9(&m, 0)
         ),
         ((false, vec![]), vec![0; 4], false, 1)
@@ -523,7 +533,7 @@ fn given_a_repeating_hblank_channel_when_it_has_run_it_then_enable_stays_set_and
  {
     let mut m = hblank9(0);
     run_until(&mut m, 0, 100);
-    assert_eq!((busy9(&m, 0), m.dma9().pending(0)), (1, false));
+    assert_eq!((busy9(&m, 0), m.inspect().dma9().pending(0)), (1, false));
 }
 
 #[test]
@@ -566,7 +576,7 @@ fn given_an_arm7_channel_with_the_cartridge_start_when_a_frame_runs_then_it_neve
     assert_eq!(
         (
             peek_words(&m, DST, 1),
-            m.dma7().control(0) >> 31,
+            m.inspect().dma7().control(0) >> 31,
             dma_events(&m)
         ),
         (vec![0], 1, vec![])
@@ -621,7 +631,10 @@ fn given_a_mapped_dtcm_when_a_dma_writes_into_its_window_then_the_word_lands_in_
     // The CPU's view of the window is the TCM, which the DMA did not reach; the same RAM byte
     // one mirror up lies outside the window (`arm9-memory-map.md`, "Main RAM").
     assert_eq!(
-        (m.arm9_peek32(DTCM), m.arm9_peek32(DTCM_BEHIND)),
+        (
+            m.inspect().arm9_peek32(DTCM),
+            m.inspect().arm9_peek32(DTCM_BEHIND)
+        ),
         (0, 0xFEED_F00D)
     );
 }
@@ -634,7 +647,7 @@ fn given_a_mapped_dtcm_when_a_dma_reads_from_its_window_then_it_reads_the_ram_be
     set9(&mut m, 0, DTCM, DST, ENABLE | WORD | 1);
     rounds(&mut m, 1);
     assert_eq!(
-        (m.arm9_peek32(DTCM), peek_words(&m, DST, 1)),
+        (m.inspect().arm9_peek32(DTCM), peek_words(&m, DST, 1)),
         (0x7C7C_7C7C, vec![0x0AAB_0AAB])
     );
 }
@@ -656,7 +669,7 @@ fn given_a_dma_writing_another_channels_control_when_it_ends_then_that_channel_i
     rounds(&mut m, 1);
     assert_eq!(
         (
-            m.dma9().pending(1),
+            m.inspect().dma9().pending(1),
             dma_events(&m),
             peek_halfwords(&m, DST, 1),
             busy9(&m, 0)
@@ -707,9 +720,9 @@ fn given_a_dma_whose_destination_is_its_own_registers_when_it_runs_then_the_tran
     rounds(&mut m, 1);
     assert_eq!(
         (
-            m.dma9().destination(0),
-            m.dma9().control(0),
-            m.dma9().pending(0),
+            m.inspect().dma9().destination(0),
+            m.inspect().dma9().control(0),
+            m.inspect().dma9().pending(0),
             dma_events(&m)
         ),
         (DST + 0x40, 0, false, vec![])
@@ -731,7 +744,7 @@ fn given_a_fixed_destination_at_ipcfifosend_when_three_words_move_then_the_send_
     );
     rounds(&mut m, 1);
     assert_eq!(
-        m.ipc().send_words::<true>().collect::<Vec<u32>>(),
+        m.inspect().ipc().send_words::<true>().collect::<Vec<u32>>(),
         vec![0x11, 0x22, 0x33]
     );
 }
@@ -755,8 +768,8 @@ fn given_seventeen_words_to_an_enabled_send_fifo_when_the_dma_ends_then_16_are_h
     rounds(&mut m, 1);
     assert_eq!(
         (
-            m.ipc().send_words::<true>().collect::<Vec<u32>>(),
-            m.ipc().control::<true>() & (1 << 14)
+            m.inspect().ipc().send_words::<true>().collect::<Vec<u32>>(),
+            m.inspect().ipc().control::<true>() & (1 << 14)
         ),
         ((1..=16).collect::<Vec<u32>>(), 1 << 14)
     );
@@ -776,8 +789,8 @@ fn given_a_disabled_send_fifo_when_a_dma_writes_it_then_no_word_is_stored_and_no
     rounds(&mut m, 1);
     assert_eq!(
         (
-            m.ipc().send_words::<true>().count(),
-            m.ipc().control::<true>() & (1 << 14)
+            m.inspect().ipc().send_words::<true>().count(),
+            m.inspect().ipc().control::<true>() & (1 << 14)
         ),
         (0, 0)
     );
@@ -798,7 +811,10 @@ fn given_an_arm7_dma_to_its_send_fifo_when_it_runs_then_the_arm9_reads_the_words
     );
     rounds(&mut m, 1);
     assert_eq!(
-        m.ipc().send_words::<false>().collect::<Vec<u32>>(),
+        m.inspect()
+            .ipc()
+            .send_words::<false>()
+            .collect::<Vec<u32>>(),
         vec![0xA1, 0xA2]
     );
 }
@@ -848,10 +864,10 @@ fn given_registers_written_by_each_cpu_when_read_through_the_accessors_then_each
     m.bus9().write32(fill_addr(2), 0x55);
     assert_eq!(
         (
-            m.dma9().source(1),
-            m.dma7().source(1),
-            m.dma9().fill(2),
-            m.dma7().fill(2)
+            m.inspect().dma9().source(1),
+            m.inspect().dma7().source(1),
+            m.inspect().dma9().fill(2),
+            m.inspect().dma7().fill(2)
         ),
         (0x0212_0000, 0x0234_0000, 0x55, 0)
     );
@@ -862,14 +878,14 @@ fn given_an_arm9_register_write_when_the_arm7_reads_the_same_address_then_it_rea
  {
     let mut m = machine();
     m.bus9().write32(sad_addr(0), 0x0212_0000);
-    assert_eq!(m.arm7_peek32(0, sad_addr(0)), 0);
+    assert_eq!(m.inspect().arm7_peek32(0, sad_addr(0)), 0);
 }
 
 #[test]
 fn given_an_arm9_channel_when_it_runs_then_the_arm7_channels_are_untouched() {
     let mut m = immediate9();
     rounds(&mut m, 1);
-    assert_eq!(*m.dma7(), Dma::<false>::new());
+    assert_eq!(*m.inspect().dma7(), Dma::<false>::new());
 }
 
 // -------------------------------------------------------------------------- determinism
@@ -948,16 +964,16 @@ fn given_a_saved_machine_with_pending_channels_when_loaded_then_the_channels_mat
     let original = busy_machine();
     let mut loaded = machine();
     loaded.load_state(&original.save_state()).expect("loads");
-    let now = loaded.scheduler().now();
+    let now = loaded.inspect().scheduler().now();
     assert_eq!(
         (
-            loaded.dma9().clone(),
-            loaded.dma7().clone(),
+            loaded.inspect().dma9().clone(),
+            loaded.inspect().dma7().clone(),
             dma_events(&loaded)
         ),
         (
-            original.dma9().clone(),
-            original.dma7().clone(),
+            original.inspect().dma9().clone(),
+            original.inspect().dma7().clone(),
             vec![(now, true, 0), (now, false, 1)]
         )
     );

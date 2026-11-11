@@ -9,6 +9,11 @@ LD := $(GCC_BIN)/arm-none-eabi-ld
 OBJCOPY := $(GCC_BIN)/arm-none-eabi-objcopy
 NDSTOOL := $(WONDERFUL)/thirdparty/blocksds/core/tools/ndstool/ndstool
 
+# The libnds ROMs (C, built with the SDK in the pinned image). They use BlocksDS's stock ARM7 core.
+BLOCKSDS := $(WONDERFUL)/thirdparty/blocksds/core
+CC := $(GCC_BIN)/arm-none-eabi-gcc
+CROMS := console
+
 ROMS := smoke boot memmap vramdisp bgtext sched wramcnt irq disptime ipc timers dma swi
 OUT := build
 
@@ -44,7 +49,20 @@ $(OUT)/$(1).nds: $(1)/arm9.s $(1)/arm7.s $(1)/arm9.ld $(1)/arm7.ld | $(OUT)
 endef
 $(foreach r,$(ROMS),$(eval $(call ROM,$(r))))
 
-$(OUT)/SHA256SUMS: $(ROMS:%=$(OUT)/%.nds)
+# One libnds ROM: <name>/main.c + the stock ARM7 -> build/<name>.nds. Flags follow the BlocksDS
+# ARM9 rules; the ARM9 ELF is linked with libnds9 and the SDK's own startup files.
+CFLAGS_ARM9 := -Wall -O2 -mthumb -mcpu=arm946e-s+nofp -ffunction-sections -fdata-sections \
+  -D__NDS__ -D__BLOCKSDS__ -DARM9 -I$(BLOCKSDS)/libs/libnds/include \
+  -specs=$(BLOCKSDS)/sys/crts/ds_arm9.specs
+define CROM
+$(OUT)/$(1).nds: $(1)/main.c | $(OUT)
+	$(CC) $(CFLAGS_ARM9) -o $(OUT)/$(1)-arm9.elf $(1)/main.c -L$(BLOCKSDS)/libs/libnds/lib \
+	  -Wl,--start-group -lnds9 -lc -Wl,--end-group
+	$(NDSTOOL) -c $$@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $(OUT)/$(1)-arm9.elf
+endef
+$(foreach r,$(CROMS),$(eval $(call CROM,$(r))))
+
+$(OUT)/SHA256SUMS: $(ROMS:%=$(OUT)/%.nds) $(CROMS:%=$(OUT)/%.nds)
 	cd $(OUT) && sha256sum $(notdir $^) > SHA256SUMS
 
 clean:

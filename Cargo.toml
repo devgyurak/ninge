@@ -7,8 +7,9 @@ version = "0.0.0"
 edition = "2024"
 license = "Apache-2.0"
 # Guards against publishing 0.0.0: the first release PR (AGENTS.md §7) sets it to `true` with the
-# version bump. ninge-runner and ninge-tracediff say `publish = false` themselves and stay
-# unpublished; the release workflow checks that only ninge-core and ninge are publishable.
+# version bump (here, and the `ninge-core` entry below). ninge-runner and ninge-tracediff say
+# `publish = false` themselves and stay unpublished; the release workflow checks that only
+# ninge-core and ninge are publishable.
 publish = false
 repository = "https://github.com/devgyurak/ninge"
 

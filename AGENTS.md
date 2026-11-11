@@ -434,10 +434,11 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   Direct pushes are blocked for everyone.
 - **Repository** — `github.com/devgyurak/ninge`.
 - **Releases** (decided) — SemVer `0.x`; a `vX.Y.Z` tag on `main` is the release, and the
-  release PR bumps `[workspace.package] version` and sets `[workspace.package] publish` to
-  `true`. The first release, `0.1.0`, follows the Phase 3 DoD. The tag triggers
-  `.github/workflows/release.yml`, which publishes **ninge-core and ninge** to crates.io
-  (`cargo install ninge`). **ninge-runner and ninge-tracediff are not published** (decided
+  release PR bumps `[workspace.package] version` **and** the `ninge-core` entry's `version`
+  in `[workspace.dependencies]`, and sets `[workspace.package] publish` to `true`. The first release, `0.1.0`, follows the Phase 3 DoD. The tag triggers
+  `.github/workflows/release.yml`, which publishes **ninge-core and ninge** to crates.io in
+  one `cargo publish` (`cargo install ninge`), after a reviewer approves the `crates-io`
+  environment that holds the token. **ninge-runner and ninge-tracediff are not published** (decided
   2026-11-11): they are repository tools whose tests and golden frames need the repository's
   `testroms/`, and a published crate would put their command line and report format under
   SemVer while both still change. Publishing one later is a one-line change. macOS arm64 and

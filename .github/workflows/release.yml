@@ -4,8 +4,12 @@ name: release
 # ninge-runner and ninge-tracediff are repository tools and are not published. The tag is
 # the release: the release PR (develop -> main) has already bumped `[workspace.package]
 # version` and set `publish = true`, and CI was green on it. This workflow only checks that,
-# then publishes. It is safe to re-run after a partial failure: a crate whose version is
-# already on crates.io is skipped.
+# then publishes both crates in one `cargo publish`, so both are verified before anything is
+# uploaded (a version on crates.io can never be replaced). It is safe to re-run after a partial
+# failure: a crate whose version is already on crates.io is skipped.
+#
+# The job runs in the `crates-io` environment: the token lives there, and the environment's
+# required reviewer is the last human check before the upload (a repository setting).
 
 on:
   push:
@@ -23,8 +27,10 @@ jobs:
   crates-io:
     name: publish to crates.io
     runs-on: ubuntu-latest
+    environment: crates-io
     steps:
-      - uses: actions/checkout@v5
+      # Pinned to a commit: this workflow holds the publish token.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
@@ -56,28 +62,41 @@ jobs:
           echo "publishable: $publishable"
           test "$publishable" = "ninge ninge-core"
 
-      # A packaging error shows up here, before anything is uploaded. ninge cannot be dry-run
-      # until ninge-core is on the index, so it is checked by the publish itself.
-      - name: Dry run ninge-core
-        run: cargo publish --dry-run --locked -p ninge-core
+      # ninge asks for ninge-core at the workspace version: a bump that forgot the dependency
+      # line would publish a ninge that cannot be built from crates.io.
+      - name: ninge requires ninge-core at the tag's version
+        run: |
+          required=$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(next(d["req"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ninge" for d in p["dependencies"] if d["name"] == "ninge-core"))')
+          echo "ninge requires ninge-core $required"
+          test "$required" = "^$VERSION"
 
-      - name: Publish ninge-core
+      # Apache-2.0 section 4(a): each package carries a copy of the license.
+      - name: Each package carries the LICENSE
+        run: |
+          cmp LICENSE crates/core/LICENSE
+          cmp LICENSE crates/frontend/LICENSE
+
+      # Both crates in one command: `cargo publish` verifies every package before it uploads
+      # any, in dependency order, so a failure in ninge cannot leave ninge-core alone on
+      # crates.io. The dry run is inside the check, so a re-run after ninge-core went out does not
+      # stop on it.
+      - name: Publish ninge-core and ninge
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          if curl -fsS -A "ninge-release" "https://crates.io/api/v1/crates/ninge-core/$VERSION" >/dev/null; then
-            echo "ninge-core $VERSION is already on crates.io, skipping"
-          else
-            cargo publish --locked -p ninge-core
+          packages=()
+          for crate in ninge-core ninge; do
+            if curl -fsS -A "ninge-release (https://github.com/devgyurak/ninge)" \
+                "https://crates.io/api/v1/crates/$crate/$VERSION" >/dev/null; then
+              echo "$crate $VERSION is already on crates.io, skipping"
+            else
+              packages+=(-p "$crate")
+            fi
+          done
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "nothing to publish"
+            exit 0
           fi
-
-      # cargo waits for the index to list ninge-core before it publishes the crate that needs it.
-      - name: Publish ninge
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          if curl -fsS -A "ninge-release" "https://crates.io/api/v1/crates/ninge/$VERSION" >/dev/null; then
-            echo "ninge $VERSION is already on crates.io, skipping"
-          else
-            cargo publish --locked -p ninge
-          fi
+          cargo publish --dry-run --locked "${packages[@]}"
+          cargo publish --locked "${packages[@]}"

@@ -1,0 +1,2 @@
+# Golden frames for testroms/console. Format and review flow: tests/golden/README.md.
+frames=10 top=6d22a848b735d4bc bottom=1a0564b2e8de2325

@@ -286,7 +286,7 @@ impl Memory {
     // TODO(hw-unverified): all RAM starts at zero, and VRAMCNT_A and WRAMCNT start at 0, which
     // GBATEK does not state (`arm9-memory-map.md`, "Unverified"; `vram-banks.md`, "Unverified";
     // `wramcnt.md`, "Unverified"; `palette-ram.md`, "Unverified").
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut memory = Self {
             main_ram: vec![0; MAIN_RAM_SIZE],
             itcm: vec![0; ITCM_SIZE],
@@ -439,12 +439,14 @@ impl Memory {
     }
 
     /// The region backing the page that holds `addr`, as the ARM9 sees it.
-    pub fn region(&self, addr: u32) -> Region {
+    #[cfg(test)]
+    pub(crate) fn region(&self, addr: u32) -> Region {
         page_of(&self.pages9, addr).region
     }
 
     /// The region backing the page that holds `addr`, as the ARM7 sees it.
-    pub fn region7(&self, addr: u32) -> Region {
+    #[cfg(test)]
+    pub(crate) fn region7(&self, addr: u32) -> Region {
         page_of(&self.pages7, addr).region
     }
 

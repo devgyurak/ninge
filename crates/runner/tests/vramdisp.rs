@@ -99,10 +99,10 @@ fn given_vramdisp_rom_when_3_frames_run_then_the_rom_wrote_the_registers_it_set(
     let machine = boot_frames();
     assert_eq!(
         (
-            machine.gpu2d().powcnt1(),
-            machine.gpu2d().dispcnt_a(),
-            machine.vram_a().mst,
-            machine.vram_a().enabled
+            machine.inspect().gpu2d().powcnt1(),
+            machine.inspect().gpu2d().dispcnt_a(),
+            machine.inspect().vram_a().mst,
+            machine.inspect().vram_a().enabled
         ),
         (0x0003, 0x0002_0000, 0, true)
     );

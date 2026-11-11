@@ -22,7 +22,7 @@
 //! # Version policy
 //!
 //! [`FORMAT_VERSION`] started at 1; version 2 adds engine A's display registers (#20); version 3 adds the ARM7, its
-//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask; version 10 adds both CPUs' DMA channels and the `DmaStart` event (#26); version 11 drops the event queue (#112); version 12 adds the HLE BIOS's SWI records (#27); version 13 adds each core's halted state and the ARM7's HALTCNT request (#27); version 14 adds the palette RAM (#28); version 15 adds the BG control and scroll registers of engine A (#28); version 16 adds the four frame buffers (#28). Before
+//! clock and the scheduler (#21); version 4 adds shared WRAM and WRAMCNT (#22); version 5 adds both CPUs' interrupt controllers (#23); version 6 adds VCOUNT, the display flags and both CPUs' DISPSTAT (#104); version 7 adds IPCSYNC and both IPC FIFOs (#24); version 8 adds both CPUs' timers (#25); version 9 splits the register devices out of the memory block (#109) and drops the timers' schedule-changed mask; version 10 adds both CPUs' DMA channels and the `DmaStart` event (#26); version 11 drops the event queue (#112); version 12 adds the HLE BIOS's SWI records (#27); version 13 adds each core's halted state and the ARM7's HALTCNT request (#27); version 14 adds the palette RAM (#28); version 15 adds the BG control and scroll registers of engine A (#28); version 16 adds the four frame buffers (#28); version 17 adds both CPUs' KEYCNT (#29); version 18 adds the ARM9's divider and square-root unit (#135). Before
 //! 1.0 there is no backward compatibility: a state whose version differs from this build's is refused with
 //! [`SavestateError::VersionMismatch`], never half-loaded. Whoever changes the saved state
 //! bumps the version; the pinned power-on hash test fails when the layout changes without it.
@@ -57,7 +57,7 @@ use crate::cpu::ARM7_INSTRUCTION_COST;
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
 /// The savestate layout version this build reads and writes (see the module docs).
-pub const FORMAT_VERSION: u32 = 16;
+pub const FORMAT_VERSION: u32 = 18;
 
 /// Bytes before the encoded machine: magic, version, ROM length, ROM fingerprint.
 const HEADER_LEN: usize = 8 + 4 + 8 + 8;

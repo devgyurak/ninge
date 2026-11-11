@@ -12,6 +12,11 @@ postcard.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
+[features]
+# Setters the CPU-suite harness needs on a bare `Cpu` (`Cpu::regs_mut`, `Cpu::set_pipeline`); a host
+# that drives a `Machine` never enables it.
+test-support = []
+
 [lints]
 workspace = true
 

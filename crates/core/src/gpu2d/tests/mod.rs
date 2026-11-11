@@ -37,11 +37,11 @@ fn w32(m: &mut Machine, addr: u32, v: u32) {
 }
 
 fn r16(m: &Machine, addr: u32) -> u16 {
-    m.arm9_peek16(addr)
+    m.inspect().arm9_peek16(addr)
 }
 
 fn r32(m: &Machine, addr: u32) -> u32 {
-    m.arm9_peek32(addr)
+    m.inspect().arm9_peek32(addr)
 }
 
 /// A machine with bank A mapped at the LCDC window, mode 2 block 0, engine A on top.

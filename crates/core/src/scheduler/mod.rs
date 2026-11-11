@@ -173,7 +173,7 @@ impl Scheduler {
 
     /// Adds an event at `time`. Among events at the same time it fires in the order of its kind's
     /// priority, not of scheduling (`scheduler.md`, "Events").
-    pub fn schedule(&mut self, time: u64, kind: EventKind) {
+    pub(crate) fn schedule(&mut self, time: u64, kind: EventKind) {
         let seq = self.next_seq;
         // A u64 counter cannot realistically wrap; wrapping keeps a hand-made state from panicking.
         self.next_seq = seq.wrapping_add(1);
@@ -181,12 +181,13 @@ impl Scheduler {
     }
 
     /// The time of the earliest pending event.
-    pub fn next_time(&self) -> Option<u64> {
+    pub(crate) fn next_time(&self) -> Option<u64> {
         self.queue.0.peek().map(|Reverse(event)| event.time)
     }
 
     /// Removes and returns the earliest event whose time is not after `now`.
-    pub fn pop_due(&mut self, now: u64) -> Option<Event> {
+    #[cfg(test)]
+    pub(crate) fn pop_due(&mut self, now: u64) -> Option<Event> {
         match self.next_time() {
             Some(time) if time <= now => self.queue.0.pop().map(|Reverse(event)| event),
             _ => None,

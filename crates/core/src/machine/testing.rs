@@ -32,23 +32,4 @@ impl Machine {
             floor,
         )
     }
-
-    /// A byte as the ARM7 would read it at its clock `now`, without side effects.
-    pub(crate) fn arm7_peek8(&self, now: u64, addr: u32) -> u8 {
-        u8::from_le_bytes(self.arm7_peek(now, addr))
-    }
-
-    /// A halfword as the ARM7 would read it at its clock `now`, without side effects.
-    pub(crate) fn arm7_peek16(&self, now: u64, addr: u32) -> u16 {
-        u16::from_le_bytes(self.arm7_peek(now, addr))
-    }
-
-    /// A word as the ARM7 would read it at its clock `now`, without side effects.
-    pub(crate) fn arm7_peek32(&self, now: u64, addr: u32) -> u32 {
-        u32::from_le_bytes(self.arm7_peek(now, addr))
-    }
-
-    fn arm7_peek<const N: usize>(&self, now: u64, addr: u32) -> [u8; N] {
-        crate::bus::peek::<false, N>(&self.memory, &self.io, &TcmConfig::NONE, now, addr)
-    }
 }

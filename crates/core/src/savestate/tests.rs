@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_671_915;
-const PINNED_HASH: u64 = 0x20c9446cddf8cc7d;
+const PINNED_LEN: usize = 4_671_928;
+const PINNED_HASH: u64 = 0x9c99485e4419cad3;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -44,8 +44,14 @@ const PINNED_HASH: u64 = 0x20c9446cddf8cc7d;
 /// Version 16 (#28) added the four frame buffers: 196,608 one-byte zero pixels and four three-byte
 /// lengths at power-on, so that length grew by 196,620; the booted one grew by more because its
 /// screens hold colors (multi-byte varints). Both hashes moved.
-const PINNED_BOOTED_LEN: usize = 4_966_918;
-const PINNED_BOOTED_HASH: u64 = 0xbdc398166676d3a1;
+/// Version 17 (#29) added both CPUs' KEYCNT, one `u16` each, a one-byte varint while zero: both
+/// lengths grew by 2 and both hashes moved.
+/// Version 18 (#135) added the ARM9's divider and square-root unit: seven fields for the divider
+/// (mode, numerator, denominator, quotient, remainder, flag, end time) and four for the square
+/// root, each a one-byte varint or bool while zero, so both lengths grew by 11 and both hashes
+/// moved.
+const PINNED_BOOTED_LEN: usize = 4_966_931;
+const PINNED_BOOTED_HASH: u64 = 0x311f984b18fa9281;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -178,7 +184,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &16u32.to_le_bytes(),
+        &18u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -219,7 +225,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 10,
-            expected: 16
+            expected: 18
         })
     );
 }
@@ -230,9 +236,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 10 is not version 16")
+        .expect_err("version 10 is not version 18")
         .to_string();
-    assert!(message.contains("version 10") && message.contains("version 16"));
+    assert!(message.contains("version 10") && message.contains("version 18"));
 }
 
 #[test]
@@ -384,14 +390,14 @@ fn given_a_machine_running_the_counter_program_when_a_frame_runs_then_the_counte
     // Guards the round-trip test below against a vacuous program: the ARM9 loop
     // LDR / ADD #1 / STR must have incremented the word at least once.
     let machine = booted(&counter_rom(), 1);
-    assert_ne!(machine.arm9_peek32(COUNTER_ADDR), 0);
+    assert_ne!(machine.inspect().arm9_peek32(COUNTER_ADDR), 0);
 }
 
 #[test]
 fn given_a_state_saved_after_2_frames_when_loaded_and_run_2_more_then_it_equals_a_4_frame_run() {
     let rom = counter_rom();
     let saved_at_2 = booted(&rom, 2);
-    let counter_at_2 = saved_at_2.arm9_peek32(COUNTER_ADDR);
+    let counter_at_2 = saved_at_2.inspect().arm9_peek32(COUNTER_ADDR);
     let bytes = saved_at_2.save_state();
 
     let mut resumed = booted(&rom, 0);
@@ -406,7 +412,7 @@ fn given_a_state_saved_after_2_frames_when_loaded_and_run_2_more_then_it_equals_
             resumed.frame(Screen::Top) == straight.frame(Screen::Top),
             resumed.frame(Screen::Bottom) == straight.frame(Screen::Bottom),
             resumed.frame_count(),
-            resumed.arm9_peek32(COUNTER_ADDR) > counter_at_2,
+            resumed.inspect().arm9_peek32(COUNTER_ADDR) > counter_at_2,
         ),
         (Ok(()), true, true, true, 4, true)
     );
@@ -471,7 +477,12 @@ fn given_a_loaded_state_when_main_ram_is_peeked_then_it_matches_the_saved_machin
     let saved = booted(&rom, 1);
     let mut target = booted(&rom, 0);
     let result = target.load_state(&saved.save_state());
-    let peeks = |m: &Machine| [m.arm9_peek32(0x0200_0000), m.arm9_peek32(COUNTER_ADDR)];
+    let peeks = |m: &Machine| {
+        [
+            m.inspect().arm9_peek32(0x0200_0000),
+            m.inspect().arm9_peek32(COUNTER_ADDR),
+        ]
+    };
     assert_eq!(
         (result, peeks(&target), peeks(&saved)),
         (Ok(()), peeks(&saved), peeks(&saved))
@@ -484,10 +495,15 @@ fn given_a_state_with_vram_a_mapped_when_loaded_onto_an_unmapped_machine_then_th
     let rom = vram_rom();
     let saved = booted(&rom, 1);
     let mut target = booted(&rom, 0);
-    let before = target.arm9_peek32(LCDC_A);
+    let before = target.inspect().arm9_peek32(LCDC_A);
     let result = target.load_state(&saved.save_state());
     assert_eq!(
-        (result, before, target.arm9_peek32(LCDC_A), target.vram_a()),
+        (
+            result,
+            before,
+            target.inspect().arm9_peek32(LCDC_A),
+            target.inspect().vram_a()
+        ),
         (
             Ok(()),
             0,
@@ -507,14 +523,14 @@ fn given_a_state_with_vram_a_unmapped_when_loaded_onto_a_mapped_machine_then_the
     let rom = vram_rom();
     let bytes = booted(&rom, 0).save_state();
     let mut target = booted(&rom, 1);
-    let before = target.arm9_peek32(LCDC_A);
+    let before = target.inspect().arm9_peek32(LCDC_A);
     let result = target.load_state(&bytes);
     assert_eq!(
         (
             result,
             before,
-            target.arm9_peek32(LCDC_A),
-            target.vram_a().enabled
+            target.inspect().arm9_peek32(LCDC_A),
+            target.inspect().vram_a().enabled
         ),
         (Ok(()), 0x80, 0, false)
     );
@@ -582,7 +598,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_16_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_18_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -590,14 +606,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 16
+            expected: 18
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_16_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_18_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -605,15 +621,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 16
+            expected: 18
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_16() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_18() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 16u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 18u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -673,15 +689,15 @@ fn given_a_machine_stopped_mid_frame_when_saved_and_loaded_then_the_clocks_and_q
     assert_eq!(
         (
             result,
-            target.scheduler().now(),
-            target.arm7_clock(),
-            target.scheduler().pending()
+            target.inspect().scheduler().now(),
+            target.inspect().arm7_clock(),
+            target.inspect().scheduler().pending()
         ),
         (
             Ok(()),
-            saver.scheduler().now(),
-            saver.arm7_clock(),
-            saver.scheduler().pending()
+            saver.inspect().scheduler().now(),
+            saver.inspect().arm7_clock(),
+            saver.inspect().scheduler().pending()
         )
     );
 }
@@ -778,10 +794,10 @@ fn with_wram(mode: u8) -> Machine {
 /// What each CPU reads at the start of the window and of the second half.
 fn wram_reads(machine: &Machine) -> [u32; 4] {
     [
-        machine.arm9_peek32(SHARED),
-        machine.arm9_peek32(SHARED + 0x4000),
-        machine.arm7_peek32(0, SHARED),
-        machine.arm7_peek32(0, SHARED + 0x4000),
+        machine.inspect().arm9_peek32(SHARED),
+        machine.inspect().arm9_peek32(SHARED + 0x4000),
+        machine.inspect().arm7_peek32(0, SHARED),
+        machine.inspect().arm7_peek32(0, SHARED + 0x4000),
     ]
 }
 
@@ -825,7 +841,7 @@ fn given_a_state_with_wramcnt_1_when_loaded_then_both_page_tables_are_rebuilt() 
             target.memory.wramcnt().mode,
             // Mode 1 gives the ARM7 the first half, which repeats every 16 KiB; mode 3 would
             // show the second half here (0xB2B2_B2B2).
-            target.arm7_peek32(0, SHARED + 0x4000)
+            target.inspect().arm7_peek32(0, SHARED + 0x4000)
         ),
         (
             Ok(()),
@@ -900,7 +916,7 @@ fn with_irq_state(frames: u32) -> Machine {
 type IrqState = (bool, u32, u32, bool, u32, u32);
 
 fn irq_state(machine: &Machine) -> IrqState {
-    let (a9, a7) = (machine.irq9(), machine.irq7());
+    let (a9, a7) = (machine.inspect().irq9(), machine.inspect().irq7());
     (a9.ime(), a9.ie(), a9.if_(), a7.ime(), a7.ie(), a7.if_())
 }
 
@@ -1054,7 +1070,7 @@ fn with_words_in_flight(frames: u32) -> Machine {
 /// The three words the ARM7 takes from `machine`, then the error flag of its IPCFIFOCNT.
 fn arm7_takes_three(machine: &mut Machine) -> ([u32; 3], u16) {
     let words = std::array::from_fn(|_| machine.bus7(0).read32(IPC_RECV));
-    (words, machine.arm7_peek16(0, IPC_CNT) & (1 << 14))
+    (words, machine.inspect().arm7_peek16(0, IPC_CNT) & (1 << 14))
 }
 
 #[test]
@@ -1109,7 +1125,11 @@ fn given_words_in_flight_when_the_state_loads_over_a_machine_with_an_empty_fifo_
     assert_eq!(
         (
             result,
-            target.ipc().send_words::<true>().collect::<Vec<u32>>()
+            target
+                .inspect()
+                .ipc()
+                .send_words::<true>()
+                .collect::<Vec<u32>>()
         ),
         (Ok(()), vec![0x11, 0x2222, 0x33_3333])
     );
@@ -1175,7 +1195,7 @@ fn with_pending_arm9_dma() -> Machine {
 /// The same on ARM7 channel 0, written at the ARM7's own clock.
 fn with_pending_arm7_dma() -> Machine {
     let mut machine = booted(&counter_rom(), 1);
-    let at = machine.arm7_clock();
+    let at = machine.inspect().arm7_clock();
     machine.bus7(at).write32(DMA0SAD, 0x0220_0000);
     machine.bus7(at).write32(DMA0DAD, 0x0230_0000);
     machine.bus7(at).write32(DMA0CNT, DMA_IMMEDIATE_WORD);
@@ -1197,8 +1217,8 @@ fn given_a_state_with_a_pending_arm7_dma_channel_when_loaded_then_its_start_is_q
     let mut target = booted(&counter_rom(), 0);
     let result = target.load_state(&saver.save_state());
     assert_eq!(
-        (result, target.scheduler().pending()),
-        (Ok(()), saver.scheduler().pending())
+        (result, target.inspect().scheduler().pending()),
+        (Ok(()), saver.inspect().scheduler().pending())
     );
 }
 
@@ -1259,7 +1279,7 @@ fn with_distinct_dma() -> Machine {
     let mut machine = booted(&counter_rom(), 1);
     machine.bus9().write32(DMA0SAD, 0x0220_0000);
     machine
-        .bus7(machine.arm7_clock())
+        .bus7(machine.inspect().arm7_clock())
         .write32(DMA0SAD, 0x0230_0000);
     machine
 }
@@ -1288,7 +1308,11 @@ fn given_a_state_whose_dma_block_is_replaced_by_an_equal_encoding_when_loaded_th
         ..idle_channel()
     });
     assert_eq!(
-        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &same)),
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma9(),
+            &same
+        )),
         Ok(())
     );
 }
@@ -1302,7 +1326,11 @@ fn given_a_state_with_an_arm9_dma_source_bit_that_does_not_exist_when_loaded_the
         ..idle_channel()
     });
     assert_eq!(
-        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &corrupt)),
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma9(),
+            &corrupt
+        )),
         Err(SavestateError::Corrupt)
     );
 }
@@ -1317,7 +1345,11 @@ fn given_a_state_with_an_arm9_dma_latched_count_above_the_field_when_loaded_then
         ..idle_channel()
     });
     assert_eq!(
-        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &corrupt)),
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma9(),
+            &corrupt
+        )),
         Err(SavestateError::Corrupt)
     );
 }
@@ -1344,7 +1376,11 @@ fn given_a_state_with_an_arm7_dma_control_bit_that_does_not_exist_when_loaded_th
         [0; 4],
     );
     assert_eq!(
-        load_bytes(bytes_with_replaced(&machine, machine.dma7(), &corrupt)),
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma7(),
+            &corrupt
+        )),
         Err(SavestateError::Corrupt)
     );
 }
@@ -1361,7 +1397,11 @@ fn given_a_state_with_an_arm7_dma_fill_register_set_when_loaded_then_it_is_corru
         [1, 0, 0, 0],
     );
     assert_eq!(
-        load_bytes(bytes_with_replaced(&machine, machine.dma7(), &corrupt)),
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma7(),
+            &corrupt
+        )),
         Err(SavestateError::Corrupt)
     );
 }
@@ -1379,7 +1419,11 @@ fn given_a_state_with_a_dma_channel_pending_but_disabled_when_loaded_then_it_is_
         ..idle_channel()
     });
     assert_eq!(
-        load_bytes(bytes_with_replaced(&machine, machine.dma9(), &corrupt)),
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma9(),
+            &corrupt
+        )),
         Err(SavestateError::Corrupt)
     );
 }

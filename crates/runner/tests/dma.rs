@@ -47,7 +47,14 @@ fn boot() -> Machine {
 
 fn mismatches(machine: &Machine, base: u32, rows: &[Row]) -> Vec<Mismatch> {
     rows.iter()
-        .map(|&(slot, name, expected)| (slot, name, expected, machine.arm9_peek32(base + slot * 4)))
+        .map(|&(slot, name, expected)| {
+            (
+                slot,
+                name,
+                expected,
+                machine.inspect().arm9_peek32(base + slot * 4),
+            )
+        })
         .filter(|&(_, _, expected, got)| expected != got)
         .collect()
 }

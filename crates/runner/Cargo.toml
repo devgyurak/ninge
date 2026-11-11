@@ -9,7 +9,7 @@ publish = false
 repository.workspace = true
 
 [dependencies]
-ninge-core.workspace = true
+ninge-core = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

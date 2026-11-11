@@ -15,9 +15,11 @@
 //! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
 pub(crate) mod device;
+pub mod divsqrt;
 pub mod dma;
 pub mod ipc;
 pub mod irq;
+pub mod keypad;
 pub(crate) mod map;
 pub mod power;
 #[cfg(test)]
@@ -28,9 +30,11 @@ pub mod timing;
 use crate::gpu2d::Gpu2d;
 use crate::scheduler::{EventKind, Scheduler};
 use device::{Device, Effect, Fired, Width};
+use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
 use irq::{InterruptController, Requests};
+use keypad::Keypad;
 use map::Port;
 use power::Power;
 use serde::{Deserialize, Serialize};
@@ -72,8 +76,11 @@ macro_rules! device_call {
                 Device::<true>::$method(borrow!($b $io.dma9) $(, $arg)*)
             }
             Port::Dma | Port::DmaFill => Device::<false>::$method(borrow!($b $io.dma7) $(, $arg)*),
+            Port::DivSqrt if $arm9 => Device::<true>::$method(borrow!($b $io.divsqrt) $(, $arg)*),
+            Port::Keypad if $arm9 => Device::<true>::$method(borrow!($b $io.keypad9) $(, $arg)*),
+            Port::Keypad => Device::<false>::$method(borrow!($b $io.keypad7) $(, $arg)*),
             Port::Power if !$arm9 => Device::<false>::$method(borrow!($b $io.power) $(, $arg)*),
-            Port::Gpu2d | Port::Power => {
+            Port::Gpu2d | Port::Power | Port::DivSqrt => {
                 debug_assert!(false, "port not reachable through Io");
                 $absent
             }
@@ -110,13 +117,19 @@ pub struct Io {
     // Each CPU's four DMA channels: the same addresses, separate state (`dma.md`).
     dma9: Dma<true>,
     dma7: Dma<false>,
+    // The ARM9's divider and square-root unit (`divsqrt.md`).
+    divsqrt: DivSqrt,
+    // Each CPU's KEYINPUT and KEYCNT, and the ARM7's EXTKEYIN: the same addresses, separate
+    // KEYCNT (`keypad.md`).
+    keypad9: Keypad<true>,
+    keypad7: Keypad<false>,
     // The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
     power: Power,
 }
 
 impl Io {
     /// The devices in their power-on state.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             gpu2d: Gpu2d::new(),
             timing: Timing::new(),
@@ -127,18 +140,21 @@ impl Io {
             timers7: Timers::new(),
             dma9: Dma::new(),
             dma7: Dma::new(),
+            divsqrt: DivSqrt::new(),
+            keypad9: Keypad::new(),
+            keypad7: Keypad::new(),
             power: Power::new(),
         }
     }
 
     /// Engine A's display registers.
     // The debugger's IO register panel will show them (#58 shows the VRAM view).
-    pub fn gpu2d(&self) -> &Gpu2d {
+    pub(crate) fn gpu2d(&self) -> &Gpu2d {
         &self.gpu2d
     }
 
     /// VCOUNT and each CPU's DISPSTAT.
-    pub fn timing(&self) -> &Timing {
+    pub(crate) fn timing(&self) -> &Timing {
         &self.timing
     }
 
@@ -147,45 +163,62 @@ impl Io {
     }
 
     /// The ARM9's interrupt controller.
-    pub fn irq9(&self) -> &InterruptController<true> {
+    pub(crate) fn irq9(&self) -> &InterruptController<true> {
         &self.irq9
     }
 
     /// The ARM7's interrupt controller.
-    pub fn irq7(&self) -> &InterruptController<false> {
+    pub(crate) fn irq7(&self) -> &InterruptController<false> {
         &self.irq7
     }
 
     /// IPCSYNC and the two IPC FIFOs, for the debugger.
-    pub fn ipc(&self) -> &Ipc {
+    pub(crate) fn ipc(&self) -> &Ipc {
         &self.ipc
     }
 
     /// The ARM9's timers.
-    pub fn timers9(&self) -> &Timers<true> {
+    pub(crate) fn timers9(&self) -> &Timers<true> {
         &self.timers9
     }
 
     /// The ARM7's timers.
-    pub fn timers7(&self) -> &Timers<false> {
+    pub(crate) fn timers7(&self) -> &Timers<false> {
         &self.timers7
     }
 
     /// The ARM9's DMA channels.
     // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
     // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
-    pub fn dma9(&self) -> &Dma<true> {
+    pub(crate) fn dma9(&self) -> &Dma<true> {
         &self.dma9
     }
 
     /// The ARM7's DMA channels.
     // The debugger's IO register panel shows them with the ARM9's.
-    pub fn dma7(&self) -> &Dma<false> {
+    pub(crate) fn dma7(&self) -> &Dma<false> {
         &self.dma7
     }
 
+    /// The ARM9's divider and square-root unit.
+    // The debugger's IO register panel will show them with the other devices'.
+    pub(crate) fn divsqrt(&self) -> &DivSqrt {
+        &self.divsqrt
+    }
+
+    /// The ARM9's keypad registers.
+    // The debugger's IO register panel will show them with the other devices'.
+    pub(crate) fn keypad9(&self) -> &Keypad<true> {
+        &self.keypad9
+    }
+
+    /// The ARM7's keypad registers.
+    pub(crate) fn keypad7(&self) -> &Keypad<false> {
+        &self.keypad7
+    }
+
     /// The ARM7's HALTCNT.
-    pub fn power(&self) -> &Power {
+    pub(crate) fn power(&self) -> &Power {
         &self.power
     }
 
@@ -381,6 +414,7 @@ impl Io {
             && self.timers7.is_well_formed(now)
             && self.dma9.is_well_formed()
             && self.dma7.is_well_formed()
+            && self.divsqrt.is_well_formed(now)
     }
 
     /// Replaces the IPC block, to build a corrupt state in a test.

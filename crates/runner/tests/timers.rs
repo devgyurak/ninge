@@ -57,7 +57,13 @@ fn boot() -> Machine {
 fn mismatches(machine: &Machine, base: u32, rows: &[Row]) -> Vec<Mismatch> {
     rows.iter()
         .map(|&(slot, name, low, high)| {
-            (slot, name, low, high, machine.arm9_peek32(base + slot * 4))
+            (
+                slot,
+                name,
+                low,
+                high,
+                machine.inspect().arm9_peek32(base + slot * 4),
+            )
         })
         .filter(|&(_, _, low, high, got)| !(low..=high).contains(&got))
         .collect()
@@ -150,8 +156,8 @@ fn given_a_stopped_timer_when_its_counter_is_read_twice_then_it_is_frozen_just_p
     ];
     let machine = boot();
     let frozen = (
-        machine.arm9_peek32(ARM9_RECORD + 8 * 4),
-        machine.arm9_peek32(ARM9_RECORD + 9 * 4),
+        machine.inspect().arm9_peek32(ARM9_RECORD + 8 * 4),
+        machine.inspect().arm9_peek32(ARM9_RECORD + 9 * 4),
     );
     assert_eq!(
         (

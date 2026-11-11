@@ -303,7 +303,7 @@ type LayerState = (u8, u32, u32, bool, u16, u16, u16, u16);
 fn layer_states(machine: &Machine) -> Vec<LayerState> {
     (0..4)
         .map(|n| {
-            let l = machine.gpu2d().text_bg(n);
+            let l = machine.inspect().gpu2d().text_bg(n);
             let hofs = if n == 3 { 0 } else { l.hofs };
             (
                 l.priority,
@@ -324,8 +324,8 @@ fn given_bgtext_rom_when_4_frames_run_then_the_rom_wrote_the_registers_it_set() 
     let machine = boot_frames();
     assert_eq!(
         (
-            machine.gpu2d().dispcnt_a(),
-            machine.gpu2d().powcnt1(),
+            machine.inspect().gpu2d().dispcnt_a(),
+            machine.inspect().gpu2d().powcnt1(),
             layer_states(&machine)
         ),
         (

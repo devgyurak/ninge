@@ -106,21 +106,21 @@ pub(super) fn arm_swi(comment: u32) -> u32 {
 fn given_an_arm_swi_with_comment_050000h_when_the_bios_traps_then_the_number_is_5() {
     let mut m = arm9_running(&[arm_swi(0x05_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 2);
-    assert_eq!(m.swi_record9().last(), Some(5));
+    assert_eq!(m.inspect().swi_record9().last(), Some(5));
 }
 
 #[test]
 fn given_an_arm_swi_with_a_comment_in_every_byte_when_trapped_then_only_bits_23_to_16_count() {
     let mut m = arm9_running(&[arm_swi(0x12_3456), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 2);
-    assert_eq!(m.swi_record9().last(), Some(0x12));
+    assert_eq!(m.inspect().swi_record9().last(), Some(0x12));
 }
 
 #[test]
 fn given_a_thumb_swi_7_when_the_bios_traps_then_the_number_is_7() {
     let mut m = arm9_running(&thumb_swi_program(7));
     step9(&mut m, 4);
-    assert_eq!(m.swi_record9().last(), Some(7));
+    assert_eq!(m.inspect().swi_record9().last(), Some(7));
 }
 
 #[test]
@@ -128,7 +128,10 @@ fn given_an_arm7_swi_when_the_bios_traps_then_the_arm7_record_holds_the_number()
     let mut m = arm7_running(&[arm_swi(0x06_0000), PROGRAM[1], PROGRAM[2]]);
     step7(&mut m, 2);
     assert_eq!(
-        (m.swi_record7().last(), m.swi_record9().last()),
+        (
+            m.inspect().swi_record7().last(),
+            m.inspect().swi_record9().last()
+        ),
         (Some(6), None)
     );
 }
@@ -139,7 +142,7 @@ fn given_an_arm7_swi_when_the_bios_traps_then_the_arm7_record_holds_the_number()
 fn given_an_arm_swi_when_executed_then_the_cpu_is_in_supervisor_mode_at_the_trap_address() {
     let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 1);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (
             regs.cpsr() & 0x1F,
@@ -154,14 +157,14 @@ fn given_an_arm_swi_when_executed_then_the_cpu_is_in_supervisor_mode_at_the_trap
 fn given_an_arm_swi_when_the_bios_returns_then_the_cpsr_is_the_one_before_the_swi() {
     let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 2);
-    assert_eq!(m.arm9().regs().cpsr(), SYSTEM_FLAGS);
+    assert_eq!(m.inspect().arm9().regs().cpsr(), SYSTEM_FLAGS);
 }
 
 #[test]
 fn given_an_arm_swi_when_the_bios_returns_then_the_next_instruction_runs() {
     let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 3);
-    assert_eq!(m.arm9().regs().get(1), 0x66);
+    assert_eq!(m.inspect().arm9().regs().get(1), 0x66);
 }
 
 #[test]
@@ -169,7 +172,7 @@ fn given_a_thumb_swi_when_the_bios_returns_then_t_is_set_again_and_the_next_thum
 {
     let mut m = arm9_running(&thumb_swi_program(0x1E));
     step9(&mut m, 5);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!((regs.cpsr() & THUMB, regs.get(1)), (THUMB, 0x66));
 }
 
@@ -177,7 +180,7 @@ fn given_a_thumb_swi_when_the_bios_returns_then_t_is_set_again_and_the_next_thum
 fn given_a_thumb_swi_when_executed_then_the_vector_is_entered_in_arm_state() {
     let mut m = arm9_running(&thumb_swi_program(0x1E));
     step9(&mut m, 3);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (regs.cpsr() & THUMB, regs.cpsr() & 0x1F, regs.get(15)),
         (0, SVC_MODE, 0xFFFF_0008 + 8)
@@ -189,11 +192,11 @@ fn given_an_unimplemented_swi_when_trapped_then_it_is_recorded_and_the_registers
     let mut m = arm9_running(&[arm_swi(0x1E_0000), PROGRAM[1], PROGRAM[2]]);
     seed_low_registers(&mut m);
     step9(&mut m, 2);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (
             [regs.get(0), regs.get(1), regs.get(2), regs.get(3)],
-            m.swi_record9().last_unimplemented(),
+            m.inspect().swi_record9().last_unimplemented(),
         ),
         ([0xA0, 0xA1, 0xA2, 0xA3], Some(0x1E))
     );
@@ -204,7 +207,10 @@ fn given_a_swi_number_above_1fh_when_trapped_then_it_returns_without_effect() {
     let mut m = arm9_running(&[arm_swi(0xFF_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 3);
     assert_eq!(
-        (m.arm9().regs().get(1), m.swi_record9().last_unimplemented()),
+        (
+            m.inspect().arm9().regs().get(1),
+            m.inspect().swi_record9().last_unimplemented()
+        ),
         (0x66, Some(0xFF))
     );
 }
@@ -213,7 +219,10 @@ fn given_a_swi_number_above_1fh_when_trapped_then_it_returns_without_effect() {
 fn given_a_machine_that_never_called_swi_when_reading_the_record_then_it_is_empty() {
     let m = arm9_running(&PROGRAM);
     assert_eq!(
-        (m.swi_record9().last(), m.swi_record9().last_unimplemented()),
+        (
+            m.inspect().swi_record9().last(),
+            m.inspect().swi_record9().last_unimplemented()
+        ),
         (None, None)
     );
 }
@@ -236,7 +245,10 @@ fn given_arm9_vectors_at_zero_when_swi_executes_then_the_game_handler_runs_and_n
     let mut m = arm9_with_itcm_handler(&[arm_swi(0x05_0000), PROGRAM[1], PROGRAM[2]], 0x08, MOV_R5);
     step9(&mut m, 2);
     assert_eq!(
-        (m.arm9().regs().get(5), m.swi_record9().last()),
+        (
+            m.inspect().arm9().regs().get(5),
+            m.inspect().swi_record9().last()
+        ),
         (0x77, None)
     );
 }
@@ -249,7 +261,10 @@ fn given_arm9_vectors_at_zero_when_irq_is_taken_then_the_game_handler_runs_and_t
     request_timer0_on_arm9(&mut m);
     step9(&mut m, 2);
     assert_eq!(
-        (m.arm9().regs().get(5), m.arm9().regs().get(13)),
+        (
+            m.inspect().arm9().regs().get(5),
+            m.inspect().arm9().regs().get(13)
+        ),
         (0x77, SP_IRQ9)
     );
 }
@@ -302,7 +317,9 @@ fn given_an_arm9_irq_when_the_vector_is_trapped_then_r0_to_r3_r12_and_lr_are_pus
     let mut m = arm9_taking_irq(HANDLER, &[MOV_R6, BX_LR]);
     step9(&mut m, 2);
     let base = SP_IRQ9 - 24;
-    let pushed: Vec<u32> = (0..6).map(|i| m.arm9_peek32(base + 4 * i)).collect();
+    let pushed: Vec<u32> = (0..6)
+        .map(|i| m.inspect().arm9_peek32(base + 4 * i))
+        .collect();
     assert_eq!(pushed, [1, 2, 3, 4, 12, ENTRY9 + 4]);
 }
 
@@ -310,7 +327,7 @@ fn given_an_arm9_irq_when_the_vector_is_trapped_then_r0_to_r3_r12_and_lr_are_pus
 fn given_an_arm9_irq_when_the_vector_is_trapped_then_sp_irq_drops_by_24() {
     let mut m = arm9_taking_irq(HANDLER, &[MOV_R6, BX_LR]);
     step9(&mut m, 2);
-    assert_eq!(m.arm9().regs().get(13), SP_IRQ9 - 24);
+    assert_eq!(m.inspect().arm9().regs().get(13), SP_IRQ9 - 24);
 }
 
 #[test]
@@ -318,7 +335,7 @@ fn given_an_arm9_irq_when_the_vector_is_trapped_then_the_handler_runs_in_irq_mod
  {
     let mut m = arm9_taking_irq(HANDLER, &[MOV_R6, BX_LR]);
     step9(&mut m, 2);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (regs.cpsr() & 0x9F, regs.get(0), regs.get(14), regs.get(15)),
         (IRQ_MODE | 0x80, 0x0400_0000, 0xFFFF_0020, HANDLER + 8)
@@ -330,7 +347,10 @@ fn given_an_arm9_irq_when_the_handler_returns_then_the_interrupted_instruction_i
     let mut m = arm9_taking_irq(HANDLER, &[MOV_R6, BX_LR]);
     step9(&mut m, 5);
     assert_eq!(
-        (m.arm9().regs().cpsr(), m.arm9().regs().get(15)),
+        (
+            m.inspect().arm9().regs().cpsr(),
+            m.inspect().arm9().regs().get(15)
+        ),
         (SYSTEM_FLAGS & !0x80, ENTRY9 + 8)
     );
 }
@@ -340,7 +360,7 @@ fn given_an_arm9_irq_when_the_handler_returns_then_the_saved_registers_and_the_s
  {
     let mut m = arm9_taking_irq(HANDLER, &[MOV_R6, BX_LR]);
     step9(&mut m, 5);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!(
         (
             [
@@ -362,7 +382,7 @@ fn given_an_arm9_handler_pointer_with_bit_0_set_when_dispatched_then_the_cpu_is_
     // Thumb: `movs r6, #0x99`, `bx lr`.
     let mut m = arm9_taking_irq(HANDLER | 1, &[0x4770_2699]);
     step9(&mut m, 2);
-    let regs = m.arm9().regs();
+    let regs = m.inspect().arm9().regs();
     assert_eq!((regs.cpsr() & THUMB, regs.get(15)), (THUMB, HANDLER + 4));
 }
 
@@ -371,7 +391,10 @@ fn given_a_thumb_arm9_handler_when_it_returns_then_the_interrupted_instruction_i
     let mut m = arm9_taking_irq(HANDLER | 1, &[0x4770_2699]);
     step9(&mut m, 5);
     assert_eq!(
-        (m.arm9().regs().get(6), m.arm9().regs().get(15)),
+        (
+            m.inspect().arm9().regs().get(6),
+            m.inspect().arm9().regs().get(15)
+        ),
         (0x99, ENTRY9 + 8)
     );
 }
@@ -380,7 +403,7 @@ fn given_a_thumb_arm9_handler_when_it_returns_then_the_interrupted_instruction_i
 fn given_a_dispatched_irq_when_the_trap_runs_then_if_ie_and_ime_are_untouched() {
     let mut m = arm9_taking_irq(HANDLER, &[MOV_R6, BX_LR]);
     step9(&mut m, 5);
-    let irq = m.irq9();
+    let irq = m.inspect().irq9();
     assert_eq!((irq.ime(), irq.ie(), irq.if_()), (true, TIMER0, TIMER0));
 }
 
@@ -405,9 +428,11 @@ fn arm7_taking_irq(pointer: u32) -> Machine {
 #[test]
 fn given_an_arm7_irq_when_the_vector_is_trapped_then_the_registers_are_pushed_on_the_irq_stack() {
     let mut m = arm7_taking_irq(HANDLER7);
-    let sp = m.arm7().regs().banked(Bank::Irq, 13);
+    let sp = m.inspect().arm7().regs().banked(Bank::Irq, 13);
     step7(&mut m, 2);
-    let pushed: Vec<u32> = (0..6).map(|i| m.arm7_peek32(0, sp - 24 + 4 * i)).collect();
+    let pushed: Vec<u32> = (0..6)
+        .map(|i| m.inspect().arm7_peek32(0, sp - 24 + 4 * i))
+        .collect();
     assert_eq!(pushed, [1, 2, 3, 4, 12, ENTRY7 + 4]);
 }
 
@@ -417,9 +442,9 @@ fn given_an_arm7_irq_when_the_handler_returns_then_the_interrupted_instruction_i
     step7(&mut m, 5);
     assert_eq!(
         (
-            m.arm7().regs().cpsr(),
-            m.arm7().regs().get(15),
-            m.arm7().regs().get(6)
+            m.inspect().arm7().regs().cpsr(),
+            m.inspect().arm7().regs().get(15),
+            m.inspect().arm7().regs().get(6)
         ),
         (SYSTEM_FLAGS & !0x80, ENTRY7 + 8, 0x99)
     );
@@ -429,7 +454,7 @@ fn given_an_arm7_irq_when_the_handler_returns_then_the_interrupted_instruction_i
 fn given_an_arm7_handler_pointer_with_bit_0_set_when_dispatched_then_the_arm7_stays_in_arm_state() {
     let mut m = arm7_taking_irq(HANDLER7 | 1);
     step7(&mut m, 2);
-    let regs = m.arm7().regs();
+    let regs = m.inspect().arm7().regs();
     assert_eq!((regs.cpsr() & THUMB, regs.get(15)), (0, HANDLER7 + 8));
 }
 
@@ -443,7 +468,7 @@ fn given_a_recorded_swi_when_saved_and_loaded_then_the_record_survives() {
     loaded.load_rom(m.rom().to_vec()).expect("same image");
     let result = loaded.load_state(&m.save_state());
     assert_eq!(
-        (result, loaded.swi_record9().last_unimplemented()),
+        (result, loaded.inspect().swi_record9().last_unimplemented()),
         (Ok(()), Some(0x1E))
     );
 }
@@ -452,7 +477,7 @@ fn given_a_recorded_swi_when_saved_and_loaded_then_the_record_survives() {
 fn given_an_arm9_swi_when_the_bios_runs_then_the_master_clock_advances_by_one_instruction_cost() {
     let mut m = arm9_running(&[arm_swi(0x05_0000), PROGRAM[1], PROGRAM[2]]);
     step9(&mut m, 1);
-    let before = m.scheduler().now();
+    let before = m.inspect().scheduler().now();
     step9(&mut m, 1);
-    assert_eq!(m.scheduler().now() - before, 1);
+    assert_eq!(m.inspect().scheduler().now() - before, 1);
 }

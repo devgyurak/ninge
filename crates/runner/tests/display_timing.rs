@@ -42,7 +42,14 @@ fn boot() -> Machine {
 
 fn mismatches(machine: &Machine, base: u32, rows: &[Row]) -> Vec<Mismatch> {
     rows.iter()
-        .map(|&(slot, name, expected)| (slot, name, expected, machine.arm9_peek32(base + slot * 4)))
+        .map(|&(slot, name, expected)| {
+            (
+                slot,
+                name,
+                expected,
+                machine.inspect().arm9_peek32(base + slot * 4),
+            )
+        })
         .filter(|&(_, _, expected, got)| expected != got)
         .collect()
 }
@@ -58,7 +65,7 @@ fn arm7_mismatches(rows: &[Row]) -> Vec<Mismatch> {
 /// The 264 polled VCOUNT values at `base`.
 fn sequence(machine: &Machine, base: u32) -> Vec<u16> {
     (0..264)
-        .map(|i| machine.arm9_peek16(base + i * 2))
+        .map(|i| machine.inspect().arm9_peek16(base + i * 2))
         .collect()
 }
 

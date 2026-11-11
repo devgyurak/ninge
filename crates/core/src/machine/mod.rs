@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The whole emulated machine: [`Machine`], the one struct that owns all emulator state.
 
-use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
+use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramWindowKind};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::BiosState;
@@ -197,7 +197,7 @@ impl Machine {
             self.io.gpu2d().render_line_a(
                 y,
                 self.memory.lcdc_banks(),
-                &self.memory.bg_vram_a(),
+                &self.memory.vram_window(VramWindowKind::BgA),
                 self.memory.palette(),
                 out,
             );

@@ -989,3 +989,36 @@ fn given_a_machine_with_a_rom_when_it_boots_then_line_0_is_drawn_from_the_power_
     m.present_frame();
     assert_eq!((top(&m, 0, 0), top(&m, 0, 1)), (WHITE, BLACK));
 }
+
+/// Engine A's first pixel with all text data in bank `bank` (A = 0 .. I = 8) mapped by `control`:
+/// an 8-bits-per-pixel tile of palette entry 1 (red) at character block 1 and one map cell at
+/// screen block 1 of the BG window (`docs/hw/vram-banks.md`, "Where each bank goes").
+fn first_pixel_from_bank(bank: u32, control: u8) -> u32 {
+    let mut m = Machine::new();
+    text_setup(&mut m, 0);
+    w8(&mut m, VRAMCNT_A, 0);
+    w8(&mut m, VRAMCNT_A + bank + u32::from(bank > 6), control);
+    solid8(&mut m, BG_VRAM + 0x4000, 1, 1);
+    cell(&mut m, SB1, 0, 0, 1);
+    w16(&mut m, BG0CNT, SB1_8BPP | (1 << 2));
+    w32(&mut m, DISPCNT_A_ADDR, dispcnt(0, 1));
+    m.render_frame();
+    pixel(&m, Screen::Top, 0, 0)
+}
+
+#[test]
+fn given_text_data_in_bank_e_with_mst_1_when_rendered_then_the_layer_draws_it() {
+    assert_eq!(first_pixel_from_bank(4, 0x81), RED);
+}
+
+#[test]
+fn given_bank_f_at_ofs_0_when_the_tile_data_lies_past_its_16_kib_then_the_backdrop_shows() {
+    // F covers the first 16 KiB of the window. The map cell at +0x800 is inside it, the tile data
+    // at +0x4000 is not, so the tile reads as transparent and the backdrop (black) shows.
+    assert_eq!(first_pixel_from_bank(5, 0x81), BLACK);
+}
+
+#[test]
+fn given_text_data_in_bank_b_with_mst_1_when_bank_a_is_off_then_the_layer_draws_it() {
+    assert_eq!(first_pixel_from_bank(1, 0x81), RED);
+}

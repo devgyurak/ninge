@@ -11,7 +11,7 @@
 
 mod text;
 
-use crate::bus::BgVram;
+use crate::bus::VramWindow;
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use serde::{Deserialize, Serialize};
@@ -230,7 +230,7 @@ impl Gpu2d {
         &self,
         y: usize,
         lcdc: [Option<&[u8]>; 4],
-        vram: &BgVram<'_>,
+        vram: &VramWindow<'_>,
         palette: &[u8],
         out: &mut [u32],
     ) {
@@ -262,7 +262,13 @@ impl Gpu2d {
 
     /// Display mode 1, line `y`: each pixel is the front-most text layer that is not transparent
     /// there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers together").
-    fn render_graphics_line(&self, y: usize, vram: &BgVram<'_>, palette: &[u8], out: &mut [u32]) {
+    fn render_graphics_line(
+        &self,
+        y: usize,
+        vram: &VramWindow<'_>,
+        palette: &[u8],
+        out: &mut [u32],
+    ) {
         let palette = palette.get(..text::BG_PALETTE_BYTES).unwrap_or(palette);
         let layers: [TextBg; 4] = std::array::from_fn(|n| self.text_bg(n));
         // The layer in front is the one with the lowest priority value, and among equals the lower

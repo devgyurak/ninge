@@ -285,7 +285,8 @@ fn given_vramcnt_a_written_when_inspected_then_vram_a_shows_the_bank_enabled() {
         VramBankState {
             enabled: true,
             mst: 0,
-            offset: 0
+            offset: 0,
+            mapping: VramMapping::Lcdc
         }
     );
 }

@@ -200,7 +200,8 @@ fn given_a_strb_to_vramcnt_a_when_executed_then_bank_a_is_enabled_in_lcdc_mode()
         crate::bus::VramBankState {
             enabled: true,
             mst: 0,
-            offset: 0
+            offset: 0,
+            mapping: crate::bus::VramMapping::Lcdc
         }
     );
 }

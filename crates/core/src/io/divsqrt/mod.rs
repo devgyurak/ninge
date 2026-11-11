@@ -63,6 +63,8 @@ pub struct DivSqrt {
     sqrt_busy_until: u64,
 }
 
+// TODO(hw-unverified): 0 / 0 takes the non-negative numerator's quotient, -1 (`divsqrt.md`,
+// "Unverified").
 /// Signed division with the hardware's two overflows: by zero the remainder is the numerator and
 /// the quotient is +1 for a negative numerator and -1 otherwise; the most negative number over -1
 /// wraps to itself with remainder 0 (`divsqrt.md`, "Overflows").
@@ -76,6 +78,8 @@ fn signed_divide(numer: i64, denom: i64) -> (i64, i64) {
 
 /// A division's quotient and remainder, as the registers hold them (`divsqrt.md`, "Behavior").
 /// `mode` is DIVCNT bits 0-1; mode 3 divides as mode 1.
+// TODO(hw-unverified): a denominator with a zero low half and a non-zero upper half divides by
+// zero here, in modes 0 and 1 (`divsqrt.md`, "Unverified").
 fn divide(mode: u8, numer: u64, denom: u64) -> (u64, u64) {
     match mode & DIV_MODE_MASK {
         0 => {
@@ -105,8 +109,9 @@ fn divide(mode: u8, numer: u64, denom: u64) -> (u64, u64) {
     }
 }
 
-/// The integer square root, rounded down, of the parameter: its low 32 bits in mode 0, all 64 in
-/// mode 1.
+/// The integer square root of the parameter: its low 32 bits in mode 0, all 64 in mode 1.
+// TODO(hw-unverified): the root is rounded down; GBATEK states only the types (`divsqrt.md`,
+// "Unverified").
 fn square_root(mode: u8, param: u64) -> u32 {
     let value = if mode & SQRT_64_BIT == 0 {
         u64::from(param as u32)
@@ -169,6 +174,8 @@ impl DivSqrt {
     }
 
     /// Starts a division on the registers as they are, ending after the mode's duration.
+    // TODO(hw-unverified): a start while busy, or one that changes nothing, restarts the count
+    // (`divsqrt.md`, "Unverified").
     fn start_division(&mut self, now: u64) {
         (self.quotient, self.remainder) = divide(self.div_mode, self.numer, self.denom);
         // The flag looks at the full 64-bit denominator, even in mode 0.
@@ -181,21 +188,24 @@ impl DivSqrt {
         self.div_busy_until = now.saturating_add(cycles * BUS_CYCLE);
     }
 
+    // TODO(hw-unverified): a start while busy restarts the count (`divsqrt.md`, "Unverified").
     fn start_sqrt(&mut self, now: u64) {
         self.sqrt_result = square_root(self.sqrt_mode, self.sqrt_param);
         self.sqrt_busy_until = now.saturating_add(SQRT_CYCLES * BUS_CYCLE);
     }
 
     /// The byte of the register space at `offset`; a hole reads 0.
+    // TODO(hw-unverified): a result register read while busy returns the finished value
+    // (`divsqrt.md`, "Unverified").
     fn byte(&self, offset: u32, now: u64) -> u8 {
         let le = |value: u64, base: u32| value.to_le_bytes()[(offset - base) as usize];
         match offset {
-            0..=3 => le(u64::from(self.divcnt(now)), 0),
+            0..=1 => le(u64::from(self.divcnt(now)), 0),
             NUMER..DENOM => le(self.numer, NUMER),
             DENOM..RESULT => le(self.denom, DENOM),
             RESULT..REMAINDER => le(self.quotient, RESULT),
             REMAINDER..SQRTCNT => le(self.remainder, REMAINDER),
-            SQRTCNT..SQRT_RESULT => le(u64::from(self.sqrtcnt(now)), SQRTCNT),
+            SQRTCNT..=0x31 => le(u64::from(self.sqrtcnt(now)), SQRTCNT),
             SQRT_RESULT..SQRT_PARAM => le(u64::from(self.sqrt_result), SQRT_RESULT),
             SQRT_PARAM..END => le(self.sqrt_param, SQRT_PARAM),
             _ => 0,
@@ -217,7 +227,12 @@ impl Device<true> for DivSqrt {
     /// Each byte of the write goes to the register at its own offset. A write to DIVCNT,
     /// DIV_NUMER or DIV_DENOM starts a division and one to SQRTCNT or SQRT_PARAM a square root,
     /// on the registers as the whole access leaves them; the result registers and the busy and
-    /// flag bits are read-only.
+    /// flag bits are read-only. It does not use `device::write_bytes`: a start happens once,
+    /// after the whole access, not after each byte (a word write of a numerator half would
+    /// otherwise start four operations, the last three on half-written operands).
+    // TODO(hw-unverified): narrow accesses, and which bytes of a register start an operation; a
+    // write to the unused upper half of a DIVCNT or SQRTCNT word starts nothing here
+    // (`divsqrt.md`, "Unverified").
     fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect {
         let (mut divide_now, mut sqrt_now) = (false, false);
         (0..width.bytes()).for_each(|i| {
@@ -227,7 +242,7 @@ impl Device<true> for DivSqrt {
                     self.div_mode = byte & DIV_MODE_MASK;
                     divide_now = true;
                 }
-                1..=3 => divide_now = true,
+                1 => divide_now = true,
                 NUMER..DENOM => {
                     self.numer = with_byte(self.numer, at - NUMER, byte);
                     divide_now = true;
@@ -240,7 +255,7 @@ impl Device<true> for DivSqrt {
                     self.sqrt_mode = byte & SQRT_64_BIT;
                     sqrt_now = true;
                 }
-                0x31..=0x33 => sqrt_now = true,
+                0x31 => sqrt_now = true,
                 SQRT_PARAM..END => {
                     self.sqrt_param = with_byte(self.sqrt_param, at - SQRT_PARAM, byte);
                     sqrt_now = true;

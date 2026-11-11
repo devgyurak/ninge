@@ -238,3 +238,30 @@ fn given_the_debug_accessors_when_a_division_and_a_root_ran_then_they_return_the
     unit.write(SQRT_PARAM, Width::Word, 81, 0);
     assert_eq!((unit.division_result(), unit.sqrt_result()), ((14, 2), 9));
 }
+
+#[test]
+fn given_a_halfword_write_to_the_unused_upper_half_of_divcnt_when_read_then_nothing_started() {
+    // `divsqrt.md`, "Registers": DIVCNT is 16 bits wide; bits 16-31 are not used.
+    let mut unit = DivSqrt::new();
+    unit.write(2, Width::Half, 0xFFFF, 0);
+    unit.write(SQRTCNT + 2, Width::Half, 0xFFFF, 0);
+    assert_eq!(
+        (
+            unit.peek(0, Width::Word, 0),
+            unit.peek(SQRTCNT, Width::Word, 0)
+        ),
+        (0, 0)
+    );
+}
+
+#[test]
+fn given_a_division_and_a_root_when_the_control_words_are_read_then_bits_16_to_31_are_zero() {
+    let (divider, root) = (divided(2, 5, 0), rooted(1, 100));
+    assert_eq!(
+        (
+            divider.peek(0, Width::Word, 0) >> 16,
+            root.peek(SQRTCNT, Width::Word, 0) >> 16
+        ),
+        (0, 0)
+    );
+}

@@ -10,6 +10,7 @@
 //! glyphs look right is a visual check by the maintainer in a terminal, recorded in the PR.
 
 use ninge_core::{Machine, SCREEN_WIDTH, Screen};
+use ninge_runner::golden::assert_frame_hash;
 use ninge_runner::{load_rom_file, testrom_path};
 
 /// Screen block 31 of engine A's BG window: `0600_0000h + 31 * 2 KiB`.
@@ -93,4 +94,11 @@ fn given_console_rom_when_run_twice_for_10_frames_then_both_screens_are_identica
         ),
         (true, true)
     );
+}
+
+#[test]
+fn given_console_rom_when_run_for_10_frames_then_both_screens_match_golden() {
+    // The hash was recorded after the maintainer checked the screen by eye in Ghostty: three
+    // lines reading "ninge console test", "sum: 20 + 22 = 42" and "hex: 00C0FFEE", glyphs intact.
+    assert_frame_hash("console", 10);
 }

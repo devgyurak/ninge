@@ -1,3 +1,5 @@
+<!-- README-KO.md is its approved Korean translation; change both together. -->
+
 <div align="center">
 
 <h1 align="center">ninge</h1>
@@ -9,6 +11,8 @@
 [![Rust 1.99.1](https://img.shields.io/badge/rust-1.99.1-orange?logo=rust)](rust-toolchain.toml)
 [![Terminals: Ghostty · kitty](https://img.shields.io/badge/terminals-Ghostty%20%C2%B7%20kitty-informational)](#run)
 [![Last commit](https://img.shields.io/github/last-commit/devgyurak/ninge/develop)](https://github.com/devgyurak/ninge/commits/develop)
+
+[Korean](README-KO.md)
 
 </div>
 

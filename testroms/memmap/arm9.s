@@ -44,8 +44,19 @@
 @   32    LDR of 0x04000090, an address no ARM9 I/O register occupies (GBATEK's ARM9 I/O map
 @         lists 0x0400006C, then the DMA registers from 0x040000B0)
 @   33    progress: the number of the last finished group (1 main RAM, 2 mirrors, 3 DTCM,
-@         4 load mode, 5 ITCM, 6 VRAM, 7 I/O)
+@         4 load mode, 5 ITCM, 6 VRAM, 7 I/O, 8 palette RAM and the BG window)
 @   34    sentinel, written last
+@   35    palette RAM: STR then LDR at 0x05000000
+@   36    STRH then LDRH at 0x05000004
+@   37    STRB over a stored word at 0x05000008, LDR of the word
+@   38    word written at 0x05000010, read at 0x05000810 (the 2 KiB mirror)
+@   39    ... read at 0x05FFF810 (the last repeat in the 16 MiB block)
+@   40    word written at 0x05000400 (engine B's half), then LDR at 0x05000000 again
+@   41    bank A moved to MST 1 (BG window): LDRH at 0x06000004, the halfword stored in slot 29
+@   42    STR then LDR at 0x06000000
+@   43    STRB over a stored word at 0x0600000C, LDR of the word
+@   44    OFS 1: STR then LDR at 0x06020000
+@   45    LDR at 0x06800000 while the bank is at MST 1 (the LCDC window is empty)
 @
 @ The protection unit and both caches are switched off at the start (control register bits 0,
 @ 2, 12), and both TCMs are switched off at the start and before the spin, so the record reads back
@@ -276,6 +287,67 @@ _start:
     ldr r2, [r9]
     rec 32, r2
     mov r1, #7
+    rec 33, r1
+
+    @ ---- group 8: palette RAM and the engine A BG window ----
+    ldr r9, =0x05000000
+    ldr r1, =0x7C1F03E0
+    str r1, [r9]
+    ldr r2, [r9]
+    rec 35, r2
+    ldr r1, =0x0000BEEF
+    strh r1, [r9, #4]
+    ldrh r2, [r9, #4]
+    rec 36, r2
+    ldr r1, =0x11223344
+    str r1, [r9, #8]
+    mov r1, #0xEE
+    strb r1, [r9, #8]
+    ldr r2, [r9, #8]
+    rec 37, r2
+    ldr r1, =0x50414C31
+    str r1, [r9, #0x10]
+    ldr r3, =0x05000810
+    ldr r2, [r3]
+    rec 38, r2
+    ldr r3, =0x05FFF810
+    ldr r2, [r3]
+    rec 39, r2
+    ldr r1, =0x0B0B0B0B
+    str r1, [r9, #0x400]
+    ldr r2, [r9]
+    rec 40, r2
+    @ Bank A was disabled at the end of group 6; its contents were kept. Put it back as LCDC,
+    @ then move it to the BG window with MST 1 and read what LCDC mode stored.
+    ldr r10, =0x04000240
+    mov r1, #0x80
+    strb r1, [r10]
+    mov r1, #0x81              @ enabled, MST 1, OFS 0
+    strb r1, [r10]
+    ldr r9, =0x06000000
+    ldrh r2, [r9, #4]
+    rec 41, r2
+    ldr r1, =0x42473031
+    str r1, [r9]
+    ldr r2, [r9]
+    rec 42, r2
+    ldr r1, =0x55667788
+    str r1, [r9, #0xC]
+    mov r1, #0xEE
+    strb r1, [r9, #0xC]
+    ldr r2, [r9, #0xC]
+    rec 43, r2
+    mov r1, #0x89              @ enabled, MST 1, OFS 1
+    strb r1, [r10]
+    ldr r9, =0x06020000
+    ldr r1, =0x4F465331
+    str r1, [r9]
+    ldr r2, [r9]
+    rec 44, r2
+    ldr r9, =0x06800000
+    ldr r2, [r9]
+    rec 45, r2
+    mov r1, #8
     rec 33, r1
 
     tcm 0

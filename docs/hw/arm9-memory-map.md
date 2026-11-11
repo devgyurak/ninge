@@ -7,21 +7,23 @@ Regions); GBATEK "DS Memory Control - Cache and TCM"; GBATEK "ARM CP15 Tightly C
 Used by: `crates/core/src/bus/`   Phase: 2 (#18), ARM9 view only
 
 This note is the address decoding the ARM9 sees. The TCM registers are in `cp15.md`; VRAM bank A
-is in `vram-banks.md`. The ARM7's view, shared WRAM and WRAMCNT are in `wramcnt.md` (#22); the other
+is in `vram-banks.md` and the palette RAM in `palette-ram.md`. The ARM7's view, shared WRAM and WRAMCNT are in `wramcnt.md` (#22); the other
 VRAM banks are Phase 4 (#35); the BIOS at `FFFF0000h` is `hle-swi.md` (#27). Until those land the
 regions below are simply unmapped.
 
-## Regions (ARM9, Phase 2)
+## Regions (ARM9, Phases 2-3)
 
-| Base | Size | What | Phase 2 |
+| Base | Size | What | Modeled |
 |---|---|---|---|
 | `0000_0000h` | 32 KiB physical | Instruction TCM, mirrored over its virtual size | mapped |
 | `0xxx_x000h` | 16 KiB physical | Data TCM, base from CP15 | mapped |
 | `0200_0000h` | 4 MiB | Main RAM, repeated through the 16 MiB block | mapped |
 | `0300_0000h` | 0, 16 or 32 KiB | Shared WRAM | mapped by WRAMCNT (`wramcnt.md`); empty when the ARM9 owns none |
 | `0400_0000h` | | I/O ports | only VRAMCNT_A; the rest reads 0 |
-| `0500_0000h`, `0700_0000h` | | palettes, OAM | unmapped, `TODO(phase4)` |
-| `0600_0000h`..`067F_FFFFh` | | BG/OBJ VRAM windows | unmapped, `TODO(phase4)` (#35) |
+| `0500_0000h` | 2 KiB | Palette RAM, repeated through the 16 MiB block | mapped, always (`palette-ram.md`, #28) |
+| `0700_0000h` | | OAM | unmapped, `TODO(phase4)` |
+| `0600_0000h`..`061F_FFFFh` | 128 KiB used | Engine A BG VRAM | bank A while enabled with MST 1, at `0600_0000h + OFS * 20000h` (`vram-banks.md`, #28) |
+| `0620_0000h`..`067F_FFFFh` | | engine B BG, OBJ VRAM windows | unmapped, `TODO(phase4)` (#35) |
 | `0680_0000h` | 128 KiB used | VRAM bank A as LCDC | mapped while bank A is enabled with MST = 0 |
 | `0800_0000h`.. | | GBA slot | unmapped |
 | `FFFF_0000h` | 32 KiB | ARM9 BIOS | mapped, synthetic: reads zero, writes ignored (`hle-swi.md`, "The BIOS area") |

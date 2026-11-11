@@ -15,6 +15,10 @@ const RAM_PERIOD: u32 = 0x0040_0000;
 const VRAMCNT_A: u32 = 0x0400_0240;
 const VRAM_A: u32 = 0x0680_0000;
 const VRAM_A_END: u32 = 0x0681_FFFF;
+const PALETTE: u32 = 0x0500_0000;
+const PALETTE_SIZE: u32 = 0x800;
+const BG_A: u32 = 0x0600_0000;
+const BG_SLOT: u32 = 0x2_0000;
 const ENABLE_MST0: u8 = 0x80;
 const X: u32 = 0x1122_3344;
 const Y: u32 = 0xA1B2_C3D4;
@@ -590,6 +594,8 @@ fn given_power_on_memory_when_regions_are_looked_up_then_only_main_ram_is_mapped
         (0x02FF_FFFF, Region::MainRam),
         // Shared WRAM, owned by the ARM9 at power-on (`wramcnt.md`).
         (0x0300_0000, Region::SharedWram),
+        // Palette RAM needs no control register (`palette-ram.md`, "Layout").
+        (PALETTE, Region::Palette),
         (VRAMCNT_A, Region::Unmapped),
         (VRAM_A, Region::Unmapped),
         // The synthetic BIOS (`hle-swi.md`, "The BIOS area").
@@ -629,13 +635,301 @@ fn given_vramcnt_a_enabled_then_set_to_mst_1_when_the_window_is_looked_up_then_i
     assert_eq!(m.region(VRAM_A), Region::Unmapped);
 }
 
+// ------------------------------------------------------ palette RAM (#28)
+//
+// Expected values come from `docs/hw/palette-ram.md` ("Layout", "Behavior", "Edge cases"), never
+// from running the code. A test that pins a line of its "Unverified" section says so in its name.
+
+#[test]
+fn given_palette_ram_when_words_and_halfwords_are_stored_then_they_read_back_little_endian() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(PALETTE, X);
+    v.write16(PALETTE + 4, 0xBEEF);
+    assert_eq!(
+        (
+            v.read32(PALETTE),
+            v.read16(PALETTE),
+            v.read16(PALETTE + 2),
+            v.read8(PALETTE),
+            v.read8(PALETTE + 3),
+            v.read16(PALETTE + 4)
+        ),
+        (X, 0x3344, 0x1122, 0x44, 0x11, 0xBEEF)
+    );
+}
+
+#[test]
+fn given_palette_ram_when_a_byte_is_stored_then_the_palette_is_unchanged() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(PALETTE + 8, X);
+    v.write8(PALETTE + 8, 0xFF);
+    v.write8(PALETTE + 0x7FF, 0xFF);
+    assert_eq!((v.read32(PALETTE + 8), v.read8(PALETTE + 0x7FF)), (X, 0));
+}
+
+#[test]
+fn given_power_on_memory_when_palette_ram_is_read_then_it_is_zero_as_the_note_models_unverified() {
+    // TODO(hw-unverified): palette-ram.md "Unverified", the power-on contents.
+    let m = Bench::new();
+    assert_eq!(
+        (
+            m.read32(&plain(), PALETTE),
+            m.read32(&plain(), PALETTE + 0x7FC)
+        ),
+        (0, 0)
+    );
+}
+
+/// Stores `value` at `write_at`, and returns the addresses of `read_at` that do not read it.
+fn palette_mirror_misses(write_at: u32, value: u32, read_at: &[u32]) -> Vec<u32> {
+    let mut m = Bench::new();
+    m.write32(&plain(), write_at, value);
+    read_at
+        .iter()
+        .copied()
+        .filter(|&at| m.read32(&plain(), at) != value)
+        .collect()
+}
+
+#[test]
+fn given_a_word_in_palette_ram_when_read_through_the_2_kib_mirrors_then_every_repeat_holds_it() {
+    // TODO(hw-unverified): palette-ram.md "Unverified", the mirror through the 16 MiB block.
+    let at = PALETTE + 0x10;
+    let repeats = [
+        at + PALETTE_SIZE,
+        at + 2 * PALETTE_SIZE,
+        at + 0x4000,
+        at + 0x10_0000,
+        0x05FF_F810,
+    ];
+    assert_eq!(palette_mirror_misses(at, X, &repeats), Vec::<u32>::new());
+}
+
+#[test]
+fn given_a_word_stored_through_a_palette_mirror_when_read_at_the_first_repeat_then_it_is_there() {
+    assert_eq!(
+        palette_mirror_misses(0x05FF_F7FC, Y, &[PALETTE + 0x7FC]),
+        Vec::<u32>::new()
+    );
+}
+
+#[test]
+fn given_a_word_stored_at_each_end_of_the_palette_block_when_the_neighbours_are_read_then_they_stay_zero()
+ {
+    // The first address after the 16 MiB block is the BG window, not palette RAM.
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(0x05FF_FFFC, X);
+    v.write32(BG_A, Y);
+    assert_eq!(
+        (
+            v.read32(0x05FF_FFFC),
+            v.read32(PALETTE + 0x7FC),
+            v.read32(BG_A)
+        ),
+        (X, X, 0)
+    );
+}
+
+#[test]
+fn given_engine_bs_half_of_the_palette_when_a_word_is_stored_then_engine_as_half_is_unchanged() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(PALETTE, X);
+    v.write32(PALETTE + 0x400, Y);
+    assert_eq!((v.read32(PALETTE), v.read32(PALETTE + 0x400)), (X, Y));
+}
+
+#[test]
+fn given_palette_ram_when_the_arm7_stores_and_reads_then_nothing_is_there_for_it() {
+    // TODO(hw-unverified): palette-ram.md "Unverified", the ARM7 reads 0 and drops writes.
+    let mut m = Bench::new();
+    m.write32_arm7(0, PALETTE, X);
+    assert_eq!(
+        (
+            m.read32_arm7(0, PALETTE),
+            m.read32(&plain(), PALETTE),
+            m.region7(PALETTE)
+        ),
+        (0, 0, Region::Unmapped)
+    );
+}
+
+#[test]
+fn given_vramcnt_a_changed_when_the_palette_is_looked_up_then_it_is_still_palette_ram() {
+    let mut m = with_vram();
+    m.arm9(plain()).write8(VRAMCNT_A, 0x00);
+    let table = [
+        (PALETTE, Region::Palette),
+        (0x05FF_FFFF, Region::Palette),
+        (0x0600_0000, Region::Unmapped),
+    ];
+    assert_eq!(region_failures(&m, &table), vec![]);
+}
+
+// ------------------------------------------------------ VRAM bank A as engine A BG (#28)
+//
+// Expected values come from `docs/hw/vram-banks.md` ("Behavior", "Engine A BG VRAM (MST 1)",
+// "Edge cases"), never from running the code.
+
+/// A bank A that is enabled with MST 1 and the offset `ofs`.
+fn with_bg_vram(ofs: u8) -> Bench {
+    let mut m = Bench::new();
+    m.arm9(plain())
+        .write8(VRAMCNT_A, ENABLE_MST0 | 1 | (ofs << 3));
+    m
+}
+
+#[test]
+fn given_bank_a_with_mst_1_and_offset_0_when_regions_are_looked_up_then_exactly_the_first_128_kib_of_the_bg_window_is_vram_a()
+ {
+    let table = [
+        (0x05FF_FFFF, Region::Palette),
+        (BG_A, Region::VramA),
+        (BG_A + 0x3FFF, Region::VramA),
+        (BG_A + 0x4000, Region::VramA),
+        (BG_A + BG_SLOT - 1, Region::VramA),
+        (BG_A + BG_SLOT, Region::Unmapped),
+        (VRAM_A, Region::Unmapped),
+    ];
+    assert_eq!(region_failures(&with_bg_vram(0), &table), vec![]);
+}
+
+/// The offsets whose BG window is not exactly the 128 KiB slot `ofs * 20000h` into the window.
+fn bg_slot_failures() -> Vec<u8> {
+    (0u8..4)
+        .filter(|&ofs| {
+            let m = with_bg_vram(ofs);
+            let base = BG_A + u32::from(ofs) * BG_SLOT;
+            let inside =
+                m.region(base) == Region::VramA && m.region(base + BG_SLOT - 1) == Region::VramA;
+            let outside = m.region(base.wrapping_sub(1)) != Region::VramA
+                && m.region(base + BG_SLOT) != Region::VramA;
+            !(inside && outside)
+        })
+        .collect()
+}
+
+#[test]
+fn given_bank_a_with_mst_1_when_the_offset_is_each_value_then_the_window_is_the_slot_it_names() {
+    assert_eq!(bg_slot_failures(), Vec::<u8>::new());
+}
+
+#[test]
+fn given_bank_a_with_mst_1_when_words_and_halfwords_are_stored_then_they_read_back() {
+    let mut m = with_bg_vram(0);
+    let mut v = m.arm9(plain());
+    v.write16(BG_A, 0x1234);
+    v.write32(BG_A + BG_SLOT - 4, Y);
+    assert_eq!(
+        (
+            v.read16(BG_A),
+            v.read32(BG_A + BG_SLOT - 4),
+            v.read8(BG_A + BG_SLOT - 1)
+        ),
+        (0x1234, Y, 0xA1)
+    );
+}
+
+#[test]
+fn given_bank_a_with_mst_1_when_a_byte_is_stored_then_the_bank_is_unchanged_as_the_note_models_unverified()
+ {
+    // TODO(hw-unverified): vram-banks.md "Unverified", byte stores to BG VRAM.
+    let mut m = with_bg_vram(0);
+    let mut v = m.arm9(plain());
+    v.write32(BG_A + 8, X);
+    v.write8(BG_A + 8, 0xFF);
+    assert_eq!(v.read32(BG_A + 8), X);
+}
+
+#[test]
+fn given_a_word_stored_in_lcdc_mode_when_the_bank_moves_to_mst_1_then_the_same_bytes_are_in_the_bg_window()
+ {
+    let mut m = with_vram();
+    m.write32(&plain(), VRAM_A + 0x24, X);
+    m.write8(&plain(), VRAMCNT_A, 0x81);
+    assert_eq!(m.read32(&plain(), BG_A + 0x24), X);
+}
+
+#[test]
+fn given_a_word_stored_in_the_bg_window_when_the_bank_moves_back_to_lcdc_then_the_same_bytes_are_there()
+ {
+    let mut m = with_bg_vram(0);
+    m.write32(&plain(), BG_A + 0x40, Y);
+    m.write8(&plain(), VRAMCNT_A, 0x80);
+    assert_eq!(m.read32(&plain(), VRAM_A + 0x40), Y);
+}
+
+#[test]
+fn given_a_word_stored_at_offset_0_when_the_offset_moves_to_1_then_the_same_bytes_are_one_slot_up()
+{
+    let mut m = with_bg_vram(0);
+    m.write32(&plain(), BG_A + 0x100, X);
+    m.write8(&plain(), VRAMCNT_A, 0x89);
+    assert_eq!(
+        (
+            m.read32(&plain(), BG_A + BG_SLOT + 0x100),
+            m.read32(&plain(), BG_A + 0x100)
+        ),
+        (X, 0)
+    );
+}
+
+#[test]
+fn given_bank_a_with_mst_1_when_the_lcdc_window_is_read_then_nothing_is_there_as_the_note_models_unverified()
+ {
+    // TODO(hw-unverified): vram-banks.md "Unverified", a bank with MST other than 0 at LCDC.
+    let mut m = with_bg_vram(0);
+    m.write32(&plain(), BG_A, X);
+    assert_eq!(
+        (m.read32(&plain(), VRAM_A), m.region(VRAM_A)),
+        (0, Region::Unmapped)
+    );
+}
+
+/// The control values after which the BG window still shows bank A.
+fn bg_window_still_mapped(controls: &[u8]) -> Vec<u8> {
+    controls
+        .iter()
+        .copied()
+        .filter(|&control| {
+            let mut m = with_bg_vram(0);
+            m.write32(&plain(), BG_A, X);
+            m.write8(&plain(), VRAMCNT_A, control);
+            m.region(BG_A) != Region::Unmapped || m.read32(&plain(), BG_A) != 0
+        })
+        .collect()
+}
+
+#[test]
+fn given_bank_a_with_mst_1_when_disabled_or_set_to_mst_2_or_3_then_the_bg_window_is_unmapped() {
+    // 0x01 disabled with MST 1; 0x82, 0x83 and 0x8A enabled with the OBJ and texture mappings
+    // (`TODO(phase4)`, `TODO(phase7)`).
+    assert_eq!(
+        bg_window_still_mapped(&[0x01, 0x82, 0x83, 0x8A]),
+        Vec::<u8>::new()
+    );
+}
+
+#[test]
+fn given_bank_a_with_mst_1_when_the_arm7_reads_the_bg_window_then_it_is_not_there() {
+    let mut m = with_bg_vram(0);
+    m.write32(&plain(), BG_A, X);
+    assert_eq!(
+        (m.read32_arm7(0, BG_A), m.region7(BG_A)),
+        (0, Region::Unmapped)
+    );
+}
+
 // ---------------------------------------------------------------- unmapped
 
-const UNMAPPED: [u32; 8] = [
+const UNMAPPED: [u32; 7] = [
     0x0000_0000,
     // An I/O port no register occupies; 0x0400_0000 is DISPCNT since #20.
     0x0400_0090,
-    0x0500_0000,
+    // The engine A BG window while no bank is mapped there; the palette RAM is always mapped.
     0x0600_0000,
     0x0700_0000,
     0x0800_0000,

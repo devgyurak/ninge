@@ -196,7 +196,7 @@ impl Machine {
         if let Some(out) = engine_a.get_mut(line.clone()) {
             self.io.gpu2d().render_line_a(
                 y,
-                self.memory.vram_a_lcdc(),
+                self.memory.lcdc_banks(),
                 &self.memory.bg_vram_a(),
                 self.memory.palette(),
                 out,

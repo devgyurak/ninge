@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The memory both CPUs see: main RAM, the two TCMs, VRAM bank A (as LCDC or as engine A BG), the
-//! palette RAM, the 32 KiB of shared WRAM that WRAMCNT hands out, and the ARM7's own WRAM. Each
+//! The memory both CPUs see: main RAM, the two TCMs, the nine VRAM banks (as LCDC, and bank A as
+//! engine A BG), the palette RAM, the 32 KiB of shared WRAM that WRAMCNT hands out, and the ARM7's own WRAM. Each
 //! CPU has a page table of its own (`docs/hw/arm9-memory-map.md`, `docs/hw/vram-banks.md`,
 //! `docs/hw/palette-ram.md`, `docs/hw/wramcnt.md`).
 //!
 //! Access order: (ARM9 only) TCM, then the page table. An address neither answers returns
 //! `None` and the bus view sends it to the register devices (`Io`), which read 0 for an address
-//! nothing holds and drop a write. Guest addresses never panic. WRAMCNT and VRAMCNT_A stay here
-//! because the page tables derive from them: a write to either rebuilds the tables.
+//! nothing holds and drop a write. Guest addresses never panic. WRAMCNT and the VRAMCNT registers stay here
+//! because the page tables derive from them: a VRAMCNT write rebuilds the VRAM block of both tables
+//! and a WRAMCNT write the shared-WRAM block.
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
@@ -43,9 +44,6 @@ const WRAM_WINDOW_END: u32 = 0x0400_0000;
 /// WRAMCNT at `0400_0247h` (ARM9) and its ARM7 read-only copy WRAMSTAT at `0400_0241h`.
 const WRAMCNT_ADDR: u32 = 0x0400_0247;
 const WRAMSTAT_ADDR: u32 = 0x0400_0241;
-/// VRAMCNT_G at `0400_0246h`, between VRAMCNT_F and WRAMCNT; Phase 4 (#35) owns it, so a write
-/// is discarded for now.
-const VRAMCNT_G_ADDR: u32 = 0x0400_0246;
 /// WRAMCNT bits 0-1: the allocation mode. Bits 2-7 are not used.
 const WRAMCNT_MODE_MASK: u8 = 0x03;
 
@@ -56,9 +54,23 @@ const BIOS9_SIZE: u32 = 32 << 10;
 pub(crate) const BIOS7_BASE: u32 = 0;
 const BIOS7_SIZE: u32 = 16 << 10;
 
-/// VRAM bank A, mapped as LCDC at `0680_0000h`, 128 KiB (`vram-banks.md`, "Behavior").
-const VRAM_A_BASE: u32 = 0x0680_0000;
-const VRAM_A_SIZE: usize = 128 << 10;
+/// The nine VRAM banks, A to I (`vram-banks.md`, "The banks").
+const BANK_COUNT: usize = 9;
+/// Where each bank starts in the one VRAM buffer: alphabetical order, so the LCDC offsets.
+const BANK_BASE: [usize; BANK_COUNT] = [
+    0, 0x2_0000, 0x4_0000, 0x6_0000, 0x8_0000, 0x9_0000, 0x9_4000, 0x9_8000, 0xA_0000,
+];
+/// The size of each bank: 128, 128, 128, 128, 64, 16, 16, 32 and 16 KiB.
+const BANK_SIZE: [usize; BANK_COUNT] = [
+    0x2_0000, 0x2_0000, 0x2_0000, 0x2_0000, 0x1_0000, 0x4000, 0x4000, 0x8000, 0x4000,
+];
+/// 656 KiB in all.
+const VRAM_SIZE: usize = 0xA_4000;
+/// The LCDC window of the banks: bank X sits at `LCDC_BASE + BANK_BASE[X]`.
+const LCDC_BASE: u32 = 0x0680_0000;
+/// The VRAM block of the address space: the only part VRAMCNT writes can change.
+const VRAM_BLOCK_BASE: u32 = 0x0600_0000;
+const VRAM_BLOCK_END: u32 = 0x0700_0000;
 /// Engine A's BG VRAM window: 2 MiB at `0600_0000h`; bank A with MST 1 sits `OFS * 20000h` into
 /// it (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
 const BG_A_BASE: u32 = 0x0600_0000;
@@ -67,19 +79,23 @@ const BG_A_BASE: u32 = 0x0600_0000;
 const PALETTE_BASE: u32 = 0x0500_0000;
 const PALETTE_SIZE: usize = 2 << 10;
 const PALETTE_BLOCK_SIZE: usize = 16 << 20;
-/// VRAMCNT_A, at `0400_0240h` (`vram-banks.md`, "Registers").
+/// VRAMCNT_A, at `0400_0240h`; B to G follow, WRAMCNT is at `0400_0247h`, and H and I at
+/// `0400_0248h` and `0400_0249h` (`vram-banks.md`, "Registers").
 pub(crate) const VRAMCNT_A_ADDR: u32 = 0x0400_0240;
-/// VRAMCNT_A bits 0-1: MST. Bit 2 is not used by bank A.
-const VRAMCNT_MST_MASK: u8 = 0x03;
-/// VRAMCNT_A bits 3-4: OFS.
+const VRAMCNT_G_ADDR: u32 = 0x0400_0246;
+const VRAMCNT_H_ADDR: u32 = 0x0400_0248;
+const VRAMCNT_I_ADDR: u32 = 0x0400_0249;
+/// VRAMCNT bits 3-4: OFS.
 const VRAMCNT_OFS_SHIFT: u32 = 3;
 const VRAMCNT_OFS_MASK: u8 = 0x03;
-/// VRAMCNT_A bit 7: enable.
+/// VRAMCNT bit 7: enable.
 const VRAMCNT_ENABLE: u8 = 0x80;
-/// The bits of VRAMCNT_A that are kept: MST (0-1), OFS (3-4), enable (7).
-const VRAMCNT_USED: u8 =
-    VRAMCNT_MST_MASK | (VRAMCNT_OFS_MASK << VRAMCNT_OFS_SHIFT) | VRAMCNT_ENABLE;
-/// The MST value that maps bank A for plain CPU access (LCDC mode).
+/// The bits each VRAMCNT keeps, A to I: MST (bits 0-1, and bit 2 for C-G), OFS (bits 3-4, not for
+/// E, H, I) and enable (`vram-banks.md`, "VRAMCNT bits").
+const VRAMCNT_USED: [u8; BANK_COUNT] = [0x9B, 0x9B, 0x9F, 0x9F, 0x87, 0x9F, 0x9F, 0x83, 0x83];
+/// VRAMCNT bits 0-2: MST.
+const VRAMCNT_MST_MASK: u8 = 0x07;
+/// The MST value that maps a bank for plain CPU access (LCDC mode).
 const MST_LCDC: u8 = 0;
 /// The MST value that maps bank A into engine A's BG VRAM.
 const MST_BG_A: u8 = 1;
@@ -91,8 +107,8 @@ pub enum Region {
     Unmapped,
     /// Main RAM.
     MainRam,
-    /// VRAM bank A, mapped as LCDC or as engine A BG VRAM; the same buffer either way.
-    VramA,
+    /// The VRAM banks, as LCDC or (bank A) as engine A BG VRAM; one buffer for all nine.
+    Vram,
     /// The palette RAM, 2 KiB repeated through its block (`palette-ram.md`).
     Palette,
     /// The shared WRAM, as WRAMCNT allocates it to the CPU asking.
@@ -140,14 +156,14 @@ pub struct WramState {
     pub arm7: WramShare,
 }
 
-/// VRAMCNT_A as decoded (`vram-banks.md`, "VRAMCNT_A bits").
+/// One VRAMCNT register as decoded (`vram-banks.md`, "VRAMCNT bits").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VramBankState {
     /// Bit 7.
     pub enabled: bool,
-    /// Bits 0-1.
+    /// Bits 0-2 (bit 2 is not used by banks A, B, H and I, so it reads 0 there).
     pub mst: u8,
-    /// Bits 3-4.
+    /// Bits 3-4 (not used by banks E, H and I, so it reads 0 there).
     pub offset: u8,
 }
 
@@ -198,8 +214,10 @@ pub struct Memory {
     main_ram: Vec<u8>,
     itcm: Vec<u8>,
     dtcm: Vec<u8>,
-    vram_a: Vec<u8>,
-    vramcnt_a: u8,
+    // The nine VRAM banks in one buffer, A first (`vram-banks.md`, "The banks"), and their
+    // VRAMCNT registers.
+    vram: Vec<u8>,
+    vramcnt: [u8; BANK_COUNT],
     // The palette RAM (`palette-ram.md`); the ARM9 alone sees it.
     palette: Vec<u8>,
     // The ARM7's own WRAM (64 KiB); only the ARM7 view reaches it.
@@ -207,7 +225,7 @@ pub struct Memory {
     // The shared WRAM (32 KiB) and the WRAMCNT mode (bits 0-1) that splits it (`wramcnt.md`).
     shared_wram: Vec<u8>,
     wramcnt: u8,
-    // Derived from `vramcnt_a` and `wramcnt`, so the tables are not saved; `build_page_table`
+    // Derived from `vramcnt` and `wramcnt`, so the tables are not saved; `build_page_table`
     // rebuilds both. Empty after a load until then, which reads as all-unmapped rather than
     // panicking. One entry per 16 KiB page, one table per CPU (the page-table decision is
     // recorded in the PR that added #22).
@@ -215,6 +233,17 @@ pub struct Memory {
     pages9: Vec<Page>,
     #[serde(skip)]
     pages7: Vec<Page>,
+}
+
+/// Which bank's VRAMCNT register sits at `addr`: A-G at `0400_0240h`-`0400_0246h`, H and I at
+/// `0400_0248h` and `0400_0249h`; `0400_0247h` is WRAMCNT (`vram-banks.md`, "Registers").
+fn vramcnt_index(addr: u32) -> Option<usize> {
+    match addr {
+        VRAMCNT_A_ADDR..=VRAMCNT_G_ADDR => Some((addr - VRAMCNT_A_ADDR) as usize),
+        VRAMCNT_H_ADDR => Some(7),
+        VRAMCNT_I_ADDR => Some(8),
+        _ => None,
+    }
 }
 
 /// The entry for the page holding `addr`; an address outside a (not yet built) table is unmapped.
@@ -283,7 +312,7 @@ fn tcm_offset(tcm: &Tcm, physical: usize, addr: u32) -> Option<usize> {
 
 impl Memory {
     /// Memory in its power-on state.
-    // TODO(hw-unverified): all RAM starts at zero, and VRAMCNT_A and WRAMCNT start at 0, which
+    // TODO(hw-unverified): all RAM starts at zero, and the VRAMCNT registers and WRAMCNT start at 0, which
     // GBATEK does not state (`arm9-memory-map.md`, "Unverified"; `vram-banks.md`, "Unverified";
     // `wramcnt.md`, "Unverified"; `palette-ram.md`, "Unverified").
     pub(crate) fn new() -> Self {
@@ -291,8 +320,8 @@ impl Memory {
             main_ram: vec![0; MAIN_RAM_SIZE],
             itcm: vec![0; ITCM_SIZE],
             dtcm: vec![0; DTCM_SIZE],
-            vram_a: vec![0; VRAM_A_SIZE],
-            vramcnt_a: 0,
+            vram: vec![0; VRAM_SIZE],
+            vramcnt: [0; BANK_COUNT],
             palette: vec![0; PALETTE_SIZE],
             wram7: vec![0; WRAM7_SIZE],
             shared_wram: vec![0; SHARED_WRAM_SIZE],
@@ -304,15 +333,14 @@ impl Memory {
         memory
     }
 
-    /// Rebuilds both page tables from the mapping state. Called at construction, after a
-    /// VRAMCNT_A write, and after a savestate load (`savestate`); a WRAMCNT write rebuilds only
-    /// the shared WRAM block (`build_wram_pages`).
+    /// Rebuilds both page tables from the mapping state. Called at construction and after a
+    /// savestate load (`savestate`) only: a VRAMCNT write rebuilds just the VRAM block
+    /// (`build_vram_pages`) and a WRAMCNT write just the shared WRAM block (`build_wram_pages`).
     // Per-CPU tables: the decision is recorded in the PR that added #22.
-    // TODO(phase4): the other VRAM banks and the OBJ mapping join them (#35); texture slots are
+    // TODO(phase4): the BG and OBJ mappings of the other banks join them (#35); texture slots are
     // `TODO(phase7)`.
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
-    // rule; a disabled bank or an MST that is not 0 or 1 is unmapped; the LCDC and BG windows
-    // have no mirrors (`arm9-memory-map.md`, `vram-banks.md`, "Unverified").
+    // rule (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the palette RAM repeats through its 16 MiB block, and the ARM7 has
     // none (`palette-ram.md`, "Unverified").
     pub(crate) fn build_page_table(&mut self) {
@@ -354,23 +382,44 @@ impl Memory {
             Region::Palette,
             Some((0, PALETTE_SIZE)),
         );
-        // Bank A is seen at one place at a time: where MST says, and only while enabled.
-        let bank = self.vram_a();
-        let base = match (bank.enabled, bank.mst) {
-            (true, MST_LCDC) => Some(VRAM_A_BASE),
-            (true, MST_BG_A) => Some(BG_A_BASE + u32::from(bank.offset) * VRAM_A_SIZE as u32),
-            _ => None,
-        };
-        if let Some(base) = base {
-            map_window(
-                &mut self.pages9,
-                base,
-                base + VRAM_A_SIZE as u32,
-                Region::VramA,
-                Some((0, VRAM_A_SIZE)),
-            );
-        }
+        self.build_vram_pages();
         self.build_wram_pages();
+    }
+
+    /// Where bank `bank` sits in the ARM9's address space, or `None` while it is disabled or its
+    /// MST maps it nowhere the CPU sees.
+    // TODO(phase4): the BG and OBJ mappings of the other banks and the ARM7's mapping (#35).
+    // TODO(hw-unverified): a disabled bank, and an MST this step does not map, are unmapped
+    // (`vram-banks.md`, "Unverified").
+    fn arm9_vram_base(&self, bank: usize) -> Option<u32> {
+        let state = self.vram_bank(bank);
+        match (state.enabled, bank, state.mst) {
+            (true, _, MST_LCDC) => Some(LCDC_BASE + BANK_BASE[bank] as u32),
+            (true, 0, MST_BG_A) => Some(BG_A_BASE + u32::from(state.offset) * BANK_SIZE[0] as u32),
+            _ => None,
+        }
+    }
+
+    /// Rebuilds the VRAM block (`0600_0000h`-`06FF_FFFFh`) of both tables: the invalidation a
+    /// VRAMCNT write needs (`vram-banks.md`, "Behavior"). Everything outside that block is left
+    /// alone.
+    // TODO(hw-unverified): an address in the block that no bank holds is unmapped: no mirrors
+    // (`vram-banks.md`, "Unverified").
+    fn build_vram_pages(&mut self) {
+        for pages in [&mut self.pages9, &mut self.pages7] {
+            map_window(pages, VRAM_BLOCK_BASE, VRAM_BLOCK_END, Region::Vram, None);
+        }
+        for bank in 0..BANK_COUNT {
+            if let Some(base) = self.arm9_vram_base(bank) {
+                map_window(
+                    &mut self.pages9,
+                    base,
+                    base + BANK_SIZE[bank] as u32,
+                    Region::Vram,
+                    Some((BANK_BASE[bank], BANK_SIZE[bank])),
+                );
+            }
+        }
     }
 
     /// Rebuilds the `0300_0000h` block of both tables: the invalidation a WRAMCNT write needs
@@ -421,15 +470,23 @@ impl Memory {
     pub(crate) fn bg_vram_a(&self) -> BgVram<'_> {
         let bank = self.vram_a();
         BgVram {
-            bank: (bank.enabled && bank.mst == MST_BG_A).then_some(self.vram_a.as_slice()),
-            base: u32::from(bank.offset) * VRAM_A_SIZE as u32,
+            bank: (bank.enabled && bank.mst == MST_BG_A)
+                .then(|| self.vram.get(..BANK_SIZE[0]))
+                .flatten(),
+            base: u32::from(bank.offset) * BANK_SIZE[0] as u32,
         }
     }
 
-    /// The bytes of bank A while the CPU sees it as LCDC VRAM (enabled, MST 0), else `None`.
-    pub(crate) fn vram_a_lcdc(&self) -> Option<&[u8]> {
-        let bank = self.vram_a();
-        (bank.enabled && bank.mst == MST_LCDC).then_some(self.vram_a.as_slice())
+    /// The bytes of banks A-D while the CPU sees them as LCDC VRAM (enabled, MST 0), else `None`
+    /// for that bank. The VRAM display mode reads one of them (`display-mode-vram.md`).
+    pub(crate) fn lcdc_banks(&self) -> [Option<&[u8]>; 4] {
+        std::array::from_fn(|bank| {
+            let state = self.vram_bank(bank);
+            let start = BANK_BASE[bank];
+            (state.enabled && state.mst == MST_LCDC)
+                .then(|| self.vram.get(start..start + BANK_SIZE[bank]))
+                .flatten()
+        })
     }
 
     /// The 2 KiB of palette RAM: engine A's BG and OBJ tables, then engine B's (`palette-ram.md`,
@@ -450,13 +507,24 @@ impl Memory {
         page_of(&self.pages7, addr).region
     }
 
+    /// VRAMCNT of bank `bank` (0 = A to 8 = I) as decoded; a bank past I reads as disabled.
+    pub fn vram_bank(&self, bank: usize) -> VramBankState {
+        let value = self.vramcnt.get(bank).copied().unwrap_or(0);
+        VramBankState {
+            enabled: value & VRAMCNT_ENABLE != 0,
+            mst: value & VRAMCNT_MST_MASK,
+            offset: (value >> VRAMCNT_OFS_SHIFT) & VRAMCNT_OFS_MASK,
+        }
+    }
+
     /// VRAMCNT_A as decoded.
     pub fn vram_a(&self) -> VramBankState {
-        VramBankState {
-            enabled: self.vramcnt_a & VRAMCNT_ENABLE != 0,
-            mst: self.vramcnt_a & VRAMCNT_MST_MASK,
-            offset: (self.vramcnt_a >> VRAMCNT_OFS_SHIFT) & VRAMCNT_OFS_MASK,
-        }
+        self.vram_bank(0)
+    }
+
+    /// All nine VRAMCNT registers as decoded, A first.
+    pub fn vram_banks(&self) -> [VramBankState; BANK_COUNT] {
+        std::array::from_fn(|bank| self.vram_bank(bank))
     }
 
     /// The page table of CPU `ARM9`.
@@ -470,7 +538,7 @@ impl Memory {
     fn region_bytes<const N: usize>(&self, region: Region, offset: usize) -> Option<[u8; N]> {
         let buf = match region {
             Region::MainRam => &self.main_ram,
-            Region::VramA => &self.vram_a,
+            Region::Vram => &self.vram,
             // The palette repeats every 2 KiB inside a page too, so the offset wraps here.
             Region::Palette => return Some(bytes_at(&self.palette, offset % PALETTE_SIZE)),
             Region::SharedWram => &self.shared_wram,
@@ -568,7 +636,7 @@ impl Memory {
             // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior").
             // TODO(hw-unverified): the rule is taken to cover the BG window too
             // (`vram-banks.md`, "Unverified").
-            Region::VramA | Region::Palette if N == 1 => false,
+            Region::Vram | Region::Palette if N == 1 => false,
             Region::Unmapped => false,
             // ROM: the write is taken and dropped, it is not an I/O access.
             Region::Bios => true,
@@ -583,7 +651,7 @@ impl Memory {
     fn put_region<const N: usize>(&mut self, region: Region, offset: usize, bytes: [u8; N]) {
         let buf = match region {
             Region::MainRam => &mut self.main_ram,
-            Region::VramA => &mut self.vram_a,
+            Region::Vram => &mut self.vram,
             Region::Palette => {
                 put_bytes(&mut self.palette, offset % PALETTE_SIZE, bytes);
                 return;
@@ -596,12 +664,12 @@ impl Memory {
     }
 
     /// What CPU `ARM9` reads from the memory-control block at `offset` bytes past VRAMCNT_A:
-    /// WRAMCNT for the ARM9, WRAMSTAT for the ARM7. VRAMCNT_A is write-only and reads 0. This is
+    /// WRAMCNT for the ARM9, WRAMSTAT for the ARM7. The VRAMCNT registers are write-only and read 0. This is
     /// the memory-control block of the I/O map (`Owner::Memory`), kept here because the page tables derive from
     /// these registers (#109); it has no side effect, so a peek and a read are the same.
     // WRAMCNT is documented R/W in one place and write-only in another; it reads back.
     // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
-    // TODO(hw-unverified): VRAMCNT_A reads 0 (`arm9-memory-map.md`, "Unverified").
+    // TODO(hw-unverified): the VRAMCNT registers read 0 (`arm9-memory-map.md`, "Unverified").
     pub(crate) fn read_control<const ARM9: bool>(&self, offset: u32, width: Width) -> u32 {
         read_bytes(offset, width, |at| {
             match (ARM9, VRAMCNT_A_ADDR.wrapping_add(at)) {
@@ -612,8 +680,8 @@ impl Memory {
     }
 
     /// Writes the memory-control block at `offset` bytes past VRAMCNT_A, each byte to the
-    /// register at its own address: VRAMCNT_A, WRAMCNT, or VRAMCNT_G (discarded for now). The
-    /// ARM7 has none (WRAMCNT is ARM9-only), and a byte on no register is dropped.
+    /// register at its own address: VRAMCNT_A-I or WRAMCNT. The ARM7 has none (WRAMCNT is
+    /// ARM9-only), and a byte on no register is dropped.
     // TODO(hw-unverified): a byte on no register is dropped (`arm9-memory-map.md`, "Unverified").
     pub(crate) fn write_control<const ARM9: bool>(
         &mut self,
@@ -626,36 +694,43 @@ impl Memory {
         }
         (0..width.bytes()).for_each(|i| {
             let byte = (value >> (8 * i)) as u8;
-            match VRAMCNT_A_ADDR.wrapping_add(offset).wrapping_add(i) {
-                VRAMCNT_A_ADDR => self.write_vramcnt_a(byte),
-                WRAMCNT_ADDR => self.write_wramcnt(byte),
-                // TODO(phase4): VRAMCNT_G arrives with the other banks (#35).
-                VRAMCNT_G_ADDR => {}
-                _ => {}
+            let addr = VRAMCNT_A_ADDR.wrapping_add(offset).wrapping_add(i);
+            match vramcnt_index(addr) {
+                Some(bank) => self.write_vramcnt(bank, byte),
+                None if addr == WRAMCNT_ADDR => self.write_wramcnt(byte),
+                None => {}
             }
         });
     }
 
-    /// Whether the buffers have the sizes `new` allocates and VRAMCNT_A holds only used bits.
+    /// Whether the buffers have the sizes `new` allocates and each VRAMCNT holds only used bits.
     /// A savestate that decodes to anything else is corrupt (`savestate`); the accessors stay
     /// total either way, so this guards behavior, not memory safety.
     pub(crate) fn is_well_formed(&self) -> bool {
         self.main_ram.len() == MAIN_RAM_SIZE
             && self.itcm.len() == ITCM_SIZE
             && self.dtcm.len() == DTCM_SIZE
-            && self.vram_a.len() == VRAM_A_SIZE
+            && self.vram.len() == VRAM_SIZE
             && self.palette.len() == PALETTE_SIZE
             && self.wram7.len() == WRAM7_SIZE
             && self.shared_wram.len() == SHARED_WRAM_SIZE
-            && self.vramcnt_a & !VRAMCNT_USED == 0
+            && self
+                .vramcnt
+                .iter()
+                .zip(VRAMCNT_USED)
+                .all(|(&cnt, used)| cnt & !used == 0)
             && self.wramcnt & !WRAMCNT_MODE_MASK == 0
     }
 
-    /// Stores VRAMCNT_A and rebuilds the page table, since the write can move the bank.
-    // TODO(hw-unverified): bit 2 is dropped (`vram-banks.md`, "Unverified").
-    fn write_vramcnt_a(&mut self, value: u8) {
-        self.vramcnt_a = value & VRAMCNT_USED;
-        self.build_page_table();
+    /// Stores the VRAMCNT of bank `bank` and rebuilds the VRAM block of both page tables, since
+    /// the write can move the bank.
+    // TODO(hw-unverified): the bits a bank does not use are dropped (`vram-banks.md`,
+    // "Unverified").
+    fn write_vramcnt(&mut self, bank: usize, value: u8) {
+        if let (Some(slot), Some(&used)) = (self.vramcnt.get_mut(bank), VRAMCNT_USED.get(bank)) {
+            *slot = value & used;
+        }
+        self.build_vram_pages();
     }
 
     /// Stores WRAMCNT (bits 2-7 dropped) and rebuilds the shared WRAM block of both page tables,

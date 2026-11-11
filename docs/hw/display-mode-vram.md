@@ -27,7 +27,7 @@ byte accesses to consecutive addresses.
 | 4-6 | OBJ options: tile OBJ mapping, bitmap OBJ 2D dimension, bitmap OBJ mapping | `TODO(phase4)` |
 | 7-15 | same as the GBA register: forced blank (7), BG0-BG3 enables (8-11), OBJ enable (12), windows (13-15) | `TODO(phase3)` / `TODO(phase4)`; bit 7 see "Unverified" |
 | 16-17 | display mode: 0 off, 1 graphics, 2 VRAM display, 3 main-memory display | 0 and 2 now |
-| 18-19 | VRAM block for mode 2: 0 = bank A, 1 = B, 2 = C, 3 = D | block 0 now |
+| 18-19 | VRAM block for mode 2: 0 = bank A, 1 = B, 2 = C, 3 = D | blocks 0-3 (banks A-D) |
 | 20-31 | tile OBJ boundary, bitmap OBJ options, H-blank OBJ processing, character/screen base, extended palettes | `TODO(phase4)` |
 
 All 32 bits are stored and read back. Only bits 16-19 change what is drawn in Phase 2.
@@ -68,7 +68,7 @@ bitmap fits in a 128 KiB bank with the rest of the bank unused.
 Each halfword is 15-bit colour: bits 0-4 red, bits 5-9 green, bits 10-14 blue, five bits per
 channel. Bit 15 is not used by the colour; it has no effect on the displayed pixel.
 
-Only block 0 (bank A) exists in Phase 2. Blocks 1-3 (banks B, C, D) are `TODO(phase4)` (#35).
+Blocks 0-3 are banks A-D, each read through its LCDC mapping (`vram-banks.md`, "Display mode 2 reads banks A-D").
 
 GBATEK also says modes 2 and 3 bypass the 2D and 3D pipelines but the master brightness unit
 still applies to their output. Master brightness is not modeled: `TODO(phase4)` (#34).
@@ -124,11 +124,9 @@ stays white. Changing this formula changes every golden frame that contains colo
   `Gpu2d::render_engine_a` — verify by a test ROM on real hardware that sets it in mode 2.
 - **POWCNT1 undefined bits** (4-8, 10-14) read back as written. — `Gpu2d::write_byte`
   — verify likewise.
-- **A selected block that is not readable as LCDC VRAM** — bank A disabled, or its MST not
+- **A selected block that is not readable as LCDC VRAM** — its bank disabled, or its MST not
   0 — is drawn as if the block read zero, which is black. GBATEK describes mode 2 only for a
-  mapped block. — `Gpu2d::render_engine_a` and `Memory::vram_a_lcdc` — verify likewise.
-- **Mode 2 with block 1-3** draws black in Phase 2, because banks B-D are not modeled
-  (`TODO(phase4)`, #35); on hardware it would show those banks. — `Gpu2d::render_engine_a`.
+  mapped block. — `Gpu2d::render_line_a` and `Memory::lcdc_banks` — verify likewise.
 - **Whether mode 2 shows a bank that is enabled with a non-LCDC MST** (for example MST 1,
   the BG mapping) is not settled; Phase 2 treats it as unreadable (previous item).
 - **Mirrors** of the I/O block are not modeled (`arm9-memory-map.md`, "Unverified").

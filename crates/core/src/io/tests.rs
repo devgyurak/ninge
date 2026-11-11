@@ -169,6 +169,26 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
 }
 
 #[test]
+fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it_in_the_gpu_space()
+{
+    // BG0CNT at offset 8 of engine A's register space, BG3VOFS' last byte at offset 31.
+    let arm9 = [
+        (0x0400_0008, Some(Owner::Io(Port::Gpu2d, 8))),
+        (0x0400_000F, Some(Owner::Io(Port::Gpu2d, 15))),
+        (0x0400_0010, Some(Owner::Io(Port::Gpu2d, 16))),
+        (0x0400_001F, Some(Owner::Io(Port::Gpu2d, 31))),
+    ];
+    let arm7 = [(0x0400_0008, None), (0x0400_001F, None)];
+    assert_eq!(
+        (
+            decode_failures::<true>(&arm9),
+            decode_failures::<false>(&arm7)
+        ),
+        (vec![], vec![])
+    );
+}
+
+#[test]
 fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
     // Just below and above IME/IE/IF (208-217), the timers (100-10F), IPCSYNC..SEND
     // (180-18B), the 2D registers and the cart-side neighbour of IPCFIFORECV.
@@ -187,7 +207,8 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         (IPCSYNC_ADDR - 1, None),
         (IPCFIFOSEND_ADDR + 4, None),
         (IPCFIFORECV_ADDR + 4, None),
-        (0x0400_0008, None),
+        // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`).
+        (0x0400_0020, None),
         (0x0000_0000, None),
     ];
     assert_eq!(

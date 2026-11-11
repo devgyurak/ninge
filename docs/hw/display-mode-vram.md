@@ -82,9 +82,11 @@ screen it is routed to stays a black placeholder.
 
 ### When the picture is made
 
-The hardware draws the screen line by line while the CPU runs. Phase 2 renders the whole frame
-at once at the end of each frame, from the registers and VRAM as they are then.
-`TODO(phase3)`: per-scanline drawing needs the line timing of `display-timing.md` (#104); until then the frame is drawn when VCOUNT wraps to line 0.
+The hardware draws the screen line by line while the CPU runs. Since #28 each visible line is
+drawn at its line start, from the registers and memory as they are then (`display-timing.md`,
+"Where the frame is drawn"; `bg-text.md`, "Lines"). Display modes 0 and 2 are the same in every
+line, so their pictures do not depend on when a line is drawn unless the ROM changes the
+registers or VRAM during the frame.
 
 ## Colour expansion (host choice, not hardware)
 

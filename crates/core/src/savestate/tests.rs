@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_475_283;
-const PINNED_HASH: u64 = 0x9cd9_7c67_d050_6267;
+const PINNED_LEN: usize = 4_671_915;
+const PINNED_HASH: u64 = 0x20c9446cddf8cc7d;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -39,8 +39,13 @@ const PINNED_HASH: u64 = 0x9cd9_7c67_d050_6267;
 /// bools: both lengths grew by 3 and both hashes moved.
 /// Version 14 (#28) added the palette RAM: 2048 bytes behind a two-byte length, so both lengths
 /// grew by 2050 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 4_475_374;
-const PINNED_BOOTED_HASH: u64 = 0x60aa16b9b9e41577;
+/// Version 15 (#28) added engine A's BGxCNT and scroll registers: twelve `u16`s, each a one-byte
+/// varint while zero, so both lengths grew by 12 and both hashes moved.
+/// Version 16 (#28) added the four frame buffers: 196,608 one-byte zero pixels and four three-byte
+/// lengths at power-on, so that length grew by 196,620; the booted one grew by more because its
+/// screens hold colors (multi-byte varints). Both hashes moved.
+const PINNED_BOOTED_LEN: usize = 4_966_918;
+const PINNED_BOOTED_HASH: u64 = 0xbdc398166676d3a1;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -173,7 +178,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &14u32.to_le_bytes(),
+        &16u32.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -214,7 +219,7 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 10,
-            expected: 14
+            expected: 16
         })
     );
 }
@@ -225,9 +230,9 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 10 is not version 14")
+        .expect_err("version 10 is not version 16")
         .to_string();
-    assert!(message.contains("version 10") && message.contains("version 14"));
+    assert!(message.contains("version 10") && message.contains("version 16"));
 }
 
 #[test]
@@ -408,19 +413,35 @@ fn given_a_state_saved_after_2_frames_when_loaded_and_run_2_more_then_it_equals_
 }
 
 #[test]
-fn given_a_machine_with_drawn_frames_when_state_is_loaded_then_both_screens_are_black() {
+fn given_a_machine_with_drawn_frames_when_state_is_loaded_then_both_screens_equal_the_saved_ones() {
     let rom = counter_rom();
-    let bytes = booted(&rom, 1).save_state();
+    let saver = booted(&rom, 1);
     let mut target = booted(&rom, 0);
-    let result = target.load_state(&bytes);
-    let black = |screen| target.frame(screen).iter().all(|&p| p == 0);
-    let sizes = [
-        target.frame(Screen::Top).len(),
-        target.frame(Screen::Bottom).len(),
-    ];
+    let result = target.load_state(&saver.save_state());
     assert_eq!(
-        (result, black(Screen::Top), black(Screen::Bottom), sizes),
-        (Ok(()), true, true, [49_152, 49_152])
+        (
+            result,
+            target.frame(Screen::Top) == saver.frame(Screen::Top),
+            target.frame(Screen::Bottom) == saver.frame(Screen::Bottom),
+            target.frame(Screen::Top).len(),
+            target.frame(Screen::Top).iter().all(|&p| p == 0)
+        ),
+        (Ok(()), true, true, 49_152, false)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_short_frame_buffer_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.work_top.pop();
+    let mut target = booted(&rom, 0);
+    let before = target.clone();
+    let result = target.load_state(&saver.save_state());
+    assert_eq!(
+        (result, target == before),
+        (Err(SavestateError::Corrupt), true)
     );
 }
 
@@ -561,7 +582,7 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_14_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_16_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -569,14 +590,14 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 14
+            expected: 16
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_14_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_16_is_expected() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -584,15 +605,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 14
+            expected: 16
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_14() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_16() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 14u32.to_le_bytes());
+    assert_eq!(bytes[8..12], 16u32.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.

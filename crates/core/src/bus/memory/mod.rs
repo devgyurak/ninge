@@ -151,6 +151,33 @@ pub struct VramBankState {
     pub offset: u8,
 }
 
+/// Engine A's BG VRAM as the renderer reads it: the bytes of bank A and where they sit in the BG
+/// window, or nothing when no bank is mapped there (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
+/// Offsets count from the start of the window (`0600_0000h`); an offset outside the bank reads 0.
+#[derive(Clone, Copy, Debug)]
+pub struct BgVram<'a> {
+    bank: Option<&'a [u8]>,
+    /// Where the bank starts in the window: `OFS * 20000h`.
+    base: u32,
+}
+
+impl BgVram<'_> {
+    /// The byte at `offset` in the window, or 0 where no bank holds it.
+    // TODO(hw-unverified): an address no bank holds reads 0 (`vram-banks.md`, "Unverified").
+    pub(crate) fn byte(&self, offset: u32) -> u8 {
+        offset
+            .checked_sub(self.base)
+            .and_then(|at| self.bank?.get(at as usize))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The little-endian halfword at `offset`.
+    pub(crate) fn half(&self, offset: u32) -> u16 {
+        u16::from_le_bytes([self.byte(offset), self.byte(offset.wrapping_add(1))])
+    }
+}
+
 /// One page-table entry: a region and an offset into that region's buffer, never a pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Page {
@@ -387,6 +414,16 @@ impl Memory {
             _ => (WramShare::None, WramShare::All32),
         };
         WramState { mode, arm9, arm7 }
+    }
+
+    /// Engine A's BG VRAM: bank A when it is enabled with MST 1, else nothing
+    /// (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
+    pub(crate) fn bg_vram_a(&self) -> BgVram<'_> {
+        let bank = self.vram_a();
+        BgVram {
+            bank: (bank.enabled && bank.mst == MST_BG_A).then_some(self.vram_a.as_slice()),
+            base: u32::from(bank.offset) * VRAM_A_SIZE as u32,
+        }
     }
 
     /// The bytes of bank A while the CPU sees it as LCDC VRAM (enabled, MST 0), else `None`.

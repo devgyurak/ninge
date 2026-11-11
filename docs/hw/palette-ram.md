@@ -1,7 +1,8 @@
 # Palette RAM
 
-Sources: GBATEK "DS Memory Maps" (NDS9 Memory Map); GBATEK "DS 2D Video - Color Palettes" (the
-standard palette layout); GBATEK "DS Memory Control - VRAM" (the notes on write widths).
+Sources: GBATEK "DS Memory Maps" (NDS9 Memory Map); GBATEK "DS Memory Control - VRAM" (the "Other
+Video RAM" table: the four 512-byte palette tables, and the notes on write widths); GBATEK "LCD
+Color Palettes" (the color format and transparent color 0).
 Used by: `crates/core/src/bus/memory/`   Phase: 3 (#28); the engines that read it are `bg-text.md`
 (engine A, Phase 3) and Phase 4 (engine B, sprites)
 

@@ -527,6 +527,8 @@ impl Memory {
         match page.region {
             // VRAM and the palette take 16-bit and 32-bit writes only; a byte write is ignored
             // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior").
+            // TODO(hw-unverified): the rule is taken to cover the BG window too
+            // (`vram-banks.md`, "Unverified").
             Region::VramA | Region::Palette if N == 1 => false,
             Region::Unmapped => false,
             // ROM: the write is taken and dropped, it is not an I/O access.

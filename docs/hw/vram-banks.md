@@ -104,8 +104,5 @@ expected values. The `bgtext` ROM (`bg-text.md`) draws from the BG window.
 - **Byte stores to BG VRAM** are dropped like every other VRAM byte store, on the strength of the
   one note under GBATEK's bank table; the note is worded for VRAM in general and does not
   single out the BG window. — `Memory::store` — verify likewise.
-- **OFS for MST 1** uses both bits 3-4 for bank A (four slots); GBATEK's table gives bank A an
-  offset field for the BG mapping, and the note takes it as the full 0-3. —
-  `Memory::build_page_table` — verify likewise.
 - **Bit 2 of the register** is dropped on a write (not used by bank A). —
   `Memory::write_vramcnt_a` — verify likewise.

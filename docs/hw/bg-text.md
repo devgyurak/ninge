@@ -90,10 +90,11 @@ The BG mode says what each of the four layers is:
 | 5 | text (or 3D) | text | extended | extended |
 | 6 | 3D only | none | large bitmap | none |
 
-Phase 3 draws the text layers only. In mode 6 BG0 is the 3D engine's layer alone, so no layer draws. An affine, extended or large-bitmap layer, and a layer
-that is none, draws nothing (`TODO(phase4)`). BG0 with DISPCNT bit 3 set is the 3D engine's
-picture, which draws nothing yet (`TODO(phase7)`). A layer is drawn only when its DISPCNT bit
-8 + n is set and the display mode is 1; mode 1 is the only one that shows backgrounds.
+Phase 3 draws the text layers only. An affine, extended or large-bitmap layer, and a layer that
+is none, draws nothing (`TODO(phase4)`). In mode 6 BG0 is the 3D engine's layer alone, so no layer
+draws there (`TODO(phase7)`). BG0 with DISPCNT bit 3 set is likewise the 3D engine's picture and
+draws nothing yet. A layer is drawn only when its DISPCNT bit 8 + n is set and the display mode is
+1; mode 1 is the only one that shows backgrounds.
 
 ### The picture of one layer at one pixel
 

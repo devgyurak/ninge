@@ -4,7 +4,8 @@ description = "Headless runner for ninge: tests, traces, golden frames"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+# A repository tool, not published (AGENTS.md §7).
+publish = false
 repository.workspace = true
 
 [dependencies]

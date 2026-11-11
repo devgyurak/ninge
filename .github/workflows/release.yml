@@ -1,0 +1,83 @@
+name: release
+
+# A `vX.Y.Z` tag on `main` publishes ninge-core and then ninge to crates.io (AGENTS.md §7).
+# ninge-runner and ninge-tracediff are repository tools and are not published. The tag is
+# the release: the release PR (develop -> main) has already bumped `[workspace.package]
+# version` and set `publish = true`, and CI was green on it. This workflow only checks that,
+# then publishes. It is safe to re-run after a partial failure: a crate whose version is
+# already on crates.io is skipped.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+# Two releases never publish at once, and a running one is never cancelled half-way.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  crates-io:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # A tag on a develop-only commit would publish code that has not been through a release PR.
+      - name: The tagged commit is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      # rustup installs the exact version and components pinned in rust-toolchain.toml
+      # (AGENTS.md §4) — never a floating `stable`.
+      - name: Rust toolchain (pinned)
+        run: rustup toolchain install
+
+      - name: The tag is the workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ninge"))')
+          echo "workspace version: $version, tag: $GITHUB_REF_NAME"
+          test "v$version" = "$GITHUB_REF_NAME"
+          test "$version" != "0.0.0"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # Both packages must be publishable (the 0.0.0 guard is off) and no other crate may be.
+      - name: Only ninge-core and ninge are publishable
+        run: |
+          publishable=$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(" ".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"] if p["publish"] != [])))')
+          echo "publishable: $publishable"
+          test "$publishable" = "ninge ninge-core"
+
+      # A packaging error shows up here, before anything is uploaded. ninge cannot be dry-run
+      # until ninge-core is on the index, so it is checked by the publish itself.
+      - name: Dry run ninge-core
+        run: cargo publish --dry-run --locked -p ninge-core
+
+      - name: Publish ninge-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if curl -fsS -A "ninge-release" "https://crates.io/api/v1/crates/ninge-core/$VERSION" >/dev/null; then
+            echo "ninge-core $VERSION is already on crates.io, skipping"
+          else
+            cargo publish --locked -p ninge-core
+          fi
+
+      # cargo waits for the index to list ninge-core before it publishes the crate that needs it.
+      - name: Publish ninge
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if curl -fsS -A "ninge-release" "https://crates.io/api/v1/crates/ninge/$VERSION" >/dev/null; then
+            echo "ninge $VERSION is already on crates.io, skipping"
+          else
+            cargo publish --locked -p ninge
+          fi

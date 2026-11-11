@@ -2,7 +2,12 @@
 
 <div align="center">
 
-<h1 align="center">ninge</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/ninge-lockup-white.svg">
+    <img src="docs/logo/ninge-lockup.svg" alt="ninge" width="360">
+  </picture>
+</h1>
 
 **Rust로 처음부터 만든, 터미널 네이티브 듀얼 스크린 휴대용 게임기 에뮬레이터**
 
@@ -121,7 +126,7 @@ crates/tracediff/  ninge-tracediff  참조 에뮬레이터와의 트레이스 �
 testroms/          직접 만든 베어메탈 테스트 ROM 소스
 tests/             통합 테스트, 골든 프레임 해시
 docs/hw/           자체 표현으로 쓴 하드웨어 노트
-docs/              계획, 현재 상태, 릴리스 노트
+docs/              계획, 현재 상태, 릴리스 노트, 로고
 scripts/           verify.sh, 테스트 ROM 빌드, 에이전트 훅
 AGENTS.md          모든 코딩 에이전트와 기여자를 위한 프로젝트 규칙
 ```

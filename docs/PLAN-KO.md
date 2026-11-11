@@ -68,7 +68,7 @@
 
 | 기능 | 사용 방식 | 비고 |
 |---|---|---|
-| Kitty graphics protocol | 같은 image id로 프레임 데이터 교체, Unicode placeholder로 셀 그리드에 배치 | 로컬: shared memory(`t=s`), 그 외: zlib 직접 전송(`t=d`, `o=z`). **Ghostty의 shm 지원 범위 확인 필요** |
+| Kitty graphics protocol | 같은 image id로 프레임 데이터 교체, Unicode placeholder로 셀 그리드에 배치 | 시작할 때 보내는 질의로 터미널이 받아들이는 것이 확인되면 shared memory(`t=s`)(macOS의 Ghostty 1.3.1과 kitty는 받아들임), 아니면 zlib 직접 전송(`t=d`, `o=z`) |
 | Kitty keyboard protocol | press / repeat / release 이벤트 수신 | 게임 입력의 전제 조건 |
 | 마우스 | SGR 1006 + SGR-Pixels(1016) | 하단 화면 터치 좌표 매핑. 지원 여부 런타임 감지 |
 
@@ -82,16 +82,19 @@
 ninge/
 ├── crates/
 │   ├── core/        # 에뮬레이터 코어. IO 없음. 순수 로직.
+│   │   ├── machine/     # `Machine`: 모든 상태를 소유하는 단일 구조체
 │   │   ├── cpu/         # ARMv4T/v5TE 공통 인터프리터 (const generic)
 │   │   ├── bus/         # ARM9 버스 뷰, ARM7 버스 뷰, 공유 메모리
+│   │   ├── io/          # 레지스터 장치(IRQ, IPC, 타이머, DMA, 타이밍)와 주소 맵
 │   │   ├── scheduler/   # 이벤트 기반 스케줄러
+│   │   ├── savestate/   # 세이브스테이트 포맷, 저장·불러오기
 │   │   ├── gpu2d/       # 엔진 A/B
 │   │   ├── gpu3d/       # geometry engine, rasterizer
 │   │   ├── spu/         # 사운드
 │   │   ├── cart/        # 카트리지 프로토콜, AUXSPI 세이브
 │   │   ├── spi/         # 펌웨어(합성), 터치 컨트롤러, 전원
 │   │   ├── hle/         # HLE BIOS(SWI), direct boot
-│   │   └── debug/       # 디버거 훅 (브레이크포인트, 트레이스)
+│   │   └── debug/       # 디버거: 지금은 읽기 전용 inspect API, 브레이크포인트·트레이스 훅은 이후
 │   ├── runner/      # headless 실행기. 테스트·트레이스·골든 프레임
 │   ├── frontend/    # TUI 앱: 렌더러, 입력, 오디오, 레이아웃, 디버거 패널
 │   └── tracediff/   # 트레이스 비교 도구
@@ -283,6 +286,6 @@ ninge/
 
 - [x] 프로젝트명: `ninge` (crates.io 사용 가능 확인), 저장소 `github.com/devgyurak/ninge`
 - [x] 라이선스: `Apache-2.0`
-- [ ] Ghostty의 kitty graphics shared memory 전송 지원 여부 확인 (Phase 0에서 확인, 그 전까지 zlib 직접 전송이 기본)
+- [x] Ghostty의 kitty graphics shared memory 전송 지원 여부 — macOS에서 지원함 (Ghostty 1.3.1, kitty 0.49.2; Phase 0, docs/STATUS.md). 전송 방식은 시작할 때 `t=s` 질의로 정함
 - [x] 세이브스테이트: 매직 넘버와 포맷 버전을 붙인 바이너리 serde 인코딩. 1.0 전에는 하위 호환 없음, 버전 불일치는 명확한 에러로 거부
 - [x] 첫 목표 상용 게임: 포켓몬스터 다이아몬드 (Phase 5 부팅~저장, Phase 7 완전 플레이)

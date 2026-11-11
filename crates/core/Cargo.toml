@@ -1,0 +1,24 @@
+[package]
+name = "ninge-core"
+description = "Dual-screen handheld emulator core: pure logic, no IO"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+postcard.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[features]
+# Setters the CPU-suite harness needs on a bare `Cpu` (`Cpu::regs_mut`, `Cpu::set_pipeline`); a host
+# that drives a `Machine` never enables it.
+test-support = []
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

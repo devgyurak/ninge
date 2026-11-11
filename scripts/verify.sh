@@ -47,6 +47,10 @@ step "cargo fmt"
 cargo fmt --all -- --check
 step "cargo clippy"
 cargo clippy --workspace --all-targets --locked -- -D warnings
+# The workspace build always has ninge-core's `test-support` on (the runner enables it), so lint
+# the feature-off combinations a host gets from `-p` builds and `cargo install ninge` too.
+cargo clippy -p ninge-core --all-targets --locked -- -D warnings
+cargo clippy -p ninge --all-targets --locked -- -D warnings
 
 need() {
   "$@" >/dev/null 2>&1 || { printf '%s is required: %s\n' "$1 $2" "$INSTALL" >&2; exit 1; }
@@ -56,6 +60,37 @@ step "dependency licenses and sources (cargo-deny)"
 INSTALL="cargo install --locked cargo-deny"
 need cargo deny --version
 cargo deny --locked check licenses bans sources
+
+# Test ROMs (AGENTS.md §3.1, §7). Built ROMs are never committed, so the golden tests need
+# them built from testroms/ sources. Decided in #65.
+#   1. NINGE_PREBUILT_TESTROMS=1 -> verify the prebuilt artifact's checksums (the macOS CI
+#      job, which cannot run Docker). Only ci.yml sets it, so a stale local build/ directory
+#      can never pass.
+#   2. a running Docker daemon   -> rebuild from source with the pinned BlocksDS image (-B
+#      ignores timestamps, so nothing stale is trusted). If NINGE_EXPECTED_TESTROM_SUMS names
+#      the checksums of the CI artifact, the rebuild must match them byte for byte.
+#   3. otherwise                 -> fail. A missing toolchain is never a pass.
+step "test ROMs (BlocksDS)"
+if [ "${NINGE_PREBUILT_TESTROMS:-}" = "1" ]; then
+  [ -f testroms/build/SHA256SUMS ] || { echo "testroms/build/SHA256SUMS is missing — the testroms artifact was not downloaded" >&2; exit 1; }
+  (cd testroms/build && shasum -a 256 -c SHA256SUMS)
+  echo "  verified prebuilt test ROMs (not built on this runner)"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  ./scripts/build_testroms.sh -B
+  if [ -n "${NINGE_EXPECTED_TESTROM_SUMS:-}" ]; then
+    diff "$NINGE_EXPECTED_TESTROM_SUMS" testroms/build/SHA256SUMS \
+      || { echo "rebuilt test ROMs differ from the testroms artifact — the build is not reproducible" >&2; exit 1; }
+    echo "  rebuilt test ROMs match the testroms artifact"
+  fi
+else
+  echo "A running Docker is required to build the test ROMs — install and start Docker (https://docs.docker.com/get-docker/) and retry." >&2
+  exit 1
+fi
+
+# The ARM7TDMI JSON suite (AGENTS.md §5.1) is fetched, never vendored. Files whose checksum
+# already matches are kept; a missing suite is downloaded, never skipped. Decided with #7.
+step "CPU test suite (fetch + checksums)"
+./scripts/fetch_cpu_suite.sh
 
 # Line-coverage floor (AGENTS.md §5.9). scripts/check_agent_config.py fails if this number
 # and the one in AGENTS.md differ — lowering it is a decision, not an edit.

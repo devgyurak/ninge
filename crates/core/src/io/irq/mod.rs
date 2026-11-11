@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: Apache-2.0
+//! One CPU's interrupt controller: IME, IE and IF (`docs/hw/interrupts.md`).
+//!
+//! Each CPU owns one; they sit at the same addresses and never see each other. That is the
+//! "an independent copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two
+//! instances of `InterruptController<const ARM9: bool>`.
+
+use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use serde::{Deserialize, Serialize};
+
+/// IME, at `0400_0208h` (`interrupts.md`, "Registers").
+pub const IME_ADDR: u32 = 0x0400_0208;
+/// IE, at `0400_0210h` (`interrupts.md`, "Registers").
+pub const IE_ADDR: u32 = 0x0400_0210;
+/// IF, at `0400_0214h` (`interrupts.md`, "Registers").
+pub const IF_ADDR: u32 = 0x0400_0214;
+
+/// IE's offset in the register space of the controller, which starts at IME.
+const IE_OFFSET: u32 = IE_ADDR - IME_ADDR;
+/// IF's offset in the same space.
+const IF_OFFSET: u32 = IF_ADDR - IME_ADDR;
+
+/// IF bit 0: LCD VBlank (`interrupts.md`, "IE and IF bits").
+pub const VBLANK_IRQ: u32 = 1 << 0;
+/// IF bit 1: LCD HBlank.
+pub const HBLANK_IRQ: u32 = 1 << 1;
+/// IF bit 2: LCD VCount match.
+pub const VCOUNT_IRQ: u32 = 1 << 2;
+
+/// IF bit 3: timer 0 overflow (`interrupts.md`, "IE and IF bits"; `timers.md`).
+pub const TIMER0_IRQ: u32 = 1 << 3;
+/// IF bit 4: timer 1 overflow.
+pub const TIMER1_IRQ: u32 = 1 << 4;
+/// IF bit 5: timer 2 overflow.
+pub const TIMER2_IRQ: u32 = 1 << 5;
+/// IF bit 6: timer 3 overflow.
+pub const TIMER3_IRQ: u32 = 1 << 6;
+
+/// IF bit 8: DMA channel 0 finished; channels 1-3 are the next bits (`interrupts.md`, "IE and
+/// IF bits"; `dma.md`, "IF bits").
+pub const DMA0_IRQ: u32 = 1 << 8;
+
+/// IF bit 16: IPC sync, from the other CPU's IPCSYNC bit 13 (`ipc.md`, "Behavior").
+pub const IPCSYNC_IRQ: u32 = 1 << 16;
+/// IF bit 17: IPC send FIFO empty (`ipc.md`, "Interrupts").
+pub const SEND_EMPTY_IRQ: u32 = 1 << 17;
+/// IF bit 18: IPC receive FIFO not empty (`ipc.md`, "Interrupts").
+pub const RECV_NOT_EMPTY_IRQ: u32 = 1 << 18;
+
+// TODO(hw-unverified): bit 7 ARM7-only and bit 13 on both CPUs follow GBATEK's table as read
+// (`interrupts.md`, "Unverified").
+/// The IE and IF bits that exist on the ARM9 (`interrupts.md`, "IE and IF bits").
+pub const VALID_BITS_ARM9: u32 = 0x003F_3F7F;
+/// The IE and IF bits that exist on the ARM7 (`interrupts.md`, "IE and IF bits").
+pub const VALID_BITS_ARM7: u32 = 0x01DF_3FFF;
+
+/// The IF bits a device would raise, one mask for each CPU. A return value, not state: `Io`
+/// hands it to the controllers through `Io::request_irq`, the one path (`AGENTS.md` §4,
+/// "Per-CPU devices").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Requests {
+    pub(crate) arm9: u32,
+    pub(crate) arm7: u32,
+}
+
+impl Requests {
+    /// The requests of a device that serves one CPU: `mask` for the ARM9 when `ARM9`, else for
+    /// the ARM7.
+    pub(crate) fn for_cpu<const ARM9: bool>(mask: u32) -> Self {
+        match ARM9 {
+            true => Self {
+                arm9: mask,
+                arm7: 0,
+            },
+            false => Self {
+                arm9: 0,
+                arm7: mask,
+            },
+        }
+    }
+
+    /// Both sets of requests in one: each CPU's masks ORed.
+    pub(crate) fn merge(self, other: Self) -> Self {
+        Self {
+            arm9: self.arm9 | other.arm9,
+            arm7: self.arm7 | other.arm7,
+        }
+    }
+}
+
+/// IME, IE and IF of one CPU: the ARM9's when `ARM9` is true, the ARM7's otherwise. Plain data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterruptController<const ARM9: bool> {
+    ime: bool,
+    ie: u32,
+    if_: u32,
+}
+
+impl<const ARM9: bool> InterruptController<ARM9> {
+    /// A controller in its power-on state: everything 0.
+    // TODO(hw-unverified): the reset values are not stated (`interrupts.md`, "Unverified").
+    pub fn new() -> Self {
+        Self {
+            ime: false,
+            ie: 0,
+            if_: 0,
+        }
+    }
+
+    /// IME bit 0.
+    pub fn ime(&self) -> bool {
+        self.ime
+    }
+
+    /// IE, the enabled sources.
+    pub fn ie(&self) -> u32 {
+        self.ie
+    }
+
+    /// IF, the latched requests.
+    pub fn if_(&self) -> u32 {
+        self.if_
+    }
+
+    /// Whether a halted CPU wakes: `IE & IF` is not zero, whatever IME says
+    /// (`hle-swi.md`, "Halt, and what wakes a CPU").
+    // TODO(hw-unverified): IME plays no part in the wake (`hle-swi.md`, "Unverified").
+    pub fn wakes(&self) -> bool {
+        self.ie & self.if_ != 0
+    }
+
+    /// Whether the controller asserts the CPU's IRQ line: `IME && (IE & IF) != 0`
+    /// (`interrupts.md`, "Behavior"). The CPU's own I flag is the CPU's to check.
+    pub fn line(&self) -> bool {
+        self.ime && self.ie & self.if_ != 0
+    }
+
+    /// Whether IE and IF hold only bits that exist on this CPU. A savestate that decodes to
+    /// anything else is corrupt (`savestate`).
+    pub(crate) fn is_well_formed(&self) -> bool {
+        (self.ie | self.if_) & !Self::valid_bits() == 0
+    }
+
+    /// A controller with IE set as given, unmasked, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn with_unchecked_ie(ie: u32) -> Self {
+        Self { ie, ..Self::new() }
+    }
+
+    /// The IE and IF bits that exist on this CPU.
+    fn valid_bits() -> u32 {
+        match ARM9 {
+            true => VALID_BITS_ARM9,
+            false => VALID_BITS_ARM7,
+        }
+    }
+
+    /// Latches the requests in `mask` into IF, whatever IME and IE say (`interrupts.md`,
+    /// "Behavior"). A bit the CPU does not have is dropped.
+    // TODO(hw-unverified): a bit that does not exist is dropped, and IF latches whatever IE and
+    // IME say (`interrupts.md`, "Unverified").
+    // The LCD (#104), IPC (#24), the timers (#25) and DMA (#26) call it.
+    pub(crate) fn request(&mut self, mask: u32) {
+        self.if_ |= mask & Self::valid_bits();
+    }
+
+    /// The byte at `offset` in the register space, which starts at IME; 0 where no register is.
+    fn read_byte(&self, offset: u32) -> u8 {
+        let Some((base, shift)) = Self::register_at(offset) else {
+            return 0;
+        };
+        let value = match base {
+            // TODO(hw-unverified): IME bits 1-31 read 0 (`interrupts.md`, "Unverified").
+            0 => u32::from(self.ime),
+            IE_OFFSET => self.ie,
+            _ => self.if_,
+        };
+        (value >> shift) as u8
+    }
+
+    /// Writes a byte at `offset`; a byte no register holds is ignored. IF takes a 1 as "clear this
+    /// bit" (`interrupts.md`, "Behavior").
+    fn write_byte(&mut self, offset: u32, value: u8) {
+        let Some((base, shift)) = Self::register_at(offset) else {
+            return;
+        };
+        let part = u32::from(value) << shift;
+        match base {
+            // Only bit 0 of the register exists, and it sits in byte 0.
+            // TODO(hw-unverified): the other IME bits are dropped and read 0
+            // (`interrupts.md`, "Unverified").
+            0 => {
+                if shift == 0 {
+                    self.ime = part & 1 != 0;
+                }
+            }
+            // TODO(hw-unverified): a bit that does not exist is dropped
+            // (`interrupts.md`, "Unverified").
+            IE_OFFSET => {
+                let byte_mask = 0xFF << shift;
+                self.ie = (self.ie & !byte_mask) | (part & byte_mask & Self::valid_bits());
+            }
+            _ => self.if_ &= !part,
+        }
+    }
+
+    /// Which register holds `offset` (its own offset), and the bit position of the byte within
+    /// the 32-bit register. The word between IME and IE holds nothing.
+    fn register_at(offset: u32) -> Option<(u32, u32)> {
+        [0, IE_OFFSET, IF_OFFSET].into_iter().find_map(|base| {
+            let within = offset.checked_sub(base).filter(|&o| o < 4)?;
+            Some((base, within * 8))
+        })
+    }
+}
+
+/// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
+/// split into them.
+impl<const ARM9: bool> Device<ARM9> for InterruptController<ARM9> {
+    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte(at))
+    }
+
+    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+        write_bytes(offset, width, value, |at, byte| {
+            self.write_byte(at, byte);
+            Effect::default()
+        })
+    }
+}
+
+impl<const ARM9: bool> Default for InterruptController<ARM9> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests;

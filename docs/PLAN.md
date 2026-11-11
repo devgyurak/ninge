@@ -77,7 +77,7 @@
 
 | Feature | How it is used | Notes |
 |---|---|---|
-| Kitty graphics protocol | Replace frame data under the same image id; place it on the cell grid with Unicode placeholders | Local: shared memory (`t=s`); otherwise: direct zlib transfer (`t=d`, `o=z`). **Ghostty's shm support must be confirmed** |
+| Kitty graphics protocol | Replace frame data under the same image id; place it on the cell grid with Unicode placeholders | Shared memory (`t=s`) where a startup query shows the terminal accepts it (Ghostty 1.3.1 and kitty on macOS do); otherwise direct zlib transfer (`t=d`, `o=z`) |
 | Kitty keyboard protocol | Receive press / repeat / release events | A precondition for game input |
 | Mouse | SGR 1006 + SGR-Pixels (1016) | Maps to touch coordinates on the bottom screen. Support is detected at runtime |
 
@@ -91,16 +91,19 @@
 ninge/
 ├── crates/
 │   ├── core/        # The emulator core. No IO. Pure logic.
+│   │   ├── machine/     # `Machine`: the one struct that owns all state
 │   │   ├── cpu/         # Shared ARMv4T/v5TE interpreter (const generic)
 │   │   ├── bus/         # ARM9 bus view, ARM7 bus view, shared memory
+│   │   ├── io/          # Register devices (IRQ, IPC, timers, DMA, timing) and the address map
 │   │   ├── scheduler/   # Event-driven scheduler
+│   │   ├── savestate/   # Savestate format, save and load
 │   │   ├── gpu2d/       # Engines A/B
 │   │   ├── gpu3d/       # Geometry engine, rasterizer
 │   │   ├── spu/         # Sound
 │   │   ├── cart/        # Cartridge protocol, AUXSPI saves
 │   │   ├── spi/         # Firmware (synthetic), touch controller, power
 │   │   ├── hle/         # HLE BIOS (SWI), direct boot
-│   │   └── debug/       # Debugger hooks (breakpoints, traces)
+│   │   └── debug/       # Debugger: read-only inspect API now; breakpoint and trace hooks later
 │   ├── runner/      # Headless runner. Tests, traces, golden frames
 │   ├── frontend/    # TUI app: renderer, input, audio, layout, debugger panels
 │   └── tracediff/   # Trace comparison tool
@@ -337,8 +340,8 @@ game (Pokémon Diamond) is playable.
 
 - [x] Project name: `ninge` (available on crates.io); repository `github.com/devgyurak/ninge`
 - [x] License: `Apache-2.0`
-- [ ] Whether Ghostty supports kitty graphics shared-memory transfer (confirmed in Phase 0;
-      direct zlib transfer is the default until then)
+- [x] Whether Ghostty supports kitty graphics shared-memory transfer — it does on macOS
+      (Ghostty 1.3.1, kitty 0.49.2; Phase 0, docs/STATUS.md); the transfer is chosen at startup by a `t=s` query
 - [x] Savestates: a binary serde encoding with a magic number and a format version; no
       backward compatibility before 1.0, and a version mismatch is refused with a clear error
 - [x] The first commercial target game: Pokémon Diamond (Phase 5 boot-to-save, Phase 7 fully

@@ -4,14 +4,14 @@ The current phase is the single line that starts with `▶`. The SessionStart ho
 and `scripts/check_agent_config.py` fails unless there is exactly one. Move the marker only
 when the phase's DoD (plan §5) is met — that is a human decision.
 
-▶ Phase 0 — harness and tools (not started; the agent workflow is in place)
+▶ Phase 3 — Both CPUs: scheduler, two bus views, WRAMCNT, IPC, IRQ, timers, DMA, HLE SWI, text BG (started)
 
 | Phase | Scope (plan §5) | DoD | State |
 |---|---|---|---|
-| 0 | Workspace, CI, bare-metal test-ROM toolchain, golden-frame infra, TUI skeleton | A dummy frame buffer shows in Ghostty and kitty; one test ROM builds and `ninge-runner` loads it | Not started |
-| 1 | CPU: ARMv4T (ARM + Thumb), ARMv5TE extensions, minimal CP15, disassembler | ARM7TDMI JSON suite passes; a self-written test passes for each v5 extension | — |
-| 2 | First pixel, ARM9 only: header parse, direct boot, main RAM, TCM, VRAM A LCDC, display mode 2 | A test ROM's VRAM image shows in Ghostty, pinned by a golden-frame test | — |
-| 3 | Both CPUs: scheduler, two bus views, WRAMCNT, IPC, IRQ, timers, DMA, HLE SWI, text BG | A libnds homebrew's console printf output displays correctly | — |
+| 0 | Workspace, CI, bare-metal test-ROM toolchain, golden-frame infra, TUI skeleton | A dummy frame buffer shows in Ghostty and kitty; one test ROM builds and `ninge-runner` loads it | Done |
+| 1 | CPU: ARMv4T (ARM + Thumb), ARMv5TE extensions, minimal CP15, disassembler | ARM7TDMI JSON suite passes; a self-written test passes for each v5 extension | Done |
+| 2 | First pixel, ARM9 only: header parse, direct boot, main RAM, TCM, VRAM A LCDC, display mode 2 | A test ROM's VRAM image shows in Ghostty, pinned by a golden-frame test | Done |
+| 3 | Both CPUs: scheduler, two bus views, WRAMCNT, IPC, IRQ, timers, DMA, HLE SWI, text BG | A libnds homebrew's console printf output displays correctly | In progress |
 | 4 | 2D complete: engines A/B, sprites, ext palettes, windows, blending, brightness, VRAM page table, capture | Every 2D test ROM's golden frame passes | — |
 | 5 | Commercial boot: cart protocol, AUXSPI saves, synthetic firmware, RTC, touch SPI, power, sound-register stubs | Pokémon Diamond boots, starts a new game, saves, and reloads the save (3D may be a non-drawing stub) | — |
 | 6 | Sound: 16 channels, PCM/ADPCM/PSG, capture, `cpal`, audio pacing | Waveform snapshot tests pass; a commercial game's sound is correct | — |
@@ -55,7 +55,9 @@ gates; reopening one is a new `decision` issue.
 - [x] **Toolchain** — an exact stable version in `rust-toolchain.toml` (≥ 1.85), bumped by
       its own `UPT:` PR; `verify.sh` refuses a floating channel. (AGENTS.md §4.)
 - [x] **BlocksDS is required** — the official Docker image pinned by digest, the same locally
-      and in CI; Phase 0 wires it in. (AGENTS.md §7.)
+      and in CI. macOS CI cannot run Docker: the ubuntu `testroms` job builds the ROMs, the
+      ubuntu verify job rebuilds and must match them, and the macOS job verifies the
+      artifact's checksums. (AGENTS.md §7, decision #65.)
 - [x] **Platforms** — macOS first-class, Linux CI-verified, **Windows planned**: no Windows
       code path yet, OS-specific frontend pieces stay behind one module. (AGENTS.md §2.)
 - [x] **Savestate format** — binary serde encoding with a magic number and a format version;
@@ -69,28 +71,56 @@ gates; reopening one is a new `decision` issue.
       test, a fixture, a golden hash, or a name in code (AGENTS.md §3.1, §3.5, §5.7). Its use
       of RTC, touch, and FLASH saves makes it a good Phase 5 exercise.
 - [x] **Frame transfer** — kitty shared memory (`t=s`) where supported, direct zlib transfer
-      (`t=d`, `o=z`) as the fallback and the default until Phase 0 confirms Ghostty's shm
-      support. (AGENTS.md §2 rule 12.)
+      (`t=d`, `o=z`) otherwise. Chosen at startup by a `t=s` query (Ghostty and kitty
+      accept it; see Phase 0 checks), never by the terminal's name; a failed shm write
+      falls back to zlib for good. (AGENTS.md §2 rule 12.)
 
 ## Phase 0 checks
 
 Facts to confirm while building Phase 0, not decisions:
 
-- [ ] Ghostty's kitty-graphics shared-memory (`t=s`) support (plan §3.3).
-- [ ] The BlocksDS image digest to pin, and that it builds a bare-metal test ROM.
-- [ ] The current stable Rust version to pin.
+- [x] **Ghostty's kitty-graphics shared-memory (`t=s`) support** (plan §3.3) — supported.
+      Measured 2026-11-02 on macOS 26.5 (arm64) with a throwaway probe: Ghostty 1.3.1 and
+      kitty 0.49.2 answer an `a=q,t=s` query with `OK`, draw the image through both a plain
+      placement and `U=1` Unicode placeholders, and unlink the object after reading it
+      (`ENOENT` on reopen). Two images per frame, a fresh object name for each, aimed
+      at 60 fps for 20 s: Ghostty took 1058 frames (2116 objects) and kitty 1059 (2118), about
+      53 fps because the loop's own work was not subtracted from the pause. Both left 0
+      objects behind and showed no stalls. Orca 1.4.219 answers the
+      same query `EINVAL:unsupported transmission medium`, draws nothing, and leaves every
+      object in place, so the frontend must detect support at run time and unlink its own
+      probe object on a refusal. The reply (`ESC _G i=…;OK ESC \`) arrives before the DA1
+      reply, which is how "no graphics reply" is told apart. Unverified: Linux (Ghostty and
+      kitty); tmux and ssh were not tested, and the startup probe decides either way. macOS shm
+      constraints confirmed: a name is at most 31 bytes including the leading `/` (32 gives
+      `ENAMETOOLONG`); `write()` on the shm fd fails with `ENXIO`, so the data goes through
+      `mmap`; `ftruncate` works once (a second call gives `EINVAL`).
+- [x] **BlocksDS image** — `skylyrac/blocksds` tag `slim-v1.24.0`, multi-arch index digest
+      `sha256:779f6193d1030c62e60d1f0f39c3e32cf4045c0bd224a45c0ceadf9d9ab01a51`. Code reads the
+      digest only from `scripts/build_testroms.sh`; this line records it and
+      `check_agent_config.py` keeps the two equal. It builds the bare-metal `smoke` ROM; the
+      build is byte-identical across clean rebuilds and across arm64 and amd64.
+- [x] The current stable Rust version to pin — `1.99.1` (released 2026-10-13).
 - [x] **ARM7TDMI JSON suite** — `SingleStepTests/ARM7TDMI` (MIT, Apache-2.0-compatible),
       pinned to commit `e3097d88d428752736b949d94c094d5da50f0db6`. About 1 GB of `.json.bin`
-      files across 46 instruction groups: fetched into `tests/data/` (git-ignored) with
-      checksums, never vendored. ARMv4T only — v5TE gets self-written tests. The fetch script
-      and the `.json.bin` reader are Phase 1 work. (AGENTS.md §5.1.)
+      files in `v1/` (45 files, 891 MB): fetched into `tests/data/` (git-ignored) by
+      `scripts/fetch_cpu_suite.sh`, which checks each file against the tracked
+      `tests/cpu_suite/SHA256SUMS` (recorded after matching git blob ids with the commit's tree);
+      never vendored. `check_agent_config.py` keeps this commit equal to the script's. ARMv4T
+      only — v5TE gets self-written tests. The `.json.bin` reader is Phase 1 work.
+      (AGENTS.md §5.1.)
 - [x] **Trace-diff oracle** — a melonDS release binary over the GDB remote protocol (NooDS's
       binary as the fallback), installed by each developer, never redistributed. Line-oriented
       text traces, compared per CPU. Whether the stub reaches both CPUs is checked when the
       track starts. (AGENTS.md §6.)
-- [x] **Releases** — SemVer `0.x`, tag-driven; `0.1.0` after the Phase 3 DoD; GitHub Releases
-      binaries (macOS arm64, Linux x86_64) and crates.io in lockstep; Homebrew tap later.
-      (AGENTS.md §7.)
+- [x] **Releases** — SemVer `0.x`, tag-driven; `0.1.0` after the Phase 3 DoD; a `vX.Y.Z` tag
+      on `main` publishes ninge-core and ninge to crates.io; the release PR bumps both
+      versions, sets `publish = true` and refreshes `Cargo.lock`. ninge-runner and
+      ninge-tracediff are not published (2026-11-11).
+      The GitHub Release is created after the publish: `docs/release-notes/<version>.md`
+      (written in the release PR, required before any upload) above notes generated from PR
+      labels (`.github/release.yml`). GitHub Releases binaries (macOS arm64, Linux x86_64) and
+      a Homebrew tap later. (AGENTS.md §7.)
 
 ## Open decisions
 

@@ -1,0 +1,39 @@
+[package]
+name = "ninge"
+description = "Terminal-native dual-screen handheld emulator"
+# The tests and benches read the repository's built test ROMs, which a published copy lacks.
+exclude = ["tests", "benches"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+crossterm = "0.29.0"
+flate2 = "1.1.10"
+ninge-core.workspace = true
+ratatui = "0.30.2"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.6", features = ["shm", "mm", "event"] }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ninge"
+path = "src/main.rs"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "transfer"
+harness = false
+
+[[bench]]
+name = "run_loop"
+harness = false

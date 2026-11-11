@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/runner", "crates/frontend", "crates/tracediff"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+# Publishable since 0.1.0 (AGENTS.md §7). ninge-runner and ninge-tracediff say `publish = false`
+# themselves and stay unpublished; the release workflow checks that only ninge-core and ninge
+# are publishable. The next release bumps `version` here and the `ninge-core` entry below, and
+# refreshes `Cargo.lock` (`cargo update -w`).
+publish = true
+repository = "https://github.com/devgyurak/ninge"
+
+[workspace.dependencies]
+ninge-core = { path = "crates/core", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+# A module with children is `dir/mod.rs`, never `dir.rs` beside `dir/` (AGENTS.md §4).
+self_named_module_files = "deny"

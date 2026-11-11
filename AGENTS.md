@@ -18,6 +18,8 @@ it). The current phase and the open decisions are in `docs/STATUS.md`.
 
 ```bash
 ./scripts/verify.sh                                        # the whole gate, in order — CI runs the same script
+./scripts/build_testroms.sh                                # build testroms/ into git-ignored testroms/build/ (needs Docker)
+./scripts/fetch_cpu_suite.sh                               # fetch the ARM7TDMI JSON suite into git-ignored tests/data/ (checksummed)
 cargo fmt --all                                            # format
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny --locked check licenses bans sources            # dependency licenses (deny.toml)
@@ -71,10 +73,13 @@ ninge-runner ────┘                        nothing depends on the front
                                           ninge-runner does not depend on ninge-tracediff
 ```
 
-Inside ninge-core: `cpu/` (shared ARMv4T/v5TE interpreter) · `bus/` (ARM9 view, ARM7 view,
-shared memory) · `scheduler/` · `gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/`
+Inside ninge-core: `machine/` (`Machine`, the one struct that owns all state) · `cpu/` (shared
+ARMv4T/v5TE interpreter) · `bus/` (ARM9 view, ARM7 view, shared memory) · `io/` (the register
+devices: `irq/` `ipc/` `timers/` `dma/` `timing/`; the address map `io/map.rs`; the one device
+interface `io/device.rs`) · `savestate/` · `scheduler/` · `gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/`
 (protocol, AUXSPI saves) · `spi/` (synthetic firmware, touch, power) · `hle/` (HLE BIOS SWIs,
-direct boot) · `debug/` (breakpoint and trace hooks).
+direct boot) · `debug/` (the read-only inspect API, `Machine::inspect`; breakpoint and trace
+hooks come later).
 
 ### Rules you must keep (plan §4.2, §8)
 
@@ -143,10 +148,10 @@ direct boot) · `debug/` (breakpoint and trace hooks).
 12. **The frontend owns the terminal.** Threads (emu, render, input), triple-buffered frame
     hand-off, audio-based pacing, the kitty graphics/keyboard protocols, and cell-to-pixel
     mapping for touch all live in the frontend (plan §4.3). ninge-core never names a
-    terminal type, and the frontend never makes an emulation decision. Frame transfer prefers
-    kitty shared memory (`t=s`) where the terminal supports it and falls back to direct zlib
-    transfer (`t=d`, `o=z`); the fallback is the default until Phase 0 confirms Ghostty's shm
-    support.
+    terminal type, and the frontend never makes an emulation decision. Frame transfer uses
+    kitty shared memory (`t=s`) where the terminal supports it and direct zlib transfer
+    (`t=d`, `o=z`) otherwise. The choice is made at startup by a `t=s` query, never by the
+    terminal's name, and a failed shm write switches to zlib for good.
 
 **Platforms** (decided): macOS is first-class (Apple Silicon is the target machine); Linux is
 guaranteed to pass CI; **Windows support is planned**, not yet provided. Nothing needs a
@@ -262,7 +267,23 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
 - **Comments explain why.** Emulator code is full of deliberate oddities (open bus,
   mirroring, an off-by-one that the hardware really has). Cite the `docs/hw/` note so the next
   person does not "fix" it into a regression.
+- **Per-CPU devices.** A device is one of three kinds, by who sees it:
+  - *An independent copy for each CPU*: two instances of `Device<const ARM9: bool>`.
+    `InterruptController` and `Timers`; DMA too.
+  - *Seen by both CPUs*: one instance, with `fn x<const ARM9: bool>` accessors, even when
+    per-CPU registers sit inside it. `Ipc`, and `Timing` (DISPSTAT is per CPU, VCOUNT shared).
+  - *Seen by one CPU*: a plain type, no const generic. `Gpu2d` (engine A, ARM9 only); SPI, RTC
+    and SPU (ARM7 only) will be too.
+
+  Every device returns the IF bits it would raise as an `irq::Requests` (a device for one CPU
+  builds it with `Requests::for_cpu::<ARM9>`); only `Io::request_irq` hands them to a controller.
 - Visibility is `pub(crate)` by default; `pub` items carry a doc comment.
+- **One module-file style: `mod.rs`.** A module with child modules is a directory with a
+  `mod.rs`; a module without children is a single file. Clippy's `self_named_module_files`
+  is denied in `[workspace.lints.clippy]`, so `foo.rs` beside `foo/` fails the build. A module
+  with tests therefore has children, and is a directory.
+- **Shared constants are defined once.** The register indices `PC`, `LR`, `SP` live in
+  `cpu/regs.rs` and `MODE_MASK` in `cpu/psr.rs`; import them, never redefine them.
 - `#[inline]` / `#[inline(always)]` on the hot path only with a measurement.
 - **Adding a dependency** asks first (`cargo add` is an `ask` permission). It must be
   permissively licensed (§3.7), and ninge-core's list in §2 rule 1 still applies.
@@ -276,8 +297,11 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
 
 Plan §7.3 and §8 rule 7. A `FIX:` comes with a test that failed before the fix. The kinds:
 
-- **Unit** — `#[cfg(test)] mod tests` beside the code: instruction semantics, barrel
-  shifter, flag rules, decoders, scheduler ordering, page-table mapping.
+- **Unit** — in the module's `tests.rs`, declared `#[cfg(test)] mod tests;`: instruction
+  semantics, barrel shifter, flag rules, decoders, scheduler ordering, page-table mapping. A
+  large `tests.rs` becomes `tests/mod.rs` plus `tests/<topic>.rs`. Never an inline
+  `mod tests { … }` and never a `tests_<topic>.rs` sibling — `check_tests.py` enforces both under
+  `crates/`. Machine-level tests live in `machine/tests/`.
 - **CPU JSON suites** — `SingleStepTests/ARM7TDMI` (MIT), pinned to commit `e3097d8`
   (plan §5 Phase 1). About 1 GB of `.json.bin` files, so a script fetches them into
   `tests/data/` (git-ignored) and verifies checksums; never vendored. The suite covers ARMv4T
@@ -410,19 +434,30 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   and a PR with one approval — which the admin (`devgyurak`) may bypass when merging a PR.
   Direct pushes are blocked for everyone.
 - **Repository** — `github.com/devgyurak/ninge`.
-- **Releases** (decided) — SemVer `0.x`; a `vX.Y.Z` tag on `main` is the release, and the
-  release PR bumps `[workspace.package] version`. The first release, `0.1.0`, follows the
-  Phase 3 DoD. Each release publishes macOS arm64 and Linux x86_64 binaries to GitHub
-  Releases and all crates to crates.io in lockstep (`cargo install ninge`); a Homebrew tap
-  comes later. The release workflow is added with the first release, not before.
+- **Releases** (decided) — SemVer `0.x`; a `vX.Y.Z` tag on `main` is the release. The release
+  PR bumps `[workspace.package] version` **and** the `ninge-core` entry's `version` in
+  `[workspace.dependencies]`, sets `[workspace.package] publish` to `true`, and refreshes
+  `Cargo.lock` (`cargo update -w`). The first release, `0.1.0`, follows the Phase 3 DoD. The tag
+  runs `.github/workflows/release.yml`: one `cargo publish` of **ninge-core and ninge**
+  (`cargo install ninge`), after a reviewer approves the `crates-io` environment that holds
+  the token. **ninge-runner and ninge-tracediff are not published** (decided 2026-11-11):
+  their tests and golden frames need the repository's `testroms/`, and publishing would put
+  their command line and report format under SemVer while both still change; publishing one
+  later is a one-line change. macOS arm64 and Linux x86_64 binaries on GitHub Releases and a
+  Homebrew tap come later.
 - **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS. The
   Rust toolchain, `cargo-nextest`, and `cargo-llvm-cov` steps switch on the moment
   `Cargo.toml` exists.
 - **BlocksDS is required** (decided). Built test ROMs are never committed (§3.1), so the
   golden tests — and therefore the 90% coverage floor — need the SDK. It comes from the
-  official BlocksDS Docker image **pinned by digest**, the same image locally and in CI;
-  Phase 0 wires it into `verify.sh` and `ci.yml`. Bumping the digest is an `UPT:` PR, and
-  every golden hash it changes needs its reason.
+  official BlocksDS Docker image **pinned by digest**, the same image locally and in CI.
+  Code reads the digest only from `scripts/build_testroms.sh`; `docs/STATUS.md` records it
+  and `check_agent_config.py` keeps the two equal. Bumping it is an `UPT:` PR, and
+  every golden hash it changes needs its reason. macOS runners cannot run Docker, so CI
+  builds the ROMs once on ubuntu (`testroms` job). The ubuntu verify job rebuilds from source
+  and must match that artifact's `SHA256SUMS`; the macOS job checks the artifact against it
+  (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only).
+  Without Docker and without that variable `verify.sh` fails — it never skips the step.
 - **The coverage floor is not CI-only and is never disabled.** `check_agent_config.py` fails
   if the floor in §5.9 and the one in `scripts/verify.sh` differ.
 - **Agent config** (`.github/workflows/agents.yml`) runs `scripts/check_agent_config.py` and

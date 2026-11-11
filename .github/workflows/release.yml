@@ -1,0 +1,153 @@
+name: release
+
+# A `vX.Y.Z` tag on `main` publishes ninge-core and then ninge to crates.io (AGENTS.md §7).
+# ninge-runner and ninge-tracediff are repository tools and are not published. The tag is
+# the release: the release PR (develop -> main) has already bumped `[workspace.package]
+# version` and set `publish = true`, and CI was green on it. This workflow only checks that,
+# then dry-runs and publishes both crates in one `cargo publish`, so both are verified before
+# anything is uploaded (a version on crates.io can never be replaced). It is safe to re-run after
+# a partial failure: a crate whose version is already on crates.io is skipped. When both are
+# out, a second job creates the GitHub Release: the hand-written `docs/release-notes/<version>.md`
+# followed by notes generated from the PR labels (`.github/release.yml`).
+#
+# The job runs in the `crates-io` environment: the token lives there, and the environment's
+# required reviewer is the last human check before the upload (a repository setting).
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+# Two releases never publish at once, and a running one is never cancelled half-way.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  crates-io:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      # Pinned to a commit: this workflow holds the publish token.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+
+      # A tag on a develop-only commit would publish code that has not been through a release PR.
+      - name: The tagged commit is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      # rustup installs the exact version and components pinned in rust-toolchain.toml
+      # (AGENTS.md §4) — never a floating `stable`.
+      - name: Rust toolchain (pinned)
+        run: rustup toolchain install
+
+      - name: The tag is the workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ninge"))')
+          echo "workspace version: $version, tag: $GITHUB_REF_NAME"
+          test "v$version" = "$GITHUB_REF_NAME"
+          test "$version" != "0.0.0"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # The release notes are written before the tag, in the release PR. A missing file stops the
+      # release here, before anything is uploaded, and not after the crates are out.
+      - name: The release notes exist
+        run: test -f "docs/release-notes/$VERSION.md"
+
+      # Both packages must be publishable (the 0.0.0 guard is off) and no other crate may be.
+      - name: Only ninge-core and ninge are publishable
+        run: |
+          publishable=$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(" ".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"] if p["publish"] != [])))')
+          echo "publishable: $publishable"
+          test "$publishable" = "ninge ninge-core"
+
+      # ninge asks for ninge-core at the workspace version: a bump that forgot the dependency
+      # line would publish a ninge that cannot be built from crates.io.
+      - name: ninge requires ninge-core at the tag's version
+        run: |
+          required=$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(next(d["req"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ninge" for d in p["dependencies"] if d["name"] == "ninge-core"))')
+          echo "ninge requires ninge-core $required"
+          test "$required" = "^$VERSION"
+
+      # Apache-2.0 section 4(a): each package carries a copy of the license.
+      - name: Each package carries the LICENSE
+        run: |
+          cmp LICENSE crates/core/LICENSE
+          cmp LICENSE crates/frontend/LICENSE
+
+      # Which crates still need publishing: a version already on crates.io is skipped, so a
+      # re-run after a partial failure is safe. 200 skips, 404 publishes, anything else
+      # (a network error, a 5xx, a rate limit) fails the job instead of guessing.
+      - name: Which crates are not yet on crates.io
+        run: |
+          packages=""
+          for crate in ninge-core ninge; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A "ninge-release (https://github.com/devgyurak/ninge)" \
+              "https://crates.io/api/v1/crates/$crate/$VERSION")
+            echo "$crate $VERSION: HTTP $code"
+            case "$code" in
+              200) echo "$crate $VERSION is already on crates.io, skipping" ;;
+              404) packages="$packages -p $crate" ;;
+              *) echo "unexpected status $code for $crate"; exit 1 ;;
+            esac
+          done
+          echo "PACKAGES=$packages" >> "$GITHUB_ENV"
+
+      # Both crates in one command: `cargo publish` verifies every package before it uploads
+      # any, in dependency order, so a failure in ninge cannot leave ninge-core alone on
+      # crates.io. The build runs here, in a step that has no token: build scripts and proc
+      # macros run in it, and a version on crates.io can never be replaced.
+      - name: Dry run
+        if: env.PACKAGES != ''
+        run: |
+          read -ra packages <<< "$PACKAGES"
+          cargo publish --dry-run --locked "${packages[@]}"
+
+      # The only step that sees the token. The dry run already built and verified the packages,
+      # so this one uploads without building again.
+      - name: Publish
+        if: env.PACKAGES != ''
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          read -ra packages <<< "$PACKAGES"
+          cargo publish --locked --no-verify "${packages[@]}"
+
+  # Runs only when both crates are on crates.io. It has no registry token, and it is the only
+  # job that may write to the repository (the workflow default is read-only).
+  github-release:
+    name: GitHub Release
+    needs: crates-io
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # The notes file comes first and GitHub appends the generated list of merged PRs, grouped
+      # by label (`.github/release.yml`). A re-run after the release exists changes nothing and
+      # does not fail.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists, skipping"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+              --notes-file "docs/release-notes/$version.md" --generate-notes
+          fi

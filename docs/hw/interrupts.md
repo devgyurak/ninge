@@ -1,0 +1,159 @@
+# Interrupt controller (IME, IE, IF)
+
+Sources: GBATEK "DS Interrupts" (IME, IE and IF registers, the interrupt bit table);
+GBATEK "ARM CPU Exceptions" for the IRQ entry (see `arm-exceptions-modes.md`).
+Used by: `crates/core/src/io/irq/mod.rs`, `crates/core/src/io/mod.rs`, `crates/core/src/machine/mod.rs`   Phase: 3 (#23)
+
+Each CPU has its own interrupt controller: three registers that sit at the same addresses on
+both CPUs but are separate hardware. A write by one CPU never shows on the other. This note
+covers the registers, which bits exist, and when the CPU is interrupted. The sources that raise
+the bits (timers (`timers.md`), DMA, IPC, the cartridge, the LCD, ...) arrive with their own issues and notes.
+
+## Registers
+
+| Address | Name | Width | Access | Reset |
+|---|---|---|---|---|
+| `0400_0208h` | IME | 32 | R/W | not stated, 0 here |
+| `0400_0210h` | IE | 32 | R/W | not stated, 0 here |
+| `0400_0214h` | IF | 32 | R/W (write 1 to clear) | not stated, 0 here |
+
+The same three addresses exist on the ARM9 and on the ARM7.
+
+The ARM7 also has HALTCNT, a power-down register next to POSTFLG:
+
+| Address | Name | Width | Access | Reset |
+|---|---|---|---|---|
+| `0400_0301h` | HALTCNT (ARM7 only) | 8 | W | not stated |
+
+### HALTCNT bits
+
+| Bits | Meaning |
+|---|---|
+| 0-5 | Not used |
+| 6-7 | Mode: 0 = no function, 1 = enter GBA mode, 2 = halt, 3 = sleep |
+
+A write whose bits 6-7 are 2 halts the ARM7 (below). The other modes do nothing here: GBA mode
+is not an NDS feature and sleep powers down most of the hardware (`TODO(phase5)`). The register
+reads 0. The ARM9 has no such register; it halts with CP15 wait-for-interrupt (`cp15.md`).
+
+### IME bits
+
+| Bits | Meaning |
+|---|---|
+| 0 | Master enable: 0 = no interrupt reaches the CPU, 1 = enabled |
+| 1-31 | Not used |
+
+### IE and IF bits
+
+IE bit *n* enables the source whose request sets IF bit *n*. Which bits exist depends on the
+CPU:
+
+| Bit | Source | ARM9 | ARM7 |
+|---|---|---|---|
+| 0 | LCD V-blank | yes | yes |
+| 1 | LCD H-blank | yes | yes |
+| 2 | LCD V-counter match | yes | yes |
+| 3-6 | Timer 0-3 overflow | yes | yes |
+| 7 | Serial port / RCNT / RTC | no | yes |
+| 8-11 | DMA 0-3 | yes | yes |
+| 12 | Keypad | yes | yes |
+| 13 | GBA slot (external IRQ source) | yes | yes |
+| 14-15 | Not used | no | no |
+| 16 | IPC sync | yes | yes |
+| 17 | IPC send FIFO empty | yes | yes |
+| 18 | IPC receive FIFO not empty | yes | yes |
+| 19 | Card slot transfer complete | yes | yes |
+| 20 | Card slot IREQ_MC | yes | yes |
+| 21 | Geometry command FIFO | yes | no |
+| 22 | Screens unfolding | no | yes |
+| 23 | SPI bus | no | yes |
+| 24 | Wi-Fi | no | yes |
+| 25-31 | Not used | no | no |
+
+Valid-bit masks, worked out from the table: ARM9 = bits 0-6, 8-13 and 16-21 = `0x003F_3F7F`;
+ARM7 = bits 0-13, 16-20 and 22-24 = `0x01DF_3FFF`. See "Unverified" for what a write to a bit
+that does not exist does.
+
+## Behavior
+
+**IME** keeps only bit 0; GBATEK calls the other bits "not used" (what they read is under
+"Unverified").
+
+**IE** is an ordinary read/write register: a bit set enables that source.
+
+**IF** latches a request. A source that fires sets its IF bit; IF records that the request
+happened. GBATEK's DS page does not say whether the latch depends on IE or IME; this model
+latches regardless (see "Unverified"). Software
+acknowledges a request by writing 1 to the bit: a 1 in the written value clears that IF bit, a
+0 leaves the bit as it was. Software cannot set an IF bit by writing.
+
+**Wider and narrower accesses.** Each register is a 32-bit register. A 16-bit or 8-bit access
+sees the corresponding part of it (little-endian), and a write to a part acts on only that
+part: an 8-bit write of `0x01` to the low byte of IF clears bit 0 and touches no other bit.
+
+**The IRQ line.** The controller asserts the CPU's IRQ line while
+
+`IME = 1` and `(IE & IF) != 0`.
+
+The CPU takes the IRQ exception between two instructions when the line is asserted and the I
+flag of CPSR is clear (`arm-exceptions-modes.md`, "IRQ and FIQ"). With I set the request waits:
+the line stays asserted and the exception is taken once I is cleared. The DS has no source for
+the FIQ line, so it is never raised.
+
+Taking the exception does not clear IF. The handler does it, by writing 1 to the bit; a
+handler that returns without doing so is interrupted again at once.
+
+**The IRQ dispatcher is not the controller.** On real hardware the BIOS vector code saves
+registers and calls the user's handler through a pointer in memory; that routine belongs to the
+HLE BIOS (#27), and `hle-swi.md` ("The IRQ dispatcher") describes it. The controller stops at the
+exception entry: IRQ mode, R14_irq, SPSR_irq, and the vector. When the vector is in the BIOS (the
+ARM7 always, the ARM9 when CP15 bit 13 is set) the machine then does the dispatcher's work; a
+game that keeps its own vectors at `0000_0000h` on the ARM9 never reaches it.
+
+**Halt.** A halted CPU runs no instruction until `IE & IF` is not zero, and the condition does
+not look at IME or at the CPSR I flag (GBATEK's Halt wording). The core then continues with the
+next instruction; with IME = 1 and I clear the IRQ is taken at once, otherwise the request waits
+as usual. A halt with `IE & IF` already not zero ends at once. Details: `hle-swi.md`, "Halt, and
+what wakes a CPU".
+
+## Edge cases
+
+- IME = 0: IF still latches requests; the line is low and no exception is taken. Setting IME
+  later takes the pending, enabled requests.
+- IE = 0 for a source: IF still latches it; nothing is taken until IE enables it.
+- Clearing IF while the CPU has not yet taken the exception drops the request.
+- The two controllers are independent: a request for the ARM9 does not set the ARM7's IF.
+
+## Unverified
+
+- POSTFLG (`0400_0300h`, the byte before HALTCNT) reads 0 and drops writes, and HALTCNT reads 0 and its GBA-mode and sleep modes do nothing (GBATEK lists the register as
+  readable and the modes as defined) — `crates/core/src/io/power/mod.rs` — the sleep mode is
+  `TODO(phase5)`; verify the read-back with a test ROM on hardware.
+- Wake with IME = 0 or I set: taken from GBATEK's Halt wording, `IE & IF` only —
+  `InterruptController::wakes` in `crates/core/src/io/irq/mod.rs` — verify likewise.
+
+- IME bits 1-31 read 0, and IF latches whatever IE and IME say — `crates/core/src/io/irq/mod.rs` —
+  GBATEK says only "not used" for IME and the latch is not described on the DS page; verify
+  with a test ROM on hardware.
+- Unused IE bits — `crates/core/src/io/irq/mod.rs`, IE write and `request`. GBATEK's only stated
+  read-back is "trying to set all IE bits gives `FFFF_FFFFh` (DSi7) or `FFFF_FF7Fh` (DSi9)", which would mean IE stores unused bits and only
+  ARM9 bit 7 is missing. That is DSi mode; the DS-mode result is not stated. The model keeps
+  the mask (IE holds only the bits in the table) because the table is the DS-mode statement and
+  the DSi sentence may describe the extended DSi bits. It is a model, not a finding: the
+  maintainer may switch it, which changes `io/irq/mod.rs`, its tests, and the test ROM's expected
+  values. Verify with a test ROM that writes `FFFF_FFFFh` to IE on hardware.
+- `0400_0218h` and `0400_021Ch` (IE2, IF2) are DSi7-only; on the DS they are undefined ports
+  and read 0 here (no register).
+- GBATEK says "raw TCM-only IRQs may be processed during DMA(?)"; not modeled: a DMA transfer is
+  atomic, so no CPU runs during one (`dma.md`, "Unverified").
+- Reset values of IME, IE and IF are not stated — `crates/core/src/io/irq/mod.rs` — all 0, which is
+  what a handoff by the BIOS expects; verify by reading the registers in a test ROM on
+  hardware before any write.
+- Bit 13 is listed for both CPUs, and bit 7 only for the ARM7 — `crates/core/src/io/irq/mod.rs` —
+  as in the GBATEK table; a DSi-mode difference is out of scope.
+- Whether an IME or IE write reaches the IRQ line instantly or a few cycles later — the model
+  is instant, and the line is read before each instruction — `crates/core/src/machine/mod.rs` —
+  verify with a cycle-timed test ROM.
+- The IRQ line is sampled before each instruction, so a request raised during an instruction
+  is taken after it — `crates/core/src/machine/mod.rs` — approximate timing is the goal
+  (AGENTS.md §2 rule 7).

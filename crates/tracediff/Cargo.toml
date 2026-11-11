@@ -1,0 +1,15 @@
+[package]
+name = "ninge-tracediff"
+description = "Trace comparison against a reference oracle for ninge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# A repository tool, not published (AGENTS.md §7).
+publish = false
+repository.workspace = true
+
+[dependencies]
+ninge-core.workspace = true
+
+[lints]
+workspace = true

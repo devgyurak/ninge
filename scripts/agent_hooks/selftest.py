@@ -310,37 +310,40 @@ def test_check_architecture_all() -> None:
 
 
 TESTS_OK = """\
-#[cfg(test)]
-mod tests {
-    use super::*;
+use super::*;
 
+#[test]
+fn given_carry_set_when_adc_executes_then_result_includes_carry() {
+    let mut cpu = cpu_with_carry();
+    cpu.execute(0xE0A1_0002);
+    assert_eq!(cpu.reg(1), 3, "if the carry were ignored this would be 2"); // for, while, match
+}
+
+#[test]
+#[should_panic(expected = "unmapped")]
+fn given_unmapped_page_when_fast_path_reads_then_panics_with_unmapped() {
+    read_fast(0x0800_0000);
+}
+
+#[test]
+fn given_adc_json_suite_when_each_case_runs_then_no_case_differs() {
+    let failures = run_json_suite("arm/adc.json");
+    assert_eq!(failures, Vec::<CaseDiff>::new());
+}
+
+proptest! {
     #[test]
-    fn given_carry_set_when_adc_executes_then_result_includes_carry() {
-        let mut cpu = cpu_with_carry();
-        cpu.execute(0xE0A1_0002);
-        assert_eq!(cpu.reg(1), 3, "if the carry were ignored this would be 2"); // for, while, match
-    }
-
-    #[test]
-    #[should_panic(expected = "unmapped")]
-    fn given_unmapped_page_when_fast_path_reads_then_panics_with_unmapped() {
-        read_fast(0x0800_0000);
-    }
-
-    #[test]
-    fn given_adc_json_suite_when_each_case_runs_then_no_case_differs() {
-        let failures = run_json_suite("arm/adc.json");
-        assert_eq!(failures, Vec::<CaseDiff>::new());
-    }
-
-    proptest! {
-        #[test]
-        fn given_any_word_when_rotated_32_then_word_is_unchanged(x in any::<u32>()) {
-            prop_assert_eq!(x.rotate_right(32), x);
-        }
+    fn given_any_word_when_rotated_32_then_word_is_unchanged(x in any::<u32>()) {
+        prop_assert_eq!(x.rotate_right(32), x);
     }
 }
 """
+
+# Test placement (AGENTS.md §5.1): the tests of a module live in its tests.rs.
+INLINE_TESTS = "#[cfg(test)]\nmod tests {\n    use super::*;\n}\n"
+INLINE_TESTS_TOPIC = "#[cfg(test)]\nmod tests_flags {\n}\n"
+TESTS_FILE_DECL = "#[cfg(test)]\nmod tests;\n#[cfg(test)]\nmod testing;\n"
+INLINE_TESTS_IN_COMMENT = "// mod tests {\n/* mod tests_x { */\nconst S: &str = \"mod tests {\";\n"
 
 TESTS_BAD = (
     ("non-GWT name", "#[test]\nfn adc_works() { assert!(true); }\n"),
@@ -358,12 +361,26 @@ TESTS_BAD = (
 def test_check_tests() -> None:
     import check_tests
 
-    found_ok = check_tests.check_source(TESTS_OK, "ok.rs")
+    found_ok = check_tests.check_source(TESTS_OK, "crates/core/src/cpu/tests.rs")
     _checked("tests: allow conventional tests", found_ok == [], "\n".join(found_ok))
     for name, text in TESTS_BAD:
         _checked(f"tests: block {name}", check_tests.check_source(text, "bad.rs") != [], text)
     macro = "macro_rules! t { ($n:ident) => { #[test] fn $n() { assert!(true); } } }\nfn helper() { if x {} }\n"
     _checked("tests: skip macro metavariable fns", check_tests.check_source(macro, "m.rs") == [], macro)
+
+    core = "crates/core/src/cpu/mod.rs"
+    for name, text in (("an inline mod tests", INLINE_TESTS), ("an inline mod tests_<topic>", INLINE_TESTS_TOPIC)):
+        _checked(f"tests: block {name}", check_tests.check_source(text, core) != [], text)
+    _checked("tests: allow an inline test module outside crates/", check_tests.check_source(INLINE_TESTS, "tests/x.rs") == [])
+    for name, text in (("a mod tests; declaration", TESTS_FILE_DECL), ("mod tests in comment or string", INLINE_TESTS_IN_COMMENT)):
+        _checked(f"tests: allow {name}", check_tests.check_source(text, core) == [], text)
+    sibling = check_tests.check_source(TESTS_OK, "crates/core/src/cpu/tests_arm.rs")
+    _checked("tests: block a tests_<topic>.rs sibling file", sibling != [], "\n".join(sibling))
+    _checked(
+        "tests: allow tests/<topic>.rs and tests.rs",
+        check_tests.check_source(TESTS_OK, "crates/core/src/cpu/tests/arm.rs") == []
+        and check_tests.check_source(TESTS_OK, "crates/core/src/cpu/tests.rs") == [],
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
@@ -483,6 +500,26 @@ def test_config_drift_helpers() -> None:
     _checked("config: matching coverage floors pass", cfg.coverage_mismatch(canon_floor, "COVERAGE_FLOOR=90\n") is None)
     lowered = cfg.coverage_mismatch(canon_floor, "COVERAGE_FLOOR=80\n")
     _checked("config: a lowered floor is reported", lowered is not None and "80" in lowered, str(lowered))
+
+    digest_a, digest_b = "a" * 64, "b" * 64
+    script = f'BLOCKSDS_IMAGE="skylyrac/blocksds@sha256:{digest_a}"\n'
+    _checked("config: matching image digests pass", cfg.image_digest_mismatch(f"**BlocksDS image** sha256:{digest_a}", script) is None)
+    entry = f"- [x] **BlocksDS image** `sha256:{digest_a}`\n- [x] **Other** `sha256:{digest_b}`\n"
+    _checked("config: another sha256 in STATUS is ignored", cfg.image_digest_mismatch(entry, script) is None)
+    bumped = cfg.image_digest_mismatch(f"**BlocksDS image** sha256:{digest_b}", script)
+    _checked("config: a stale STATUS digest is reported", bumped is not None and "differs" in bumped, str(bumped))
+    unrecorded = cfg.image_digest_mismatch("no digest here", script)
+    _checked("config: an unrecorded digest is reported", unrecorded is not None and "STATUS" in unrecorded, str(unrecorded))
+
+    commit_a, commit_b = "a" * 40, "b" * 40
+    fetch = f'SUITE_COMMIT="{commit_a}"\n'
+    _checked("config: matching suite commits pass", cfg.suite_commit_mismatch(f"**ARM7TDMI JSON suite** `{commit_a}`", fetch) is None)
+    suite_entry = f"- [x] **ARM7TDMI JSON suite** `{commit_a}`\n- [x] **Other** `{commit_b}`\n"
+    _checked("config: another commit in STATUS is ignored", cfg.suite_commit_mismatch(suite_entry, fetch) is None)
+    moved = cfg.suite_commit_mismatch(f"**ARM7TDMI JSON suite** `{commit_b}`", fetch)
+    _checked("config: a stale STATUS suite commit is reported", moved is not None and "differs" in moved, str(moved))
+    unpinned = cfg.suite_commit_mismatch(f"**ARM7TDMI JSON suite** `{commit_a}`", "no pin here")
+    _checked("config: a missing script pin is reported", unpinned is not None and "SUITE_COMMIT" in unpinned, str(unpinned))
 
 
 def main() -> int:

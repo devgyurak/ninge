@@ -5,6 +5,7 @@
 
 use crate::bus::VRAMCNT_A_ADDR;
 use crate::gpu2d::{BG_REGS_ADDR, BG_REGS_BYTES, DISPCNT_A_ADDR, POWCNT1_ADDR};
+use crate::io::divsqrt::{BLOCK_BYTES as DIVSQRT_BYTES, DIVCNT_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::IME_ADDR;
@@ -48,6 +49,8 @@ pub(crate) enum Port {
     DmaFill,
     /// KEYINPUT and KEYCNT, and on the ARM7 EXTKEYIN.
     Keypad,
+    /// DIVCNT to SQRT_PARAM, ARM9 only.
+    DivSqrt,
     /// HALTCNT, ARM7 only.
     Power,
 }
@@ -64,6 +67,7 @@ impl Port {
             Self::Ipc | Self::IpcRecv => IPCSYNC_ADDR,
             Self::Timers => TM0CNT_L_ADDR,
             Self::Dma | Self::DmaFill => DMA0SAD_ADDR,
+            Self::DivSqrt => DIVCNT_ADDR,
             Self::Keypad => KEYINPUT_ADDR,
             Self::Power => POSTFLG_ADDR,
         }
@@ -79,7 +83,7 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 12] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 13] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
@@ -88,6 +92,8 @@ pub(crate) const ARM9_PORTS: [PortEntry; 12] = [
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (DMA0FILL_ADDR, FILL_BYTES, Some(Port::DmaFill)),
     (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
+    // DIVCNT, the divider's registers, SQRTCNT and the square root's, with holes between.
+    (DIVCNT_ADDR, DIVSQRT_BYTES, Some(Port::DivSqrt)),
     // KEYINPUT and KEYCNT.
     (KEYINPUT_ADDR, KEYPAD9_BYTES, Some(Port::Keypad)),
     // IPCSYNC, IPCFIFOCNT and IPCFIFOSEND, 4 bytes each.

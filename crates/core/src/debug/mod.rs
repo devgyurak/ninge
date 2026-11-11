@@ -21,6 +21,7 @@ pub use crate::hle::SwiRecord;
 pub use crate::io::dma::Dma;
 pub use crate::io::ipc::Ipc;
 pub use crate::io::irq::InterruptController;
+pub use crate::io::keypad::Keypad;
 pub use crate::io::power::Power;
 pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
@@ -152,6 +153,19 @@ impl<'a> Inspect<'a> {
     // The debugger's IO register panel shows them with the ARM9's.
     pub fn dma7(&self) -> &'a Dma<false> {
         self.machine.io.dma7()
+    }
+
+    /// The ARM9's KEYCNT.
+    // The debugger's IO register panel shows it with the other devices'; the key bits are
+    // constants until input exists (`keypad.md`, #44).
+    pub fn keypad9(&self) -> &'a Keypad<true> {
+        self.machine.io.keypad9()
+    }
+
+    /// The ARM7's KEYCNT.
+    // The debugger's IO register panel shows it with the ARM9's.
+    pub fn keypad7(&self) -> &'a Keypad<false> {
+        self.machine.io.keypad7()
     }
 
     /// The ARM7's HALTCNT.

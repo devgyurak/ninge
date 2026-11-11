@@ -69,7 +69,9 @@ const KINDS: [[Kind; 4]; 8] = [
     [Text, Text, Text, Other],
     [Text, Text, Other, Other],
     [Text, Text, Other, Other],
-    [Text, Other, Other, Other],
+    // Mode 6: BG0 is the 3D layer only (GBATEK "DS Video BG Modes / Control").
+    // TODO(phase7): the 3D layer.
+    [Other, Other, Other, Other],
     [Other, Other, Other, Other],
 ];
 

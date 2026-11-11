@@ -787,8 +787,9 @@ fn given_bg_modes_1_to_5_when_the_text_layers_are_enabled_then_they_draw() {
 }
 
 #[test]
-fn given_bg_mode_6_when_the_layers_are_enabled_then_only_bg0_draws() {
-    let cases = [(6, 0, true), (6, 1, false), (6, 2, false), (6, 3, false)];
+fn given_bg_mode_6_when_the_layers_are_enabled_then_none_draws_as_bg0_is_the_3d_layer() {
+    // TODO(phase7): BG0 is the 3D engine's layer in mode 6.
+    let cases = [(6, 0, false), (6, 1, false), (6, 2, false), (6, 3, false)];
     assert_eq!(kind_failures(&cases), vec![]);
 }
 
@@ -929,21 +930,44 @@ fn given_a_frame_in_progress_when_the_presented_frame_is_read_then_it_is_the_las
     assert_eq!((top(&m, 0, 3), top(&m, 0, 7)), (RED, RED));
 }
 
-#[test]
-fn given_a_machine_saved_in_the_middle_of_a_frame_when_loaded_and_run_then_its_frame_equals_the_uninterrupted_one()
- {
+/// A machine saved at line 100 of a frame whose registers changed at line 50, loaded onto a fresh
+/// one; both then run to the end of the frame. Returns whether both screens are equal.
+fn raster_save_matches() -> (Result<(), crate::savestate::SavestateError>, bool, bool) {
     let mut m = spinning_scene();
-    w16(&mut m, BG0HOFS, 8);
     m.run_frame();
+    run_to_line(&mut m, 50);
+    w16(&mut m, BG0HOFS, 8);
     run_to_line(&mut m, 100);
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");
     let result = loaded.load_state(&m.save_state());
     m.run_frame();
     loaded.run_frame();
+    (
+        result,
+        loaded.frame(Screen::Top) == m.frame(Screen::Top),
+        loaded.frame(Screen::Bottom) == m.frame(Screen::Bottom),
+    )
+}
+
+#[test]
+fn given_a_machine_saved_after_a_mid_frame_register_change_when_loaded_and_run_then_both_screens_equal_the_uninterrupted_ones()
+ {
+    assert_eq!(raster_save_matches(), (Ok(()), true, true));
+}
+
+#[test]
+fn given_a_machine_saved_mid_frame_when_loaded_then_the_last_finished_frame_is_still_shown() {
+    let mut m = spinning_scene();
+    m.run_frame();
+    m.run_frame();
+    run_to_line(&mut m, 100);
+    let mut loaded = Machine::new();
+    loaded.load_rom(m.rom().to_vec()).expect("same image");
+    let result = loaded.load_state(&m.save_state());
     assert_eq!(
-        (result, loaded.frame(Screen::Top) == m.frame(Screen::Top)),
-        (Ok(()), true)
+        (result, top(&loaded, 0, 3), top(&loaded, 8, 3)),
+        (Ok(()), RED, GREEN)
     );
 }
 

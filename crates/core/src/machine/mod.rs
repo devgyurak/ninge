@@ -39,21 +39,16 @@ pub enum Screen {
 /// skips its checks and leaves the derived page table empty.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machine {
-    // Invariant: each buffer holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels. They are
-    // `Vec`s because serde does not derive for arrays this large. The buffers are derived
-    // output, not savestate data: they are skipped on save, and a load recreates them blank
-    // (restoring the invariant) until the next frame is presented. The savestate format is in
-    // the `savestate` module.
-    #[serde(skip, default = "blank_screen")]
+    // Invariant: each of the four buffers holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels.
+    // They are `Vec`s because serde does not derive for arrays this large. `top` and `bottom`
+    // are the last finished frame; each visible line is drawn into `work_top`/`work_bottom` at
+    // its line start and the pairs swap when line 192 starts, so a frame a caller reads is always
+    // a whole one (`docs/hw/bg-text.md`, "Lines"). All four are saved: a line drawn from a
+    // register that changed later in the same frame cannot be drawn again after a load, so
+    // saving them is what makes save, load and continue equal an uninterrupted run (#28).
     pub(crate) top: Vec<u32>,
-    #[serde(skip, default = "blank_screen")]
     pub(crate) bottom: Vec<u32>,
-    // The frame being drawn: each visible line is drawn here at its line start, and the buffers
-    // swap with `top` and `bottom` when the last visible line is done, so a frame a caller reads
-    // is always a whole one (`docs/hw/bg-text.md`, "Lines"). Derived output like `top`.
-    #[serde(skip, default = "blank_screen")]
     pub(crate) work_top: Vec<u32>,
-    #[serde(skip, default = "blank_screen")]
     pub(crate) work_bottom: Vec<u32>,
     // The ROM image is an input, not machine state: it is skipped on save and a savestate
     // loads onto a machine that was handed the ROM again, so a savestate never embeds the
@@ -216,6 +211,14 @@ impl Machine {
         }
     }
 
+    /// Whether all four frame buffers have the size `new` allocates; a savestate that decodes
+    /// to anything else is corrupt.
+    pub(crate) fn screens_well_formed(&self) -> bool {
+        [&self.top, &self.bottom, &self.work_top, &self.work_bottom]
+            .iter()
+            .all(|buffer| buffer.len() == SCREEN_WIDTH * SCREEN_HEIGHT)
+    }
+
     /// The frame being drawn is complete: it becomes the one [`Machine::frame`] returns, and the
     /// buffers it replaces are drawn over by the next frame's lines.
     pub(crate) fn present_frame(&mut self) {
@@ -229,20 +232,6 @@ impl Machine {
     pub(crate) fn render_frame(&mut self) {
         (0..SCREEN_HEIGHT).for_each(|y| self.render_line(y));
         self.present_frame();
-    }
-
-    /// Draws again the lines of the frame in progress that were drawn before a savestate was
-    /// taken, from the loaded state: the frame buffers are not saved, so a load would otherwise
-    /// leave them blank. A machine saved at a frame boundary is whole; one saved mid-frame
-    /// loses a raster effect that changed a register earlier in the same frame, for that frame
-    /// only (`docs/hw/bg-text.md`, "Lines").
-    // Decided with the maintainer in #28: redraw rather than save the buffers.
-    pub(crate) fn redraw_started_lines(&mut self) {
-        if self.header.is_none() {
-            return;
-        }
-        let last = usize::from(self.io.timing().vcount()).min(SCREEN_HEIGHT - 1);
-        (0..=last).for_each(|y| self.render_line(y));
     }
 
     /// VCOUNT: the current line, 0-262 (`docs/hw/display-timing.md`).

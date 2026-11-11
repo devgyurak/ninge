@@ -1,9 +1,9 @@
 # Engine A text backgrounds
 
-Sources: GBATEK "DS 2D Video - LCD Control" (DISPCNT, the BG modes); GBATEK "DS 2D Video - BG
-Control" (BGxCNT, BGxHOFS/VOFS); GBATEK "DS 2D Video - Text Background Screen / BG Tile Map"
-(screen entries and the tile layout); GBATEK "DS 2D Video - Color Palettes" and "DS 2D Video -
-Color Format"; GBATEK "DS 2D Video - Display Priority".
+Sources: GBATEK "DS Video BG Modes / Control" (DISPCNT, BGxCNT, the BG mode table); GBATEK "LCD
+I/O BG Control" and "LCD I/O BG Scrolling" (BGxCNT, BGxHOFS/VOFS); GBATEK "LCD VRAM BG Screen Data
+Format (BG Map)" and "LCD VRAM Character Data" (screen entries, tile layout); GBATEK "LCD Color
+Palettes" (colors, transparent color 0, backdrop).
 Used by: `crates/core/src/gpu2d/`   Phase: 3 (#28, engine A, standard palettes); engine B,
 sprites, extended palettes, mosaic, windows and blending are Phase 4
 
@@ -88,9 +88,9 @@ The BG mode says what each of the four layers is:
 | 3 | text (or 3D) | text | text | extended |
 | 4 | text (or 3D) | text | affine | extended |
 | 5 | text (or 3D) | text | extended | extended |
-| 6 | text (or 3D) | none | large bitmap | none |
+| 6 | 3D only | none | large bitmap | none |
 
-Phase 3 draws the text layers only. An affine, extended or large-bitmap layer, and a layer
+Phase 3 draws the text layers only. In mode 6 BG0 is the 3D engine's layer alone, so no layer draws. An affine, extended or large-bitmap layer, and a layer
 that is none, draws nothing (`TODO(phase4)`). BG0 with DISPCNT bit 3 set is the 3D engine's
 picture, which draws nothing yet (`TODO(phase7)`). A layer is drawn only when its DISPCNT bit
 8 + n is set and the display mode is 1; mode 1 is the only one that shows backgrounds.

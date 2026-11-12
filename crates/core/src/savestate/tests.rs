@@ -9,7 +9,7 @@
 //! FNV-1a 64 of the ROM (LE u64), `28..` the machine.
 
 use super::*;
-use crate::bus::{Region, VramBankState};
+use crate::bus::{Region, VramBankState, VramMapping};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::irq::Requests;
@@ -513,7 +513,8 @@ fn given_a_state_with_vram_a_mapped_when_loaded_onto_an_unmapped_machine_then_th
             VramBankState {
                 enabled: true,
                 mst: 0,
-                offset: 0
+                offset: 0,
+                mapping: VramMapping::Lcdc
             }
         )
     );

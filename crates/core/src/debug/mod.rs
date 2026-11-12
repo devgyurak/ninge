@@ -15,7 +15,7 @@ use crate::bus::TcmConfig;
 use crate::cpu::Cpu;
 use crate::machine::Machine;
 
-pub use crate::bus::{VramBankState, WramShare, WramState};
+pub use crate::bus::{VramBankState, VramMapping, WramShare, WramState};
 pub use crate::gpu2d::{Gpu2d, TextBg};
 pub use crate::hle::SwiRecord;
 pub use crate::io::divsqrt::DivSqrt;

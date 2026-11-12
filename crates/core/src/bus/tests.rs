@@ -425,36 +425,40 @@ fn vramcnt_decode_failures(expected: &[(u8, VramBankState)]) -> Vec<(u8, VramBan
         .collect()
 }
 
-fn state(enabled: bool, mst: u8, offset: u8) -> VramBankState {
+fn state(enabled: bool, mst: u8, offset: u8, mapping: VramMapping) -> VramBankState {
     VramBankState {
         enabled,
         mst,
         offset,
+        mapping,
     }
 }
+
+const OFF: VramMapping = VramMapping::Disabled;
+const LCDC: VramMapping = VramMapping::Lcdc;
 
 #[test]
 fn given_vramcnt_a_values_when_written_then_enable_mst_and_offset_decode_from_bits_7_0_1_and_3_4() {
     let table = [
-        (0x00, state(false, 0, 0)),
-        (0x80, state(true, 0, 0)),
-        (0x81, state(true, 1, 0)),
-        (0x83, state(true, 3, 0)),
-        (0x88, state(true, 0, 1)),
-        (0x93, state(true, 3, 2)),
-        (0x9B, state(true, 3, 3)),
-        (0x03, state(false, 3, 0)),
+        (0x00, state(false, 0, 0, OFF)),
+        (0x80, state(true, 0, 0, LCDC)),
+        (0x81, state(true, 1, 0, VramMapping::BgA { offset: 0 })),
+        (0x83, state(true, 3, 0, VramMapping::Texture { slot: 0 })),
+        (0x88, state(true, 0, 1, LCDC)),
+        (0x93, state(true, 3, 2, VramMapping::Texture { slot: 2 })),
+        (0x9B, state(true, 3, 3, VramMapping::Texture { slot: 3 })),
+        (0x03, state(false, 3, 0, OFF)),
         // Bit 2 is not used by bank A and is dropped.
-        (0x84, state(true, 0, 0)),
-        (0xFF, state(true, 3, 3)),
-        (0x64, state(false, 0, 0)),
+        (0x84, state(true, 0, 0, LCDC)),
+        (0xFF, state(true, 3, 3, VramMapping::Texture { slot: 3 })),
+        (0x64, state(false, 0, 0, OFF)),
     ];
     assert_eq!(vramcnt_decode_failures(&table), vec![]);
 }
 
 #[test]
 fn given_power_on_memory_when_vram_a_is_decoded_then_it_is_disabled() {
-    assert_eq!(Bench::new().vram_a(), state(false, 0, 0));
+    assert_eq!(Bench::new().vram_a(), state(false, 0, 0, OFF));
 }
 
 #[test]
@@ -472,21 +476,21 @@ fn given_vramcnt_a_enabled_when_a_halfword_with_a_zero_low_byte_is_written_there
  {
     let mut m = with_vram();
     m.arm9(plain()).write16(VRAMCNT_A, 0xFF00);
-    assert_eq!(m.vram_a(), state(false, 0, 0));
+    assert_eq!(m.vram_a(), state(false, 0, 0, OFF));
 }
 
 #[test]
 fn given_a_word_written_at_vramcnt_a_when_decoded_then_only_the_byte_at_that_address_counts() {
     let mut m = Bench::new();
     m.arm9(plain()).write32(VRAMCNT_A, 0xFFFF_FF80);
-    assert_eq!(m.vram_a(), state(true, 0, 0));
+    assert_eq!(m.vram_a(), state(true, 0, 0, LCDC));
 }
 
 #[test]
 fn given_vramcnt_a_enabled_when_the_next_byte_is_written_then_bank_a_is_unchanged() {
     let mut m = with_vram();
     m.arm9(plain()).write8(VRAMCNT_A + 1, 0x00);
-    assert_eq!(m.vram_a(), state(true, 0, 0));
+    assert_eq!(m.vram_a(), state(true, 0, 0, LCDC));
 }
 
 #[test]
@@ -2162,7 +2166,13 @@ fn given_a_word_written_at_0400_0248_when_decoded_then_banks_h_and_i_are_enabled
     let mut m = Bench::new();
     m.write32(&plain(), 0x0400_0248, 0xFFFF_8383_u32);
     let banks = m.vram_banks();
-    assert_eq!((banks[7], banks[8]), (state(true, 3, 0), state(true, 3, 0)));
+    assert_eq!(
+        (banks[7], banks[8]),
+        (
+            state(true, 3, 0, VramMapping::Unmapped),
+            state(true, 3, 0, VramMapping::ObjExtPaletteB)
+        )
+    );
 }
 
 #[test]
@@ -2172,7 +2182,7 @@ fn given_a_halfword_written_at_0400_0246_when_decoded_then_bank_g_and_wramcnt_ta
     m.write16(&plain(), 0x0400_0246, 0x0281);
     assert_eq!(
         (m.vram_banks()[6], m.read8(&plain(), WRAMCNT)),
-        (state(true, 1, 0), 2)
+        (state(true, 1, 0, VramMapping::BgA { offset: 0 }), 2)
     );
 }
 
@@ -2196,5 +2206,8 @@ fn given_vramcnt_registers_written_when_read_at_each_width_then_they_read_zero()
 fn given_bank_e_written_with_ofs_bits_when_decoded_then_the_offset_reads_zero() {
     let mut m = Bench::new();
     m.write8(&plain(), 0x0400_0244, 0x80 | 0x18 | 1);
-    assert_eq!(m.vram_banks()[4], state(true, 1, 0));
+    assert_eq!(
+        m.vram_banks()[4],
+        state(true, 1, 0, VramMapping::BgA { offset: 0 })
+    );
 }

@@ -10,6 +10,10 @@
 //! because the page tables derive from them: a VRAMCNT write rebuilds the VRAM block of both tables
 //! and a WRAMCNT write the shared-WRAM block.
 
+mod vram;
+
+pub use vram::{VramMapping, VramWindow, VramWindowKind};
+
 use super::TcmConfig;
 use crate::cpu::Tcm;
 use crate::io::device::{Width, read_bytes};
@@ -71,9 +75,6 @@ const LCDC_BASE: u32 = 0x0680_0000;
 /// The VRAM block of the address space: the only part VRAMCNT writes can change.
 const VRAM_BLOCK_BASE: u32 = 0x0600_0000;
 const VRAM_BLOCK_END: u32 = 0x0700_0000;
-/// Engine A's BG VRAM window: 2 MiB at `0600_0000h`; bank A with MST 1 sits `OFS * 20000h` into
-/// it (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
-const BG_A_BASE: u32 = 0x0600_0000;
 /// Palette RAM: 2 KiB at `0500_0000h`, repeated through its 16 MiB block (`palette-ram.md`,
 /// "Layout" and "Behavior").
 const PALETTE_BASE: u32 = 0x0500_0000;
@@ -95,10 +96,6 @@ const VRAMCNT_ENABLE: u8 = 0x80;
 const VRAMCNT_USED: [u8; BANK_COUNT] = [0x9B, 0x9B, 0x9F, 0x9F, 0x87, 0x9F, 0x9F, 0x83, 0x83];
 /// VRAMCNT bits 0-2: MST.
 const VRAMCNT_MST_MASK: u8 = 0x07;
-/// The MST value that maps a bank for plain CPU access (LCDC mode).
-const MST_LCDC: u8 = 0;
-/// The MST value that maps bank A into engine A's BG VRAM.
-const MST_BG_A: u8 = 1;
 
 /// Which memory a page of the address space is backed by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,33 +162,8 @@ pub struct VramBankState {
     pub mst: u8,
     /// Bits 3-4 (not used by banks E, H and I, so it reads 0 there).
     pub offset: u8,
-}
-
-/// Engine A's BG VRAM as the renderer reads it: the bytes of bank A and where they sit in the BG
-/// window, or nothing when no bank is mapped there (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
-/// Offsets count from the start of the window (`0600_0000h`); an offset outside the bank reads 0.
-#[derive(Clone, Copy, Debug)]
-pub struct BgVram<'a> {
-    bank: Option<&'a [u8]>,
-    /// Where the bank starts in the window: `OFS * 20000h`.
-    base: u32,
-}
-
-impl BgVram<'_> {
-    /// The byte at `offset` in the window, or 0 where no bank holds it.
-    // TODO(hw-unverified): an address no bank holds reads 0 (`vram-banks.md`, "Unverified").
-    pub(crate) fn byte(&self, offset: u32) -> u8 {
-        offset
-            .checked_sub(self.base)
-            .and_then(|at| self.bank?.get(at as usize))
-            .copied()
-            .unwrap_or(0)
-    }
-
-    /// The little-endian halfword at `offset`.
-    pub(crate) fn half(&self, offset: u32) -> u16 {
-        u16::from_le_bytes([self.byte(offset), self.byte(offset.wrapping_add(1))])
-    }
+    /// What the register means for this bank (`vram-banks.md`, "Where each bank goes").
+    pub mapping: VramMapping,
 }
 
 /// One page-table entry: a region and an offset into that region's buffer, never a pointer.
@@ -386,31 +358,22 @@ impl Memory {
         self.build_wram_pages();
     }
 
-    /// Where bank `bank` sits in the ARM9's address space, or `None` while it is disabled or its
-    /// MST maps it nowhere the CPU sees.
-    // TODO(phase4): the BG and OBJ mappings of the other banks and the ARM7's mapping (#35).
-    // TODO(hw-unverified): a disabled bank, and an MST this step does not map, are unmapped
-    // (`vram-banks.md`, "Unverified").
-    fn arm9_vram_base(&self, bank: usize) -> Option<u32> {
-        let state = self.vram_bank(bank);
-        match (state.enabled, bank, state.mst) {
-            (true, _, MST_LCDC) => Some(LCDC_BASE + BANK_BASE[bank] as u32),
-            (true, 0, MST_BG_A) => Some(BG_A_BASE + u32::from(state.offset) * BANK_SIZE[0] as u32),
-            _ => None,
-        }
-    }
-
     /// Rebuilds the VRAM block (`0600_0000h`-`06FF_FFFFh`) of both tables: the invalidation a
     /// VRAMCNT write needs (`vram-banks.md`, "Behavior"). Everything outside that block is left
     /// alone.
-    // TODO(hw-unverified): an address in the block that no bank holds is unmapped: no mirrors
-    // (`vram-banks.md`, "Unverified").
+    ///
+    /// Banks are laid down from I back to A, so where two enabled banks cover the same page the
+    /// earlier bank's entry is the one left (`vram-banks.md`, "Overlap").
+    // TODO(phase4): the ARM7's mapping of banks C and D (#35).
+    // TODO(hw-unverified): the earlier bank wins an overlap, and an address in the block that no
+    // bank holds is unmapped: no mirrors (`vram-banks.md`, "Unverified").
     fn build_vram_pages(&mut self) {
         for pages in [&mut self.pages9, &mut self.pages7] {
             map_window(pages, VRAM_BLOCK_BASE, VRAM_BLOCK_END, Region::Vram, None);
         }
-        for bank in 0..BANK_COUNT {
-            if let Some(base) = self.arm9_vram_base(bank) {
+        for bank in (0..BANK_COUNT).rev() {
+            let lcdc = LCDC_BASE + BANK_BASE[bank] as u32;
+            if let Some(base) = self.vram_bank(bank).mapping.cpu_base(lcdc) {
                 map_window(
                     &mut self.pages9,
                     base,
@@ -465,25 +428,18 @@ impl Memory {
         WramState { mode, arm9, arm7 }
     }
 
-    /// Engine A's BG VRAM: bank A when it is enabled with MST 1, else nothing
-    /// (`vram-banks.md`, "Engine A BG VRAM (MST 1)").
-    pub(crate) fn bg_vram_a(&self) -> BgVram<'_> {
-        let bank = self.vram_a();
-        BgVram {
-            bank: (bank.enabled && bank.mst == MST_BG_A)
-                .then(|| self.vram.get(..BANK_SIZE[0]))
-                .flatten(),
-            base: u32::from(bank.offset) * BANK_SIZE[0] as u32,
-        }
+    /// One BG or OBJ window of the 2D engines, as a renderer reads it by offset
+    /// (`vram-banks.md`, "The 2D engines' view of a window").
+    pub(crate) fn vram_window(&self, kind: VramWindowKind) -> VramWindow<'_> {
+        VramWindow::new(self, kind)
     }
 
     /// The bytes of banks A-D while the CPU sees them as LCDC VRAM (enabled, MST 0), else `None`
     /// for that bank. The VRAM display mode reads one of them (`display-mode-vram.md`).
     pub(crate) fn lcdc_banks(&self) -> [Option<&[u8]>; 4] {
         std::array::from_fn(|bank| {
-            let state = self.vram_bank(bank);
             let start = BANK_BASE[bank];
-            (state.enabled && state.mst == MST_LCDC)
+            (self.vram_bank(bank).mapping == VramMapping::Lcdc)
                 .then(|| self.vram.get(start..start + BANK_SIZE[bank]))
                 .flatten()
         })
@@ -510,10 +466,14 @@ impl Memory {
     /// VRAMCNT of bank `bank` (0 = A to 8 = I) as decoded; a bank past I reads as disabled.
     pub fn vram_bank(&self, bank: usize) -> VramBankState {
         let value = self.vramcnt.get(bank).copied().unwrap_or(0);
+        let enabled = value & VRAMCNT_ENABLE != 0;
+        let mst = value & VRAMCNT_MST_MASK;
+        let offset = (value >> VRAMCNT_OFS_SHIFT) & VRAMCNT_OFS_MASK;
         VramBankState {
-            enabled: value & VRAMCNT_ENABLE != 0,
-            mst: value & VRAMCNT_MST_MASK,
-            offset: (value >> VRAMCNT_OFS_SHIFT) & VRAMCNT_OFS_MASK,
+            enabled,
+            mst,
+            offset,
+            mapping: vram::mapping(bank, enabled, mst, offset),
         }
     }
 

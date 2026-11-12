@@ -155,8 +155,8 @@ the engine's per-line state).
   a read gives. — `Gpu2d::read_byte` — verify likewise.
 - **BGxCNT bit 13** is kept as written even for a text layer, where it matters only with
   extended palettes. — `Gpu2d::write_byte` — verify likewise.
-- **Reads past the mapped banks.** A base block that points beyond bank A's 128 KiB slot reads
-  0 (`vram-banks.md`, "Unverified"). — `BgVram::byte` — verify likewise.
+- **Reads past the mapped banks.** A base block that points where no bank sits in engine A's BG window reads
+  0 (`vram-banks.md`, "Unverified"). — `VramWindow::byte` — verify likewise.
 - **Mode 7** (not defined) draws no layer. — `text::layer_kind` — verify likewise.
 - **The sampling instant of a line** is its start; real hardware reads the registers while the
   line is being drawn. A write inside the visible part of a line is a half-line effect that this

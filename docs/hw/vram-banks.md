@@ -1,13 +1,15 @@
-# VRAM banks (A-I: registers and LCDC mode; bank A as engine A BG)
+# VRAM banks (A-I: registers, LCDC mode, and the BG, OBJ and extended mappings)
 
 Sources: GBATEK "DS Memory Control - VRAM"; GBATEK "DS Memory Maps" (NDS9 Memory Map).
 Used by: `crates/core/src/bus/`   Phase: 2 (#18, bank A in LCDC mode), 3 (#28, bank A as engine A
-BG), 4 (#35: all nine banks; LCDC mode first, the BG and OBJ mappings and the ARM7 mapping follow)
+BG), 4 (#35: all nine banks; LCDC mode, then the BG and OBJ mappings of both engines; the ARM7
+mapping follows)
 
 The DS has nine VRAM banks, A to I (656 KiB in all). Each has its own control register on the
-ARM9 side. This note grows with #35. The first step models every bank, its register and the plain
-CPU (LCDC) mapping, plus bank A as engine A BG VRAM (MST 1, the one other mapping Phase 3 had).
-The other mappings (BG, OBJ and the ARM7's) are `TODO(phase4)` (#35).
+ARM9 side. This note grows with #35. It models every bank, its register, the plain CPU (LCDC)
+mapping and the BG and OBJ mappings of both 2D engines. The ARM7's own mapping of banks C and D
+is `TODO(phase4)` (#35). The mappings only the display controller sees (textures and extended
+palettes) are decoded but not read: the renderer side is `TODO(phase7)` (#32).
 
 ## The banks
 
@@ -69,14 +71,53 @@ structure derived from the mapping is rebuilt on every write. Only the VRAM bloc
 space (`0600_0000h`-`06FF_FFFFh`) depends on these registers, so only that block is rebuilt. A
 bank's contents stay as they are when it moves: the same bytes are seen at the new place.
 
-For every bank MST 0 is LCDC mode, plain CPU access at the address in the table above. The
-other MST values are `TODO(phase4)` (#35), except bank A's MST 1 below.
+### Where each bank goes
 
-| Bank A MST | Where bank A is | Step |
+OFS.0 is OFS bit 0 and OFS.1 is OFS bit 1 (VRAMCNT bits 3 and 4). "+x" is the offset inside the
+window below.
+
+Seen by the ARM9 CPU, at these windows:
+
+| Window | Address | Size | Contents |
+|---|---|---|---|
+| LCDC | `0680_0000h` | 656 KiB | every bank, MST 0 (the table under "The banks") |
+| engine A BG | `0600_0000h` | up to 512 KiB | A, B, C, D (MST 1): `+20000h * OFS`; E (MST 1): `+0`; F, G (MST 1): `+4000h * OFS.0 + 10000h * OFS.1` |
+| engine A OBJ | `0640_0000h` | up to 256 KiB | A, B (MST 2): `+20000h * OFS.0`; E (MST 2): `+0`; F, G (MST 2): `+4000h * OFS.0 + 10000h * OFS.1` |
+| engine B BG | `0620_0000h` | up to 128 KiB | C (MST 4): `+0`; H (MST 1): `+0`; I (MST 1): `+8000h` |
+| engine B OBJ | `0660_0000h` | up to 128 KiB | D (MST 4): `+0`; I (MST 2): `+0` |
+
+Seen by the display controller only (not in any CPU address space; "slot" is the unit the
+renderer picks by):
+
+| Use | Bank, MST | Slot |
 |---|---|---|
-| 0 | LCDC: `0680_0000h`-`0681_FFFFh`, plain ARM9 access | LCDC |
-| 1 | engine A BG VRAM: `0600_0000h + OFS * 20000h`, 128 KiB | Phase 3 |
-| 2, 3 | engine A OBJ VRAM; texture slot | `TODO(phase4)` (#35), `TODO(phase7)` |
+| texture image | A, B, C, D (MST 3) | slot OFS (0-3) |
+| texture palette | E (MST 3) | slots 0-3 |
+| | F, G (MST 3) | slot `OFS.0 + 4 * OFS.1` (0, 1, 4 or 5) |
+| engine A BG extended palette | E (MST 4) | slots 0-3 (only the lower 32 KiB used) |
+| | F, G (MST 4) | slots 0-1 for OFS 0, slots 2-3 for OFS 1 |
+| engine A OBJ extended palette | F, G (MST 5) | slot 0 |
+| engine B BG extended palette | H (MST 2) | slots 0-3 |
+| engine B OBJ extended palette | I (MST 3) | slot 0 |
+
+Seen by the ARM7: banks C and D with MST 2 (`TODO(phase4)`, #35).
+
+A bank with any other MST (for example MST 5 on a bank that is not F or G) is mapped nowhere.
+For the F and G extended-palette rows the register's OFS.1 is not used; for A, B in OBJ mode
+and for the ARM7 mapping GBATEK says OFS.1 must be zero, and only OFS.0 counts here.
+
+The CPU reads and writes a CPU-visible mapping like any other memory; the display controller
+reads the same bytes. A bank in an extended-palette or texture mapping is where the CPU does not
+see it: its LCDC address and every window are empty for it, and to change such a bank software
+switches it to MST 0 first. Its contents stay as they are when it moves.
+
+### Overlap
+
+Two enabled banks can name overlapping addresses (two banks at the same BG offset, E under A,
+C over H and I). GBATEK does not say what the CPU sees. Here the bank that is earlier in the
+alphabet wins, for reads and writes alike, over every address they share; the bank behind it
+holds its bytes but the CPU cannot reach them while the earlier one covers them. When the earlier
+bank is disabled or moves, the later one shows through at once.
 
 ### Display mode 2 reads banks A-D
 
@@ -84,22 +125,19 @@ The VRAM display mode of engine A (`display-mode-vram.md`) shows the bank DISPCN
 name: 0 to 3 for bank A to D. The bank is read through its LCDC mapping, so it must be enabled
 with MST 0 to show; a bank that is not is drawn as zeros (`display-mode-vram.md`, "Unverified").
 
-### Engine A BG VRAM (MST 1)
+### The 2D engines' view of a window
 
-The engine A BG VRAM window is `0600_0000h`-`061F_FFFFh` (2 MiB of address space; the banks that
-can fill it add up to 512 KiB). Bank A with MST 1 sits at `0600_0000h + OFS * 20000h` where OFS
-is VRAMCNT_A bits 3-4 (0-3), so it covers one of four 128 KiB slots of the first 512 KiB. The
-CPU reads and writes it there like any other memory; engine A reads the same bytes as tile data
-and background maps (`bg-text.md`). The BG screen and character base offsets of engine A count
-from `0600_0000h`, the start of this window (`bg-text.md`, "Memory"); bank A is the only bank that
-exists in Phase 3, so a background that points outside its slot reads what no bank holds (zero,
-`bg-text.md`, "Unverified").
+A renderer reads a window by offset from the window's start, not by CPU address: engine A's text
+backgrounds count their character and screen bases from `0600_0000h` (`bg-text.md`, "Memory").
+The four windows are engine A BG (512 KiB), engine A OBJ (256 KiB), engine B BG (128 KiB) and
+engine B OBJ (128 KiB). A read at an offset finds what the CPU would read at the window's address
+plus that offset, and reads 0 where no bank holds it or past the window's size, so a renderer
+and the CPU never disagree about what the window contains.
 
 The CPU can store to VRAM, palette RAM (`palette-ram.md`) and OAM with halfword and word accesses
 only; a byte store is dropped and changes nothing (GBATEK "DS Memory Control - VRAM", the notes
 under the bank table). The one exception is the ARM7's own work-RAM mapping of banks C and D,
-which is Phase 3-4. Reads work in any width. The write rule applies to the LCDC window and to the
-engine A BG window alike.
+which is `TODO(phase4)` (#35). Reads work in any width. The write rule applies to every window.
 
 ## Evidence
 
@@ -115,23 +153,27 @@ The `vrambanks` test ROM (`testroms/vrambanks/`) enables each of the nine banks 
 turn, writes a different marker word at the first and last word of its LCDC window, and reads
 back the markers and the words just outside the window. Its slots are listed at the top of
 `arm9.s`; `crates/runner/tests/vrambanks.rs` computes the expected values from this note alone.
+Its later groups set every MST and OFS that maps a bank into one of the four windows, read the
+first and last word of the window mapping and the words just outside it with every other bank off,
+overlap two or three banks, check that a byte store to each window is ignored, that a bank keeps
+its bytes when it moves between LCDC, BG and OBJ mappings, and that a bank in an extended-palette
+or texture mode leaves the LCDC address and all four windows empty.
 
 ## Edge cases
 
 - A byte write to any bank leaves the bank unchanged.
 - A disabled bank is not there: reads give the unmapped value and writes are ignored
   (`arm9-memory-map.md`).
-- Each bank occupies exactly its LCDC window; the address just below and just above are its
-  neighbours' (bank X+1 starts where X ends), and the address past bank I (`068A_4000h`) is
-  unmapped.
+- Each bank occupies exactly its window (its size at the address the tables give); the address
+  just below and just above are the neighbours', or empty. The address past bank I in the LCDC
+  area (`068A_4000h`) is unmapped.
 - Disabling bank X unmaps its window at once and leaves its neighbours as they are.
 - A VRAMCNT write rebuilds only the VRAM block of the page table; the result is the same as
   rebuilding the whole table.
-- With MST 1 bank A occupies exactly the 128 KiB slot OFS names in the BG window; the address
-  just before it (for OFS 0, `05FF_FFFFh`) is palette RAM and the address just after is
-  unmapped until bank B or another bank joins (`TODO(phase4)`).
-- Changing MST or OFS moves a bank without clearing it; the LCDC address and the BG slot never
-  hold bank A at the same time.
+- Engine A BG offset 0 is preceded by palette RAM (`05FF_FFFFh`).
+- Changing MST or OFS moves a bank without clearing it; a bank sits in at most one place.
+- A bank in an extended-palette or texture mapping, or with an MST the tables do not define, is
+  in no window and not in the LCDC area.
 - A word or halfword write that spans several VRAMCNT registers writes each byte to the register
   at its own address; `0400_0247h` inside the span is WRAMCNT.
 
@@ -142,7 +184,7 @@ back the markers and the words just outside the window. Its slots are listed at 
   `crates/core/src/bus/memory/mod.rs` — verify by a test ROM on real hardware.
 - **Reads of the VRAMCNT registers** return 0: they are write-only and GBATEK does not say what
   a read gives. — `Memory::read_control` — verify likewise.
-- **A disabled bank, or one with an MST this step does not map,** is unmapped at the LCDC address
+- **A disabled bank, or one with an MST that is not 0 here,** is unmapped at the LCDC address
   (reads 0, writes ignored). GBATEK describes the mapping only for the enabled case. —
   `Memory::build_vram_pages` — verify likewise. The `memmap` ROM records the disabled-bank read
   (slot 31); running that ROM on hardware settles it.
@@ -150,10 +192,18 @@ back the markers and the words just outside the window. Its slots are listed at 
   the BG/OBJ windows and the LCDC area share a block and GBATEK's mirror rule is not specific.
   An address inside the block that no bank holds reads 0 and a write is dropped. —
   `Memory::build_vram_pages` — verify likewise.
-- **Mirrors of the engine A BG window.** The 2 MiB window is wider than the 512 KiB the banks can
-  fill, and nothing is mirrored here: an address outside the bank's slot is unmapped (reads 0,
-  writes dropped). — `Memory::build_vram_pages` — verify likewise.
-- **Byte stores to BG VRAM** are dropped like every other VRAM byte store, on the strength of the
+- **Mirrors inside a window.** The BG and OBJ windows are wider than the banks that fill them
+  (engine A BG is 2 MiB of address space for at most 512 KiB), and nothing is mirrored: an address
+  no bank holds is unmapped (reads 0, writes dropped), and so is a renderer offset past the
+  window. — `Memory::build_vram_pages`, `VramWindow::byte` — verify likewise.
+- **Overlapping banks.** The earlier bank in the alphabet wins both reads and writes where two
+  enabled banks cover the same address; GBATEK is silent. — `Memory::build_vram_pages` — verify
+  likewise.
+- **An MST the tables do not define** (C-G with MST 5-7 apart from F and G with MST 5, A, B with
+  MST 4 or more, and so on) maps nowhere. — `vram::mapping` — verify likewise.
+- **OFS.1 where it must be zero** (A, B in OBJ mode; the ARM7 mapping) and **in F, G's
+  extended-palette modes**: only OFS.0 is used. — `vram::mapping` — verify likewise.
+- **Byte stores to BG and OBJ VRAM** are dropped like every other VRAM byte store, on the strength of the
   one note under GBATEK's bank table; the note is worded for VRAM in general and does not
   single out the BG window. — `Memory::store` — verify likewise.
 - **Unused bits of a register** (MST bit 2 for A, B, H, I; OFS for E, H, I; bits 5-6) are

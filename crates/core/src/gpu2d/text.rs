@@ -4,7 +4,7 @@
 //! point at; nothing is allocated, formatted or collected, so a line can be drawn from the bus
 //! hot path of a frame.
 
-use crate::bus::BgVram;
+use crate::bus::VramWindow;
 
 /// BGxCNT bits 0-1: priority.
 const CNT_PRIORITY_MASK: u16 = 0x3;
@@ -130,7 +130,7 @@ pub(super) fn is_drawn(dispcnt: u32, layer: usize) -> bool {
 }
 
 /// The map cell entry for the layer point (`px`, `py`).
-fn entry(layer: &TextBg, vram: &BgVram<'_>, px: u32, py: u32) -> u16 {
+fn entry(layer: &TextBg, vram: &VramWindow<'_>, px: u32, py: u32) -> u16 {
     let (cx, cy) = (px / TILE_SIZE, py / TILE_SIZE);
     // A 512-wide layer has a second block to the right; a 512-high one has the next below, and
     // a 512x512 layer holds them top-left, top-right, bottom-left, bottom-right.
@@ -142,7 +142,7 @@ fn entry(layer: &TextBg, vram: &BgVram<'_>, px: u32, py: u32) -> u16 {
 
 /// The palette value of layer point (`px`, `py`) and the palette number to colour it with; value
 /// 0 is transparent.
-fn tile_pixel(layer: &TextBg, vram: &BgVram<'_>, px: u32, py: u32) -> (u8, u32) {
+fn tile_pixel(layer: &TextBg, vram: &VramWindow<'_>, px: u32, py: u32) -> (u8, u32) {
     let entry = entry(layer, vram, px, py);
     let tile = u32::from(entry & ENTRY_TILE_MASK);
     let column = match entry & ENTRY_H_FLIP != 0 {
@@ -175,7 +175,7 @@ fn tile_pixel(layer: &TextBg, vram: &BgVram<'_>, px: u32, py: u32) -> (u8, u32) 
 // says (`bg-text.md`, "Unverified").
 pub(super) fn pixel(
     layer: &TextBg,
-    vram: &BgVram<'_>,
+    vram: &VramWindow<'_>,
     palette: &[u8],
     x: u32,
     y: u32,

@@ -71,7 +71,7 @@ three halfwords of its own:
 | 0-7 | Y, 0-255 |
 | 8 | 1 = affine object (rotation/scaling) |
 | 9 | affine object: 1 = double-size; plain object: 1 = **disabled**, not drawn |
-| 10-11 | mode: 0 normal, 1 semi-transparent (`TODO(phase4)`, #34), 2 OBJ window (`TODO(phase4)`, #33, `windows.md`), 3 bitmap object |
+| 10-11 | mode: 0 normal, 1 semi-transparent (`TODO(phase4)`, #34), 2 OBJ window (`windows.md`), 3 bitmap object |
 | 12 | mosaic on for this object |
 | 13 | 0 = 16 colours of 16 palettes, 1 = 256 colours of one palette (not for a bitmap object, where it should be 0) |
 | 14-15 | shape: 0 square, 1 wide, 2 tall, 3 not allowed |
@@ -223,8 +223,8 @@ the best background pixel; otherwise the best background pixel; otherwise the ba
 
 DISPCNT bit 12 is set and the engine's display mode is the normal picture (mode 1,
 `display-mode-vram.md`); with bit 12 clear no object is drawn, whatever OAM holds. An object
-with mode 2 (OBJ window) draws no colour and marks the window mask (`windows.md`; `TODO(phase4)`, #33); one with mode 1 is drawn as a normal
-object (`TODO(phase4)`, #34).
+with mode 2 (OBJ window) draws no colour: its opaque pixels are the OBJ window mask instead
+(`windows.md`, "The OBJ window"); one with mode 1 is drawn as a normal object (`TODO(phase4)`, #34).
 
 ### Mosaic
 
@@ -332,10 +332,11 @@ Each item gets `TODO(hw-unverified)` at its code site.
   `obj::placement` and `obj::bitmap_color` — verify likewise.
 - **DISPCNT bits 5 and 6 both set** (reserved for bitmap objects): a bitmap object draws nothing.
   — `obj::bitmap_color` — verify likewise.
-- **The cost of an OBJ-window object** (mode 2): it costs its cycles like any other object though
-  it is not drawn yet (#33). — `obj::draw_line` — verify likewise.
-- **Semi-transparent and OBJ-window objects** are drawn as normal objects / not drawn until #34
-  and #33; bitmap alpha is ignored until #34.
+- **The cost of an OBJ-window object** (mode 2): it costs its cycles like any other object, and
+  the line limit can cut its mask. See `windows.md`, "Unverified". — `obj::draw_line` — verify
+  likewise.
+- **Semi-transparent objects** are drawn as normal objects until #34; bitmap alpha is ignored
+  until #34.
 
 ## Evidence
 

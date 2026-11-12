@@ -32,7 +32,6 @@ None in Phase 0.
 
 ## Not implemented yet
 
-- Engine B's picture (`TODO(phase4)`): the screen it is routed to stays a black placeholder.
 - Engine A's graphics (mode 1) and main-memory display (mode 3) pictures (`TODO(phase3)`,
   `TODO(phase4)`).
 - Per-scanline drawing; a frame is rendered at once at the end of `run_frame` (`TODO(phase3)`, #104).

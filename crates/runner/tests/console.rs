@@ -71,9 +71,9 @@ fn given_console_rom_when_10_frames_run_then_the_rows_below_the_text_are_blank()
 }
 
 #[test]
-fn given_console_rom_when_10_frames_run_then_the_upper_screen_is_drawn_and_the_lower_is_black() {
-    // The text is drawn on engine A, which POWCNT1 puts on the upper screen at power-on; engine B
-    // is a black placeholder in Phase 3.
+fn given_console_rom_when_10_frames_run_then_the_upper_screen_is_drawn_and_the_lower_is_white() {
+    // The text is drawn on engine A, which POWCNT1 puts on the upper screen at power-on; the ROM
+    // leaves engine B in display mode 0, which is white (`docs/hw/bg-modes.md`).
     let machine = boot_frames();
     let top = machine.frame(Screen::Top);
     let first = top[0];
@@ -83,7 +83,7 @@ fn given_console_rom_when_10_frames_run_then_the_upper_screen_is_drawn_and_the_l
             machine
                 .frame(Screen::Bottom)
                 .iter()
-                .all(|&pixel| pixel == 0),
+                .all(|&pixel| pixel == 0x00FF_FFFF),
             top.len() == SCREEN_WIDTH * 192
         ),
         (true, true, true)

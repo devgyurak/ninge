@@ -40,7 +40,7 @@ All 32 bits are stored and read back. Only bits 16-19 change what is drawn in Ph
 | 1 | engine A (2D) power | see "Unverified" |
 | 2 | 3D rendering engine power | `TODO(phase7)` |
 | 3 | 3D geometry engine power | `TODO(phase7)` |
-| 9 | engine B (2D) power | `TODO(phase4)` |
+| 9 | engine B (2D) power: with it clear engine B's registers are read-only and its screen is black (`bg-modes.md`, "Engine B") | now |
 | 15 | display swap: 1 = engine A to the upper screen, engine B to the lower; 0 = engine A to the lower, B to the upper | now |
 
 All 16 bits are stored and read back. Bits 4-8 and 10-14 are not defined by GBATEK; they are
@@ -51,12 +51,13 @@ kept anyway so a read returns what was written (see "Unverified").
 ### What engine A shows, by display mode (DISPCNT bits 16-17)
 
 - **Mode 0, display off:** the screen is white.
-- **Mode 1, graphics:** backgrounds and objects. `TODO(phase3)` (text BG) and
-  `TODO(phase4)` (the rest). Until then the screen is a black placeholder, which is not a
-  hardware claim.
+- **Mode 1, graphics:** backgrounds and objects: `bg-text.md` and `bg-modes.md` for the
+  backgrounds; objects, windows and blending are `TODO(phase4)`.
 - **Mode 2, VRAM display:** the bitmap described below.
 - **Mode 3, main-memory display:** a bitmap streamed from main RAM through the display FIFO.
   `TODO(phase4)`. Until then the screen is a black placeholder.
+
+Engine B has modes 0 and 1 only (`bg-modes.md`, "Engine B").
 
 ### Mode 2: reading the bitmap
 
@@ -77,8 +78,9 @@ still applies to their output. Master brightness is not modeled: `TODO(phase4)` 
 
 The words upper and lower name the physical screens. POWCNT1 bit 15 decides which screen shows
 engine A and which shows engine B: with the bit set, engine A is on the upper screen; with it
-clear, engine A is on the lower screen. Engine B is not drawn in Phase 2 (`TODO(phase4)`): the
-screen it is routed to stays a black placeholder.
+clear, engine A is on the lower screen. Engine B draws the other screen (`bg-modes.md`, "Engine B"):
+display mode 0 white, display mode 1 its layers, and black while POWCNT1 bit 9 is clear. A ROM
+that never writes engine B's DISPCNT therefore leaves that screen white.
 
 ### When the picture is made
 

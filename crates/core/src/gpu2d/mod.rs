@@ -122,6 +122,15 @@ enum Route {
     Engine(EngineId, u32),
 }
 
+/// The ports POWCNT1 bit 9 gates are `1008h-105Fh` of the engine B block, i.e. offsets `8..60h`
+/// within it (`bg-modes.md`, "Engine B"): DISPCNT below them and registers above them, such as
+/// MASTER_BRIGHT at `106Ch`, are not gated.
+const GATED_PORTS_END: u32 = 0x60;
+
+fn is_gated_port(offset_in_block: u32) -> bool {
+    (BGCNT_OFFSET..GATED_PORTS_END).contains(&offset_in_block)
+}
+
 /// Widens a 5-bit channel to 8 bits by repeating its top bits. A host-side choice, not a
 /// hardware fact (`display-mode-vram.md`, "Colour expansion"; #68).
 fn expand_channel(channel: u16) -> u32 {
@@ -250,7 +259,7 @@ impl Gpu2d {
             }
             Route::Engine(EngineId::A, at) => self.a.write_byte(at, value),
             Route::Engine(EngineId::B, at) => {
-                if self.engine_b_on() || at < BGCNT_OFFSET {
+                if self.engine_b_on() || !is_gated_port(at) {
                     self.b.write_byte(at, value);
                 }
             }

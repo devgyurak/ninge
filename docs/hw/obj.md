@@ -280,49 +280,53 @@ Each item gets `TODO(hw-unverified)` at its code site.
   no value for an unmapped read. — `Memory::build_page_table` — verify likewise.
 - **What an object reads past its VRAM window** (an unmapped tile, or tile 1023 with boundary 256
   in engine B's 128 KiB): the pixel is 0, so it is transparent. GBATEK says only that engine B has
-  128 KiB. — `Engine::obj_pixel` — verify likewise.
-- **Engine B and DISPCNT bit 22** (engine A only): engine B treats it as 0. — `Engine::obj_pixel`
+  128 KiB. — `obj::tile_value` — verify likewise.
+- **Engine B and DISPCNT bit 22** (engine A only): engine B treats it as 0. — `SUB_SPEC` in `gpu2d/spec.rs`
   — verify likewise.
 - **X as a signed 9-bit number.** GBATEK says 0-511 and does not say signed; the wrap is what the
-  GBA does. — `Engine::draw_obj` — verify likewise.
+  GBA does. — `ObjAttrs::decode` — verify likewise.
 - **Vertical wrap.** Two GBATEK pages disagree: "OAM Attributes" says a very large object at
   Y > 128 is shown only at the top, "DS Video OBJs" says the DS shows it at both ends. This note
-  follows the DS page: box rows are on line `(Y + r) mod 256`. — `Engine::draw_obj` — verify
+  follows the DS page: box rows are on line `(Y + r) mod 256`. — `obj::placement` — verify
   likewise.
 - **The affine arithmetic.** GBATEK gives no formula for an object; this note uses the centre of
   the box and the BG's 8.8 convention, so the sampling instant (pixel corner or centre) and the
-  rounding of `(PA * dx + PB * dy) >> 8` are inferred. — `Engine::obj_source` — verify likewise
+  rounding of `(PA * dx + PB * dy) >> 8` are inferred. — `obj::affine_source` — verify likewise
   with a rotated test pattern.
-- **Flip on a bitmap object** is taken to be the same as on a tile object. — `Engine::obj_source`
+- **Flip on a bitmap object** is taken to be the same as on a tile object. — `obj::bitmap_color`
   — verify likewise.
 - **Whether the budget numbers of the GBA hold on the DS**, and whether a double-size affine
-  object costs `10 + 2 * 2W`. GBATEK's table says so ("16..128 pixels"). — `obj::line_cost` —
+  object costs `10 + 2 * 2W`. GBATEK's table says so ("16..128 pixels"). — `Placement::cost` in `obj.rs` —
   verify likewise.
 - **The cost of an object that is off-screen** horizontally, or **not on the current line**: GBATEK
   says offscreen objects cost and asks whether vertically offscreen ones do too. This model charges
   every object that the line reaches and one whose vertical range does not contain the line costs
-  nothing. — `obj::line_cost` — verify likewise.
+  nothing. — `Placement::cost` in `obj.rs` — verify likewise.
 - **The cost of a disabled object** (attr0 bit 9 on a plain object). Assumed to be 0. —
-  `obj::line_cost` — verify likewise.
+  `Placement::cost` in `obj.rs` — verify likewise.
 - **Which object loses when the budget runs out in the middle of one:** the whole object is
-  dropped here, and so are all later ones; the hardware may draw part of it. — `obj::fill_line` —
+  dropped here, and so are all later ones; the hardware may draw part of it. — `obj::draw_line` —
   verify likewise.
 - **Bit 23's effect beyond the budget.** GBATEK states only the two budgets; whether OAM access
-  timing changes the picture is not modelled. — `obj::line_budget` — verify likewise.
+  timing changes the picture is not modelled. — `obj::draw_line` — verify likewise.
 - **The mosaic block origin for objects** is the screen's, as for the backgrounds; GBATEK says
   only that the colour is the upper-left covered pixel, and that scrolling or moving the object
-  shifts the pick. — `obj::mosaic` — verify likewise.
+  shifts the pick. — `obj::placement` — verify likewise.
 - **Mosaic on an affine object**: the block's upper-left pixel is taken on the screen, then
-  transformed. — `obj::mosaic` — verify likewise.
+  transformed. — `obj::placement` — verify likewise.
 - **OAM writes during a visible line:** a store lands at once and the next line sees it; the
-  hardware may block or garble it. — `Engine::render_line` — verify against a trace.
+  hardware may block or garble it. — `Machine::render_line` — verify against a trace.
 - **The sampling instant** of OAM inside a line is the line's start, as for every register
   (`bg-text.md`, "Unverified"). — `Machine::render_line` — verify against a trace.
 - **Tiles 0-511 in bitmap BG modes** (a GBA rule) do not apply: the DS keeps objects in their own
   VRAM windows. — none — noted so nobody adds it.
-- **Shape 3 and mode 3 with attr0 bit 13 set:** shape 3 draws nothing; a bitmap object with
-  the colour bit set is drawn as a bitmap object regardless. — `Engine::draw_obj` — verify
-  likewise.
+- **Shape 3 and mode 3 with attr0 bit 13 set:** shape 3 draws nothing and costs no budget; a
+  bitmap object with the colour bit set is drawn as a bitmap object regardless. —
+  `obj::placement` and `obj::bitmap_color` — verify likewise.
+- **DISPCNT bits 5 and 6 both set** (reserved for bitmap objects): a bitmap object draws nothing.
+  — `obj::bitmap_color` — verify likewise.
+- **The cost of an OBJ-window object** (mode 2): it costs its cycles like any other object though
+  it is not drawn yet (#33). — `obj::draw_line` — verify likewise.
 - **Semi-transparent and OBJ-window objects** are drawn as normal objects / not drawn until #34
   and #33; bitmap alpha is ignored until #34; extended palettes (bit 31) until #32.
 

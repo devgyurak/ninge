@@ -309,8 +309,7 @@ impl Memory {
     /// savestate load (`savestate`) only: a VRAMCNT write rebuilds just the VRAM block
     /// (`build_vram_pages`) and a WRAMCNT write just the shared WRAM block (`build_wram_pages`).
     // Per-CPU tables: the decision is recorded in the PR that added #22.
-    // TODO(phase4): the BG and OBJ mappings of the other banks join them (#35); texture slots are
-    // `TODO(phase7)`.
+    // TODO(phase7): texture and extended-palette slots are decoded but not read (#32).
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
     // rule (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the palette RAM repeats through its 16 MiB block, and the ARM7 has
@@ -364,23 +363,24 @@ impl Memory {
     ///
     /// Banks are laid down from I back to A, so where two enabled banks cover the same page the
     /// earlier bank's entry is the one left (`vram-banks.md`, "Overlap").
-    // TODO(phase4): the ARM7's mapping of banks C and D (#35).
-    // TODO(hw-unverified): the earlier bank wins an overlap, and an address in the block that no
-    // bank holds is unmapped: no mirrors (`vram-banks.md`, "Unverified").
+    // TODO(hw-unverified): the earlier bank wins an overlap, in the ARM7's table too, and an
+    // address in the block that no bank holds is unmapped: no mirrors (`vram-banks.md`,
+    // "Unverified").
     fn build_vram_pages(&mut self) {
         for pages in [&mut self.pages9, &mut self.pages7] {
             map_window(pages, VRAM_BLOCK_BASE, VRAM_BLOCK_END, Region::Vram, None);
         }
         for bank in (0..BANK_COUNT).rev() {
             let lcdc = LCDC_BASE + BANK_BASE[bank] as u32;
-            if let Some(base) = self.vram_bank(bank).mapping.cpu_base(lcdc) {
-                map_window(
-                    &mut self.pages9,
-                    base,
-                    base + BANK_SIZE[bank] as u32,
-                    Region::Vram,
-                    Some((BANK_BASE[bank], BANK_SIZE[bank])),
-                );
+            let mapping = self.vram_bank(bank).mapping;
+            let span = Some((BANK_BASE[bank], BANK_SIZE[bank]));
+            if let Some(base) = mapping.cpu_base(lcdc) {
+                let end = base + BANK_SIZE[bank] as u32;
+                map_window(&mut self.pages9, base, end, Region::Vram, span);
+            }
+            if let Some(base) = mapping.arm7_base() {
+                let end = base + BANK_SIZE[bank] as u32;
+                map_window(&mut self.pages7, base, end, Region::Vram, span);
             }
         }
     }
@@ -593,10 +593,12 @@ impl Memory {
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
         match page.region {
             // VRAM and the palette take 16-bit and 32-bit writes only; a byte write is ignored
-            // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior").
-            // TODO(hw-unverified): the rule is taken to cover the BG window too
+            // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior"). The ARM7's own
+            // mapping of banks C and D is the one exception: its table holds VRAM only there, so
+            // every VRAM page the ARM7 reaches takes a byte store.
+            // TODO(hw-unverified): the rule is taken to cover the BG and OBJ windows too
             // (`vram-banks.md`, "Unverified").
-            Region::Vram | Region::Palette if N == 1 => false,
+            Region::Vram | Region::Palette if N == 1 && ARM9 => false,
             Region::Unmapped => false,
             // ROM: the write is taken and dropped, it is not an I/O access.
             Region::Bios => true,
@@ -623,17 +625,33 @@ impl Memory {
         put_bytes(buf, offset, bytes);
     }
 
+    /// VRAMSTAT: bit 0 is bank C and bit 1 bank D, each set while the bank is enabled in the ARM7
+    /// mapping (MST 2). OFS is not reflected and bits 2-7 are 0 (`vram-banks.md`, "VRAMSTAT").
+    fn vramstat(&self) -> u8 {
+        let in_arm7 = |bank: usize| {
+            u8::from(matches!(
+                self.vram_bank(bank).mapping,
+                VramMapping::Arm7 { .. }
+            ))
+        };
+        in_arm7(2) | (in_arm7(3) << 1)
+    }
+
     /// What CPU `ARM9` reads from the memory-control block at `offset` bytes past VRAMCNT_A:
-    /// WRAMCNT for the ARM9, WRAMSTAT for the ARM7. The VRAMCNT registers are write-only and read 0. This is
+    /// WRAMCNT for the ARM9, WRAMSTAT and VRAMSTAT for the ARM7. The VRAMCNT registers are
+    /// write-only and read 0. This is
     /// the memory-control block of the I/O map (`Owner::Memory`), kept here because the page tables derive from
     /// these registers (#109); it has no side effect, so a peek and a read are the same.
     // WRAMCNT is documented R/W in one place and write-only in another; it reads back.
     // TODO(hw-unverified): WRAMSTAT is the stored 2-bit mode (`wramcnt.md`, "Unverified").
     // TODO(hw-unverified): the VRAMCNT registers read 0 (`arm9-memory-map.md`, "Unverified").
+    // TODO(hw-unverified): the ARM7's write to VRAMSTAT is ignored (`vram-banks.md`,
+    // "Unverified").
     pub(crate) fn read_control<const ARM9: bool>(&self, offset: u32, width: Width) -> u32 {
         read_bytes(offset, width, |at| {
             match (ARM9, VRAMCNT_A_ADDR.wrapping_add(at)) {
                 (true, WRAMCNT_ADDR) | (false, WRAMSTAT_ADDR) => self.wramcnt,
+                (false, VRAMCNT_A_ADDR) => self.vramstat(),
                 _ => 0,
             }
         })

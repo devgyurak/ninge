@@ -3,7 +3,8 @@
 @ engines, overlap, and the modes the CPU cannot see (docs/hw/vram-banks.md).
 @ No libnds, no crt0. Loaded at 0x02000000, entered at 0x02000100. The ROM records observed
 @ values only; the expected values live in crates/runner/tests/vrambanks.rs, computed from the
-@ note and not from this file.
+@ note and not from this file. The ARM7 side (arm7.s) records at 0x02005000; its steps are
+@ described there, and group 10 below sets up each one.
 @
 @ Banks are visited through the `banks` table at the end: VRAMCNT address, LCDC start, size.
 @ Bank number i is 0 (A) to 8 (I). Groups 1-4 enable with VRAMCNT = 0x80 (enabled, MST 0);
@@ -27,8 +28,14 @@
 @   47       LDR of 0x04000240 with bank A on (VRAMCNT_A..D are write-only)
 @   48       progress: the number of the last finished group (1 markers, 2 neighbours,
 @            3 byte stores, 4 disable and re-enable, 5 windows, 6 overlap, 7 invisible,
-@            8 byte stores in windows, 9 moves)
+@            8 byte stores in windows, 9 moves, 10 the ARM7's steps)
 @   49       sentinel, written last
+@   500-523  group 10, step s (1-8) of `arm7_steps`: 3 words at 500 + 3 (s - 1): the ARM9's own
+@            reads at 0x06000000, 0x06840000 (bank C's LCDC address) and 0x06860000 (bank D's)
+@            before it posts step s, so what the ARM9 sees while C and D are the ARM7's
+@   530      after the last step, bank C back in LCDC mode: the word at 0x06840010 the ARM7
+@            stored (STR then STRB)
+@   531      ... the word at 0x06840014 (the ARM7's STRH)
 @   100-334  group 5, entry e of the `entries` table (bank, VRAMCNT value, CPU address of the
 @            window start), only that bank on: slot 100 + 5e is the address used, +1 the word
 @            there, +2 the last word of the window, +3 the word just below, +4 just above
@@ -65,7 +72,7 @@
     .global _start
 _start:
     ldr r8, =REC
-    adr r9, banks
+    ldr r9, =banks
     mrc p15, 0, r0, c1, c0, 0
     bic r0, r0, #0x00001000
     bic r0, r0, #0x00000005
@@ -314,6 +321,54 @@ g8:
     rec 393, r0
     mov r1, #9
     rec 48, r1
+    @ ---- group 10: the ARM7's mapping, one IPCSYNC step per setting of C and D ----
+    ldr r10, =0x04000180        @ IPCSYNC
+    mov r4, #1
+g10:
+    bl all_off
+    ldr r5, =arm7_steps
+    sub r1, r4, #1
+    add r5, r5, r1, lsl #3
+    ldr r2, [r5]                @ VRAMCNT_C
+    ldr r3, [r5, #4]            @ VRAMCNT_D
+    ldr r0, =0x04000242
+    strb r2, [r0]
+    ldr r0, =0x04000243
+    strb r3, [r0]
+    add r11, r1, r1, lsl #1
+    add r11, r11, #500
+    add r11, r8, r11, lsl #2    @ this step's three slots
+    ldr r0, =0x06000000
+    ldr r6, [r0]
+    str r6, [r11]
+    ldr r0, =0x06840000
+    ldr r6, [r0]
+    str r6, [r11, #4]
+    ldr r0, =0x06860000
+    ldr r6, [r0]
+    str r6, [r11, #8]
+    mov r6, r4, lsl #8
+    strh r6, [r10]              @ post step s
+g10w:
+    ldrh r6, [r10]
+    and r6, r6, #0xF
+    cmp r6, r4
+    bne g10w                    @ the ARM7 posts s back when it has recorded
+    add r4, r4, #1
+    cmp r4, #9
+    blo g10
+    bl all_off
+    ldr r0, =0x04000242
+    mov r1, #0x80
+    strb r1, [r0]               @ bank C back to LCDC
+    ldr r0, =0x06840010
+    ldr r1, [r0]
+    rec 530, r1
+    ldr r0, =0x06840014
+    ldr r1, [r0]
+    rec 531, r1
+    mov r1, #10
+    rec 48, r1
     ldr r1, =0x56425421
     rec 49, r1
 spin:
@@ -435,3 +490,13 @@ bytes:
     .word 0, 0x82, 0x06400000
     .word 2, 0x84, 0x06200000
     .word 3, 0x84, 0x06600000
+    .align 2
+arm7_steps:                     @ VRAMCNT_C, VRAMCNT_D per step
+    .word 0x82, 0x00            @ 1: C MST 2, OFS 0
+    .word 0x8A, 0x00            @ 2: C MST 2, OFS 1
+    .word 0x82, 0x82            @ 3: both, OFS 0
+    .word 0x82, 0x8A            @ 4: C OFS 0, D OFS 1
+    .word 0x80, 0x81            @ 5: C LCDC, D BG A
+    .word 0x02, 0x0A            @ 6: MST 2 but disabled
+    .word 0x9A, 0x00            @ 7: C MST 2, OFS 3 (OFS.1 not used)
+    .word 0x92, 0x00            @ 8: C MST 2, OFS 2

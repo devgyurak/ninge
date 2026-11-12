@@ -2211,3 +2211,64 @@ fn given_bank_e_written_with_ofs_bits_when_decoded_then_the_offset_reads_zero() 
         state(true, 1, 0, VramMapping::BgA { offset: 0 })
     );
 }
+
+// ---------------------------------------------------------------- the ARM7's VRAM (banks C, D)
+
+#[test]
+fn given_c_and_d_set_to_mst_2_by_the_arm9_when_the_arm7_reads_vramstat_then_both_bits_are_set() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write8(&plain(), 0x0400_0243, 0x8A);
+    assert_eq!(
+        (m.read8_arm7(0, 0x0400_0240), m.read16_arm7(0, 0x0400_0240)),
+        (3, 0x0003)
+    );
+}
+
+#[test]
+fn given_vramcnt_c_changed_when_the_arm7_reads_vramstat_again_then_it_follows_at_once() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    let on = m.read8_arm7(0, 0x0400_0240);
+    m.write8(&plain(), 0x0400_0242, 0x80);
+    assert_eq!((on, m.read8_arm7(0, 0x0400_0240)), (1, 0));
+}
+
+#[test]
+fn given_the_arm7_writes_vramstat_through_its_view_when_read_then_it_is_unchanged() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write8_arm7(0, 0x0400_0240, 0xFF);
+    assert_eq!(m.read8_arm7(0, 0x0400_0240), 1);
+}
+
+#[test]
+fn given_bank_c_in_the_arm7_mapping_when_the_arm7_stores_a_byte_through_its_view_then_it_lands() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write32_arm7(0, 0x0600_0000, 0x1122_3344);
+    m.write8_arm7(0, 0x0600_0001, 0xEE);
+    assert_eq!(m.read32_arm7(0, 0x0600_0000), 0x1122_EE44);
+}
+
+#[test]
+fn given_bank_c_in_the_arm7_mapping_when_the_arm9_looks_for_it_then_every_address_is_empty() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write32_arm7(0, 0x0600_0000, 0xCAFE_F00D);
+    assert_eq!(
+        (
+            m.read32(&plain(), 0x0600_0000),
+            m.read32(&plain(), 0x0684_0000),
+            m.read32(&plain(), 0x0620_0000)
+        ),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn given_the_arm7_without_vram_banks_when_it_reads_the_vram_block_then_it_reads_zero() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0240, 0x80);
+    assert_eq!(m.read32_arm7(0, 0x0680_0000), 0);
+}

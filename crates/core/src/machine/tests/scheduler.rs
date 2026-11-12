@@ -576,7 +576,8 @@ fn given_arm7_reads_the_io_area_when_it_is_unmapped_then_it_reads_zero_as_the_no
     assert_eq!(record(&machine, 2), 0x100);
 }
 
-// TODO(hw-unverified): as above, for the VRAM window that the ARM7 does not see yet (#35).
+// TODO(hw-unverified): as above, for the VRAM window while no bank is in the ARM7 mapping
+// (`vram-banks.md`, "Unverified").
 #[test]
 fn given_arm7_reads_the_vram_window_when_it_is_unmapped_then_it_reads_zero_as_the_note_models_unverified()
  {

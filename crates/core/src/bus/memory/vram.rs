@@ -47,6 +47,12 @@ pub enum VramMapping {
         /// Bytes from the start of the window.
         offset: u32,
     },
+    /// The ARM7's work RAM (banks C and D, MST 2): `offset` bytes into the ARM7's window at
+    /// `0600_0000h`. The ARM9 does not see the bank.
+    Arm7 {
+        /// Bytes from the start of the window.
+        offset: u32,
+    },
     /// A texture image slot (not in any CPU address space).
     Texture {
         /// The slot, 0-3.
@@ -108,6 +114,8 @@ impl VramWindowKind {
     }
 }
 
+/// Where the ARM7 sees banks C and D: `0600_0000h` (`vram-banks.md`, "Where each bank goes").
+pub(crate) const ARM7_BASE: u32 = 0x0600_0000;
 /// Bytes in one 128 KiB bank slot of a BG window.
 const SLOT_128K: u32 = 0x2_0000;
 /// Bytes in one 16 KiB step of banks F and G.
@@ -134,6 +142,9 @@ pub(crate) fn mapping(bank: usize, enabled: bool, mst: u8, ofs: u8) -> VramMappi
         },
         (E, 1) => VramMapping::BgA { offset: 0 },
         (F | G, 1) => VramMapping::BgA { offset: fg_offset },
+        (C | D, 2) => VramMapping::Arm7 {
+            offset: SLOT_128K * ofs0,
+        },
         (A | B, 2) => VramMapping::ObjA {
             offset: SLOT_128K * ofs0,
         },
@@ -163,8 +174,16 @@ pub(crate) fn mapping(bank: usize, enabled: bool, mst: u8, ofs: u8) -> VramMappi
 }
 
 impl VramMapping {
-    /// The CPU address the bank starts at while this mapping is in force, or `None` when the CPU
-    /// does not see the bank (`lcdc` is the bank's LCDC address).
+    /// The address the ARM7 sees the bank at, or `None` when the bank is not in the ARM7 mapping.
+    pub(crate) fn arm7_base(self) -> Option<u32> {
+        match self {
+            Self::Arm7 { offset } => Some(ARM7_BASE + offset),
+            _ => None,
+        }
+    }
+
+    /// The ARM9 address the bank starts at while this mapping is in force, or `None` when the
+    /// ARM9 does not see the bank (`lcdc` is the bank's LCDC address).
     pub(crate) fn cpu_base(self, lcdc: u32) -> Option<u32> {
         let at = |kind: VramWindowKind, offset: u32| Some(kind.base() + offset);
         match self {
@@ -175,6 +194,7 @@ impl VramMapping {
             Self::ObjB { offset } => at(VramWindowKind::ObjB, offset),
             Self::Disabled
             | Self::Unmapped
+            | Self::Arm7 { .. }
             | Self::Texture { .. }
             | Self::TexPalette { .. }
             | Self::BgExtPaletteA { .. }

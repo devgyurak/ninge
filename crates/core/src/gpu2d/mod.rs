@@ -15,6 +15,7 @@
 mod affine;
 mod engine;
 mod kind;
+mod obj;
 mod spec;
 mod text;
 
@@ -27,6 +28,7 @@ use engine::{
     BG_REGS_BYTES as ENGINE_BG_REGS_BYTES, BGCNT_OFFSET, Engine,
     MOSAIC_BLOCK_BYTES as ENGINE_MOSAIC_BYTES, MOSAIC_OFFSET,
 };
+pub use obj::{OBJ_COUNT, ObjAttrs};
 use serde::{Deserialize, Serialize};
 pub(crate) use spec::EngineInputs;
 use spec::{EngineSpec, MAIN_SPEC, SUB_SPEC};

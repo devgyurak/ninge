@@ -27,6 +27,7 @@ mod engine_b;
 mod extended;
 mod large;
 mod mosaic;
+mod obj;
 mod text;
 
 fn w8(m: &mut Machine, addr: u32, v: u8) {

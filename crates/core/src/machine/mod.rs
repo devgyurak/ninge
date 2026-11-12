@@ -17,7 +17,7 @@ pub const SCREEN_HEIGHT: usize = 192;
 /// Bytes of palette RAM one engine reads: its BG and OBJ tables (`docs/hw/palette-ram.md`).
 const PALETTE_HALF: usize = 1 << 10;
 /// Bytes of OAM one engine reads: 128 entries of 8 bytes (`docs/hw/obj.md`).
-const OAM_HALF: usize = 1 << 10;
+pub(crate) const OAM_HALF: usize = 1 << 10;
 
 /// One of the two physical screens.
 ///
@@ -206,6 +206,8 @@ impl Machine {
             .split_at_checked(PALETTE_HALF)
             .unwrap_or((palette, &[]));
         // OAM is one half for each engine too (`obj.md`, "Registers and memory").
+        // TODO(hw-unverified): OAM is read at the start of the line, and a store during a visible
+        // line lands at once (`obj.md`, "Unverified").
         let oam = self.memory.oam();
         let (oam_a, oam_b) = oam.split_at_checked(OAM_HALF).unwrap_or((oam, &[]));
         if let Some(out) = engine_a.get_mut(line.clone()) {

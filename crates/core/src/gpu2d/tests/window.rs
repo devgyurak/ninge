@@ -393,18 +393,28 @@ fn given_the_windows_of_engine_a_when_engine_b_has_none_then_engine_b_shows_the_
 
 // ------------------------------------------------------------------------- the objects
 
-/// Bank B as engine A's OBJ VRAM (MST 2): one solid tile 0 of colour 1, a palette whose entry 1 is
-/// magenta, and two 8 by 8 objects at (10, 10) and (200, 10), every other entry disabled.
-fn put_sprites(m: &mut Machine) {
+/// Bank B as engine A's OBJ VRAM (MST 2): one solid tile 0 of colour 1 and a palette whose entry 1
+/// is magenta, with every OAM entry disabled.
+fn prepare_objects(m: &mut Machine) {
     w8(m, 0x0400_0241, 0x82);
     w16(m, 0x0500_0202, MAGENTA);
     (0..8).for_each(|row| w32(m, 0x0640_0000 + row * 4, 0x1111_1111));
     (0..128u32).for_each(|entry| w16(m, 0x0700_0000 + entry * 8, 1 << 9));
-    [10u16, 200].iter().enumerate().for_each(|(n, &x)| {
-        w16(m, 0x0700_0000 + n as u32 * 8, 10);
-        w16(m, 0x0700_0000 + n as u32 * 8 + 2, x);
-        w16(m, 0x0700_0000 + n as u32 * 8 + 4, 0);
-    });
+}
+
+/// Writes entry `entry` of engine A's OAM.
+fn put_object(m: &mut Machine, entry: u32, attrs: [u16; 3]) {
+    attrs
+        .iter()
+        .enumerate()
+        .for_each(|(n, &half)| w16(m, 0x0700_0000 + entry * 8 + n as u32 * 2, half));
+}
+
+/// Two 8 by 8 objects at (10, 10) and (200, 10).
+fn put_sprites(m: &mut Machine) {
+    prepare_objects(m);
+    put_object(m, 0, [10, 10, 0]);
+    put_object(m, 1, [10, 200, 0]);
 }
 
 #[test]
@@ -579,4 +589,229 @@ fn given_the_effect_bit_when_set_then_it_is_stored_and_changes_no_pixel() {
         ),
         (true, true)
     );
+}
+
+// ------------------------------------------------------------------------- the OBJ window
+
+/// attr0 bits: mode 2 (the OBJ window), affine, mosaic.
+const MODE_OBJ_WINDOW: u16 = 2 << 10;
+const AFFINE: u16 = 1 << 8;
+const MOSAIC: u16 = 1 << 12;
+
+/// A scene whose OBJ window group is BG1 and whose outside group is BG0 and the OBJ layer:
+/// objects, window 0 and window 1 off.
+fn obj_window_scene(extra: u32, regs: &[(u32, u16)]) -> Machine {
+    let mut m = layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | OBJ_ON | OBJ_WIN_ON | extra,
+        &[&[(WINOUT, BG0 | OBJ | high(BG1))], regs].concat(),
+    );
+    prepare_objects(&mut m);
+    m
+}
+
+/// Fills each row of OBJ tile 0 with `word`.
+fn fill_tile_0(m: &mut Machine, word: u32) {
+    (0..8).for_each(|row| w32(m, 0x0640_0000 + row * 4, word));
+}
+
+/// Affine group 0: PA, PB, PC and PD, the fourth halfword of entries 0-3 (disabled objects).
+fn put_group_0(m: &mut Machine, [pa, pb, pc, pd]: [u16; 4]) {
+    [pa, pb, pc, pd]
+        .iter()
+        .enumerate()
+        .for_each(|(n, &value)| w16(m, 0x0700_0000 + n as u32 * 8 + 6, value));
+}
+
+#[test]
+fn given_a_mode_2_object_when_drawn_then_its_pixels_show_the_obj_window_layers_and_it_draws_no_colour()
+ {
+    let mut m = obj_window_scene(0, &[]);
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    // The object covers columns 50-57 and rows 50-57; BG1 shows there, BG0 elsewhere, and no pixel is
+    // the object's magenta.
+    let probes = [
+        (50, 50, GREEN),
+        (57, 57, GREEN),
+        (49, 53, RED),
+        (58, 53, RED),
+        (53, 49, RED),
+        (53, 58, RED),
+    ];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_a_mode_2_object_when_no_window_is_on_then_it_draws_nothing() {
+    let mut m = layers_scene(ENG_A, GRAPHICS_BGS | OBJ_ON, &[]);
+    prepare_objects(&mut m);
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [(53, 53, RED), (60, 60, RED)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_a_mode_2_object_with_transparent_pixels_when_drawn_then_only_its_opaque_pixels_are_window()
+{
+    let mut m = obj_window_scene(0, &[]);
+    // Tile 0 keeps colour 1 in its left four columns (the low nibbles) and is transparent right of
+    // them.
+    fill_tile_0(&mut m, 0x0000_1111);
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [
+        (50, 52, GREEN),
+        (53, 52, GREEN),
+        (54, 52, RED),
+        (57, 52, RED),
+    ];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_window_0_over_the_obj_window_when_drawn_then_window_0_s_layers_show() {
+    let mut m = obj_window_scene(
+        WIN0_ON,
+        &[(WIN0H, range(40, 54)), (WIN0V, range(40, 60)), (WININ, BG2)],
+    );
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    // Columns 50-53 are in window 0 and the OBJ window (window 0 wins); columns 54-57 are in the
+    // OBJ window alone.
+    let probes = [
+        (52, 52, BLUE),
+        (56, 52, GREEN),
+        (45, 45, BLUE),
+        (60, 52, RED),
+    ];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_window_1_over_the_obj_window_when_drawn_then_window_1_s_layers_show() {
+    let mut m = obj_window_scene(
+        WIN1_ON,
+        &[
+            (WIN1H, range(40, 54)),
+            (WIN1V, range(40, 60)),
+            (WININ, high(BG3)),
+        ],
+    );
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [(52, 52, YELLOW), (56, 52, GREEN), (60, 52, RED)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_a_sprite_over_the_obj_window_when_the_obj_bit_is_clear_there_then_the_sprite_is_hidden() {
+    let mut m = obj_window_scene(0, &[]);
+    // The window object covers 50-57; a normal object covers 54-61. Inside the window the group is
+    // BG1 alone, so the sprite is hidden there; outside, the group has OBJ and shows it.
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    put_object(&mut m, 1, [54, 54, 0]);
+    let probes = [(56, 56, GREEN), (60, 60, MAGENTA)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_a_sprite_over_the_obj_window_when_the_obj_bit_is_set_there_then_the_sprite_shows() {
+    let mut m = obj_window_scene(0, &[(WINOUT, BG0 | high(BG1 | OBJ))]);
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    put_object(&mut m, 1, [54, 54, 0]);
+    // Outside the window the group is BG0 alone, so the sprite is hidden there.
+    let probes = [(56, 56, MAGENTA), (60, 60, RED)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_the_obj_layer_off_when_a_mode_2_object_is_listed_then_there_is_no_obj_window() {
+    // DISPCNT bit 12 is clear: no object is processed, so no pixel is marked (`windows.md`).
+    let mut m = layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | OBJ_WIN_ON,
+        &[(WINOUT, BG0 | high(BG1))],
+    );
+    prepare_objects(&mut m);
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [(53, 53, RED)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_an_obj_window_bit_clear_when_a_mode_2_object_is_listed_then_the_outside_layers_show() {
+    // DISPCNT bit 15 is clear (OBJ window off) but window 0 is on elsewhere: the object's pixels are
+    // outside every window.
+    let mut m = layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | OBJ_ON | WIN0_ON,
+        &[
+            (WIN0H, range(0, 10)),
+            (WIN0V, range(0, 10)),
+            (WINOUT, BG0 | high(BG1)),
+        ],
+    );
+    prepare_objects(&mut m);
+    put_object(&mut m, 0, [50 | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [(53, 53, RED)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_an_affine_mode_2_object_when_drawn_then_the_mask_follows_the_transform() {
+    let mut m = obj_window_scene(0, &[]);
+    // Group 0: PA = PD = 2.0 samples twice as far from the centre, so the picture covers the middle
+    // four columns and rows of the 8 by 8 box (columns and rows 52-55).
+    put_group_0(&mut m, [0x200, 0, 0, 0x200]);
+    put_object(&mut m, 4, [50 | AFFINE | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [
+        (52, 52, GREEN),
+        (55, 55, GREEN),
+        (51, 52, RED),
+        (56, 52, RED),
+        (52, 56, RED),
+    ];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_a_mosaic_mode_2_object_when_drawn_then_the_mask_is_made_of_blocks() {
+    let mut m = obj_window_scene(0, &[]);
+    // OBJ mosaic 4 wide, 1 high. Blocks are counted from the left of the screen: the block at 48-51
+    // starts left of the object and is transparent, the blocks 52-55 and 56-59 show it, the block 60-63
+    // starts right of its box.
+    w16(&mut m, MOSAIC_ADDR, 0x0300);
+    put_object(&mut m, 0, [50 | MOSAIC | MODE_OBJ_WINDOW, 50, 0]);
+    let probes = [
+        (51, 53, RED),
+        (52, 53, GREEN),
+        (59, 53, GREEN),
+        (60, 53, RED),
+    ];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+/// The budget scene: `costly` objects that cost 64 cycles each, off the left of the screen on line
+/// 40, then a mode 2 object of 8 cycles at column 100.
+fn budget_scene(costly: u32) -> Machine {
+    let mut m = obj_window_scene(0, &[]);
+    (0..costly).for_each(|entry| {
+        // A 64 by 32 plain object at X = -256 (entirely off the screen).
+        put_object(&mut m, entry, [40 | 1 << 14, 0x100 | 3 << 14, 0]);
+    });
+    put_object(&mut m, costly, [40 | MODE_OBJ_WINDOW, 100, 0]);
+    m
+}
+
+#[test]
+fn given_18_costly_objects_when_a_mode_2_object_follows_then_it_fits_the_budget_and_marks_its_mask()
+{
+    // 18 * 64 + 8 = 1160 cycles, within 1210.
+    let mut m = budget_scene(18);
+    assert_eq!(misses(&mut m, ENG_A, &[(103, 43, GREEN)]), vec![]);
+}
+
+#[test]
+fn given_19_costly_objects_when_a_mode_2_object_follows_then_the_budget_is_spent_and_it_marks_nothing()
+ {
+    // The 19th costly object would need 1216 > 1210 cycles: it and every later object are dropped.
+    let mut m = budget_scene(19);
+    assert_eq!(misses(&mut m, ENG_A, &[(103, 43, RED)]), vec![]);
 }

@@ -10,7 +10,6 @@ use super::spec::{EngineInputs, EngineSpec};
 use super::text::{self, TextBg};
 use super::window::{GROUP_MASK, LineWindows, WINDOW_BLOCK_BYTES, WINDOW_OFFSET, Windows};
 use super::{expand_color, with_byte};
-use crate::SCREEN_WIDTH;
 use serde::{Deserialize, Serialize};
 
 /// The engine's register block starts at DISPCNT; these are offsets from there, the same in
@@ -269,7 +268,7 @@ impl Engine {
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
     /// together"). An object is in front of a background layer whose priority value is the same or
     /// greater (`obj.md`, "Priority").
-    // TODO(phase4): blending completes the line (#34), and the OBJ window (#33) joins the regions.
+    // TODO(phase4): blending completes the line (#34).
     // TODO(hw-unverified): the backdrop has no enable bit and shows when every layer is hidden
     // (`windows.md`, "Unverified").
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
@@ -309,12 +308,12 @@ impl Engine {
         // The object layer, when DISPCNT bit 12 is set (`obj.md`, "The layer is on when").
         let objects = match dispcnt & DISPCNT_OBJ_ON != 0 {
             true => obj::draw_line(inputs, dispcnt, mosaic, y),
-            false => [None; SCREEN_WIDTH],
+            false => obj::ObjLayer::EMPTY,
         };
         // The regions of the line: which layers each pixel may show (`windows.md`).
         let regions = LineWindows::new(&self.windows(dispcnt), y);
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
-            let shown = regions.layers(x);
+            let shown = regions.layers(x, &objects.window);
             // The first column of the pixel's block, for a mosaic layer.
             let block_x = (x - x % block_w) as u32;
             let layer = order.iter().find_map(|&n| {
@@ -346,7 +345,7 @@ impl Engine {
                 }
                 .map(|color| (color, texts[n].priority))
             });
-            let object = objects[x].filter(|_| shown.obj());
+            let object = objects.pixels[x].filter(|_| shown.obj());
             *pixel = expand_color(match (object, layer) {
                 // An object is behind a layer of a smaller priority value.
                 (Some(object), Some((color, priority))) if object.priority > priority => color,

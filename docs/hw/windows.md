@@ -154,6 +154,10 @@ Each item carries `TODO(hw-unverified)` at its code site.
 - **The backdrop with every layer hidden:** it has no enable bit and is shown. This is what the
   absence of a bit implies; GBATEK does not spell it out. — `Engine::render_line` — verify
   likewise.
+- **What an OBJ window object goes through.** GBATEK does not say that a mode 2 object has the
+  same cost, affine transform, mosaic and line limit as a drawn one. We give it all of them, so the
+  mask can be cut off by the limit and follows a transform. — `obj::draw_line` and
+  `obj::draw_object` — verify likewise.
 - **The window on the 3D layer**, and GBATEK's own doubt there that the effect bit may be
   overridden when the 3D layer is in front. — none until Phase 7.
 - **Windows outside the normal picture mode.** We apply them only in display mode 1, where the
@@ -161,6 +165,8 @@ Each item carries `TODO(hw-unverified)` at its code site.
 
 ## Evidence
 
-Test ROMs will pin this note (#33): `win` (WIN0, WIN1 and the outside region, on both engines,
-through halfword and byte writes) and `objwin` (the OBJ window). Their expected pixels are worked
-out from this note, never read from the emulator.
+Test ROMs pin this note (#33): `win` (WIN0, WIN1 and the outside region on both engines, one with
+the rectangle rules for a start past an end) and `objwin` (mode 2 objects: plain, affine,
+half-transparent and mosaic, with ordinary sprites and window 1 over them). Their expected pixels
+are worked out from this note, never read from the emulator. The unit tests in `gpu2d/tests/window.rs`
+add byte and halfword writes, the register masks, the line budget and the savestate.

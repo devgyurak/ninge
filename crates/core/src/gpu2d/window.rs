@@ -137,6 +137,8 @@ pub(super) struct LineWindows {
     /// outside its rows.
     spans: [(usize, usize); 2],
     inside: [LayerSet; 2],
+    /// The OBJ window's layers, when DISPCNT turns it on.
+    obj_window: Option<LayerSet>,
     outside: LayerSet,
 }
 
@@ -144,13 +146,13 @@ impl LineWindows {
     /// The regions of line `y` (`windows.md`, "The four regions").
     // TODO(hw-unverified): the row test compares the line against Y1 and Y2 as the line is made
     // (`windows.md`, "Unverified").
-    // TODO(phase4): the OBJ window region (#33) is not made yet; its pixels fall to the outside.
     pub(super) fn new(windows: &Windows, y: usize) -> Self {
         // With no window on at all there is no windowing: every layer shows everywhere.
         if !windows.enabled.iter().any(|&on| on) {
             return Self {
                 spans: [(0, 0); 2],
                 inside: [LayerSet::ALL; 2],
+                obj_window: None,
                 outside: LayerSet::ALL,
             };
         }
@@ -165,17 +167,20 @@ impl LineWindows {
         Self {
             spans: [span(0), span(1)],
             inside: windows.inside,
+            obj_window: windows.enabled[2].then_some(windows.obj_window),
             outside: windows.outside,
         }
     }
 
-    /// The layers column `x` shows: window 0's, else window 1's, else the outside set.
-    pub(super) fn layers(&self, x: usize) -> LayerSet {
+    /// The layers column `x` shows: window 0's, else window 1's, else the OBJ window's where
+    /// `obj_window` marks the column, else the outside set.
+    pub(super) fn layers(&self, x: usize, obj_window: &[bool; SCREEN_WIDTH]) -> LayerSet {
         let hit = |n: usize| (self.spans[n].0..self.spans[n].1).contains(&x);
-        match (hit(0), hit(1)) {
-            (true, _) => self.inside[0],
-            (false, true) => self.inside[1],
-            (false, false) => self.outside,
+        match (hit(0), hit(1), self.obj_window) {
+            (true, _, _) => self.inside[0],
+            (false, true, _) => self.inside[1],
+            (false, false, Some(set)) if obj_window[x] => set,
+            _ => self.outside,
         }
     }
 }

@@ -43,7 +43,8 @@ const ATTR2_PRIORITY_SHIFT: u32 = 10;
 const ATTR2_PRIORITY_MASK: u16 = 0x3;
 const ATTR2_PALETTE_SHIFT: u32 = 12;
 
-/// OBJ mode 2 is the OBJ window; mode 1 (semi-transparent, `TODO(phase4)`, #34) draws as mode 0.
+/// OBJ mode 2 is the OBJ window (`windows.md`); mode 1 (semi-transparent, `TODO(phase4)`, #34) draws
+/// as mode 0.
 const MODE_WINDOW: u8 = 2;
 /// OBJ mode 3 is a bitmap object.
 const MODE_BITMAP: u8 = 3;
@@ -187,18 +188,33 @@ pub(super) struct ObjPixel {
 /// The object layer of one line; `None` where no object has a pixel.
 pub(super) type ObjLine = [Option<ObjPixel>; SCREEN_WIDTH];
 
+/// What the objects make of one line: the coloured pixels, and the OBJ window mask, true where an
+/// object of mode 2 has a pixel that is not transparent (`windows.md`, "The OBJ window").
+pub(super) struct ObjLayer {
+    pub(super) pixels: ObjLine,
+    pub(super) window: [bool; SCREEN_WIDTH],
+}
+
+impl ObjLayer {
+    /// A line no object touches.
+    pub(super) const EMPTY: Self = Self {
+        pixels: [None; SCREEN_WIDTH],
+        window: [false; SCREEN_WIDTH],
+    };
+}
+
 /// The line `y` of the object layer under `dispcnt` (`obj.md`, "Behavior"). Objects are walked in
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
-/// lower entry (`obj.md`, "Priority").
-// TODO(phase4): semi-transparent objects draw as normal ones (#34) and the OBJ window is not drawn
-// (#33).
+/// lower entry (`obj.md`, "Priority"). An object of mode 2 draws no colour: its opaque pixels
+/// mark the window mask instead.
+// TODO(phase4): semi-transparent objects draw as normal ones (#34).
 pub(super) fn draw_line(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
     mosaic: Mosaic,
     y: usize,
-) -> ObjLine {
-    let mut line: ObjLine = [None; SCREEN_WIDTH];
+) -> ObjLayer {
+    let mut line = ObjLayer::EMPTY;
     let palette = inputs.palette.get(BG_PALETTE_BYTES..).unwrap_or(&[]);
     // TODO(hw-unverified): bit 23 only changes the budget here; whether OAM access timing changes
     // the picture is not modelled (`obj.md`, "Unverified").
@@ -224,12 +240,10 @@ pub(super) fn draw_line(
             break;
         };
         budget = left;
-        // TODO(phase4): the OBJ window (mode 2, #33) is not drawn.
-        // TODO(hw-unverified): a mode 2 object costs its cycles though it is not drawn
-        // (`obj.md`, "Unverified").
-        if obj.mode != MODE_WINDOW {
-            draw_object(inputs, dispcnt, palette, &obj, &place, &mut line);
-        }
+        // TODO(hw-unverified): a mode 2 object costs its cycles like any other, and its mask is
+        // cut by the budget, goes through the affine transform and the mosaic like a picture
+        // would be (`windows.md`, "Unverified").
+        draw_object(inputs, dispcnt, palette, &obj, &place, &mut line);
     }
     line
 }
@@ -324,14 +338,14 @@ fn affine_source(
     Some((inside(u, width)?, inside(v, height)?))
 }
 
-/// Draws the part of a tile object that lies on line `y` into `line`.
+/// Draws the part of a tile object that lies on line `y` into `layer`.
 fn draw_object(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
     palette: &[u8],
     obj: &ObjAttrs,
     place: &Placement,
-    line: &mut ObjLine,
+    layer: &mut ObjLayer,
 ) {
     let Placement {
         width,
@@ -346,10 +360,10 @@ fn draw_object(
     let end = (i32::from(obj.x) + (box_width + block_width - 1) as i32).min(SCREEN_WIDTH as i32);
     (first..end).for_each(|screen_x| {
         let block_x = screen_x - screen_x % block_width as i32;
-        let (Some(slot), Ok(column)) = (
+        let (Some(at), Ok(column)) = (
             usize::try_from(screen_x)
                 .ok()
-                .and_then(|at| line.get_mut(at)),
+                .filter(|&at| at < SCREEN_WIDTH),
             u32::try_from(block_x - i32::from(obj.x)),
         ) else {
             return;
@@ -383,6 +397,17 @@ fn draw_object(
             false => tile_color(inputs, dispcnt, palette, obj, width, src_column, src_row),
         };
         let Some(color) = color else {
+            return;
+        };
+        // An OBJ window object colours nothing: its opaque pixel is a window pixel, whatever its
+        // palette, colour and priority (`windows.md`, "The OBJ window").
+        if obj.mode == MODE_WINDOW {
+            if let Some(mark) = layer.window.get_mut(at) {
+                *mark = true;
+            }
+            return;
+        }
+        let Some(slot) = layer.pixels.get_mut(at) else {
             return;
         };
         // The first object to reach a column keeps it unless a later one has a smaller priority

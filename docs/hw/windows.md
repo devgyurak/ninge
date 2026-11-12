@@ -138,17 +138,17 @@ Each item carries `TODO(hw-unverified)` at its code site.
 - **The screen limit of the clamp.** GBATEK writes the rule for the GBA screen: "X2 > 240 or X1 >
   X2 counts as X2 = 240", "Y2 > 160 or Y1 > Y2 counts as Y2 = 160". The DS screen is 256 by 192.
   We use the DS size. With X2 an 8-bit field the X2 > width part can never apply, so only X1 > X2
-  matters horizontally. — `gpu2d::window::Rect` — verify with a test ROM on hardware.
+  matters horizontally. — `gpu2d::window::WindowRect::decode` — verify with a test ROM on hardware.
 - **X2 or Y2 equal to 0, X1 or Y1 at 255.** Not stated; they follow from the rule (an empty window,
-  or X1 > X2 and so the full width). — `gpu2d::window::Rect` — verify likewise.
+  or X1 > X2 and so the full width). — `gpu2d::window::WindowRect::decode` — verify likewise.
 - **Vertical test.** Whether the row test is a comparison of the current line against Y1 and Y2, or
   a latch that switches on at Y1 and off at Y2 (so that changing the registers mid-frame behaves
   differently). We compare the line number against the values as they stand when the line is made.
-  — `gpu2d::window::Rect::contains_row` — verify with a mid-frame write.
+  — `gpu2d::window::LineWindows::new` — verify with a mid-frame write.
 - **Reads.** WIN0H-WIN1V are marked write-only; we return 0 for them, as for the other
-  write-only registers (`bg-modes.md`). — `Gpu2d::read_byte` — verify likewise.
+  write-only registers (`bg-modes.md`). — `Engine::read_byte` — verify likewise.
 - **WININ and WINOUT bits 6-7 and 14-15** ("not used"): we clear them on write, so they read back
-  0. — `gpu2d::window::Control` — verify likewise.
+  0. — `gpu2d::window::GROUP_MASK` — verify likewise.
 - **Power-on values** of all six registers: not stated; they start at 0. — `Engine::new` —
   verify likewise.
 - **The backdrop with every layer hidden:** it has no enable bit and is shown. This is what the
@@ -157,8 +157,7 @@ Each item carries `TODO(hw-unverified)` at its code site.
 - **The window on the 3D layer**, and GBATEK's own doubt there that the effect bit may be
   overridden when the 3D layer is in front. — none until Phase 7.
 - **Windows outside the normal picture mode.** We apply them only in display mode 1, where the
-  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). — `Engine::render_line`
-  — verify likewise.
+  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). — `Gpu2d::render_line_a` and `render_line_b` — verify likewise.
 
 ## Evidence
 

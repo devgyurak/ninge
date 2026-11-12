@@ -9,6 +9,7 @@ use crate::debug::{EngineId, ObjAttrs};
 
 mod affine;
 mod bitmap;
+mod limit;
 mod mosaic;
 
 const VRAMCNT_B: u32 = 0x0400_0241;

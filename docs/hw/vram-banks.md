@@ -1,14 +1,14 @@
-# VRAM banks (A-I: registers, LCDC mode, and the BG, OBJ and extended mappings)
+# VRAM banks (A-I: registers, LCDC mode, the BG, OBJ, extended and ARM7 mappings)
 
 Sources: GBATEK "DS Memory Control - VRAM"; GBATEK "DS Memory Maps" (NDS9 Memory Map).
 Used by: `crates/core/src/bus/`   Phase: 2 (#18, bank A in LCDC mode), 3 (#28, bank A as engine A
-BG), 4 (#35: all nine banks; LCDC mode, then the BG and OBJ mappings of both engines; the ARM7
-mapping follows)
+BG), 4 (#35: all nine banks; LCDC mode, the BG and OBJ mappings of both engines, and the ARM7's
+mapping of banks C and D with VRAMSTAT)
 
 The DS has nine VRAM banks, A to I (656 KiB in all). Each has its own control register on the
 ARM9 side. This note grows with #35. It models every bank, its register, the plain CPU (LCDC)
-mapping and the BG and OBJ mappings of both 2D engines. The ARM7's own mapping of banks C and D
-is `TODO(phase4)` (#35). The mappings only the display controller sees (textures and extended
+mapping, the BG and OBJ mappings of both 2D engines, and the ARM7's own mapping of banks C and D.
+The mappings only the display controller sees (textures and extended
 palettes) are decoded but not read: the renderer side is `TODO(phase7)` (#32).
 
 ## The banks
@@ -59,8 +59,18 @@ is the first address past bank I.
 A bit a bank does not use is dropped on a write, so the register keeps only the bits in this
 table: A and B keep `9Bh`, C, D, F and G keep `9Fh`, E keeps `87h`, H and I keep `83h`.
 
-The register at `0400_0240h` on the ARM7 is VRAMSTAT (read-only status of banks C and D); the
-ARM7 view is `TODO(phase4)` (#35).
+### VRAMSTAT (ARM7)
+
+The ARM7 has no VRAMCNT registers. Its register at `0400_0240h` is VRAMSTAT, 8 bits, read-only:
+
+| Bits | Meaning |
+|---|---|
+| 0 | bank C is enabled and in the ARM7 mapping (enable bit 1 and MST 2) |
+| 1 | bank D is enabled and in the ARM7 mapping |
+| 2-7 | not used, always 0 |
+
+It does not show OFS. A write to it from the ARM7 changes nothing. (The byte at `0400_0241h` on the
+ARM7 is WRAMSTAT, `wramcnt.md`.)
 
 ## Behavior
 
@@ -100,7 +110,14 @@ renderer picks by):
 | engine B BG extended palette | H (MST 2) | slots 0-3 |
 | engine B OBJ extended palette | I (MST 3) | slot 0 |
 
-Seen by the ARM7: banks C and D with MST 2 (`TODO(phase4)`, #35).
+Seen by the ARM7 CPU, in its own table:
+
+| Window | Address | Size | Contents |
+|---|---|---|---|
+| ARM7 VRAM | `0600_0000h` | up to 256 KiB | C, D (MST 2): `+20000h * OFS.0` |
+
+A bank in this mapping is the ARM7's work RAM: the ARM9 does not see it (its LCDC address and
+every window are empty for it) and the 2D engines do not read it. The ARM7 sees no other VRAM.
 
 A bank with any other MST (for example MST 5 on a bank that is not F or G) is mapped nowhere.
 For the F and G extended-palette rows the register's OFS.1 is not used; for A, B in OBJ mode
@@ -136,8 +153,10 @@ and the CPU never disagree about what the window contains.
 
 The CPU can store to VRAM, palette RAM (`palette-ram.md`) and OAM with halfword and word accesses
 only; a byte store is dropped and changes nothing (GBATEK "DS Memory Control - VRAM", the notes
-under the bank table). The one exception is the ARM7's own work-RAM mapping of banks C and D,
-which is `TODO(phase4)` (#35). Reads work in any width. The write rule applies to every window.
+under the bank table). The one exception is the ARM7's own work-RAM mapping of banks C and D:
+the ARM7 can store a byte there (GBATEK: the reason is the GBA mode, where two 128 KiB banks stand in
+for the GBA's 256 KiB work RAM). Reads work in any width. The write rule applies to every window
+the ARM9 sees.
 
 ## Evidence
 
@@ -159,6 +178,13 @@ overlap two or three banks, check that a byte store to each window is ignored, t
 its bytes when it moves between LCDC, BG and OBJ mappings, and that a bank in an extended-palette
 or texture mode leaves the LCDC address and all four windows empty.
 
+The ARM7 half of the same ROM (`arm7.s`) and the ARM9 take turns through IPCSYNC (`ipc.md`). In
+each step the ARM9 sets banks C and D, and the ARM7 reads VRAMSTAT and the words at the ARM7
+window's start, end and just past it, stores a word, a byte and a halfword there, and records
+what it found at `0200_5000h`. The steps cover MST 2 at OFS 0 and 1, OFS.1 set, both banks on at
+the same offset and side by side, and banks that are in another mode or disabled. The ARM9 then
+switches bank C to LCDC and reads the words the ARM7 stored: the same bytes.
+
 ## Edge cases
 
 - A byte write to any bank leaves the bank unchanged.
@@ -171,6 +197,12 @@ or texture mode leaves the LCDC address and all four windows empty.
 - A VRAMCNT write rebuilds only the VRAM block of the page table; the result is the same as
   rebuilding the whole table.
 - Engine A BG offset 0 is preceded by palette RAM (`05FF_FFFFh`).
+- In the ARM7 mapping a bank occupies exactly 128 KiB at `+20000h * OFS.0`; C and D at the same
+  offset overlap and C wins, at different offsets they sit side by side.
+- The ARM7's bytes in C and D are the same bytes the ARM9 sees in LCDC mode; moving a bank
+  between the two mappings does not clear it.
+- VRAMSTAT shows a bank in the ARM7 mapping only: C or D in MST 0, 1, 3 or 4, or disabled with
+  MST 2, reads 0 there.
 - Changing MST or OFS moves a bank without clearing it; a bank sits in at most one place.
 - A bank in an extended-palette or texture mapping, or with an MST the tables do not define, is
   in no window and not in the LCDC area.
@@ -206,5 +238,12 @@ or texture mode leaves the LCDC address and all four windows empty.
 - **Byte stores to BG and OBJ VRAM** are dropped like every other VRAM byte store, on the strength of the
   one note under GBATEK's bank table; the note is worded for VRAM in general and does not
   single out the BG window. — `Memory::store` — verify likewise.
+- **The ARM7 window's mirrors.** Nothing repeats the ARM7's 256 KiB through the rest of
+  `0600_0000h`-`06FF_FFFFh`; an address no bank holds reads 0 and a write is dropped. —
+  `Memory::build_vram_pages` — verify likewise.
+- **Overlap of C and D in the ARM7 mapping** follows the same rule as the ARM9 windows: C wins.
+  — `Memory::build_vram_pages` — verify likewise.
+- **Reads of VRAMSTAT above bit 1** are 0, as GBATEK says ("always zero"); a write from the ARM7
+  is ignored, which GBATEK does not state. — `Memory::read_control` — verify likewise.
 - **Unused bits of a register** (MST bit 2 for A, B, H, I; OFS for E, H, I; bits 5-6) are
   dropped on a write. — `Memory::write_vramcnt` — verify likewise.

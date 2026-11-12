@@ -673,3 +673,244 @@ fn given_the_window_geometry_when_asked_then_it_matches_the_note() {
         ]
     );
 }
+
+// ---------------------------------------------------------------- the ARM7's mapping (C, D)
+
+/// (bank, VRAMCNT value, ARM7 address the bank must start at): MST 2 on C and D, OFS.0 picks
+/// the 128 KiB slot and OFS.1 is not used (`vram-banks.md`, "Where each bank goes").
+const ARM7_MAPPINGS: [(usize, u8, u32); 8] = [
+    (2, 0x82, 0x0600_0000),
+    (2, 0x8A, 0x0602_0000),
+    (2, 0x92, 0x0600_0000),
+    (2, 0x9A, 0x0602_0000),
+    (3, 0x82, 0x0600_0000),
+    (3, 0x8A, 0x0602_0000),
+    (3, 0x92, 0x0600_0000),
+    (3, 0x9A, 0x0602_0000),
+];
+
+fn region7(memory: &Memory, addr: u32) -> Region {
+    page_of(&memory.pages7, addr).region
+}
+
+/// The rows where the ARM7 does not see exactly the bank's 128 KiB at the expected address, or
+/// where the ARM9 sees the bank anywhere in the VRAM block.
+fn arm7_mapping_failures() -> Vec<(usize, u8)> {
+    ARM7_MAPPINGS
+        .iter()
+        .filter(|&&(bank, value, start)| {
+            let memory = memory_with(&[(BANKS[bank].0, value)]);
+            let own = |addr: u32, offset: u32| {
+                let page = page_of(&memory.pages7, addr);
+                page.region == Region::Vram && page.offset == BANK_BASE[bank] as u32 + offset
+            };
+            let edges = own(start, 0) && own(start + 0x1_FFFF, 0x1_C000);
+            let outside = region7(&memory, start - 1) != Region::Vram
+                && region7(&memory, start + 0x2_0000) != Region::Vram;
+            let arm9_blind = (0x0600_0000..0x0700_0000u32)
+                .step_by(PAGE_SIZE)
+                .all(|addr| region9(&memory, addr) != Region::Vram);
+            !(edges && outside && arm9_blind)
+        })
+        .map(|&(bank, value, _)| (bank, value))
+        .collect()
+}
+
+#[test]
+fn given_c_or_d_with_mst_2_when_looked_up_by_the_arm7_then_it_sits_at_the_ofs_0_slot_and_the_arm9_does_not_see_it()
+ {
+    assert_eq!(arm7_mapping_failures(), Vec::<(usize, u8)>::new());
+}
+
+/// Which bank the page at ARM7 address `addr` holds.
+fn owner7_at(memory: &Memory, addr: u32) -> Option<usize> {
+    let page = page_of(&memory.pages7, addr);
+    (page.region == Region::Vram)
+        .then(|| {
+            (0..BANKS.len()).find(|&bank| {
+                let start = BANK_BASE[bank] as u32;
+                (start..start + BANKS[bank].2).contains(&page.offset)
+            })
+        })
+        .flatten()
+}
+
+#[test]
+fn given_c_and_d_at_the_same_arm7_slot_when_looked_up_then_c_wins_and_at_different_slots_both_show()
+{
+    let same = memory_with(&[(0x0400_0242, 0x82), (0x0400_0243, 0x82)]);
+    let beside = memory_with(&[(0x0400_0242, 0x82), (0x0400_0243, 0x8A)]);
+    assert_eq!(
+        (
+            owner7_at(&same, 0x0600_0000),
+            owner7_at(&same, 0x0602_0000),
+            owner7_at(&beside, 0x0600_0000),
+            owner7_at(&beside, 0x0602_0000)
+        ),
+        (Some(2), None, Some(2), Some(3))
+    );
+}
+
+#[test]
+fn given_other_banks_with_mst_2_when_looked_up_by_the_arm7_then_it_sees_none_of_them() {
+    // A and B are OBJ A, E is OBJ A, F and G are OBJ A, I is OBJ B: none is the ARM7's.
+    let memory = memory_with(&[
+        (0x0400_0240, 0x82),
+        (0x0400_0241, 0x82),
+        (0x0400_0244, 0x82),
+        (0x0400_0245, 0x82),
+        (0x0400_0246, 0x82),
+        (0x0400_0249, 0x82),
+    ]);
+    assert!(
+        (0x0600_0000..0x0700_0000u32)
+            .step_by(PAGE_SIZE)
+            .all(|addr| region7(&memory, addr) == Region::Unmapped)
+    );
+}
+
+#[test]
+fn given_c_and_d_with_mst_2_when_decoded_then_the_mapping_is_the_arm7_slot() {
+    let memory = memory_with(&[(0x0400_0242, 0x82), (0x0400_0243, 0x9A)]);
+    assert_eq!(
+        (memory.vram_bank(2).mapping, memory.vram_bank(3).mapping),
+        (
+            VramMapping::Arm7 { offset: 0 },
+            VramMapping::Arm7 { offset: 0x2_0000 }
+        )
+    );
+}
+
+#[test]
+fn given_arm7_vram_when_the_arm7_stores_a_byte_then_it_lands_and_the_arm9_byte_store_to_a_window_is_dropped()
+ {
+    let mut memory = memory_with(&[(0x0400_0242, 0x82), (0x0400_0243, 0x84)]);
+    let none = TcmConfig::NONE;
+    memory.store::<false, 4>(&none, 0x0600_0010, 0x1122_3344u32.to_le_bytes());
+    let arm7_byte = memory.store::<false, 1>(&none, 0x0600_0010, [0xEE]);
+    let arm9_byte = memory.store::<true, 1>(&none, 0x0660_0000, [0xEE]);
+    assert_eq!(
+        (
+            arm7_byte,
+            memory.load::<false, 4>(&none, 0x0600_0010),
+            arm9_byte,
+            memory.load::<true, 1>(&none, 0x0660_0000)
+        ),
+        (true, Some(0x1122_33EEu32.to_le_bytes()), false, Some([0]))
+    );
+}
+
+#[test]
+fn given_arm7_vram_when_the_arm7_stores_halfwords_and_words_then_they_read_back() {
+    let mut memory = memory_with(&[(0x0400_0243, 0x82)]);
+    let none = TcmConfig::NONE;
+    memory.store::<false, 2>(&none, 0x0601_FFFE, 0xBEEFu16.to_le_bytes());
+    memory.store::<false, 4>(&none, 0x0600_0000, 0xA1B2_C3D4u32.to_le_bytes());
+    assert_eq!(
+        (
+            memory.load::<false, 2>(&none, 0x0601_FFFE),
+            memory.load::<false, 4>(&none, 0x0600_0000),
+            memory.load::<false, 4>(&none, 0x0602_0000)
+        ),
+        (
+            Some(0xBEEFu16.to_le_bytes()),
+            Some(0xA1B2_C3D4u32.to_le_bytes()),
+            // Past the bank nothing answers, so the register devices do (and read 0).
+            None
+        )
+    );
+}
+
+#[test]
+fn given_bytes_the_arm7_stored_when_the_bank_moves_to_lcdc_then_the_arm9_reads_the_same_bytes() {
+    let mut memory = memory_with(&[(0x0400_0242, 0x82)]);
+    let none = TcmConfig::NONE;
+    memory.store::<false, 4>(&none, 0x0600_0020, 0x5566_7788u32.to_le_bytes());
+    memory.store::<false, 1>(&none, 0x0600_0020, [0x99]);
+    set(&mut memory, 0x0400_0242, 0x80);
+    assert_eq!(
+        memory.load::<true, 4>(&none, 0x0684_0020),
+        Some(0x5566_7799u32.to_le_bytes())
+    );
+}
+
+/// The VRAMSTAT byte after each list of register writes, against the value the note gives.
+fn vramstat_failures() -> Vec<(usize, u32, u32)> {
+    let (c, d) = (0x0400_0242, 0x0400_0243);
+    let cases: Vec<(Vec<(u32, u8)>, u32)> = vec![
+        (vec![], 0),
+        (vec![(c, 0x82)], 1),
+        (vec![(d, 0x82)], 2),
+        (vec![(c, 0x82), (d, 0x82)], 3),
+        // OFS is not reflected.
+        (vec![(c, 0x9A), (d, 0x8A)], 3),
+        (vec![(d, 0x9A)], 2),
+        // Enabled in another mode, or MST 2 while disabled: not the ARM7's.
+        (vec![(c, 0x80), (d, 0x81)], 0),
+        (vec![(c, 0x83), (d, 0x84)], 0),
+        (vec![(c, 0x02), (d, 0x0A)], 0),
+        (vec![(c, 0x87), (d, 0x86)], 0),
+        // MST 2 on other banks does not count.
+        (
+            vec![
+                (0x0400_0240, 0x82),
+                (0x0400_0241, 0x82),
+                (0x0400_0244, 0x82),
+            ],
+            0,
+        ),
+        // Bank D alone, C in another mode.
+        (vec![(c, 0x81), (d, 0x82)], 2),
+    ];
+    cases
+        .into_iter()
+        .enumerate()
+        .map(|(i, (writes, want))| {
+            (
+                i,
+                want,
+                memory_with(&writes).read_control::<false>(0, Width::Byte),
+            )
+        })
+        .filter(|&(_, want, got)| want != got)
+        .collect()
+}
+
+#[test]
+fn given_banks_c_and_d_in_various_modes_when_the_arm7_reads_vramstat_then_bits_0_and_1_show_the_arm7_ones()
+ {
+    assert_eq!(vramstat_failures(), Vec::<(usize, u32, u32)>::new());
+}
+
+#[test]
+fn given_vramstat_read_as_a_halfword_when_c_is_in_the_arm7_mapping_then_the_high_byte_is_wramstat()
+{
+    let mut memory = memory_with(&[(0x0400_0242, 0x82)]);
+    memory.write_control::<true>(0x0400_0247 - VRAMCNT_A_ADDR, Width::Byte, 3);
+    assert_eq!(memory.read_control::<false>(0, Width::Half), 0x0301);
+}
+
+#[test]
+fn given_the_arm7_writes_vramstat_when_read_again_then_nothing_changed_and_no_bank_moved() {
+    let mut memory = memory_with(&[(0x0400_0242, 0x82)]);
+    memory.write_control::<false>(0, Width::Word, 0xFFFF_FFFF);
+    assert_eq!(
+        (
+            memory.read_control::<false>(0, Width::Byte),
+            memory.vramcnt[2]
+        ),
+        (1, 0x82)
+    );
+}
+
+#[test]
+fn given_arm7_mapping_writes_when_the_vram_block_is_rebuilt_in_place_then_it_equals_a_full_rebuild()
+{
+    let writes = [
+        (0x0400_0243, 0x8A),
+        (0x0400_0242, 0x82),
+        (0x0400_0243, 0x82),
+        (0x0400_0242, 0x00),
+    ];
+    assert!(!rebuild_differs(&writes));
+}

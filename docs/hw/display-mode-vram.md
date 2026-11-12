@@ -121,7 +121,7 @@ stays white. Changing this formula changes every golden frame that contains colo
   by a test ROM that clears each bit and observes the screens on hardware.
 - **DISPCNT bit 7 (forced blank)** is stored but ignored. It draws a white line on the GBA;
   GBATEK has no DS description of its effect in display modes 0 and 2. —
-  `Gpu2d::render_engine_a` — verify by a test ROM on real hardware that sets it in mode 2.
+  `Gpu2d::render_line_a` — verify by a test ROM on real hardware that sets it in mode 2.
 - **POWCNT1 undefined bits** (4-8, 10-14) read back as written. — `Gpu2d::write_byte`
   — verify likewise.
 - **A selected block that is not readable as LCDC VRAM** — its bank disabled, or its MST not

@@ -177,8 +177,9 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
 fn given_engine_b_register_addresses_when_decoded_then_the_arm9_reaches_them_in_the_gpu_space_and_the_arm7_does_not()
  {
     // Engine B's block is engine A's 1000h on: DISPCNT at offset 1000h, BG0CNT at 1008h, the last
-    // scroll byte at 101Fh and the transform block at 1020h-103Fh (`bg-modes.md`, "Registers"); the
-    // bytes between and after are holes.
+    // scroll byte at 101Fh, the transform block at 1020h-103Fh (`bg-modes.md`, "Registers") and the
+    // window block at 1040h-104Bh (`windows.md`, "Registers"); the bytes between and after are
+    // holes.
     let arm9 = [
         (0x0400_1000, Some(Owner::Io(Port::Gpu2d, 0x1000))),
         (0x0400_1003, Some(Owner::Io(Port::Gpu2d, 0x1003))),
@@ -187,12 +188,16 @@ fn given_engine_b_register_addresses_when_decoded_then_the_arm9_reaches_them_in_
         (0x0400_101F, Some(Owner::Io(Port::Gpu2d, 0x101F))),
         (0x0400_1020, Some(Owner::Io(Port::Gpu2d, 0x1020))),
         (0x0400_103F, Some(Owner::Io(Port::Gpu2d, 0x103F))),
-        (0x0400_1040, None),
+        (0x0400_1040, Some(Owner::Io(Port::Gpu2d, 0x1040))),
+        (0x0400_104B, Some(Owner::Io(Port::Gpu2d, 0x104B))),
+        (0x0400_104C, Some(Owner::Io(Port::Gpu2d, 0x104C))),
+        (0x0400_1050, None),
     ];
     let arm7 = [
         (0x0400_1000, None),
         (0x0400_1008, None),
         (0x0400_1020, None),
+        (0x0400_1040, None),
     ];
     assert_eq!(
         (
@@ -218,11 +223,15 @@ fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it
         // MOSAIC at offset 4Ch, in a 4-byte block.
         (0x0400_004C, Some(Owner::Io(Port::Gpu2d, 0x4C))),
         (0x0400_004F, Some(Owner::Io(Port::Gpu2d, 0x4F))),
+        // WIN0H at offset 40h and WINOUT's last byte at 4Bh.
+        (0x0400_0040, Some(Owner::Io(Port::Gpu2d, 0x40))),
+        (0x0400_004B, Some(Owner::Io(Port::Gpu2d, 0x4B))),
     ];
     let arm7 = [
         (0x0400_0008, None),
         (0x0400_001F, None),
         (0x0400_0020, None),
+        (0x0400_0040, None),
     ];
     assert_eq!(
         (
@@ -253,9 +262,8 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         (IPCFIFOSEND_ADDR + 4, None),
         (IPCFIFORECV_ADDR + 4, None),
         // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`) is the
-        // transform block, which ends at `0400_003Fh`; MOSAIC's block is `0400_004Ch`-`004Fh`.
-        (0x0400_0040, None),
-        (0x0400_004B, None),
+        // transform block, which ends at `0400_003Fh`, then the window block `0400_0040h`-`004Bh`
+        // and MOSAIC's `004Ch`-`004Fh`.
         (0x0400_0050, None),
         (0x0000_0000, None),
     ];

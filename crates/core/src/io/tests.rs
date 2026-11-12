@@ -174,6 +174,29 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
 }
 
 #[test]
+fn given_engine_b_register_addresses_when_decoded_then_the_arm9_reaches_them_in_the_gpu_space_and_the_arm7_does_not()
+ {
+    // Engine B's block is engine A's 1000h on: DISPCNT at offset 1000h, BG0CNT at 1008h, the last
+    // scroll byte at 101Fh (`bg-modes.md`, "Registers"); the bytes between and after are holes.
+    let arm9 = [
+        (0x0400_1000, Some(Owner::Io(Port::Gpu2d, 0x1000))),
+        (0x0400_1003, Some(Owner::Io(Port::Gpu2d, 0x1003))),
+        (0x0400_1004, None),
+        (0x0400_1008, Some(Owner::Io(Port::Gpu2d, 0x1008))),
+        (0x0400_101F, Some(Owner::Io(Port::Gpu2d, 0x101F))),
+        (0x0400_1020, None),
+    ];
+    let arm7 = [(0x0400_1000, None), (0x0400_1008, None)];
+    assert_eq!(
+        (
+            decode_failures::<true>(&arm9),
+            decode_failures::<false>(&arm7)
+        ),
+        (vec![], vec![])
+    );
+}
+
+#[test]
 fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it_in_the_gpu_space()
 {
     // BG0CNT at offset 8 of engine A's register space, BG3VOFS' last byte at offset 31.

@@ -22,6 +22,7 @@ const POWCNT1_ON_TOP: u16 = 0x820F;
 const POWCNT1_ON_BOTTOM: u16 = 0x020F;
 const PIXELS: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 
+mod engine_b;
 mod text;
 
 fn w8(m: &mut Machine, addr: u32, v: u8) {
@@ -176,19 +177,6 @@ fn given_a_power_on_machine_when_dispcnt_is_read_then_it_is_zero() {
 }
 
 #[test]
-fn given_a_power_on_machine_when_a_frame_is_rendered_then_top_is_white_and_bottom_black() {
-    let mut m = Machine::new();
-    m.render_frame();
-    assert_eq!(
-        (
-            not_equal_to(&m, Screen::Top, WHITE),
-            not_equal_to(&m, Screen::Bottom, BLACK)
-        ),
-        (0, 0)
-    );
-}
-
-#[test]
 fn given_mode_2_and_bank_a_when_pixels_are_rendered_then_corners_and_an_interior_pixel_match() {
     let failures = pixel_failures(&[
         (0, 0, 0x001F, 0x00FF_0000),
@@ -321,32 +309,36 @@ fn given_banks_a_to_d_enabled_when_each_block_is_displayed_then_the_pixel_comes_
     );
 }
 
+/// The red of 15-bit `001Fh`, and the picture the three swap tests draw.
+const RED_PIXEL: u32 = 0x00FF_0000;
+
 #[test]
-fn given_powcnt1_bit_15_set_when_mode_2_is_rendered_then_top_shows_the_picture_and_bottom_is_black()
-{
+fn given_powcnt1_bit_15_set_when_mode_2_is_rendered_then_top_shows_the_picture_and_bottom_is_engine_b_off()
+ {
+    // Engine B's DISPCNT is 0, display off: white (`display-mode-vram.md`).
     let mut m = mode2_machine();
-    fill_bank(&mut m, 0x7FFF);
+    fill_bank(&mut m, 0x001F);
     m.render_frame();
     assert_eq!(
         (
-            not_equal_to(&m, Screen::Top, WHITE),
-            not_equal_to(&m, Screen::Bottom, BLACK)
+            not_equal_to(&m, Screen::Top, RED_PIXEL),
+            not_equal_to(&m, Screen::Bottom, WHITE)
         ),
         (0, 0)
     );
 }
 
 #[test]
-fn given_powcnt1_bit_15_clear_when_mode_2_is_rendered_then_bottom_shows_the_picture_and_top_is_black()
+fn given_powcnt1_bit_15_clear_when_mode_2_is_rendered_then_bottom_shows_the_picture_and_top_is_engine_b_off()
  {
     let mut m = mode2_machine();
-    fill_bank(&mut m, 0x7FFF);
+    fill_bank(&mut m, 0x001F);
     w16(&mut m, POWCNT1_ADDR, POWCNT1_ON_BOTTOM);
     m.render_frame();
     assert_eq!(
         (
-            not_equal_to(&m, Screen::Bottom, WHITE),
-            not_equal_to(&m, Screen::Top, BLACK)
+            not_equal_to(&m, Screen::Bottom, RED_PIXEL),
+            not_equal_to(&m, Screen::Top, WHITE)
         ),
         (0, 0)
     );
@@ -356,16 +348,16 @@ fn given_powcnt1_bit_15_clear_when_mode_2_is_rendered_then_bottom_shows_the_pict
 fn given_a_rendered_frame_when_bit_15_is_cleared_and_rendered_again_then_the_picture_moves_to_bottom()
  {
     let mut m = mode2_machine();
-    fill_bank(&mut m, 0x7FFF);
+    fill_bank(&mut m, 0x001F);
     m.render_frame();
-    let first_top_white = not_equal_to(&m, Screen::Top, WHITE);
+    let first_top_red = not_equal_to(&m, Screen::Top, RED_PIXEL);
     w16(&mut m, POWCNT1_ADDR, POWCNT1_ON_BOTTOM);
     m.render_frame();
     assert_eq!(
         (
-            first_top_white,
-            not_equal_to(&m, Screen::Bottom, WHITE),
-            not_equal_to(&m, Screen::Top, BLACK)
+            first_top_red,
+            not_equal_to(&m, Screen::Bottom, RED_PIXEL),
+            not_equal_to(&m, Screen::Top, WHITE)
         ),
         (0, 0, 0)
     );

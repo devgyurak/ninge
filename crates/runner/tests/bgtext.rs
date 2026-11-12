@@ -9,6 +9,7 @@
 //! ROM's source lists. It is never read back from the emulator: the code below shares nothing
 //! with `ninge-core`.
 
+use ninge_core::debug::EngineId;
 use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
 use ninge_runner::{load_rom_file, testrom_path};
@@ -303,7 +304,7 @@ type LayerState = (u8, u32, u32, bool, u16, u16, u16, u16);
 fn layer_states(machine: &Machine) -> Vec<LayerState> {
     (0..4)
         .map(|n| {
-            let l = machine.inspect().gpu2d().text_bg(n);
+            let l = machine.inspect().gpu2d().text_bg(EngineId::A, n);
             let hofs = if n == 3 { 0 } else { l.hofs };
             (
                 l.priority,

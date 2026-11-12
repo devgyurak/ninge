@@ -175,7 +175,7 @@ fn given_a_scroll_written_with_bits_above_8_when_decoded_then_only_the_low_9_bit
     let mut m = Machine::new();
     w16(&mut m, BG0HOFS, 0xFFFF);
     w16(&mut m, BG0HOFS + 2, 0xFE12);
-    let layer = m.inspect().gpu2d().text_bg(0);
+    let layer = m.inspect().gpu2d().text_bg(EngineId::A, 0);
     assert_eq!((layer.hofs, layer.vofs), (0x1FF, 0x012));
 }
 
@@ -184,7 +184,7 @@ fn given_a_scroll_with_a_byte_written_when_decoded_then_the_other_byte_is_kept()
     let mut m = Machine::new();
     w16(&mut m, BG0HOFS, 0x01FF);
     w8(&mut m, BG0HOFS, 0x01);
-    assert_eq!(m.inspect().gpu2d().text_bg(0).hofs, 0x101);
+    assert_eq!(m.inspect().gpu2d().text_bg(EngineId::A, 0).hofs, 0x101);
 }
 
 /// Scrolls layer n to (10 + n, 20 + n) and returns what each layer decodes to.
@@ -197,8 +197,8 @@ fn scrolled_layers() -> Vec<(u16, u16)> {
     (0..4)
         .map(|n| {
             (
-                m.inspect().gpu2d().text_bg(n).hofs,
-                m.inspect().gpu2d().text_bg(n).vofs,
+                m.inspect().gpu2d().text_bg(EngineId::A, n).hofs,
+                m.inspect().gpu2d().text_bg(EngineId::A, n).vofs,
             )
         })
         .collect()
@@ -231,7 +231,7 @@ fn given_bg_registers_written_when_decoded_then_the_layer_state_follows_the_note
         bgcnt_addr(1),
         2 | (5 << 2) | 0x80 | (7 << 8) | (3 << 14),
     );
-    let layer = m.inspect().gpu2d().text_bg(1);
+    let layer = m.inspect().gpu2d().text_bg(EngineId::A, 1);
     assert_eq!(
         (
             layer.priority,
@@ -252,8 +252,8 @@ fn given_each_screen_size_when_decoded_then_the_layer_is_the_size_the_note_lists
         .map(|size| {
             w16(&mut m, BG0CNT, size << 14);
             (
-                m.inspect().gpu2d().text_bg(0).width,
-                m.inspect().gpu2d().text_bg(0).height,
+                m.inspect().gpu2d().text_bg(EngineId::A, 0).width,
+                m.inspect().gpu2d().text_bg(EngineId::A, 0).height,
             )
         })
         .collect();
@@ -270,7 +270,8 @@ fn given_no_layer_on_in_mode_1_when_drawn_then_every_pixel_is_the_backdrop() {
     assert_eq!(
         (
             not_equal_to(&m, Screen::Top, GREEN),
-            not_equal_to(&m, Screen::Bottom, BLACK)
+            // Engine B is in display mode 0: white.
+            not_equal_to(&m, Screen::Bottom, WHITE)
         ),
         (0, 0)
     );
@@ -872,7 +873,8 @@ fn given_layers_on_the_bottom_screen_when_powcnt1_bit_15_is_clear_then_the_pictu
     m.render_frame();
     assert_eq!(
         (pixel(&m, Screen::Bottom, 0, 0), top(&m, 0, 0)),
-        (RED, BLACK)
+        // Engine B, display off, is on the upper screen: white.
+        (RED, WHITE)
     );
 }
 

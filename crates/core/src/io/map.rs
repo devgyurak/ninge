@@ -4,7 +4,9 @@
 //! [`ARM7_PORTS`]. The map lives here and nowhere else; a test pins that no two entries overlap.
 
 use crate::bus::VRAMCNT_A_ADDR;
-use crate::gpu2d::{BG_REGS_ADDR, BG_REGS_BYTES, DISPCNT_A_ADDR, POWCNT1_ADDR};
+use crate::gpu2d::{
+    BG_REGS_ADDR, BG_REGS_B_ADDR, BG_REGS_BYTES, DISPCNT_A_ADDR, DISPCNT_B_ADDR, POWCNT1_ADDR,
+};
 use crate::io::divsqrt::{BLOCK_BYTES as DIVSQRT_BYTES, DIVCNT_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
@@ -29,7 +31,7 @@ pub(crate) enum Owner {
 /// Which device holds a register. [`Port::base`] is where its register space starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Port {
-    /// DISPCNT, the BG control and scroll registers of engine A, and POWCNT1 (three table
+    /// DISPCNT, the BG control and scroll registers of both engines, and POWCNT1 (five table
     /// entries, one device).
     Gpu2d,
     /// DISPSTAT and VCOUNT.
@@ -83,7 +85,7 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 13] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 15] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
@@ -104,10 +106,13 @@ pub(crate) const ARM9_PORTS: [PortEntry; 13] = [
     // holds (the block stays on the 4-byte grid).
     (VRAMCNT_A_ADDR, 12, None),
     (POWCNT1_ADDR, 4, Some(Port::Gpu2d)),
+    // Engine B's block, the same layout 1000h on: DISPCNT, then the BG control and scroll registers.
+    (DISPCNT_B_ADDR, 4, Some(Port::Gpu2d)),
+    (BG_REGS_B_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
 ];
 
-/// What the ARM7 sees: the same blocks, without engine A, and WRAMSTAT in place of the ARM9's
+/// What the ARM7 sees: the same blocks, without the 2D engines, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
 pub(crate) const ARM7_PORTS: [PortEntry; 9] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),

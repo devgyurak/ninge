@@ -4,6 +4,7 @@
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramWindowKind};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
+use crate::gpu2d::EngineInputs;
 use crate::hle::BiosState;
 use crate::io::Io;
 use crate::scheduler::{EventKind, Scheduler};
@@ -13,6 +14,8 @@ use serde::{Deserialize, Serialize};
 pub const SCREEN_WIDTH: usize = 256;
 /// Height of each screen in pixels (`docs/hw/display.md`).
 pub const SCREEN_HEIGHT: usize = 192;
+/// Bytes of palette RAM one engine reads: its BG and OBJ tables (`docs/hw/palette-ram.md`).
+const PALETTE_HALF: usize = 1 << 10;
 
 /// One of the two physical screens.
 ///
@@ -180,30 +183,32 @@ impl Machine {
     /// memory as they are now (`docs/hw/bg-text.md`, "Lines"). A line past the last visible one is
     /// not drawn.
     ///
-    /// Engine A goes to the screen POWCNT1 bit 15 picks; the other screen is a black
-    /// placeholder for engine B (`docs/hw/display-mode-vram.md`).
-    // TODO(phase4): engine B draws its screen.
+    /// Engine A goes to the screen POWCNT1 bit 15 picks and engine B to the other one
+    /// (`docs/hw/bg-modes.md`, "Engine B").
     pub(crate) fn render_line(&mut self, y: usize) {
         if y >= SCREEN_HEIGHT {
             return;
         }
-        let (engine_a, engine_b) = if self.io.gpu2d().engine_a_on_top() {
+        let gpu = self.io.gpu2d();
+        let (engine_a, engine_b) = if gpu.engine_a_on_top() {
             (&mut self.work_top, &mut self.work_bottom)
         } else {
             (&mut self.work_bottom, &mut self.work_top)
         };
         let line = y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH;
+        // The palette RAM is one half for each engine (`palette-ram.md`, "Layout").
+        let palette = self.memory.palette();
+        let (palette_a, palette_b) = palette
+            .split_at_checked(PALETTE_HALF)
+            .unwrap_or((palette, &[]));
         if let Some(out) = engine_a.get_mut(line.clone()) {
-            self.io.gpu2d().render_line_a(
-                y,
-                self.memory.lcdc_banks(),
-                &self.memory.vram_window(VramWindowKind::BgA),
-                self.memory.palette(),
-                out,
-            );
+            let inputs =
+                EngineInputs::main(self.memory.vram_window(VramWindowKind::BgA), palette_a);
+            gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs, out);
         }
         if let Some(out) = engine_b.get_mut(line) {
-            out.fill(crate::gpu2d::BLACK);
+            let inputs = EngineInputs::sub(self.memory.vram_window(VramWindowKind::BgB), palette_b);
+            gpu.render_line_b(y, &inputs, out);
         }
     }
 

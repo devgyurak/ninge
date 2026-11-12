@@ -4,10 +4,12 @@
 //! which DISPCNT fields exist, and [`EngineInputs`] is what the machine hands a line: the memory
 //! that engine reads. The spec is a constant, not state, so it is not saved.
 
-use crate::bus::VramWindow;
+use crate::bus::{ExtPalette, VramWindow};
 
 /// DISPCNT bit 3: BG0 is the 3D engine's layer (engine A only).
 pub(super) const DISPCNT_BG0_3D: u32 = 1 << 3;
+/// DISPCNT bit 30: the BG layers read extended palettes (`extended-palettes.md`, "Registers").
+pub(super) const DISPCNT_BG_EXT_PALETTE: u32 = 1 << 30;
 /// DISPCNT bit 17: with bit 16 the display mode; engine B has modes 0-1 only.
 const DISPCNT_MODE_HIGH: u32 = 1 << 17;
 /// DISPCNT bits 18-19: the VRAM block of display mode 2 (engine A only).
@@ -64,6 +66,8 @@ pub(crate) struct EngineInputs<'a> {
     /// The OBJ window, where sprites read their tiles.
     pub(crate) obj_vram: VramWindow<'a>,
     pub(crate) palette: &'a [u8],
+    /// The engine's BG extended palettes, read when DISPCNT bit 30 is set.
+    pub(crate) ext_bg: ExtPalette<'a>,
     /// The engine's 1 KiB of OAM: 128 entries of 8 bytes.
     pub(crate) oam: &'a [u8],
     pub(crate) spec: &'static EngineSpec,
@@ -75,12 +79,14 @@ impl<'a> EngineInputs<'a> {
         vram: VramWindow<'a>,
         obj_vram: VramWindow<'a>,
         palette: &'a [u8],
+        ext_bg: ExtPalette<'a>,
         oam: &'a [u8],
     ) -> Self {
         Self {
             vram,
             obj_vram,
             palette,
+            ext_bg,
             oam,
             spec: &MAIN_SPEC,
         }
@@ -91,12 +97,14 @@ impl<'a> EngineInputs<'a> {
         vram: VramWindow<'a>,
         obj_vram: VramWindow<'a>,
         palette: &'a [u8],
+        ext_bg: ExtPalette<'a>,
         oam: &'a [u8],
     ) -> Self {
         Self {
             vram,
             obj_vram,
             palette,
+            ext_bg,
             oam,
             spec: &SUB_SPEC,
         }

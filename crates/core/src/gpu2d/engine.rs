@@ -98,7 +98,13 @@ impl Engine {
     /// as the engine sees it.
     pub(super) fn text_bg(&self, dispcnt: u32, layer: usize) -> TextBg {
         let n = layer & 3;
-        TextBg::decode(dispcnt, self.bgcnt[n], self.bghofs[n], self.bgvofs[n])
+        TextBg::decode(
+            dispcnt,
+            n as u8,
+            self.bgcnt[n],
+            self.bghofs[n],
+            self.bgvofs[n],
+        )
     }
 
     /// Affine, extended or large-bitmap layer `layer` (2 or 3; others are taken modulo 2) decoded for
@@ -108,6 +114,7 @@ impl Engine {
         let kind = kind_of(dispcnt, (layer & 1) + 2, spec);
         AffineBg::decode(
             dispcnt,
+            ((layer & 1) + 2) as u8,
             self.bgcnt[(layer & 1) + 2],
             &self.affine[layer & 1],
             kind,
@@ -210,7 +217,7 @@ impl Engine {
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
     /// together"). An object is in front of a background layer whose priority value is the same or
     /// greater (`obj.md`, "Priority").
-    // TODO(phase4): windows, blending and extended palettes complete the line.
+    // TODO(phase4): windows and blending complete the line.
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
         let dispcnt = inputs.spec.dispcnt(self.dispcnt);
         let palette = inputs
@@ -260,12 +267,19 @@ impl Engine {
                             true => (block_x, block_y),
                             false => (x as u32, y),
                         };
-                        text::pixel(&texts[n], &inputs.vram, palette, px, py as u32)
+                        text::pixel(
+                            &texts[n],
+                            &inputs.vram,
+                            palette,
+                            &inputs.ext_bg,
+                            px,
+                            py as u32,
+                        )
                     }
                     Kind::Affine | Kind::Extended | Kind::Large => {
                         let layer = &affines[n & 1];
                         let px = if layer.mosaic { block_x } else { x as u32 };
-                        affine::pixel(layer, &inputs.vram, palette, px)
+                        affine::pixel(layer, &inputs.vram, palette, &inputs.ext_bg, px)
                     }
                     Kind::Other => None,
                 }

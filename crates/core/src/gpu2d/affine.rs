@@ -6,12 +6,13 @@
 //! formatted or collected.
 
 use super::kind::Kind;
+use super::spec::DISPCNT_BG_EXT_PALETTE;
 use super::text::{
     CHAR_BLOCK_SIZE, CNT_CHAR_MASK, CNT_CHAR_SHIFT, CNT_MOSAIC, CNT_PRIORITY_MASK, CNT_SCREEN_MASK,
     CNT_SCREEN_SHIFT, CNT_SIZE_SHIFT, DISPCNT_BASE_MASK, DISPCNT_BASE_SIZE, DISPCNT_CHAR_SHIFT,
-    DISPCNT_SCREEN_SHIFT, SCREEN_BLOCK_SIZE, palette_color,
+    DISPCNT_SCREEN_SHIFT, ENTRY_PALETTE_SHIFT, SCREEN_BLOCK_SIZE, palette_color,
 };
-use crate::bus::VramWindow;
+use crate::bus::{ExtPalette, VramWindow};
 use serde::{Deserialize, Serialize};
 
 /// BGxCNT bit 2 and bit 7 select the extended format (`bg-modes.md`, "Extended layers"): bit 7
@@ -142,6 +143,10 @@ pub struct AffineBg {
     pub wrap: bool,
     /// Whether mosaic is on for the layer (BGxCNT bit 6).
     pub mosaic: bool,
+    /// The extended palette slot (2 or 3: the layer's own number) the layer reads: with DISPCNT
+    /// bit 30 set, the tile format with 16-bit entries does (`extended-palettes.md`, "Behavior").
+    /// `None` reads the standard palette.
+    pub ext_slot: Option<u8>,
     /// PA, PB, PC, PD as signed 8.8 numbers.
     pub params: [i16; 4],
     /// BGxX and BGxY, sign-extended from 28 bits, 20.8.
@@ -152,8 +157,8 @@ pub struct AffineBg {
 
 impl AffineBg {
     /// Decodes BGxCNT and the transform registers of one layer under `dispcnt`, the DISPCNT as the
-    /// engine sees it; `kind` is what the BG mode makes this layer.
-    pub(super) fn decode(dispcnt: u32, cnt: u16, regs: &Affine, kind: Kind) -> Self {
+    /// engine sees it; `layer` is 2 or 3 and `kind` is what the BG mode makes this layer.
+    pub(super) fn decode(dispcnt: u32, layer: u8, cnt: u16, regs: &Affine, kind: Kind) -> Self {
         let format = match (kind, cnt & CNT_BITMAP != 0, cnt & CNT_DIRECT != 0) {
             (Kind::Large, _, _) => AffineFormat::Bitmap256,
             (Kind::Extended, false, _) => AffineFormat::Tiles16,
@@ -199,6 +204,8 @@ impl AffineBg {
             height,
             wrap: cnt & CNT_WRAP != 0,
             mosaic: cnt & CNT_MOSAIC != 0,
+            ext_slot: (dispcnt & DISPCNT_BG_EXT_PALETTE != 0 && format == AffineFormat::Tiles16)
+                .then_some(layer),
             params: regs.params,
             reference: [sign_extend_28(regs.x), sign_extend_28(regs.y)],
             internal: [regs.ref_x, regs.ref_y],
@@ -208,14 +215,14 @@ impl AffineBg {
 
 /// The 15-bit colour of layer `layer` at screen pixel column `x` of the line being drawn, or
 /// `None` where it is transparent (`bg-modes.md`, "Affine layers", "Extended layers").
-// TODO(phase4): extended palettes (DISPCNT bit 30) for the 16-bit tile format (#32).
-// TODO(hw-unverified): the 16-bit tile format reads the standard palette whatever the entry's
-// palette number says (`bg-modes.md`, "Unverified").
 // TODO(hw-unverified): the large bitmap honours the area overflow bit (`bg-modes.md`, "Unverified").
+// TODO(hw-unverified): the 16-bit tile format reads the standard palette by the value alone while
+// DISPCNT bit 30 is clear (`bg-modes.md`, "Unverified").
 pub(super) fn pixel(
     layer: &AffineBg,
     vram: &VramWindow<'_>,
     palette: &[u8],
+    ext: &ExtPalette<'_>,
     x: u32,
 ) -> Option<u16> {
     let step = x as i32;
@@ -238,7 +245,15 @@ pub(super) fn pixel(
         AffineFormat::Tiles8 => {
             let cell = (ty / TILE_SIZE) * (width / TILE_SIZE) + tx / TILE_SIZE;
             let tile = u32::from(vram.byte(layer.screen_base + cell as u32));
-            tile_pixel(layer, vram, palette, tile, tx & TILE_MASK, ty & TILE_MASK)
+            tile_pixel(
+                layer,
+                vram,
+                palette,
+                ext,
+                (tile, 0),
+                tx & TILE_MASK,
+                ty & TILE_MASK,
+            )
         }
         AffineFormat::Tiles16 => {
             let cell = (ty / TILE_SIZE) * (width / TILE_SIZE) + tx / TILE_SIZE;
@@ -253,7 +268,8 @@ pub(super) fn pixel(
                 false => ty & TILE_MASK,
             };
             let tile = u32::from(entry & ENTRY_TILE_MASK);
-            tile_pixel(layer, vram, palette, tile, column, row)
+            let number = u32::from(entry >> ENTRY_PALETTE_SHIFT);
+            tile_pixel(layer, vram, palette, ext, (tile, number), column, row)
         }
         AffineFormat::Bitmap256 => {
             let at = layer.screen_base + (ty * width + tx) as u32;
@@ -270,18 +286,22 @@ pub(super) fn pixel(
     }
 }
 
-/// The colour of pixel (`column`, `row`) of 256-colour tile `tile`, or `None` where it is 0.
+/// The colour of pixel (`column`, `row`) of 256-colour tile `tile` (with the entry's palette
+/// number, 0 for a one-byte entry), or `None` where it is 0. A layer with an extended slot reads
+/// it, else the standard palette.
 fn tile_pixel(
     layer: &AffineBg,
     vram: &VramWindow<'_>,
     palette: &[u8],
-    tile: u32,
+    ext: &ExtPalette<'_>,
+    (tile, number): (u32, u32),
     column: i32,
     row: i32,
 ) -> Option<u16> {
     let at = layer.char_base + tile * TILE_BYTES + row as u32 * TILE_SIZE as u32 + column as u32;
-    match vram.byte(at) {
-        0 => None,
-        value => Some(palette_color(palette, u32::from(value))),
+    match (vram.byte(at), layer.ext_slot) {
+        (0, _) => None,
+        (value, Some(slot)) => Some(ext.color(usize::from(slot), number, u32::from(value))),
+        (value, None) => Some(palette_color(palette, u32::from(value))),
     }
 }

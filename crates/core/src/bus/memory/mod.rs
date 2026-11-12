@@ -12,7 +12,8 @@
 
 mod vram;
 
-pub use vram::{VramMapping, VramWindow, VramWindowKind};
+pub(crate) use vram::{ExtPalette, ExtSlots};
+pub use vram::{ExtPaletteBanks, VramMapping, VramWindow, VramWindowKind};
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
@@ -327,7 +328,8 @@ impl Memory {
     /// savestate load (`savestate`) only: a VRAMCNT write rebuilds just the VRAM block
     /// (`build_vram_pages`) and a WRAMCNT write just the shared WRAM block (`build_wram_pages`).
     // Per-CPU tables: the decision is recorded in the PR that added #22.
-    // TODO(phase7): texture and extended-palette slots are decoded but not read (#32).
+    // TODO(phase7): texture slots are decoded but not read; the extended-palette slots are read by
+    // the 2D engines (`ext_slots`, #32).
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
     // rule (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the palette RAM repeats through its 16 MiB block, and the ARM7 has
@@ -455,6 +457,26 @@ impl Memory {
             _ => (WramShare::None, WramShare::All32),
         };
         WramState { mode, arm9, arm7 }
+    }
+
+    /// The extended-palette slots both engines read, from the nine VRAMCNT registers as they are
+    /// now (`extended-palettes.md`, "Which bank backs a slot").
+    pub(crate) fn ext_slots(&self) -> ExtSlots {
+        let mappings: [VramMapping; BANK_COUNT] =
+            std::array::from_fn(|bank| self.vram_bank(bank).mapping);
+        vram::ext_slots(&mappings)
+    }
+
+    /// Which bank backs each extended-palette slot of engine A, or of engine B when `engine_b`
+    /// (`extended-palettes.md`, "Which bank backs a slot").
+    pub fn ext_palette_banks(&self, engine_b: bool) -> ExtPaletteBanks {
+        self.ext_slots().banks(engine_b)
+    }
+
+    /// The BG extended palettes of engine A, or of engine B when `engine_b`.
+    pub(crate) fn ext_bg_palette(&self, engine_b: bool) -> ExtPalette<'_> {
+        let slots = self.ext_slots();
+        ExtPalette::new(&self.vram, if engine_b { slots.bg_b } else { slots.bg_a })
     }
 
     /// One BG or OBJ window of the 2D engines, as a renderer reads it by offset

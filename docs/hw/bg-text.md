@@ -162,9 +162,7 @@ the engine's per-line state).
 - **The sampling instant of a line** is its start; real hardware reads the registers while the
   line is being drawn. A write inside the visible part of a line is a half-line effect that this
   model rounds to the next line. — `Machine::render_line` — verify against a trace.
-- **Extended palettes** (DISPCNT bit 30) are `extended-palettes.md`; until that note's code lands
-  (`TODO(phase4)`, #32) an 8 bits per pixel layer uses the standard palette whatever the bit says.
-  — `text::pixel` — verify likewise.
+- **Extended palettes** (DISPCNT bit 30) are `extended-palettes.md`, with its own "Unverified".
 - **Forced blank** and **master brightness** do not change the picture (`display-mode-vram.md`,
   "Unverified"; `TODO(phase4)`).
 - **Mosaic** (BGxCNT bit 6, MOSAIC) is `bg-modes.md`; its OBJ bits are `TODO(phase4)` (#31).

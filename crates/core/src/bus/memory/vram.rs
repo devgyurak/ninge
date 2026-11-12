@@ -3,7 +3,7 @@
 //! and OBJ windows of the two 2D engines, and the renderer's view of a window ([`VramWindow`])
 //! (`docs/hw/vram-banks.md`, "Where each bank goes" and "The 2D engines' view of a window").
 
-use super::{Memory, PAGE_MASK, Region, VRAM_BLOCK_BASE, page_of};
+use super::{BANK_BASE, BANK_COUNT, Memory, PAGE_MASK, Region, VRAM_BLOCK_BASE, page_of};
 
 /// The banks are named by their index, A = 0 to I = 8.
 const A: usize = 0;
@@ -246,5 +246,121 @@ impl<'a> VramWindow<'a> {
     /// The little-endian halfword at `offset`.
     pub(crate) fn half(&self, offset: u32) -> u16 {
         u16::from_le_bytes([self.byte(offset), self.byte(offset.wrapping_add(1))])
+    }
+}
+
+/// Bytes of one extended-palette slot: 16 palettes of 256 colours of 2 bytes
+/// (`docs/hw/extended-palettes.md`, "Where the palette is").
+const EXT_SLOT_BYTES: u32 = 8 << 10;
+/// Bytes of one palette of 256 colours.
+const EXT_PALETTE_BYTES: u32 = 512;
+/// Palette numbers a slot holds, and colours in a palette.
+const EXT_PALETTES: u32 = 16;
+const EXT_COLORS: u32 = 256;
+
+/// Where one extended-palette slot's 8 KiB is: the bank that backs it (A = 0 to I = 8) and the
+/// byte offset of the slot in the VRAM buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExtSlot {
+    pub(crate) bank: usize,
+    pub(crate) start: u32,
+}
+
+/// The slots of both engines: four BG slots and one OBJ slot each, `None` where no bank backs
+/// them. Plain data built from the VRAMCNT registers each line, so it is never saved
+/// (`docs/hw/extended-palettes.md`, "Which bank backs a slot").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ExtSlots {
+    pub(crate) bg_a: [Option<ExtSlot>; 4],
+    pub(crate) obj_a: Option<ExtSlot>,
+    pub(crate) bg_b: [Option<ExtSlot>; 4],
+    pub(crate) obj_b: Option<ExtSlot>,
+}
+
+/// The slots the nine banks back, given what each is mapped as, A first. A slot a bank does not
+/// back in its mapping stays empty; when two banks back the same slot the earlier letter wins, as
+/// for the CPU windows.
+// TODO(hw-unverified): the earlier letter wins on the display side too
+// (`extended-palettes.md`, "Unverified").
+pub(crate) fn ext_slots(mappings: &[VramMapping; BANK_COUNT]) -> ExtSlots {
+    let mut slots = ExtSlots::default();
+    for (bank, mapping) in mappings.iter().enumerate() {
+        let base = BANK_BASE[bank] as u32;
+        // The slot that starts `index` slots into the bank.
+        let at = |index: u32| ExtSlot {
+            bank,
+            start: base + index * EXT_SLOT_BYTES,
+        };
+        // A slot already taken by an earlier bank is kept.
+        let claim = |slot: Option<&mut Option<ExtSlot>>, value: ExtSlot| {
+            if let Some(slot) = slot.filter(|slot| slot.is_none()) {
+                *slot = Some(value);
+            }
+        };
+        match *mapping {
+            VramMapping::BgExtPaletteA { first, count } => (0..u32::from(count)).for_each(|n| {
+                claim(slots.bg_a.get_mut(usize::from(first) + n as usize), at(n));
+            }),
+            VramMapping::ObjExtPaletteA => claim(Some(&mut slots.obj_a), at(0)),
+            VramMapping::BgExtPaletteB => (0..4u32).for_each(|n| {
+                claim(slots.bg_b.get_mut(n as usize), at(n));
+            }),
+            VramMapping::ObjExtPaletteB => claim(Some(&mut slots.obj_b), at(0)),
+            _ => {}
+        }
+    }
+    slots
+}
+
+/// The extended palettes of one engine and one kind (BG or OBJ) as a renderer reads them: a colour
+/// by (slot, palette number, index). A slot no bank backs reads 0.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExtPalette<'a> {
+    vram: &'a [u8],
+    slots: [Option<ExtSlot>; 4],
+}
+
+impl<'a> ExtPalette<'a> {
+    pub(super) fn new(vram: &'a [u8], slots: [Option<ExtSlot>; 4]) -> Self {
+        Self { vram, slots }
+    }
+
+    /// The 15-bit colour of palette `palette` (0-15), entry `index` (0-255) of slot `slot`.
+    // TODO(hw-unverified): a slot no bank backs reads colour 0 (`extended-palettes.md`,
+    // "Unverified").
+    pub(crate) fn color(&self, slot: usize, palette: u32, index: u32) -> u16 {
+        let Some(Some(slot)) = self.slots.get(slot) else {
+            return 0;
+        };
+        let at =
+            slot.start + (palette % EXT_PALETTES) * EXT_PALETTE_BYTES + (index % EXT_COLORS) * 2;
+        self.vram
+            .get(at as usize..at as usize + 2)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map_or(0, u16::from_le_bytes)
+    }
+}
+
+/// Which bank (A = 0 to I = 8) backs each extended-palette slot of one engine, `None` where no bank
+/// does. A debugger's VRAM panel (#58) shows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExtPaletteBanks {
+    /// The bank behind BG slots 0-3.
+    pub bg: [Option<usize>; 4],
+    /// The bank behind the OBJ slot.
+    pub obj: Option<usize>,
+}
+
+impl ExtSlots {
+    /// The banks behind the slots of engine A, or of engine B when `engine_b`.
+    pub(crate) fn banks(&self, engine_b: bool) -> ExtPaletteBanks {
+        let (bg, obj) = match engine_b {
+            true => (&self.bg_b, &self.obj_b),
+            false => (&self.bg_a, &self.obj_a),
+        };
+        ExtPaletteBanks {
+            bg: bg.map(|slot| slot.map(|slot| slot.bank)),
+            obj: obj.map(|slot| slot.bank),
+        }
     }
 }

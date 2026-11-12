@@ -316,7 +316,7 @@ fn given_a_16_bit_map_with_a_screen_block_when_drawn_then_the_map_is_read_from_i
 fn given_entries_with_palette_numbers_when_drawn_with_the_standard_palette_then_the_number_is_not_used()
  {
     // TODO(hw-unverified): `bg-modes.md`, "Unverified": the palette number belongs to the extended
-    // palette (`TODO(phase4)`, #32); the standard palette is indexed by the value alone.
+    // palette (`extended-palettes.md`); the standard palette is indexed by the value alone.
     let mut m = build(&MAP_A);
     w16(&mut m, ENG_A.vram, entry(0, 0) | (7 << 12));
     m.render_frame();

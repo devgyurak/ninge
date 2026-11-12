@@ -107,4 +107,5 @@ fn given_a_long_oam_when_checked_then_it_is_not_well_formed() {
     assert!(!memory.is_well_formed());
 }
 
+mod ext;
 mod vram;

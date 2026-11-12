@@ -284,7 +284,7 @@ impl Gpu2d {
     /// Draws line `y` (0-191) of engine A's picture into `out` (`SCREEN_WIDTH` pixels), given the
     /// bytes of banks A-D where the CPU sees them as LCDC VRAM and what the engine reads
     /// ([`EngineInputs`]). A line past the last visible one is not drawn.
-    // TODO(phase4): mode 1 completes (OBJ, windows, blending, extended palettes), and mode 3
+    // TODO(phase4): mode 1 completes (windows and blending), and mode 3
     // draws the main-memory bitmap.
     // TODO(phase4): master brightness applies to the output of modes 1-3 (#34).
     // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored

@@ -215,6 +215,7 @@ impl Machine {
                 self.memory.vram_window(VramWindowKind::BgA),
                 self.memory.vram_window(VramWindowKind::ObjA),
                 palette_a,
+                self.memory.ext_bg_palette(false),
                 oam_a,
             );
             gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs, out);
@@ -224,6 +225,7 @@ impl Machine {
                 self.memory.vram_window(VramWindowKind::BgB),
                 self.memory.vram_window(VramWindowKind::ObjB),
                 palette_b,
+                self.memory.ext_bg_palette(true),
                 oam_b,
             );
             gpu.render_line_b(y, &inputs, out);

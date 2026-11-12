@@ -44,7 +44,7 @@ Engine B's POWCNT1 enable is bit 9 of `0400_0304h` (`display-mode-vram.md`).
 | 16-17 | display mode | engine A 0-3, engine B 0-1 |
 | 24-26 | character base, `N * 64 KiB` | engine A only; engine B's is 0 |
 | 27-29 | screen base, `N * 64 KiB` | engine A only; engine B's is 0 |
-| 30 | BG extended palettes (`extended-palettes.md`) | both (`TODO(phase4)`, #32) |
+| 30 | BG extended palettes (`extended-palettes.md`) | both |
 
 ### BGxCNT bits that this note adds to `bg-text.md`
 
@@ -158,8 +158,9 @@ otherwise the colour is the BG palette entry `value`.
   horizontal flip, bit 11 vertical flip, bits 12-15 palette number) laid out like an affine map:
   `W/8 x H/8` entries, row by row, one block (not the text layer's 32x32 blocks). The tile is
   always 256 colours (64 bytes). Flips mirror the pixel inside the tile. Value 0 is transparent.
-  The palette number is the extended palette's: with the standard palette (DISPCNT bit 30 clear)
-  the colour is the BG palette entry `value` whatever the number (`TODO(phase4)`, #32).
+  The palette number is the extended palette's (`extended-palettes.md`): with DISPCNT bit 30 set the
+  colour is entry `value` of palette `number` of the layer's slot; with it clear the colour is the BG
+  palette entry `value` whatever the number.
 - **256-colour bitmap** (bit 7 = 1, bit 2 = 0): the pixel is the byte at `base + ty * W + tx`;
   value 0 is transparent, otherwise the BG palette entry `value`.
 - **Direct-colour bitmap** (bit 7 = 1, bit 2 = 1): the pixel is the halfword at
@@ -284,7 +285,7 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
 - **Extended map with the standard palette**: the palette number of a 16-bit entry has no
   effect and the colour is the standard BG palette entry `value`. GBATEK lists the extended
   palette as the one these tiles use and does not say what the standard palette does for them.
-  — `affine::pixel` — verify likewise (`TODO(phase4)`, #32).
+  — `affine::pixel` — verify likewise.
 - **Engine B with bits it does not have**: DISPCNT bits 3, 18-19, 24-29 on engine B and the
   display modes 2 and 3 are stored as written and ignored; display mode bit 17 does not exist
   there, so engine B's mode is bit 16 alone. — `EngineSpec` in `crates/core/src/gpu2d/spec.rs` —
@@ -300,7 +301,7 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
   verify likewise.
 - **Engine A's POWCNT1 bit 1** still does nothing (`display-mode-vram.md`, "Unverified").
 - **Mode 7** (not defined) draws no layer, on both engines (`bg-text.md`, "Unverified").
-- **Extended palettes** (DISPCNT bit 30) are not modeled (`TODO(phase4)`, #32).
+- **Extended palettes** (DISPCNT bit 30) are `extended-palettes.md`, with its own "Unverified".
 
 ## Evidence
 

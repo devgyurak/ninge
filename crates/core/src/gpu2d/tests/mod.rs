@@ -289,8 +289,36 @@ fn nonblack_for_blocks_1_to_3() -> Vec<usize> {
 }
 
 #[test]
-fn given_dispcnt_blocks_1_to_3_when_mode_2_is_rendered_then_the_screen_is_black() {
+fn given_dispcnt_blocks_1_to_3_with_banks_b_to_d_disabled_when_mode_2_is_rendered_then_the_screen_is_black()
+ {
     assert_eq!(nonblack_for_blocks_1_to_3(), vec![0, 0, 0]);
+}
+
+/// The top-left pixel of engine A in mode 2 for each block 0..=3 when banks A-D are all enabled
+/// in LCDC mode and bank X holds the halfword `0x0001 << X` at its first pixel
+/// (`docs/hw/display-mode-vram.md`: block N is bank A + N).
+fn first_pixel_per_block() -> Vec<u32> {
+    (0u32..4)
+        .map(|block| {
+            let mut m = mode2_machine();
+            (0..4u32).for_each(|bank| {
+                w8(&mut m, VRAMCNT_A + bank, ENABLE_MST0);
+                w16(&mut m, LCDC_A + bank * 0x2_0000, 1 << bank);
+            });
+            w32(&mut m, DISPCNT_A_ADDR, MODE2 | (block << 18));
+            m.render_frame();
+            pixel(&m, Screen::Top, 0, 0)
+        })
+        .collect()
+}
+
+#[test]
+fn given_banks_a_to_d_enabled_when_each_block_is_displayed_then_the_pixel_comes_from_that_bank() {
+    // Red 1 / 2 / 4 / 8 expands (c << 3 | c >> 2) to 8, 16, 33 and 66, in the high byte.
+    assert_eq!(
+        first_pixel_per_block(),
+        vec![0x0008_0000, 0x0010_0000, 0x0021_0000, 0x0042_0000]
+    );
 }
 
 #[test]

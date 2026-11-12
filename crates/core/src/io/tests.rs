@@ -12,8 +12,10 @@ use crate::io::irq::{IE_ADDR, IF_ADDR, IME_ADDR, InterruptController, Requests};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::{DISPSTAT_ADDR, VCOUNT_ADDR};
 
-/// The WRAMCNT, WRAMSTAT and VRAMCNT_G addresses, which `Memory` keeps private.
+/// The WRAMCNT, WRAMSTAT and VRAMCNT_G-I addresses, which `Memory` keeps private.
 const VRAMCNT_G: u32 = 0x0400_0246;
+const VRAMCNT_H: u32 = 0x0400_0248;
+const VRAMCNT_I: u32 = 0x0400_0249;
 const WRAMCNT: u32 = 0x0400_0247;
 const WRAMSTAT: u32 = 0x0400_0241;
 
@@ -112,6 +114,8 @@ fn given_each_arm9_register_address_when_decoded_then_the_expected_port_and_offs
         (VRAMCNT_A_ADDR, Some(Owner::Memory(0))),
         (VRAMCNT_G, Some(Owner::Memory(6))),
         (WRAMCNT, Some(Owner::Memory(7))),
+        (VRAMCNT_H, Some(Owner::Memory(8))),
+        (VRAMCNT_I, Some(Owner::Memory(9))),
     ];
     assert_eq!(decode_failures::<true>(&expected), vec![]);
 }
@@ -145,6 +149,7 @@ fn given_arm9_only_registers_when_the_arm7_decodes_them_then_no_port_owns_them()
         (POWCNT1_ADDR, None),
         (WRAMCNT, None),
         (VRAMCNT_G, None),
+        (VRAMCNT_H, None),
         (0x0400_00E0, None),
         (0x0400_00EF, None),
     ];

@@ -51,8 +51,6 @@ const MODE_VRAM: u32 = 2;
 /// DISPCNT bits 18-19: the VRAM block mode 2 reads.
 const DISPCNT_BLOCK_SHIFT: u32 = 18;
 const DISPCNT_BLOCK_MASK: u32 = 0x3;
-/// The block number of bank A, the only block modeled in Phase 2.
-const BLOCK_A: u32 = 0;
 /// POWCNT1 bit 15: display swap. Set sends engine A to the upper screen.
 const POWCNT1_SWAP: u16 = 1 << 15;
 /// POWCNT1 after direct boot: LCD, both 2D engines and both 3D units on, engine A on top.
@@ -219,11 +217,10 @@ impl Gpu2d {
     }
 
     /// Draws line `y` (0-191) of engine A's picture into `out` (`SCREEN_WIDTH` pixels), given the
-    /// bytes of bank A when the CPU can see it as LCDC VRAM, engine A's BG VRAM, and the palette
-    /// RAM. A line past the last visible one is not drawn.
+    /// bytes of banks A-D where the CPU sees them as LCDC VRAM, engine A's BG VRAM, and the
+    /// palette RAM. A line past the last visible one is not drawn.
     // TODO(phase4): mode 1 completes (OBJ, affine and extended layers, windows, blending, extended
-    // palettes, mosaic), mode 3 draws the main-memory bitmap, and blocks 1-3 (banks B-D) join
-    // mode 2 (#35).
+    // palettes, mosaic), and mode 3 draws the main-memory bitmap.
     // TODO(phase4): master brightness applies to the output of modes 1-3 (#34).
     // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored
     // (`display-mode-vram.md`, "Unverified").
@@ -232,7 +229,7 @@ impl Gpu2d {
     pub(crate) fn render_line_a(
         &self,
         y: usize,
-        bank_a: Option<&[u8]>,
+        lcdc: [Option<&[u8]>; 4],
         vram: &BgVram<'_>,
         palette: &[u8],
         out: &mut [u32],
@@ -246,9 +243,12 @@ impl Gpu2d {
             out.fill(WHITE);
         } else if mode == MODE_GRAPHICS {
             self.render_graphics_line(y, vram, palette, out);
-        } else if mode == MODE_VRAM && block == BLOCK_A {
+        } else if mode == MODE_VRAM {
             out.fill(BLACK);
-            let row = bank_a
+            let row = lcdc
+                .get(block as usize)
+                .copied()
+                .flatten()
                 .and_then(|bank| bank.get(y * SCREEN_WIDTH * 2..(y + 1) * SCREEN_WIDTH * 2))
                 .unwrap_or(&[]);
             let (pairs, _) = row.as_chunks::<2>();

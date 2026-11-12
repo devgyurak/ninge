@@ -120,6 +120,9 @@ impl Bench {
     pub(crate) fn vram_a(&self) -> VramBankState {
         self.memory.vram_a()
     }
+    pub(crate) fn vram_banks(&self) -> [VramBankState; 9] {
+        self.memory.vram_banks()
+    }
     pub(crate) fn wramcnt(&self) -> WramState {
         self.memory.wramcnt()
     }

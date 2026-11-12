@@ -187,6 +187,12 @@ impl<'a> Inspect<'a> {
         self.machine.memory.vram_a()
     }
 
+    /// All nine VRAMCNT registers as decoded, bank A first.
+    // The debugger's VRAM bank map (#58) shows them with the mapping each one means.
+    pub fn vram_banks(&self) -> [VramBankState; 9] {
+        self.machine.memory.vram_banks()
+    }
+
     /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.
     // The debugger's memory viewer (#57) shows each CPU's window from it.
     pub fn wramcnt(&self) -> WramState {

@@ -14,7 +14,7 @@ use crate::io::power::{BLOCK_BYTES as POWER_BYTES, POSTFLG_ADDR};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::DISPSTAT_ADDR;
 
-/// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..G,
+/// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..I,
 /// WRAMCNT, WRAMSTAT) stays in `Memory` because the page tables derive from it (#109), every
 /// other register belongs to a device behind a [`Port`]. [`decode`] says which, so no `Io` access
 /// ever sees an address `Memory` owns.
@@ -100,8 +100,9 @@ pub(crate) const ARM9_PORTS: [PortEntry; 13] = [
     (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
     // IME, a hole, IE and IF.
     (IME_ADDR, 16, Some(Port::Irq)),
-    // VRAMCNT_A..D and VRAMCNT_E, F, G and WRAMCNT.
-    (VRAMCNT_A_ADDR, 8, None),
+    // VRAMCNT_A..D, VRAMCNT_E, F, G, WRAMCNT, then VRAMCNT_H and I and two bytes no register
+    // holds (the block stays on the 4-byte grid).
+    (VRAMCNT_A_ADDR, 12, None),
     (POWCNT1_ADDR, 4, Some(Port::Gpu2d)),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
 ];

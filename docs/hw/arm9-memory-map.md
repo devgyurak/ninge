@@ -19,7 +19,7 @@ regions below are simply unmapped.
 | `0xxx_x000h` | 16 KiB physical | Data TCM, base from CP15 | mapped |
 | `0200_0000h` | 4 MiB | Main RAM, repeated through the 16 MiB block | mapped |
 | `0300_0000h` | 0, 16 or 32 KiB | Shared WRAM | mapped by WRAMCNT (`wramcnt.md`); empty when the ARM9 owns none |
-| `0400_0000h` | | I/O ports | only VRAMCNT_A; the rest reads 0 |
+| `0400_0000h` | | I/O ports | VRAMCNT_A-I and WRAMCNT; the rest reads 0 |
 | `0500_0000h` | 2 KiB | Palette RAM, repeated through the 16 MiB block | mapped, always (`palette-ram.md`, #28) |
 | `0700_0000h` | | OAM | unmapped, `TODO(phase4)` |
 | `0600_0000h`..`061F_FFFFh` | 128 KiB used | Engine A BG VRAM | bank A while enabled with MST 1, at `0600_0000h + OFS * 20000h` (`vram-banks.md`, #28) |
@@ -135,11 +135,11 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 - **Unmapped reads** return 0 and writes are ignored; GBATEK says "undefined" for memory and
   gives zero only for I/O ports. — `read_registers` in `bus/view.rs` — verify
   likewise. The `memmap` ROM records the I/O case (slot 32) only.
-- **Write-only registers read.** VRAMCNT_A is marked write-only; a read returns 0 here. —
+- **Write-only registers read.** The VRAMCNT registers are marked write-only; a read returns 0 here. —
   `read_registers` in `bus/view.rs` — verify likewise.
-- **Wider writes to a byte register.** VRAMCNT_A sits next to VRAMCNT_B; a halfword or word
-  write there is split into bytes, each byte goes to the register at its own address, and a
-  byte that lands on no register (VRAMCNT_B before it exists) is dropped. —
+- **Wider writes to a byte register.** The VRAMCNT registers sit next to each other; a halfword
+  or word write there is split into bytes, each byte goes to the register at its own address,
+  and a byte that lands on no register (`0400_024Ah` and up) is dropped. —
   `Access::write_registers` in `bus/view.rs` — verify likewise.
 - **A fetch from the DTCM region** reads the memory underneath; a fetch from a load-mode ITCM
   reads underneath. GBATEK does not describe the fetch path in either case. —

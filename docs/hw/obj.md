@@ -8,8 +8,8 @@ GBATEK "LCD I/O Mosaic Function" (MOSAIC); GBATEK "LCD I/O BG Rotation/Scaling" 
 GBATEK "LCD Color Palettes" (the OBJ palette, transparent colour 0); GBATEK "DS Memory Control -
 Memory Access" and "DS Memory Maps" (OAM location and the write widths).
 Used by: `crates/core/src/gpu2d/`, `crates/core/src/bus/memory/`   Phase: 4 (#31); the
-semi-transparent mode (#34), the OBJ window (#33), OBJ extended palettes (#32), capture (#36) and
-the OAM panel in the debugger (#58) are other issues
+semi-transparent mode (#34), the OBJ window (#33), capture (#36) and the OAM panel in the
+debugger (#58) are other issues; the OBJ extended palettes are `extended-palettes.md` (#32)
 
 `bg-text.md` describes the picture of one line and `bg-modes.md` the layers behind the sprites.
 This note adds the sprites: where their attributes live, how one object is turned into pixels, and
@@ -42,7 +42,7 @@ aligned address (`arm9-memory-map.md`, "Alignment").
 | 20-21 | tile OBJ 1D boundary, `32 << n` bytes | both |
 | 22 | bitmap OBJ 1D boundary: 0 = 128 bytes, 1 = 256 bytes | engine A only |
 | 23 | OBJ processing during H-Blank (the line budget, below) | both |
-| 31 | OBJ extended palettes (`extended-palettes.md`) | both (`TODO(phase4)`, #32) |
+| 31 | OBJ extended palettes (`extended-palettes.md`) | both |
 
 The other bits are in `bg-text.md`, `bg-modes.md` and `display-mode-vram.md`. Bit 5 is "H-Blank
 interval free" on the GBA; on the DS that meaning moved to bit 23 and bit 5 became the bitmap width.
@@ -151,7 +151,8 @@ the first tile of an object may start.
 entry `palette * 16 + value` of the engine's OBJ palette; a 256-colour object takes entry `value`.
 The OBJ palette is the second 512 bytes of the engine's palette half (`palette-ram.md`: `0500_0200h`
 for engine A, `0500_0600h` for engine B). With DISPCNT bit 31 the palettes come from extended
-palette memory (`extended-palettes.md`; `TODO(phase4)`, #32).
+palette memory for a 256-colour object: attr2's palette number picks one of 16 palettes of 256
+colours of the OBJ slot, and the pixel value the colour in it (`extended-palettes.md`).
 
 ### An affine object
 
@@ -334,7 +335,7 @@ Each item gets `TODO(hw-unverified)` at its code site.
 - **The cost of an OBJ-window object** (mode 2): it costs its cycles like any other object though
   it is not drawn yet (#33). — `obj::draw_line` — verify likewise.
 - **Semi-transparent and OBJ-window objects** are drawn as normal objects / not drawn until #34
-  and #33; bitmap alpha is ignored until #34; extended palettes (bit 31) until #32.
+  and #33; bitmap alpha is ignored until #34.
 
 ## Evidence
 

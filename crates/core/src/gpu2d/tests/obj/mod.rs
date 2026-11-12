@@ -9,6 +9,7 @@ use crate::debug::{EngineId, ObjAttrs};
 
 mod affine;
 mod bitmap;
+mod extpal;
 mod limit;
 mod mosaic;
 

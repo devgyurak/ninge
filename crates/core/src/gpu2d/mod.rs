@@ -20,7 +20,7 @@ mod text;
 
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
-pub use affine::AffineBg;
+pub use affine::{AffineBg, AffineFormat};
 use engine::{
     AFFINE_OFFSET, AFFINE_REGS_BYTES as ENGINE_AFFINE_REGS_BYTES,
     BG_REGS_BYTES as ENGINE_BG_REGS_BYTES, BGCNT_OFFSET, Engine,

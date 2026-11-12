@@ -761,13 +761,6 @@ fn given_bg_mode_0_when_each_layer_is_enabled_then_all_four_text_layers_draw() {
 }
 
 #[test]
-fn given_bg_modes_3_to_5_when_the_extended_layers_are_enabled_then_they_draw_nothing_yet() {
-    // The affine layers draw (`bg-modes.md`); the extended kinds are `TODO(phase4)` (PR 4 of #30).
-    let cases = [(3, 3, false), (4, 3, false), (5, 2, false), (5, 3, false)];
-    assert_eq!(kind_failures(&cases), vec![]);
-}
-
-#[test]
 fn given_bg_modes_1_to_5_when_the_text_layers_are_enabled_then_they_draw() {
     let cases = [
         (1, 0, true),

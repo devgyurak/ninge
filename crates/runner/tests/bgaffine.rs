@@ -245,7 +245,7 @@ type AffineState = (u8, u16, bool, [i16; 4], [i32; 2]);
 
 fn affine_state(machine: &Machine, engine: EngineId, layer: usize) -> AffineState {
     let l = machine.inspect().gpu2d().affine_bg(engine, layer);
-    (l.priority, l.size, l.wrap, l.params, l.reference)
+    (l.priority, l.width, l.wrap, l.params, l.reference)
 }
 
 #[test]

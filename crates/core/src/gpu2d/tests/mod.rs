@@ -24,6 +24,7 @@ const PIXELS: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 
 mod affine;
 mod engine_b;
+mod extended;
 mod text;
 
 fn w8(m: &mut Machine, addr: u32, v: u8) {

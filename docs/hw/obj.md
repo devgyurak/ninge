@@ -42,7 +42,7 @@ aligned address (`arm9-memory-map.md`, "Alignment").
 | 20-21 | tile OBJ 1D boundary, `32 << n` bytes | both |
 | 22 | bitmap OBJ 1D boundary: 0 = 128 bytes, 1 = 256 bytes | engine A only |
 | 23 | OBJ processing during H-Blank (the line budget, below) | both |
-| 31 | OBJ extended palettes | both (`TODO(phase4)`, #32) |
+| 31 | OBJ extended palettes (`extended-palettes.md`) | both (`TODO(phase4)`, #32) |
 
 The other bits are in `bg-text.md`, `bg-modes.md` and `display-mode-vram.md`. Bit 5 is "H-Blank
 interval free" on the GBA; on the DS that meaning moved to bit 23 and bit 5 became the bitmap width.
@@ -151,7 +151,7 @@ the first tile of an object may start.
 entry `palette * 16 + value` of the engine's OBJ palette; a 256-colour object takes entry `value`.
 The OBJ palette is the second 512 bytes of the engine's palette half (`palette-ram.md`: `0500_0200h`
 for engine A, `0500_0600h` for engine B). With DISPCNT bit 31 the palettes come from extended
-palette memory (`TODO(phase4)`, #32).
+palette memory (`extended-palettes.md`; `TODO(phase4)`, #32).
 
 ### An affine object
 

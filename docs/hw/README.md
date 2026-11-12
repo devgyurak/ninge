@@ -49,6 +49,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Engine A display mode 2 (VRAM display) and the screen swap](display-mode-vram.md)
 - [Engine A text backgrounds](bg-text.md)
 - [Background modes, affine layers and mosaic (both engines)](bg-modes.md)
+- [Sprites (OBJ): OAM, tile, affine and bitmap objects, priority, mosaic, line limit](obj.md)
 
 **Boot and BIOS**
 

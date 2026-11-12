@@ -93,4 +93,18 @@ fn given_a_long_palette_when_checked_then_it_is_not_well_formed() {
     assert!(!memory.is_well_formed());
 }
 
+#[test]
+fn given_a_short_oam_when_checked_then_it_is_not_well_formed() {
+    let mut memory = Memory::new();
+    memory.oam.pop();
+    assert!(!memory.is_well_formed());
+}
+
+#[test]
+fn given_a_long_oam_when_checked_then_it_is_not_well_formed() {
+    let mut memory = Memory::new();
+    memory.oam.push(0);
+    assert!(!memory.is_well_formed());
+}
+
 mod vram;

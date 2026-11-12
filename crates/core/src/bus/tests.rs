@@ -17,6 +17,8 @@ const VRAM_A: u32 = 0x0680_0000;
 const VRAM_A_END: u32 = 0x0681_FFFF;
 const PALETTE: u32 = 0x0500_0000;
 const PALETTE_SIZE: u32 = 0x800;
+const OAM: u32 = 0x0700_0000;
+const OAM_SIZE: u32 = 0x800;
 const BG_A: u32 = 0x0600_0000;
 const BG_SLOT: u32 = 0x2_0000;
 const ENABLE_MST0: u8 = 0x80;
@@ -773,6 +775,138 @@ fn given_vramcnt_a_changed_when_the_palette_is_looked_up_then_it_is_still_palett
     assert_eq!(region_failures(&m, &table), vec![]);
 }
 
+// ------------------------------------------------------ OAM (#31)
+//
+// Expected values come from `docs/hw/obj.md` ("Registers and memory"), never from running the
+// code. A test that pins a line of its "Unverified" section says so in its name.
+
+#[test]
+fn given_oam_when_words_and_halfwords_are_stored_then_they_read_back_little_endian() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(OAM, X);
+    v.write16(OAM + 4, 0xBEEF);
+    assert_eq!(
+        (
+            v.read32(OAM),
+            v.read16(OAM),
+            v.read16(OAM + 2),
+            v.read8(OAM),
+            v.read8(OAM + 3),
+            v.read16(OAM + 4)
+        ),
+        (X, 0x3344, 0x1122, 0x44, 0x11, 0xBEEF)
+    );
+}
+
+#[test]
+fn given_oam_when_a_byte_is_stored_then_oam_is_unchanged() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(OAM + 8, X);
+    v.write8(OAM + 8, 0xFF);
+    v.write8(OAM + 0x7FF, 0xFF);
+    assert_eq!((v.read32(OAM + 8), v.read8(OAM + 0x7FF)), (X, 0));
+}
+
+#[test]
+fn given_power_on_memory_when_oam_is_read_then_it_is_zero_as_the_note_models_unverified() {
+    // TODO(hw-unverified): obj.md "Unverified", the power-on contents.
+    let m = Bench::new();
+    assert_eq!(
+        (m.read32(&plain(), OAM), m.read32(&plain(), OAM + 0x7FC)),
+        (0, 0)
+    );
+}
+
+/// Stores `value` at `write_at`, and returns the addresses of `read_at` that do not read it.
+fn oam_mirror_misses(write_at: u32, value: u32, read_at: &[u32]) -> Vec<u32> {
+    let mut m = Bench::new();
+    m.write32(&plain(), write_at, value);
+    read_at
+        .iter()
+        .copied()
+        .filter(|&at| m.read32(&plain(), at) != value)
+        .collect()
+}
+
+#[test]
+fn given_a_word_in_oam_when_read_through_the_2_kib_mirrors_then_every_repeat_holds_it() {
+    // TODO(hw-unverified): obj.md "Unverified", the mirror through the 16 MiB block.
+    let at = OAM + 0x10;
+    let repeats = [
+        at + OAM_SIZE,
+        at + 2 * OAM_SIZE,
+        at + 0x4000,
+        at + 0x10_0000,
+        0x07FF_F810,
+    ];
+    assert_eq!(oam_mirror_misses(at, X, &repeats), Vec::<u32>::new());
+}
+
+#[test]
+fn given_a_word_stored_through_an_oam_mirror_when_read_at_the_first_repeat_then_it_is_there() {
+    assert_eq!(
+        oam_mirror_misses(0x07FF_F7FC, Y, &[OAM + 0x7FC]),
+        Vec::<u32>::new()
+    );
+}
+
+#[test]
+fn given_a_word_stored_at_the_end_of_the_oam_block_when_the_next_block_is_read_then_it_is_unmapped()
+{
+    // The first address after the 16 MiB block is the GBA slot, which is unmapped.
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(0x07FF_FFFC, X);
+    v.write32(0x0800_0000, Y);
+    assert_eq!(
+        (
+            v.read32(0x07FF_FFFC),
+            v.read32(OAM + 0x7FC),
+            v.read32(0x0800_0000)
+        ),
+        (X, X, 0)
+    );
+}
+
+#[test]
+fn given_engine_bs_half_of_oam_when_a_word_is_stored_then_engine_as_half_is_unchanged() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(OAM, X);
+    v.write32(OAM + 0x400, Y);
+    assert_eq!((v.read32(OAM), v.read32(OAM + 0x400)), (X, Y));
+}
+
+#[test]
+fn given_oam_when_the_arm7_stores_and_reads_then_nothing_is_there_for_it() {
+    // TODO(hw-unverified): obj.md "Unverified", the ARM7 reads 0 and drops writes.
+    let mut m = Bench::new();
+    m.write32_arm7(0, OAM, X);
+    assert_eq!(
+        (
+            m.read32_arm7(0, OAM),
+            m.read32(&plain(), OAM),
+            m.region7(OAM)
+        ),
+        (0, 0, Region::Unmapped)
+    );
+}
+
+#[test]
+fn given_vramcnt_a_changed_when_oam_is_looked_up_then_it_is_still_oam() {
+    let mut m = with_vram();
+    m.arm9(plain()).write8(VRAMCNT_A, 0x00);
+    let table = [
+        (0x06FF_FFFF, Region::Unmapped),
+        (OAM, Region::Oam),
+        (0x07FF_FFFF, Region::Oam),
+        (0x0800_0000, Region::Unmapped),
+    ];
+    assert_eq!(region_failures(&m, &table), vec![]);
+}
+
 // ------------------------------------------------------ VRAM bank A as engine A BG (#28)
 //
 // Expected values come from `docs/hw/vram-banks.md` ("Behavior", "Engine A BG VRAM (MST 1)",
@@ -929,13 +1063,12 @@ fn given_bank_a_with_mst_1_when_the_arm7_reads_the_bg_window_then_it_is_not_ther
 
 // ---------------------------------------------------------------- unmapped
 
-const UNMAPPED: [u32; 7] = [
+const UNMAPPED: [u32; 6] = [
     0x0000_0000,
     // An I/O port no register occupies; 0x0400_0000 is DISPCNT since #20.
     0x0400_0090,
-    // The engine A BG window while no bank is mapped there; the palette RAM is always mapped.
+    // The engine A BG window while no bank is mapped there; the palette RAM and OAM are always mapped.
     0x0600_0000,
-    0x0700_0000,
     0x0800_0000,
     0xFFFF_0000,
     0xFFFF_FFFC,

@@ -144,7 +144,8 @@ PA-PD are read whenever a pixel is made, so a change shows from the next line.
 The point `(tx, ty)` is **inside** the layer when `0 <= tx < W` and `0 <= ty < H`. Outside it, the
 BGxCNT bit 13 decides: 0 gives a transparent pixel, 1 wraps (`tx mod W`, `ty mod H`, the size a
 power of two). The bit counts in the affine, extended-map, bitmap and large-bitmap kinds alike;
-GBATEK says explicitly that the DS bitmaps support it, unlike the GBA's.
+The DS BG Modes page says explicitly that the DS bitmaps support it, unlike the GBA's (see
+"Unverified": the Rotation/Scaling page says the opposite).
 
 **Affine map entries** are one byte, the tile number (0-255): no flips, no palette number, always
 256 colours in one palette. The map is `W/8 x H/8` entries, row by row. The tile is 64 bytes, a
@@ -210,8 +211,10 @@ Where engine B reads:
 - BG palette: the first 512 bytes of its half of the palette RAM, `0500_0400h` (`palette-ram.md`).
 - Backdrop: BG palette entry 0 of that palette.
 
-POWCNT1 bit 9 powers engine B. With it clear the engine's registers are read-only; with it set
-they work as engine A's do. A powered-off engine draws nothing, so the screen it feeds is black.
+POWCNT1 bit 9 powers engine B. GBATEK lists the ports it gates as `1008h-105Fh` (engine A's:
+`008h-05Fh`), so DISPCNT at `1000h` is not among them. With the bit clear those registers are
+read-only; DISPCNT of engine B stays writable; with the bit set all work as engine A's do. A
+powered-off engine draws nothing, so the screen it feeds is black.
 
 POWCNT1 bit 15 chooses which screen each engine feeds (`display-mode-vram.md`); engine B takes
 the other one.
@@ -252,7 +255,7 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
   what a read gives. — `Engine::read_byte` — verify likewise.
 - **The 28-bit width of the internal reference point.** GBATEK says the registers hold 28 bits
   and does not say whether the internal point keeps adding at 28 bits or at 32; this model adds
-  at 32 bits (wrapping). — `Engine::end_line` — verify likewise.
+  at 32 bits (wrapping). — `Affine::end_line` — verify likewise.
 - **The sampling instant** of PA-PD, BGxX and BGxY inside a line is the line's start, as for every
   register (`bg-text.md`, "Unverified"); the hardware reads them while it draws. — `Machine::render_line`
   — verify against a trace.
@@ -262,6 +265,10 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
   first line (so PB and PD are not added while the block lasts) is inferred from GBATEK's "colorized
   by the upper-left covered pixel"; GBATEK does not describe the internal point under mosaic. —
   `Engine::render_line` in `crates/core/src/gpu2d/engine.rs` — verify likewise.
+- **A BGxX or BGxY write inside a mosaic block**: the point loaded by the write is the origin of the
+  next line, but a mosaic layer steps the point back by `y mod v` lines to reach the block's first
+  line, so the rewind crosses the write and the lines after it start from a point that is not the one
+  written. The hardware's behavior is not described. — `Engine::render_line` — verify likewise.
 - **Mosaic and BG scroll or the transform**: the first pixel of a block is the layer's own pixel
   at the block's first screen position; GBATEK does not say whether the scroll is applied before
   or after the mosaic. — `Engine::render_line` — verify likewise.
@@ -282,9 +289,15 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
   display modes 2 and 3 are stored as written and ignored; display mode bit 17 does not exist
   there, so engine B's mode is bit 16 alone. — `EngineSpec` in `crates/core/src/gpu2d/spec.rs` —
   verify likewise.
-- **Engine B powered off**: the registers are read-only and the screen is black. GBATEK says
-  the ports become read-only and the palette reads zero; what the LCD shows is not said. —
-  `Gpu2d::render_line_b` — verify likewise.
+- **Engine B powered off**: the registers `1008h-105Fh` are read-only and the screen is black.
+  GBATEK says the ports become read-only and the palette "becomes read-only-zero-filled"; what the
+  LCD shows is not said, and the palette RAM here is not zero-filled (a powered-off engine draws
+  nothing, so it does not matter to the picture, but a read of `0500_0400h` still returns the
+  stored bytes). — `Gpu2d::write_byte`, `Gpu2d::render_line_b` — verify likewise.
+- **The area overflow bit in bitmap modes**: the "LCD I/O BG Rotation/Scaling" page says it is
+  ignored in bitmap modes and the bitmap's outside is always transparent; the "DS Video BG Modes /
+  Control" page says DS bitmaps support it. This note follows the DS page. — `affine::pixel` —
+  verify likewise.
 - **Engine A's POWCNT1 bit 1** still does nothing (`display-mode-vram.md`, "Unverified").
 - **Mode 7** (not defined) draws no layer, on both engines (`bg-text.md`, "Unverified").
 - **Extended palettes** (DISPCNT bit 30) are not modeled (`TODO(phase4)`, #32).

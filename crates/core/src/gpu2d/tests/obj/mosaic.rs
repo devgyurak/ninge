@@ -5,6 +5,8 @@
 //! scene is rendered twice, plain and with mosaic, and the second is compared with the first by
 //! that rule; the plain pictures are pinned by the tests of `mod.rs`, `affine.rs` and `bitmap.rs`.
 
+// TODO(hw-unverified): these tests pin the model's choice where GBATEK is silent: the mosaic block origin and the affine order (`obj.md`,
+// "Unverified").
 use super::affine::put_group;
 use super::*;
 

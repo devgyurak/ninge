@@ -321,6 +321,8 @@ fn given_objtext_rom_when_3_frames_run_then_oam_holds_the_listed_entries_and_the
     );
 }
 
+// TODO(hw-unverified): the golden below also pins the model's choices where GBATEK is silent
+// (`obj.md`, "Unverified"): the vertical wrap, X as a signed 9-bit number, reads past the OBJ window.
 #[test]
 fn given_objtext_rom_when_run_for_3_frames_then_both_screens_match_golden() {
     // The pixel tests above are the evidence that these frames are the right ones: the hash pins

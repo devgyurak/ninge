@@ -632,8 +632,8 @@ impl Memory {
             // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior"; `obj.md`). The ARM7's own
             // mapping of banks C and D is the one exception: its table holds VRAM only there, so
             // every VRAM page the ARM7 reaches takes a byte store.
-            // TODO(hw-unverified): the rule is taken to cover the BG and OBJ windows too
-            // (`vram-banks.md`, "Unverified").
+            // GBATEK states it for palette RAM and OAM; TODO(hw-unverified): the rule is taken to
+            // cover the BG and OBJ windows too (`vram-banks.md`, "Unverified").
             Region::Vram | Region::Palette | Region::Oam if N == 1 && ARM9 => false,
             Region::Unmapped => false,
             // ROM: the write is taken and dropped, it is not an I/O access.

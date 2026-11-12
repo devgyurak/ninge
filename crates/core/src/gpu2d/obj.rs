@@ -43,8 +43,9 @@ const ATTR2_PRIORITY_SHIFT: u32 = 10;
 const ATTR2_PRIORITY_MASK: u16 = 0x3;
 const ATTR2_PALETTE_SHIFT: u32 = 12;
 
-/// OBJ mode 1: semi-transparent (`TODO(phase4)`, #34). Mode 2 is the OBJ window and 3 a bitmap object.
+/// OBJ mode 2 is the OBJ window; mode 1 (semi-transparent, `TODO(phase4)`, #34) draws as mode 0.
 const MODE_WINDOW: u8 = 2;
+/// OBJ mode 3 is a bitmap object.
 const MODE_BITMAP: u8 = 3;
 
 /// DISPCNT bit 5: bitmap OBJ 2D width, 0 = 128 pixels, 1 = 256.
@@ -64,6 +65,8 @@ const BITMAP_TILE_Y: u32 = 0x80;
 /// line limit").
 const DISPCNT_OBJ_HBLANK: u32 = 1 << 23;
 /// The OBJ rendering cycles a line has: 1210 normally, 954 with DISPCNT bit 23.
+// TODO(hw-unverified): 1210 and 954 are GBATEK's GBA values, and bit 23 is read with the GBA's
+// "H-Blank Interval Free" polarity (set = 954); the DS may differ on both (`obj.md`, "Unverified").
 const BUDGET: u32 = 1210;
 const BUDGET_HBLANK: u32 = 954;
 /// An affine object costs this many cycles more than a plain one, and twice its box width.
@@ -131,7 +134,7 @@ impl ObjAttrs {
     /// not hold reads as zeros.
     // TODO(hw-unverified): X is a 9-bit signed number; GBATEK says only 0-511 (`obj.md`,
     // "Unverified").
-    pub fn decode(oam: &[u8], index: usize) -> Self {
+    pub(crate) fn decode(oam: &[u8], index: usize) -> Self {
         let at = (index % OBJ_COUNT) * ENTRY_BYTES;
         let half = |offset: usize| {
             oam.get(at + offset..at + offset + 2)
@@ -221,7 +224,9 @@ pub(super) fn draw_line(
             break;
         };
         budget = left;
-        // TODO(phase4): the OBJ window (mode 2, #33) is not drawn, though it costs its cycles.
+        // TODO(phase4): the OBJ window (mode 2, #33) is not drawn.
+        // TODO(hw-unverified): a mode 2 object costs its cycles though it is not drawn
+        // (`obj.md`, "Unverified").
         if obj.mode != MODE_WINDOW {
             draw_object(inputs, dispcnt, palette, &obj, &place, &mut line);
         }
@@ -255,7 +260,7 @@ impl Placement {
 
 /// The object's placement on line `y`, or `None` when the object has a shape that is not allowed
 /// or its box does not reach the line.
-// TODO(hw-unverified): shape 3 draws nothing (`obj.md`, "Edge cases").
+// TODO(hw-unverified): shape 3 draws nothing and costs nothing (`obj.md`, "Unverified").
 fn placement(obj: &ObjAttrs, mosaic: Mosaic, y: usize) -> Option<Placement> {
     let (width, height) = obj.dimensions()?;
     // An affine object with double-size is drawn in a box twice as wide and as high.

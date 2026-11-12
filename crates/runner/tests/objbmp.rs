@@ -353,6 +353,8 @@ fn given_objbmp_rom_when_5_frames_run_then_oam_holds_bitmap_objects_with_the_alp
     );
 }
 
+// TODO(hw-unverified): the golden below also pins the model's choices where GBATEK is silent
+// (`obj.md`, "Unverified"): flips on a bitmap object, the alpha field being ignored, engine B ignoring bit 22.
 #[test]
 fn given_objbmp_rom_when_run_for_5_frames_then_both_screens_match_golden() {
     assert_frame_hash("objbmp", 5);

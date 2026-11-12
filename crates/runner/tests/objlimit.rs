@@ -318,6 +318,8 @@ fn given_objlimit_rom_when_3_frames_run_then_the_budget_drops_visible_objects_on
     );
 }
 
+// TODO(hw-unverified): the golden below also pins the model's choices where GBATEK is silent
+// (`obj.md`, "Unverified"): the budget numbers, bit 23's polarity, that the first object that does not fit ends the line, the cost of off-screen, disabled and OBJ-window objects.
 #[test]
 fn given_objlimit_rom_when_run_for_3_frames_then_both_screens_match_golden() {
     assert_frame_hash("objlimit", 3);

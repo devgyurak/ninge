@@ -7,7 +7,7 @@
 use crate::bus::VramWindow;
 
 /// DISPCNT bit 3: BG0 is the 3D engine's layer (engine A only).
-const DISPCNT_BG0_3D: u32 = 1 << 3;
+pub(super) const DISPCNT_BG0_3D: u32 = 1 << 3;
 /// DISPCNT bit 17: with bit 16 the display mode; engine B has modes 0-1 only.
 const DISPCNT_MODE_HIGH: u32 = 1 << 17;
 /// DISPCNT bits 18-19: the VRAM block of display mode 2 (engine A only).

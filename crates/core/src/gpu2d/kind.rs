@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What each background layer of a BG mode is (`docs/hw/bg-modes.md`, "The mode table").
 
-use super::spec::EngineSpec;
+use super::spec::{DISPCNT_BG0_3D, EngineSpec};
 
 /// How a layer gets its pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +23,6 @@ use Kind::{Affine, Extended, Large, Other, Text};
 
 /// DISPCNT bits 0-2: the BG mode.
 const DISPCNT_BG_MODE_MASK: u32 = 0x7;
-/// DISPCNT bit 3: BG0 shows the 3D engine instead of its own map.
-const DISPCNT_BG0_3D: u32 = 1 << 3;
 /// DISPCNT bits 8-11: BG0-BG3 on.
 const DISPCNT_LAYER_SHIFT: u32 = 8;
 
@@ -46,6 +44,7 @@ const KINDS: [[Kind; 4]; 8] = [
 /// The kind the BG mode of `dispcnt` (as the engine sees it) gives layer `layer`, whether or not
 /// the layer is switched on. An engine without BG mode 6 has no large bitmap: the layer is
 /// absent.
+// TODO(hw-unverified): mode 6 on engine B (reserved) draws no layer (`bg-modes.md`, "Unverified").
 pub(super) fn kind_of(dispcnt: u32, layer: usize, spec: &EngineSpec) -> Kind {
     match KINDS[(dispcnt & DISPCNT_BG_MODE_MASK) as usize][layer & 3] {
         Large if !spec.large_bitmap => Other,

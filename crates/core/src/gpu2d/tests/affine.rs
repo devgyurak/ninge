@@ -650,13 +650,25 @@ fn given_bg2x_written_after_line_100_started_when_the_frame_ends_then_lines_101_
 
 #[test]
 fn given_run_frame_and_render_frame_when_the_same_scene_is_drawn_then_the_screens_are_equal() {
-    // The per-line event path and the all-lines path both go through the reference point step.
+    // The per-line event path and the all-lines path both go through the reference point step. Two
+    // frames each, so the second starts from the reload of the registers and not from a stale
+    // point; X is written first so that the reload has a value to differ from.
     let mut running = spinning(SHEAR);
+    w32(&mut running, AFFINE_REGS_ADDR + 8, 0x3000);
     running.run_frame();
     running.run_frame();
     let mut whole = scene(ENG_A, 1, true, SHEAR);
+    w32(&mut whole, AFFINE_REGS_ADDR + 8, 0x3000);
     whole.render_frame();
-    assert_eq!(running.frame(Screen::Top), whole.frame(Screen::Top));
+    whole.render_frame();
+    // After 192 lines the point has moved by 192 steps of PB: the frame really stepped it.
+    assert_eq!(
+        (
+            running.frame(Screen::Top) == whole.frame(Screen::Top),
+            bg2(&whole).internal[0] == 0x3000 + 192 * i32::from(SHEAR.pb)
+        ),
+        (true, true)
+    );
 }
 
 #[test]

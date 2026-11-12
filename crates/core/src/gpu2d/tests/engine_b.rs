@@ -252,16 +252,27 @@ fn given_dispcnt_bit_3_set_in_engine_a_when_rendered_then_bg0_draws_nothing_yet(
 
 #[test]
 fn given_powcnt1_bit_9_clear_when_engine_b_registers_are_written_then_they_stay_as_they_were() {
-    // The ports of a powered-off engine are read-only (`bg-modes.md`, "Engine B").
+    // The ports 1008h-105Fh of a powered-off engine are read-only (`bg-modes.md`, "Engine B").
     let mut m = Machine::new();
-    w32(&mut m, DISPCNT_B_ADDR, 0x0001_0100);
+    w16(&mut m, POWCNT1_ADDR, POWCNT1_ON_TOP & !(1 << 9));
+    w16(&mut m, BG_REGS_B_ADDR, 0x1234);
+    w16(&mut m, BG_REGS_B_ADDR + 8, 0x0123);
+    assert_eq!(
+        (
+            r16(&m, BG_REGS_B_ADDR),
+            m.inspect().gpu2d().text_bg(EngineId::B, 0).hofs
+        ),
+        (0, 0)
+    );
+}
+
+#[test]
+fn given_powcnt1_bit_9_clear_when_dispcnt_b_is_written_then_it_is_kept_as_it_is_not_a_gated_port() {
+    // GBATEK gates engine B's ports 1008h-105Fh; DISPCNT at 1000h is outside (`bg-modes.md`).
+    let mut m = Machine::new();
     w16(&mut m, POWCNT1_ADDR, POWCNT1_ON_TOP & !(1 << 9));
     w32(&mut m, DISPCNT_B_ADDR, 0x0002_0200);
-    w16(&mut m, BG_REGS_B_ADDR, 0x1234);
-    assert_eq!(
-        (r32(&m, DISPCNT_B_ADDR), r16(&m, BG_REGS_B_ADDR)),
-        (0x0001_0100, 0)
-    );
+    assert_eq!(r32(&m, DISPCNT_B_ADDR), 0x0002_0200);
 }
 
 #[test]

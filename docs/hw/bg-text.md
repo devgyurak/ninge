@@ -5,7 +5,7 @@ I/O BG Control" and "LCD I/O BG Scrolling" (BGxCNT, BGxHOFS/VOFS); GBATEK "LCD V
 Format (BG Map)" and "LCD VRAM Character Data" (screen entries, tile layout); GBATEK "LCD Color
 Palettes" (colors, transparent color 0, backdrop).
 Used by: `crates/core/src/gpu2d/`   Phase: 3 (#28, engine A, standard palettes); engine B,
-sprites, extended palettes, mosaic, windows and blending are Phase 4
+sprites, extended palettes, windows and blending are Phase 4
 
 A text background is a grid of 8x8-pixel tiles. A map says which tile goes in each cell, the
 tile data says what each tile looks like, and the palette RAM (`palette-ram.md`) says what the
@@ -165,7 +165,7 @@ the engine's per-line state).
   standard palette whatever the bit says (`TODO(phase4)`). — `text::pixel` — verify likewise.
 - **Forced blank** and **master brightness** do not change the picture (`display-mode-vram.md`,
   "Unverified"; `TODO(phase4)`).
-- **Mosaic** (BGxCNT bit 6) is stored and ignored (`TODO(phase4)`).
+- **Mosaic** (BGxCNT bit 6, MOSAIC) is `bg-modes.md`; its OBJ bits are `TODO(phase4)` (#31).
 
 ## Evidence
 

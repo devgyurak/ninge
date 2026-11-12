@@ -35,6 +35,8 @@ const ENTRY_V_FLIP: u16 = 1 << 11;
 const DIRECT_OPAQUE: u16 = 1 << 15;
 /// BGxCNT bit 13: area overflow, 0 = transparent outside the layer, 1 = wrap around.
 const CNT_WRAP: u16 = 1 << 13;
+/// BGxCNT bit 6: mosaic on for this layer (`bg-modes.md`, "Mosaic").
+const CNT_MOSAIC: u16 = 1 << 6;
 /// BGxCNT bits 14-15: the size.
 const CNT_SIZE_SHIFT: u32 = 14;
 /// The smallest affine layer is 128 pixels square; each size step doubles it.
@@ -153,6 +155,8 @@ pub struct AffineBg {
     pub height: u16,
     /// Whether the layer wraps around (BGxCNT bit 13) rather than being transparent outside.
     pub wrap: bool,
+    /// Whether mosaic is on for the layer (BGxCNT bit 6).
+    pub mosaic: bool,
     /// PA, PB, PC, PD as signed 8.8 numbers.
     pub params: [i16; 4],
     /// BGxX and BGxY, sign-extended from 28 bits, 20.8.
@@ -209,6 +213,7 @@ impl AffineBg {
             width,
             height,
             wrap: cnt & CNT_WRAP != 0,
+            mosaic: cnt & CNT_MOSAIC != 0,
             params: regs.params,
             reference: [sign_extend_28(regs.x), sign_extend_28(regs.y)],
             internal: [regs.ref_x, regs.ref_y],

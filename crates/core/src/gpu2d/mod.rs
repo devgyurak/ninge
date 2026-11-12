@@ -21,9 +21,11 @@ mod text;
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
+pub use engine::Mosaic;
 use engine::{
     AFFINE_OFFSET, AFFINE_REGS_BYTES as ENGINE_AFFINE_REGS_BYTES,
     BG_REGS_BYTES as ENGINE_BG_REGS_BYTES, BGCNT_OFFSET, Engine,
+    MOSAIC_BLOCK_BYTES as ENGINE_MOSAIC_BYTES, MOSAIC_OFFSET,
 };
 use serde::{Deserialize, Serialize};
 pub(crate) use spec::EngineInputs;
@@ -54,6 +56,13 @@ pub const AFFINE_REGS_ADDR: u32 = DISPCNT_A_ADDR + AFFINE_OFFSET;
 pub const AFFINE_REGS_B_ADDR: u32 = AFFINE_REGS_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block: PA-PD, BGxX and BGxY of two layers.
 pub const AFFINE_REGS_BYTES: u32 = ENGINE_AFFINE_REGS_BYTES;
+/// MOSAIC, at `0400_004Ch`: a halfword in a 4-byte block of the address map (`bg-modes.md`,
+/// "Registers").
+pub const MOSAIC_ADDR: u32 = DISPCNT_A_ADDR + MOSAIC_OFFSET;
+/// Engine B's MOSAIC, at `0400_104Ch`.
+pub const MOSAIC_B_ADDR: u32 = MOSAIC_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const MOSAIC_BYTES: u32 = ENGINE_MOSAIC_BYTES;
 /// The xRGB8888 value of a white pixel.
 pub const WHITE: u32 = 0x00FF_FFFF;
 /// The xRGB8888 value of a black pixel.
@@ -185,6 +194,11 @@ impl Gpu2d {
     pub(crate) fn vblank_started(&mut self) {
         self.a.vblank_started();
         self.b.vblank_started();
+    }
+
+    /// The mosaic block sizes engine `which`'s MOSAIC holds. A debugger's BG panel (#58) shows them.
+    pub fn mosaic(&self, which: EngineId) -> Mosaic {
+        self.engine(which).mosaic()
     }
 
     /// DISPCNT of engine A.

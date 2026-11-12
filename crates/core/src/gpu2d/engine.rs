@@ -20,6 +20,9 @@ pub(super) const BG_REGS_BYTES: u32 = 24;
 const SCROLL_END: u32 = BGCNT_OFFSET + BG_REGS_BYTES;
 /// BG2PA: the transform registers of BG2 and BG3, 16 bytes each (`bg-modes.md`, "Registers").
 pub(super) const AFFINE_OFFSET: u32 = 0x20;
+/// MOSAIC, a halfword (`bg-modes.md`, "Registers"); the block of the address map is 4 bytes.
+pub(super) const MOSAIC_OFFSET: u32 = 0x4C;
+pub(super) const MOSAIC_BLOCK_BYTES: u32 = 4;
 /// Bytes of one layer's transform registers, and of both.
 const AFFINE_LAYER_BYTES: u32 = 16;
 pub(super) const AFFINE_REGS_BYTES: u32 = 2 * AFFINE_LAYER_BYTES;
@@ -36,6 +39,22 @@ pub(super) struct Engine {
     bgvofs: [u16; 4],
     // BG2's and BG3's transform registers and internal reference points (`bg-modes.md`).
     affine: [Affine; 2],
+    // MOSAIC: BG and OBJ horizontal and vertical sizes minus 1, a nibble each.
+    mosaic: u16,
+}
+
+/// The mosaic block sizes in pixels of an engine (`bg-modes.md`, "Mosaic"): each is the register's
+/// field plus 1, so 1 means no mosaic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mosaic {
+    /// BG horizontal size, 1-16 pixels.
+    pub bg_h: u8,
+    /// BG vertical size, 1-16 lines.
+    pub bg_v: u8,
+    /// OBJ horizontal size, 1-16 pixels (sprites are `TODO(phase4)`, #31).
+    pub obj_h: u8,
+    /// OBJ vertical size, 1-16 lines.
+    pub obj_v: u8,
 }
 
 /// A register of [`Engine`] and which byte of it an offset falls on.
@@ -48,6 +67,7 @@ enum Field {
     /// A byte of one affine layer's 16 bytes of registers: the layer (0 = BG2, 1 = BG3) and the
     /// byte.
     Affine(usize, u32),
+    Mosaic,
 }
 
 impl Engine {
@@ -61,6 +81,7 @@ impl Engine {
             bghofs: [0; 4],
             bgvofs: [0; 4],
             affine: [Affine::new(); 2],
+            mosaic: 0,
         }
     }
 
@@ -87,6 +108,17 @@ impl Engine {
             &self.affine[layer & 1],
             kind,
         )
+    }
+
+    /// The mosaic sizes MOSAIC holds.
+    pub(super) fn mosaic(&self) -> Mosaic {
+        let size = |shift: u32| ((self.mosaic >> shift) & 0xF) as u8 + 1;
+        Mosaic {
+            bg_h: size(0),
+            bg_v: size(4),
+            obj_h: size(8),
+            obj_v: size(12),
+        }
     }
 
     /// A visible line has been drawn: both affine layers' internal reference points move down one
@@ -121,6 +153,8 @@ impl Engine {
                 Field::Affine((at / AFFINE_LAYER_BYTES) as usize, at % AFFINE_LAYER_BYTES),
                 0,
             ))
+        } else if (MOSAIC_OFFSET..MOSAIC_OFFSET + 2).contains(&offset) {
+            Some((Field::Mosaic, offset - MOSAIC_OFFSET))
         } else {
             None
         }
@@ -137,7 +171,7 @@ impl Engine {
             Field::Dispcnt => self.dispcnt,
             Field::BgCnt(n) => u32::from(self.bgcnt[n & 3]),
             // The transform registers are write-only too (`bg-modes.md`, "Unverified").
-            Field::BgHofs(_) | Field::BgVofs(_) | Field::Affine(..) => 0,
+            Field::BgHofs(_) | Field::BgVofs(_) | Field::Affine(..) | Field::Mosaic => 0,
         };
         (value >> (byte * 8)) as u8
     }
@@ -162,14 +196,14 @@ impl Engine {
                     (with_byte(u32::from(self.bgvofs[n & 3]), byte, value) & SCROLL_MASK) as u16;
             }
             Field::Affine(n, at) => self.affine[n & 1].write_byte(at, value),
+            Field::Mosaic => self.mosaic = with_byte(u32::from(self.mosaic), byte, value) as u16,
         }
     }
 
     /// Line `y` of the layers (display mode 1): each pixel is the front-most layer that is not
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
     /// together").
-    // TODO(phase4): OBJ, windows, blending, extended palettes
-    // and mosaic complete the line.
+    // TODO(phase4): OBJ, windows, blending and extended palettes complete the line.
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
         let dispcnt = inputs.spec.dispcnt(self.dispcnt);
         let palette = inputs
@@ -177,19 +211,49 @@ impl Engine {
             .get(..text::BG_PALETTE_BYTES)
             .unwrap_or(inputs.palette);
         let texts: [TextBg; 4] = std::array::from_fn(|n| self.text_bg(dispcnt, n));
-        let affines: [AffineBg; 2] = std::array::from_fn(|n| self.affine_bg(inputs.spec, n + 2));
+        // TODO(hw-unverified): the block's first pixel is the layer's own pixel at the block's first
+        // screen position, a transparent one makes the block transparent, and an affine layer's
+        // point does not step within a block (`bg-modes.md`, "Unverified").
+        // Mosaic: a layer with BGxCNT bit 6 shows, at each pixel, what the first pixel of its block
+        // would show; blocks are counted from the top left of the screen (`bg-modes.md`, "Mosaic").
+        let mosaic = self.mosaic();
+        let (block_w, block_h) = (usize::from(mosaic.bg_h), usize::from(mosaic.bg_v));
+        let block_y = y - y % block_h;
+        let back = (y - block_y) as i32;
+        let affines: [AffineBg; 2] = std::array::from_fn(|n| {
+            let mut layer = self.affine_bg(inputs.spec, n + 2);
+            if layer.mosaic {
+                // The line of the block's first row starts `back` steps of PB and PD earlier.
+                let [pb, pd] = [layer.params[1], layer.params[3]].map(i32::from);
+                layer.internal = [
+                    layer.internal[0].wrapping_sub(back.wrapping_mul(pb)),
+                    layer.internal[1].wrapping_sub(back.wrapping_mul(pd)),
+                ];
+            }
+            layer
+        });
         // The layer in front is the one with the lowest priority value, and among equals the lower
         // number: sorting by (priority, number) puts the front-most first.
         let mut order = [0usize, 1, 2, 3];
         order.sort_unstable_by_key(|&n| (texts[n].priority, n));
         let backdrop = expand_color(text::palette_color(palette, 0));
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
+            // The first column of the pixel's block, for a mosaic layer.
+            let block_x = (x - x % block_w) as u32;
             *pixel = order
                 .iter()
                 .find_map(|&n| match drawn_kind(dispcnt, n, inputs.spec)? {
-                    Kind::Text => text::pixel(&texts[n], &inputs.vram, palette, x as u32, y as u32),
+                    Kind::Text => {
+                        let (px, py) = match texts[n].mosaic {
+                            true => (block_x, block_y),
+                            false => (x as u32, y),
+                        };
+                        text::pixel(&texts[n], &inputs.vram, palette, px, py as u32)
+                    }
                     Kind::Affine | Kind::Extended | Kind::Large => {
-                        affine::pixel(&affines[n & 1], &inputs.vram, palette, x as u32)
+                        let layer = &affines[n & 1];
+                        let px = if layer.mosaic { block_x } else { x as u32 };
+                        affine::pixel(layer, &inputs.vram, palette, px)
                     }
                     Kind::Other => None,
                 })

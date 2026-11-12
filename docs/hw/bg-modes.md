@@ -261,12 +261,12 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
 - **Mosaic and affine layers**: that line `y` of a block uses the reference point of the block's
   first line (so PB and PD are not added while the block lasts) is inferred from GBATEK's "colorized
   by the upper-left covered pixel"; GBATEK does not describe the internal point under mosaic. —
-  `affine::pixel` — verify likewise.
+  `Engine::render_line` in `crates/core/src/gpu2d/engine.rs` — verify likewise.
 - **Mosaic and BG scroll or the transform**: the first pixel of a block is the layer's own pixel
   at the block's first screen position; GBATEK does not say whether the scroll is applied before
-  or after the mosaic. — `mosaic::source` — verify likewise.
+  or after the mosaic. — `Engine::render_line` — verify likewise.
 - **Mosaic on transparent pixels**: a block whose first pixel is transparent is transparent. —
-  `mosaic::source` — verify likewise.
+  `Engine::render_line` — verify likewise.
 - **Large bitmap sizes 2 and 3** are not defined; a layer with them draws nothing. —
   `AffineBg::decode` in `crates/core/src/gpu2d/affine.rs` — verify likewise.
 - **Large bitmap and the area overflow bit** are not described together; the bit works as in the

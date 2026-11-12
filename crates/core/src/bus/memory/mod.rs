@@ -87,6 +87,11 @@ const VRAM_BLOCK_END: u32 = 0x0700_0000;
 const PALETTE_BASE: u32 = 0x0500_0000;
 const PALETTE_SIZE: usize = 2 << 10;
 const PALETTE_BLOCK_SIZE: usize = 16 << 20;
+/// OAM: 2 KiB at `0700_0000h` (engine A's 1 KiB, then engine B's), repeated through its 16 MiB
+/// block (`obj.md`, "Registers and memory").
+const OAM_BASE: u32 = 0x0700_0000;
+const OAM_SIZE: usize = 2 << 10;
+const OAM_BLOCK_SIZE: usize = 16 << 20;
 /// VRAMCNT_A, at `0400_0240h`; B to G follow, WRAMCNT is at `0400_0247h`, and H and I at
 /// `0400_0248h` and `0400_0249h` (`vram-banks.md`, "Registers").
 pub(crate) const VRAMCNT_A_ADDR: u32 = 0x0400_0240;
@@ -115,6 +120,8 @@ pub enum Region {
     Vram,
     /// The palette RAM, 2 KiB repeated through its block (`palette-ram.md`).
     Palette,
+    /// The OAM, 2 KiB repeated through its block (`obj.md`).
+    Oam,
     /// The shared WRAM, as WRAMCNT allocates it to the CPU asking.
     SharedWram,
     /// The BIOS area: synthetic, reads zero, writes are ignored (`hle-swi.md`, "The BIOS area").
@@ -199,6 +206,8 @@ pub struct Memory {
     vramcnt: [u8; BANK_COUNT],
     // The palette RAM (`palette-ram.md`); the ARM9 alone sees it.
     palette: Vec<u8>,
+    // The OAM (`obj.md`); the ARM9 alone sees it.
+    oam: Vec<u8>,
     // The ARM7's own WRAM (64 KiB); only the ARM7 view reaches it.
     wram7: Vec<u8>,
     // The shared WRAM (32 KiB) and the WRAMCNT mode (bits 0-1) that splits it (`wramcnt.md`).
@@ -294,6 +303,7 @@ impl Memory {
     // TODO(hw-unverified): all RAM starts at zero, and the VRAMCNT registers and WRAMCNT start at 0, which
     // GBATEK does not state (`arm9-memory-map.md`, "Unverified"; `vram-banks.md`, "Unverified";
     // `wramcnt.md`, "Unverified"; `palette-ram.md`, "Unverified").
+    // TODO(hw-unverified): OAM starts at zero too (`obj.md`, "Unverified").
     pub(crate) fn new() -> Self {
         let mut memory = Self {
             main_ram: vec![0; MAIN_RAM_SIZE],
@@ -302,6 +312,7 @@ impl Memory {
             vram: vec![0; VRAM_SIZE],
             vramcnt: [0; BANK_COUNT],
             palette: vec![0; PALETTE_SIZE],
+            oam: vec![0; OAM_SIZE],
             wram7: vec![0; WRAM7_SIZE],
             shared_wram: vec![0; SHARED_WRAM_SIZE],
             wramcnt: 0,
@@ -321,6 +332,7 @@ impl Memory {
     // rule (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the palette RAM repeats through its 16 MiB block, and the ARM7 has
     // none (`palette-ram.md`, "Unverified").
+    // TODO(hw-unverified): the same two rules for OAM (`obj.md`, "Unverified").
     pub(crate) fn build_page_table(&mut self) {
         self.pages9.clear();
         self.pages9.resize(PAGE_COUNT, UNMAPPED_PAGE);
@@ -359,6 +371,14 @@ impl Memory {
             PALETTE_BASE + PALETTE_BLOCK_SIZE as u32,
             Region::Palette,
             Some((0, PALETTE_SIZE)),
+        );
+        // OAM is the ARM9's alone too, repeated the same way.
+        map_window(
+            &mut self.pages9,
+            OAM_BASE,
+            OAM_BASE + OAM_BLOCK_SIZE as u32,
+            Region::Oam,
+            Some((0, OAM_SIZE)),
         );
         self.build_vram_pages();
         self.build_wram_pages();
@@ -460,6 +480,12 @@ impl Memory {
         &self.palette
     }
 
+    /// The 2 KiB of OAM: engine A's 128 entries and parameter groups, then engine B's (`obj.md`,
+    /// "Registers and memory"). The debugger's OAM view (#58) shows it.
+    pub fn oam(&self) -> &[u8] {
+        &self.oam
+    }
+
     /// The region backing the page that holds `addr`, as the ARM9 sees it.
     #[cfg(test)]
     pub(crate) fn region(&self, addr: u32) -> Region {
@@ -510,6 +536,7 @@ impl Memory {
             Region::Vram => &self.vram,
             // The palette repeats every 2 KiB inside a page too, so the offset wraps here.
             Region::Palette => return Some(bytes_at(&self.palette, offset % PALETTE_SIZE)),
+            Region::Oam => return Some(bytes_at(&self.oam, offset % OAM_SIZE)),
             Region::SharedWram => &self.shared_wram,
             Region::Wram7 => &self.wram7,
             // The BIOS is synthetic: it reads zero (`hle-swi.md`, "The BIOS area").
@@ -601,13 +628,13 @@ impl Memory {
         let page = page_of(self.pages::<ARM9>(), addr);
         let offset = page.offset as usize + (addr & PAGE_MASK) as usize;
         match page.region {
-            // VRAM and the palette take 16-bit and 32-bit writes only; a byte write is ignored
-            // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior"). The ARM7's own
+            // VRAM, the palette and OAM take 16-bit and 32-bit writes only; a byte write is ignored
+            // (`vram-banks.md`, "Behavior"; `palette-ram.md`, "Behavior"; `obj.md`). The ARM7's own
             // mapping of banks C and D is the one exception: its table holds VRAM only there, so
             // every VRAM page the ARM7 reaches takes a byte store.
             // TODO(hw-unverified): the rule is taken to cover the BG and OBJ windows too
             // (`vram-banks.md`, "Unverified").
-            Region::Vram | Region::Palette if N == 1 && ARM9 => false,
+            Region::Vram | Region::Palette | Region::Oam if N == 1 && ARM9 => false,
             Region::Unmapped => false,
             // ROM: the write is taken and dropped, it is not an I/O access.
             Region::Bios => true,
@@ -625,6 +652,10 @@ impl Memory {
             Region::Vram => &mut self.vram,
             Region::Palette => {
                 put_bytes(&mut self.palette, offset % PALETTE_SIZE, bytes);
+                return;
+            }
+            Region::Oam => {
+                put_bytes(&mut self.oam, offset % OAM_SIZE, bytes);
                 return;
             }
             Region::SharedWram => &mut self.shared_wram,
@@ -699,6 +730,7 @@ impl Memory {
             && self.dtcm.len() == DTCM_SIZE
             && self.vram.len() == VRAM_SIZE
             && self.palette.len() == PALETTE_SIZE
+            && self.oam.len() == OAM_SIZE
             && self.wram7.len() == WRAM7_SIZE
             && self.shared_wram.len() == SHARED_WRAM_SIZE
             && self

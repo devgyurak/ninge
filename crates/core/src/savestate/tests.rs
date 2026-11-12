@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_212_655;
-const PINNED_HASH: u64 = 0x19b6f4fc0008da5c;
+const PINNED_LEN: usize = 5_214_705;
+const PINNED_HASH: u64 = 0x3a132f3523f38267;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -56,9 +56,10 @@ const PINNED_HASH: u64 = 0x19b6f4fc0008da5c;
 /// now draws engine B's screen white instead of black, which costs three more bytes in each of its
 /// 2 x 49,152 lower-screen pixels. Version 21 (#30) added the affine layers' registers and internal
 /// reference points: 2 engines x 2 layers x 8 bytes while they are zero. Version 22 (#30) added both
-/// engines' MOSAIC: one byte each while it is zero.
-const PINNED_BOOTED_LEN: usize = 5_802_570;
-const PINNED_BOOTED_HASH: u64 = 0x79d675e5de09ed54;
+/// engines' MOSAIC: one byte each while it is zero. Version 23 (#31) added the OAM: 2048 bytes
+/// behind a two-byte length, so both lengths grew by 2050 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 5_804_620;
+const PINNED_BOOTED_HASH: u64 = 0x289b52a136f1496d;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -232,6 +233,20 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 10,
+            expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
+fn given_a_version_22_state_from_before_oam_when_loaded_then_it_is_refused_with_both_versions() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &22u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 22,
             expected: FORMAT_VERSION
         })
     );
@@ -1438,4 +1453,38 @@ fn given_a_state_with_a_dma_channel_pending_but_disabled_when_loaded_then_it_is_
         )),
         Err(SavestateError::Corrupt)
     );
+}
+
+// ------------------------------------------------------------------------------------- OAM (#31)
+
+/// A booted machine whose OAM holds a halfword in each engine's half.
+fn with_oam(frames: u32) -> Machine {
+    let mut machine = booted(&counter_rom(), frames);
+    machine.bus9().write16(0x0700_0006, 0x1234);
+    machine.bus9().write16(0x0700_0400, 0xABCD);
+    machine
+}
+
+fn oam_words(machine: &Machine) -> (u16, u16) {
+    let oam = machine.memory.oam();
+    (
+        u16::from_le_bytes([oam[6], oam[7]]),
+        u16::from_le_bytes([oam[0x400], oam[0x401]]),
+    )
+}
+
+#[test]
+fn given_oam_with_halfwords_in_both_halves_when_saved_and_loaded_then_both_come_back() {
+    let saved = with_oam(1);
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!((result, oam_words(&target)), (Ok(()), (0x1234, 0xABCD)));
+}
+
+#[test]
+fn given_oam_when_loaded_and_saved_again_then_the_bytes_are_identical() {
+    let first = with_oam(1).save_state();
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&first);
+    assert_eq!((result, target.save_state() == first), (Ok(()), true));
 }

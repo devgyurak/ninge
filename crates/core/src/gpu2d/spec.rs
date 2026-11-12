@@ -47,31 +47,56 @@ impl EngineSpec {
     }
 }
 
-/// What the machine hands an engine to draw one line: its window of BG VRAM, its half of the
-/// palette RAM (`palette-ram.md`, "Layout") and its spec.
-// TODO(phase4): the engine's half of OAM arrives with sprites (#31).
+/// What the machine hands an engine to draw one line: its windows of BG and OBJ VRAM, its half
+/// of the palette RAM (`palette-ram.md`, "Layout"), its half of OAM (`obj.md`) and its spec.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EngineInputs<'a> {
     pub(crate) vram: VramWindow<'a>,
+    /// The OBJ window, where sprites read their tiles.
+    #[expect(
+        dead_code,
+        reason = "the sprite renderer reads it in the next PR (#31)"
+    )]
+    pub(crate) obj_vram: VramWindow<'a>,
     pub(crate) palette: &'a [u8],
+    /// The engine's 1 KiB of OAM: 128 entries of 8 bytes.
+    #[expect(
+        dead_code,
+        reason = "the sprite renderer reads it in the next PR (#31)"
+    )]
+    pub(crate) oam: &'a [u8],
     pub(crate) spec: &'static EngineSpec,
 }
 
 impl<'a> EngineInputs<'a> {
     /// Engine A's inputs.
-    pub(crate) fn main(vram: VramWindow<'a>, palette: &'a [u8]) -> Self {
+    pub(crate) fn main(
+        vram: VramWindow<'a>,
+        obj_vram: VramWindow<'a>,
+        palette: &'a [u8],
+        oam: &'a [u8],
+    ) -> Self {
         Self {
             vram,
+            obj_vram,
             palette,
+            oam,
             spec: &MAIN_SPEC,
         }
     }
 
     /// Engine B's inputs.
-    pub(crate) fn sub(vram: VramWindow<'a>, palette: &'a [u8]) -> Self {
+    pub(crate) fn sub(
+        vram: VramWindow<'a>,
+        obj_vram: VramWindow<'a>,
+        palette: &'a [u8],
+        oam: &'a [u8],
+    ) -> Self {
         Self {
             vram,
+            obj_vram,
             palette,
+            oam,
             spec: &SUB_SPEC,
         }
     }

@@ -16,6 +16,8 @@ pub const SCREEN_WIDTH: usize = 256;
 pub const SCREEN_HEIGHT: usize = 192;
 /// Bytes of palette RAM one engine reads: its BG and OBJ tables (`docs/hw/palette-ram.md`).
 const PALETTE_HALF: usize = 1 << 10;
+/// Bytes of OAM one engine reads: 128 entries of 8 bytes (`docs/hw/obj.md`).
+const OAM_HALF: usize = 1 << 10;
 
 /// One of the two physical screens.
 ///
@@ -203,13 +205,25 @@ impl Machine {
         let (palette_a, palette_b) = palette
             .split_at_checked(PALETTE_HALF)
             .unwrap_or((palette, &[]));
+        // OAM is one half for each engine too (`obj.md`, "Registers and memory").
+        let oam = self.memory.oam();
+        let (oam_a, oam_b) = oam.split_at_checked(OAM_HALF).unwrap_or((oam, &[]));
         if let Some(out) = engine_a.get_mut(line.clone()) {
-            let inputs =
-                EngineInputs::main(self.memory.vram_window(VramWindowKind::BgA), palette_a);
+            let inputs = EngineInputs::main(
+                self.memory.vram_window(VramWindowKind::BgA),
+                self.memory.vram_window(VramWindowKind::ObjA),
+                palette_a,
+                oam_a,
+            );
             gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs, out);
         }
         if let Some(out) = engine_b.get_mut(line) {
-            let inputs = EngineInputs::sub(self.memory.vram_window(VramWindowKind::BgB), palette_b);
+            let inputs = EngineInputs::sub(
+                self.memory.vram_window(VramWindowKind::BgB),
+                self.memory.vram_window(VramWindowKind::ObjB),
+                palette_b,
+                oam_b,
+            );
             gpu.render_line_b(y, &inputs, out);
         }
         // The affine layers' reference points move down a line (`bg-modes.md`, "When the picture is

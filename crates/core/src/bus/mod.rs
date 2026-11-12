@@ -8,9 +8,10 @@ mod view;
 
 #[cfg(test)]
 pub use memory::Region;
-pub(crate) use memory::{BANK_COUNT, BIOS7_BASE, BIOS9_BASE, VRAMCNT_A_ADDR};
+pub(crate) use memory::{BANK_COUNT, BIOS7_BASE, BIOS9_BASE, ExtPalette, VRAMCNT_A_ADDR};
 pub use memory::{
-    Memory, VramBankState, VramMapping, VramWindow, VramWindowKind, WramShare, WramState,
+    ExtPaletteBanks, Memory, VramBankState, VramMapping, VramWindow, VramWindowKind, WramShare,
+    WramState,
 };
 pub(crate) use view::peek;
 pub use view::{Arm7View, Arm9View, TcmConfig};

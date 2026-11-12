@@ -4,7 +4,8 @@
 //! point at; nothing is allocated, formatted or collected, so a line can be drawn from the bus
 //! hot path of a frame.
 
-use crate::bus::VramWindow;
+use super::spec::DISPCNT_BG_EXT_PALETTE;
+use crate::bus::{ExtPalette, VramWindow};
 
 /// BGxCNT bits 0-1: priority.
 pub(super) const CNT_PRIORITY_MASK: u16 = 0x3;
@@ -16,6 +17,9 @@ pub(super) const CHAR_BLOCK_SIZE: u32 = 16 << 10;
 pub(super) const CNT_MOSAIC: u16 = 1 << 6;
 /// BGxCNT bit 7: 256 colors (8 bits per pixel) instead of 16 palettes of 16.
 const CNT_EIGHT_BPP: u16 = 1 << 7;
+/// BGxCNT bit 13 of BG0 and BG1: read extended palette slot 2 / 3 instead of 0 / 1
+/// (`extended-palettes.md`, "Registers").
+const CNT_EXT_SLOT: u16 = 1 << 13;
 /// BGxCNT bits 8-12: the screen base block, in 2 KiB units.
 pub(super) const CNT_SCREEN_SHIFT: u32 = 8;
 pub(super) const CNT_SCREEN_MASK: u16 = 0x1F;
@@ -32,7 +36,7 @@ pub(super) const DISPCNT_BASE_SIZE: u32 = 64 << 10;
 const ENTRY_TILE_MASK: u16 = 0x3FF;
 const ENTRY_H_FLIP: u16 = 1 << 10;
 const ENTRY_V_FLIP: u16 = 1 << 11;
-const ENTRY_PALETTE_SHIFT: u32 = 12;
+pub(super) const ENTRY_PALETTE_SHIFT: u32 = 12;
 /// Pixels in a tile row, and the mask for a position inside a tile.
 const TILE_SIZE: u32 = 8;
 const TILE_MASK: u32 = 7;
@@ -60,6 +64,10 @@ pub struct TextBg {
     pub eight_bpp: bool,
     /// Whether mosaic is on for the layer (BGxCNT bit 6).
     pub mosaic: bool,
+    /// The extended palette slot (0-3) the layer reads: with DISPCNT bit 30 set, a 256-colour text
+    /// layer reads its slot, which is its own number unless BG0 or BG1 has BGxCNT bit 13 set
+    /// (`extended-palettes.md`, "Behavior"). `None` reads the standard palette.
+    pub ext_slot: Option<u8>,
     /// The layer's width in pixels, 256 or 512.
     pub width: u16,
     /// The layer's height in pixels, 256 or 512.
@@ -71,8 +79,17 @@ pub struct TextBg {
 }
 
 impl TextBg {
-    /// Decodes BGxCNT and the scroll registers of one layer under `dispcnt`.
-    pub(super) fn decode(dispcnt: u32, cnt: u16, hofs: u16, vofs: u16) -> Self {
+    /// Decodes BGxCNT and the scroll registers of layer `layer` (0-3) under `dispcnt`.
+    // TODO(hw-unverified): BGxCNT bit 13 does nothing while DISPCNT bit 30 is clear
+    // (`extended-palettes.md`, "Unverified").
+    pub(super) fn decode(dispcnt: u32, layer: u8, cnt: u16, hofs: u16, vofs: u16) -> Self {
+        let eight_bpp = cnt & CNT_EIGHT_BPP != 0;
+        let ext_slot = (dispcnt & DISPCNT_BG_EXT_PALETTE != 0 && eight_bpp).then_some(
+            match layer < 2 && cnt & CNT_EXT_SLOT != 0 {
+                true => layer + 2,
+                false => layer,
+            },
+        );
         let size = cnt >> CNT_SIZE_SHIFT;
         let char_base = ((dispcnt >> DISPCNT_CHAR_SHIFT) & DISPCNT_BASE_MASK) * DISPCNT_BASE_SIZE
             + u32::from((cnt >> CNT_CHAR_SHIFT) & CNT_CHAR_MASK) * CHAR_BLOCK_SIZE;
@@ -83,8 +100,9 @@ impl TextBg {
             priority: (cnt & CNT_PRIORITY_MASK) as u8,
             char_base,
             screen_base,
-            eight_bpp: cnt & CNT_EIGHT_BPP != 0,
+            eight_bpp,
             mosaic: cnt & CNT_MOSAIC != 0,
+            ext_slot,
             // Size bit 0 doubles the width, bit 1 the height.
             width: 256 << (size & 1),
             height: 256 << (size >> 1),
@@ -120,7 +138,9 @@ fn tile_pixel(layer: &TextBg, vram: &VramWindow<'_>, px: u32, py: u32) -> (u8, u
     };
     if layer.eight_bpp {
         let at = layer.char_base + tile * TILE_BYTES_8BPP + row * TILE_SIZE + column;
-        (vram.byte(at), 0)
+        // A 256-colour layer's palette number (entry bits 12-15) matters only to an extended
+        // palette (`extended-palettes.md`, "Behavior").
+        (vram.byte(at), u32::from(entry >> ENTRY_PALETTE_SHIFT))
     } else {
         let at = layer.char_base + tile * TILE_BYTES_4BPP + row * 4 + column / 2;
         let byte = vram.byte(at);
@@ -135,13 +155,13 @@ fn tile_pixel(layer: &TextBg, vram: &VramWindow<'_>, px: u32, py: u32) -> (u8, u
 
 /// The 15-bit colour of layer `layer` at screen pixel (`x`, `y`), or `None` where it is
 /// transparent.
-// TODO(phase4): extended palettes (DISPCNT bit 30).
-// TODO(hw-unverified): the standard palette is used for 8 bits per pixel whatever DISPCNT bit 30
-// says (`bg-text.md`, "Unverified").
+// TODO(hw-unverified): a 16-colour layer keeps the standard palette whatever DISPCNT bit 30 says
+// (`extended-palettes.md`, "Unverified").
 pub(super) fn pixel(
     layer: &TextBg,
     vram: &VramWindow<'_>,
     palette: &[u8],
+    ext: &ExtPalette<'_>,
     x: u32,
     y: u32,
 ) -> Option<u16> {
@@ -151,6 +171,11 @@ pub(super) fn pixel(
     let (value, palette_number) = tile_pixel(layer, vram, px, py);
     if value == 0 {
         return None;
+    }
+    // With bit 30 set a 256-colour layer reads its extended slot: the entry's palette number picks
+    // the palette and the value the colour in it.
+    if let Some(slot) = layer.ext_slot {
+        return Some(ext.color(usize::from(slot), palette_number, u32::from(value)));
     }
     let index = match layer.eight_bpp {
         true => u32::from(value),

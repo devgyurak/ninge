@@ -25,6 +25,7 @@ const PIXELS: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 mod affine;
 mod engine_b;
 mod extended;
+mod extpal;
 mod large;
 mod mosaic;
 mod obj;

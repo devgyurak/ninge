@@ -16,7 +16,7 @@ use crate::cpu::Cpu;
 use crate::machine::Machine;
 use crate::machine::OAM_HALF;
 
-pub use crate::bus::{VramBankState, VramMapping, WramShare, WramState};
+pub use crate::bus::{ExtPaletteBanks, VramBankState, VramMapping, WramShare, WramState};
 pub use crate::gpu2d::{
     AffineBg, AffineFormat, EngineId, Gpu2d, Mosaic, OBJ_COUNT, ObjAttrs, TextBg,
 };
@@ -209,6 +209,13 @@ impl<'a> Inspect<'a> {
     // The debugger's VRAM bank map (#58) shows them with the mapping each one means.
     pub fn vram_banks(&self) -> [VramBankState; BANK_COUNT] {
         self.machine.memory.vram_banks()
+    }
+
+    /// Which bank backs each extended-palette slot of engine `which` (`extended-palettes.md`, "Which
+    /// bank backs a slot"), from the VRAMCNT registers as they are now.
+    // The debugger's VRAM bank map (#58) shows it beside the banks.
+    pub fn ext_palette_banks(&self, which: EngineId) -> ExtPaletteBanks {
+        self.machine.memory.ext_palette_banks(which == EngineId::B)
     }
 
     /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.

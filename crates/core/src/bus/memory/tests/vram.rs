@@ -23,7 +23,7 @@ const BANKS: [(u32, u32, u32); 9] = [
 const LCDC_END: u32 = 0x068A_4000;
 const LCDC_ON: u8 = 0x80;
 
-fn set(memory: &mut Memory, addr: u32, value: u8) {
+pub(super) fn set(memory: &mut Memory, addr: u32, value: u8) {
     memory.write_control::<true>(addr - VRAMCNT_A_ADDR, Width::Byte, u32::from(value));
 }
 

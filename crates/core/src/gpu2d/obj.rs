@@ -2,7 +2,7 @@
 //! Sprites (OBJ): one entry of OAM decoded ([`ObjAttrs`]) and the line of object pixels the
 //! engine makes before it puts the background layers behind them (`docs/hw/obj.md`).
 //!
-//! This step draws plain and affine tile objects. Bitmap objects, mosaic and the line limit are
+//! This step draws plain and affine tile and bitmap objects. Mosaic and the line limit are
 //! markers here and come with the next steps of #31.
 
 use super::spec::EngineInputs;
@@ -49,6 +49,20 @@ const MODE_BITMAP: u8 = 3;
 /// Shape 3 is not allowed.
 const SHAPE_PROHIBITED: u8 = 3;
 
+/// DISPCNT bit 5: bitmap OBJ 2D width, 0 = 128 pixels, 1 = 256.
+const DISPCNT_BITMAP_WIDE: u32 = 1 << 5;
+/// DISPCNT bit 6: bitmap OBJ mapping, 1 = 1D.
+const DISPCNT_BITMAP_1D: u32 = 1 << 6;
+/// DISPCNT bit 22: the bitmap OBJ 1D boundary is 256 bytes instead of 128 (engine A only).
+const DISPCNT_BITMAP_BOUNDARY_SHIFT: u32 = 22;
+const BITMAP_BOUNDARY: u32 = 128;
+/// A bitmap pixel is a halfword; bit 15 set means opaque.
+const BITMAP_PIXEL: u32 = 2;
+const BITMAP_OPAQUE: u16 = 1 << 15;
+/// In 2D mapping the tile number's column steps are 8 pixels (`0x10` bytes) and its row steps
+/// are 8 lines of the source bitmap, written as `0x80` bytes per number.
+const BITMAP_TILE_X: u32 = 0x10;
+const BITMAP_TILE_Y: u32 = 0x80;
 /// DISPCNT bit 4: tile OBJ mapping, 1 = 1D.
 const DISPCNT_TILE_1D: u32 = 1 << 4;
 /// DISPCNT bits 20-21: the 1D boundary is `32 << n` bytes.
@@ -168,7 +182,7 @@ pub(super) type ObjLine = [Option<ObjPixel>; SCREEN_WIDTH];
 /// The line `y` of the object layer under `dispcnt` (`obj.md`, "Behavior"). Objects are walked in
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
 /// lower entry (`obj.md`, "Priority").
-// TODO(phase4): bitmap objects, mosaic and the line limit are the next steps of #31;
+// TODO(phase4): mosaic and the line limit are the next steps of #31;
 // semi-transparent objects draw as normal ones (#34), the OBJ window is not drawn (#33) and
 // extended palettes are not read (#32).
 pub(super) fn draw_line(inputs: &EngineInputs<'_>, dispcnt: u32, y: usize) -> ObjLine {
@@ -183,12 +197,9 @@ pub(super) fn draw_line(inputs: &EngineInputs<'_>, dispcnt: u32, y: usize) -> Ob
 
 /// Whether this step draws the object at all.
 // TODO(hw-unverified): shape 3 draws nothing (`obj.md`, "Edge cases").
-// TODO(phase4): bitmap objects (mode 3, #31) and the OBJ window (mode 2, #33) are not drawn.
+// TODO(phase4): the OBJ window (mode 2, #33) is not drawn.
 fn drawn(obj: &ObjAttrs) -> bool {
-    !obj.disabled
-        && obj.mode != MODE_WINDOW
-        && obj.mode != MODE_BITMAP
-        && obj.shape != SHAPE_PROHIBITED
+    !obj.disabled && obj.mode != MODE_WINDOW && obj.shape != SHAPE_PROHIBITED
 }
 
 /// Parameter group `group` of an affine object: PA, PB, PC, PD, each the fourth halfword of one of
@@ -277,24 +288,83 @@ fn draw_object(
         let Some((src_column, src_row)) = source else {
             return;
         };
-        let value = tile_value(inputs, dispcnt, obj, width, src_column, src_row);
-        if value == 0 {
+        let color = match obj.mode == MODE_BITMAP {
+            true => bitmap_color(inputs, dispcnt, obj, width, src_column, src_row),
+            false => tile_color(inputs, dispcnt, palette, obj, width, src_column, src_row),
+        };
+        let Some(color) = color else {
             return;
-        }
+        };
         // The first object to reach a column keeps it unless a later one has a smaller priority
         // value: the entry order breaks the ties (`obj.md`, "Priority").
         let in_front = slot.is_none_or(|have| obj.priority < have.priority);
         if in_front {
-            let index = match obj.eight_bpp {
-                true => u32::from(value),
-                false => u32::from(obj.palette) * PALETTE_COLORS + u32::from(value),
-            };
             *slot = Some(ObjPixel {
-                color: text::palette_color(palette, index),
+                color,
                 priority: obj.priority,
             });
         }
     });
+}
+
+/// The 15-bit colour of the pixel (`column`, `row`) of a tile object's picture, or `None` where
+/// its palette value is 0.
+fn tile_color(
+    inputs: &EngineInputs<'_>,
+    dispcnt: u32,
+    palette: &[u8],
+    obj: &ObjAttrs,
+    width: u32,
+    column: u32,
+    row: u32,
+) -> Option<u16> {
+    let value = tile_value(inputs, dispcnt, obj, width, column, row);
+    let index = match (value, obj.eight_bpp) {
+        (0, _) => return None,
+        (value, true) => u32::from(value),
+        (value, false) => u32::from(obj.palette) * PALETTE_COLORS + u32::from(value),
+    };
+    Some(text::palette_color(palette, index))
+}
+
+/// The 15-bit colour of the pixel (`column`, `row`) of a bitmap object's picture, or `None` where
+/// its bit 15 is clear (`obj.md`, "A bitmap object"). A bitmap object has no palette and its
+/// attr2 bits 12-15 are an alpha value, not read here (`TODO(phase4)`, #34).
+// TODO(hw-unverified): the flips work as on a tile object, a bitmap object with attr0 bit 13 set
+// is still a bitmap object, and DISPCNT bits 5 and 6 both set (reserved) draw nothing
+// (`obj.md`, "Unverified").
+fn bitmap_color(
+    inputs: &EngineInputs<'_>,
+    dispcnt: u32,
+    obj: &ObjAttrs,
+    width: u32,
+    column: u32,
+    row: u32,
+) -> Option<u16> {
+    let wide = dispcnt & DISPCNT_BITMAP_WIDE != 0;
+    let tile = u32::from(obj.tile);
+    let (first, stride) = match (dispcnt & DISPCNT_BITMAP_1D != 0, wide) {
+        // 2D: the tile number is the column in its low bits (in 8-pixel steps) and the row above
+        // them (in 8-line steps); the source bitmap is 128 or 256 pixels wide.
+        (false, wide) => {
+            let mask = if wide { 0x1F } else { 0xF };
+            let source_width = if wide { 256 } else { 128 };
+            (
+                (tile & mask) * BITMAP_TILE_X + (tile & !mask) * BITMAP_TILE_Y,
+                source_width * BITMAP_PIXEL,
+            )
+        }
+        // 1D: the first pixel is at tile * boundary and a row is the object's own width.
+        (true, false) => {
+            let boundary = BITMAP_BOUNDARY << ((dispcnt >> DISPCNT_BITMAP_BOUNDARY_SHIFT) & 1);
+            (tile * boundary, width * BITMAP_PIXEL)
+        }
+        (true, true) => return None,
+    };
+    let pixel = inputs
+        .obj_vram
+        .half(first + row * stride + column * BITMAP_PIXEL);
+    (pixel & BITMAP_OPAQUE != 0).then_some(pixel & !BITMAP_OPAQUE)
 }
 
 /// The palette value (0 is transparent) of the pixel (`column`, `row`) of the object's picture,

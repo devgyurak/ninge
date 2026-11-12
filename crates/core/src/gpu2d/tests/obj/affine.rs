@@ -14,7 +14,7 @@ const ONE: i16 = 0x100;
 
 /// Writes parameter group `group` of the side's OAM: PA, PB, PC and PD in the fourth halfword of
 /// four consecutive entries.
-fn put_group(m: &mut Machine, side: Side, group: u32, params: [i16; 4]) {
+pub(super) fn put_group(m: &mut Machine, side: Side, group: u32, params: [i16; 4]) {
     params.iter().enumerate().for_each(|(n, &value)| {
         w16(m, side.oam + (group * 4 + n as u32) * 8 + 6, value as u16);
     });

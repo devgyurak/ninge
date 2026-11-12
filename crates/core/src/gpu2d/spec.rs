@@ -14,6 +14,8 @@ const DISPCNT_MODE_HIGH: u32 = 1 << 17;
 const DISPCNT_VRAM_BLOCK: u32 = 0x3 << 18;
 /// DISPCNT bits 24-29: the character and screen base in 64 KiB steps (engine A only).
 const DISPCNT_BASES: u32 = 0x3F << 24;
+/// DISPCNT bit 22: the bitmap OBJ 1D boundary, 256 bytes (engine A only, `obj.md`).
+const DISPCNT_OBJ_BITMAP_BOUNDARY: u32 = 1 << 22;
 
 /// Which fields of an engine's registers exist (`docs/hw/bg-modes.md`, "Engine B").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,9 +36,13 @@ pub(crate) const MAIN_SPEC: EngineSpec = EngineSpec {
 };
 
 /// Engine B: no 3D BG0, display modes 0-1 only, no VRAM block, no character or screen base, no
-/// BG mode 6.
+/// BG mode 6, no bitmap OBJ boundary bit.
 pub(crate) const SUB_SPEC: EngineSpec = EngineSpec {
-    dispcnt_mask: !(DISPCNT_BG0_3D | DISPCNT_MODE_HIGH | DISPCNT_VRAM_BLOCK | DISPCNT_BASES),
+    dispcnt_mask: !(DISPCNT_BG0_3D
+        | DISPCNT_MODE_HIGH
+        | DISPCNT_VRAM_BLOCK
+        | DISPCNT_BASES
+        | DISPCNT_OBJ_BITMAP_BOUNDARY),
     large_bitmap: false,
 };
 

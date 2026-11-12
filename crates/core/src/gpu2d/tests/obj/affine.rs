@@ -5,6 +5,8 @@
 //! pixel shows the picture at (`u`, `v`) when that is inside it. Each table below was worked out
 //! by hand from those lines for its parameters; none is computed by the code under test.
 
+// TODO(hw-unverified): these tests pin the model's choice where GBATEK is silent: the affine
+// arithmetic and its rounding (`obj.md`, "Unverified").
 use super::*;
 
 /// attr0 bit 8, and bit 9 for double-size.

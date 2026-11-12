@@ -445,6 +445,8 @@ fn given_objmosaic_rom_when_3_frames_run_then_oam_holds_mosaic_objects_and_the_r
     );
 }
 
+// TODO(hw-unverified): the golden below also pins the model's choices where GBATEK is silent
+// (`obj.md`, "Unverified"): the mosaic block origin and the order of mosaic and affine transform.
 #[test]
 fn given_objmosaic_rom_when_run_for_3_frames_then_both_screens_match_golden() {
     assert_frame_hash("objmosaic", 3);

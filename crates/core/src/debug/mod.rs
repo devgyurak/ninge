@@ -117,7 +117,8 @@ impl<'a> Inspect<'a> {
     /// index past 127 is taken modulo 128.
     // The debugger's OAM view (#58) shows it.
     pub fn obj(&self, which: EngineId, index: usize) -> ObjAttrs {
-        let (oam_a, oam_b) = self.machine.memory.oam().split_at(OAM_HALF);
+        let oam = self.machine.memory.oam();
+        let (oam_a, oam_b) = oam.split_at_checked(OAM_HALF).unwrap_or((oam, &[]));
         ObjAttrs::decode(
             match which {
                 EngineId::A => oam_a,

@@ -2,11 +2,10 @@
 //! Sprites (OBJ): one entry of OAM decoded ([`ObjAttrs`]) and the line of object pixels the
 //! engine makes before it puts the background layers behind them (`docs/hw/obj.md`).
 //!
-//! This step draws plain and affine tile and bitmap objects, with mosaic. The line limit is a
-//! marker here and comes with the next step of #31.
+//! Plain and affine tile and bitmap objects, with mosaic and the per-line cycle budget.
 
 use super::Mosaic;
-use super::spec::EngineInputs;
+use super::spec::{DISPCNT_OBJ_BITMAP_BOUNDARY_SHIFT, EngineInputs};
 use super::text::{self, BG_PALETTE_BYTES};
 use crate::SCREEN_WIDTH;
 
@@ -44,18 +43,16 @@ const ATTR2_PRIORITY_SHIFT: u32 = 10;
 const ATTR2_PRIORITY_MASK: u16 = 0x3;
 const ATTR2_PALETTE_SHIFT: u32 = 12;
 
-/// OBJ mode 1: semi-transparent (`TODO(phase4)`, #34). Mode 2 is the OBJ window and 3 a bitmap object.
+/// OBJ mode 2 is the OBJ window; mode 1 (semi-transparent, `TODO(phase4)`, #34) draws as mode 0.
 const MODE_WINDOW: u8 = 2;
+/// OBJ mode 3 is a bitmap object.
 const MODE_BITMAP: u8 = 3;
-/// Shape 3 is not allowed.
-const SHAPE_PROHIBITED: u8 = 3;
 
 /// DISPCNT bit 5: bitmap OBJ 2D width, 0 = 128 pixels, 1 = 256.
 const DISPCNT_BITMAP_WIDE: u32 = 1 << 5;
 /// DISPCNT bit 6: bitmap OBJ mapping, 1 = 1D.
 const DISPCNT_BITMAP_1D: u32 = 1 << 6;
-/// DISPCNT bit 22: the bitmap OBJ 1D boundary is 256 bytes instead of 128 (engine A only).
-const DISPCNT_BITMAP_BOUNDARY_SHIFT: u32 = 22;
+/// The bitmap OBJ 1D boundary is 128 bytes, or 256 with DISPCNT bit 22 (engine A only, `spec.rs`).
 const BITMAP_BOUNDARY: u32 = 128;
 /// A bitmap pixel is a halfword; bit 15 set means opaque.
 const BITMAP_PIXEL: u32 = 2;
@@ -64,6 +61,16 @@ const BITMAP_OPAQUE: u16 = 1 << 15;
 /// are 8 lines of the source bitmap, written as `0x80` bytes per number.
 const BITMAP_TILE_X: u32 = 0x10;
 const BITMAP_TILE_Y: u32 = 0x80;
+/// DISPCNT bit 23: OBJ processing during H-Blank, which shortens the line budget (`obj.md`, "The
+/// line limit").
+const DISPCNT_OBJ_HBLANK: u32 = 1 << 23;
+/// The OBJ rendering cycles a line has: 1210 normally, 954 with DISPCNT bit 23.
+// TODO(hw-unverified): 1210 and 954 are GBATEK's GBA values, and bit 23 is read with the GBA's
+// "H-Blank Interval Free" polarity (set = 954); the DS may differ on both (`obj.md`, "Unverified").
+const BUDGET: u32 = 1210;
+const BUDGET_HBLANK: u32 = 954;
+/// An affine object costs this many cycles more than a plain one, and twice its box width.
+const AFFINE_COST_BASE: u32 = 10;
 /// DISPCNT bit 4: tile OBJ mapping, 1 = 1D.
 const DISPCNT_TILE_1D: u32 = 1 << 4;
 /// DISPCNT bits 20-21: the 1D boundary is `32 << n` bytes.
@@ -127,7 +134,7 @@ impl ObjAttrs {
     /// not hold reads as zeros.
     // TODO(hw-unverified): X is a 9-bit signed number; GBATEK says only 0-511 (`obj.md`,
     // "Unverified").
-    pub fn decode(oam: &[u8], index: usize) -> Self {
+    pub(crate) fn decode(oam: &[u8], index: usize) -> Self {
         let at = (index % OBJ_COUNT) * ENTRY_BYTES;
         let half = |offset: usize| {
             oam.get(at + offset..at + offset + 2)
@@ -183,9 +190,8 @@ pub(super) type ObjLine = [Option<ObjPixel>; SCREEN_WIDTH];
 /// The line `y` of the object layer under `dispcnt` (`obj.md`, "Behavior"). Objects are walked in
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
 /// lower entry (`obj.md`, "Priority").
-// TODO(phase4): the line limit is the next step of #31;
-// semi-transparent objects draw as normal ones (#34), the OBJ window is not drawn (#33) and
-// extended palettes are not read (#32).
+// TODO(phase4): semi-transparent objects draw as normal ones (#34), the OBJ window is not drawn
+// (#33) and extended palettes are not read (#32).
 pub(super) fn draw_line(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
@@ -194,18 +200,96 @@ pub(super) fn draw_line(
 ) -> ObjLine {
     let mut line: ObjLine = [None; SCREEN_WIDTH];
     let palette = inputs.palette.get(BG_PALETTE_BYTES..).unwrap_or(&[]);
-    (0..OBJ_COUNT)
-        .map(|index| ObjAttrs::decode(inputs.oam, index))
-        .filter(drawn)
-        .for_each(|obj| draw_object(inputs, dispcnt, palette, mosaic, &obj, y, &mut line));
+    // TODO(hw-unverified): bit 23 only changes the budget here; whether OAM access timing changes
+    // the picture is not modelled (`obj.md`, "Unverified").
+    let mut budget = match dispcnt & DISPCNT_OBJ_HBLANK != 0 {
+        true => BUDGET_HBLANK,
+        false => BUDGET,
+    };
+    for index in 0..OBJ_COUNT {
+        let obj = ObjAttrs::decode(inputs.oam, index);
+        // A disabled object, one of shape 3 and one that does not reach the line cost nothing.
+        // TODO(hw-unverified): a disabled object costs nothing, and neither does one that is not
+        // on the line; an object off the screen to the side does cost (`obj.md`, "Unverified").
+        if obj.disabled {
+            continue;
+        }
+        let Some(place) = placement(&obj, mosaic, y) else {
+            continue;
+        };
+        // When the budget runs out the object is dropped, and so is every later one.
+        // TODO(hw-unverified): the whole object is dropped, not part of it, and the later ones
+        // with it (`obj.md`, "Unverified").
+        let Some(left) = budget.checked_sub(place.cost(&obj)) else {
+            break;
+        };
+        budget = left;
+        // TODO(phase4): the OBJ window (mode 2, #33) is not drawn.
+        // TODO(hw-unverified): a mode 2 object costs its cycles though it is not drawn
+        // (`obj.md`, "Unverified").
+        if obj.mode != MODE_WINDOW {
+            draw_object(inputs, dispcnt, palette, &obj, &place, &mut line);
+        }
+    }
     line
 }
 
-/// Whether this step draws the object at all.
-// TODO(hw-unverified): shape 3 draws nothing (`obj.md`, "Edge cases").
-// TODO(phase4): the OBJ window (mode 2, #33) is not drawn.
-fn drawn(obj: &ObjAttrs) -> bool {
-    !obj.disabled && obj.mode != MODE_WINDOW && obj.shape != SHAPE_PROHIBITED
+/// Where an object's box meets the line being made.
+struct Placement {
+    width: u32,
+    height: u32,
+    box_width: u32,
+    box_height: u32,
+    /// The box row the line shows (the row of the block's first line for a mosaic object).
+    row: u32,
+    block_width: u32,
+}
+
+impl Placement {
+    /// The object's cost in OBJ rendering cycles: its box width, or 10 plus twice it when affine
+    /// (`obj.md`, "The line limit").
+    // TODO(hw-unverified): the cost of a double-size affine object is 10 + 2 * (2W)
+    // (`obj.md`, "Unverified").
+    fn cost(&self, obj: &ObjAttrs) -> u32 {
+        match obj.affine {
+            true => AFFINE_COST_BASE + 2 * self.box_width,
+            false => self.box_width,
+        }
+    }
+}
+
+/// The object's placement on line `y`, or `None` when the object has a shape that is not allowed
+/// or its box does not reach the line.
+// TODO(hw-unverified): shape 3 draws nothing and costs nothing (`obj.md`, "Unverified").
+fn placement(obj: &ObjAttrs, mosaic: Mosaic, y: usize) -> Option<Placement> {
+    let (width, height) = obj.dimensions()?;
+    // An affine object with double-size is drawn in a box twice as wide and as high.
+    let (box_width, box_height) = match obj.double_size {
+        true => (2 * width, 2 * height),
+        false => (width, height),
+    };
+    // A mosaic object shows, at each screen pixel, what it would show at the first pixel of the
+    // pixel's block; blocks are counted from the top left of the screen (`obj.md`, "Mosaic"). So
+    // the line is the block's first line, and the columns run on to the end of the last block.
+    // TODO(hw-unverified): the block origin is the screen's, and an affine object's block pixel is
+    // transformed after the pick (`obj.md`, "Unverified").
+    let (block_width, block_height) = match obj.mosaic {
+        true => (u32::from(mosaic.obj_h), u32::from(mosaic.obj_v)),
+        false => (1, 1),
+    };
+    let block_y = y as u32 - y as u32 % block_height;
+    // The box covers lines `(Y + r) mod 256`, so a box that runs past line 255 shows at the top
+    // (`obj.md`, "Where an object is on the screen").
+    // TODO(hw-unverified): the DS page's vertical wrap is followed (`obj.md`, "Unverified").
+    let row = block_y.wrapping_sub(u32::from(obj.y)) & 0xFF;
+    (row < box_height).then_some(Placement {
+        width,
+        height,
+        box_width,
+        box_height,
+        row,
+        block_width,
+    })
 }
 
 /// Parameter group `group` of an affine object: PA, PB, PC, PD, each the fourth halfword of one of
@@ -245,36 +329,18 @@ fn draw_object(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
     palette: &[u8],
-    mosaic: Mosaic,
     obj: &ObjAttrs,
-    y: usize,
+    place: &Placement,
     line: &mut ObjLine,
 ) {
-    let Some((width, height)) = obj.dimensions() else {
-        return;
-    };
-    // The box covers lines `(Y + r) mod 256`, so a box that runs past line 255 shows at the top
-    // (`obj.md`, "Where an object is on the screen").
-    // TODO(hw-unverified): the DS page's vertical wrap is followed (`obj.md`, "Unverified").
-    // An affine object with double-size is drawn in a box twice as wide and as high.
-    let (box_width, box_height) = match obj.double_size {
-        true => (2 * width, 2 * height),
-        false => (width, height),
-    };
-    // A mosaic object shows, at each screen pixel, what it would show at the first pixel of the
-    // pixel's block; blocks are counted from the top left of the screen (`obj.md`, "Mosaic"). So
-    // the line is the block's first line, and the columns run on to the end of the last block.
-    // TODO(hw-unverified): the block origin is the screen's, and an affine object's block pixel is
-    // transformed after the pick (`obj.md`, "Unverified").
-    let (block_width, block_height) = match obj.mosaic {
-        true => (u32::from(mosaic.obj_h), u32::from(mosaic.obj_v)),
-        false => (1, 1),
-    };
-    let block_y = y as u32 - y as u32 % block_height;
-    let row = block_y.wrapping_sub(u32::from(obj.y)) & 0xFF;
-    if row >= box_height {
-        return;
-    }
+    let Placement {
+        width,
+        height,
+        box_width,
+        box_height,
+        row,
+        block_width,
+    } = *place;
     let group = obj.affine.then(|| parameters(inputs.oam, obj.group));
     let first = i32::from(obj.x).max(0);
     let end = (i32::from(obj.x) + (box_width + block_width - 1) as i32).min(SCREEN_WIDTH as i32);
@@ -380,7 +446,7 @@ fn bitmap_color(
         }
         // 1D: the first pixel is at tile * boundary and a row is the object's own width.
         (true, false) => {
-            let boundary = BITMAP_BOUNDARY << ((dispcnt >> DISPCNT_BITMAP_BOUNDARY_SHIFT) & 1);
+            let boundary = BITMAP_BOUNDARY << ((dispcnt >> DISPCNT_OBJ_BITMAP_BOUNDARY_SHIFT) & 1);
             (tile * boundary, width * BITMAP_PIXEL)
         }
         (true, true) => return None,

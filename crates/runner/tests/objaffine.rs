@@ -340,6 +340,8 @@ fn given_objaffine_rom_when_3_frames_run_then_oam_holds_the_listed_entries_and_p
     );
 }
 
+// TODO(hw-unverified): the golden below also pins the model's choices where GBATEK is silent
+// (`obj.md`, "Unverified"): the affine arithmetic and its rounding, the Y wrap of a double-size box.
 #[test]
 fn given_objaffine_rom_when_run_for_3_frames_then_both_screens_match_golden() {
     assert_frame_hash("objaffine", 3);

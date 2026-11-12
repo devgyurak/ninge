@@ -1,0 +1,2 @@
+# Golden frames for testroms/objaffine. Format and review flow: tests/golden/README.md.
+frames=3 top=eab1d38baf731740 bottom=5421c2a0dd48bf4f

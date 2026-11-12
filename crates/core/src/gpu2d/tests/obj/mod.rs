@@ -7,6 +7,8 @@
 use super::*;
 use crate::debug::{EngineId, ObjAttrs};
 
+mod affine;
+
 const VRAMCNT_B: u32 = 0x0400_0241;
 const VRAMCNT_D: u32 = 0x0400_0243;
 /// Bank A as engine A's OBJ VRAM (MST 2) and bank D as engine B's (MST 4).
@@ -71,15 +73,20 @@ const fn color(i: u32) -> u32 {
     (((red << 3) | (red >> 2)) << 16) | ((blue << 3) | (blue >> 2))
 }
 
-/// A machine with both engines on, the side's OBJ bank mapped, a filled OBJ palette, and sprites
-/// on in display mode 1 with `extra` DISPCNT bits.
+/// A machine with both engines on and the side set up by [`enable`].
 fn scene(side: Side, extra: u32) -> Machine {
     let mut m = Machine::new();
     w16(&mut m, POWCNT1_ADDR, POWCNT1_ON_TOP);
-    w8(&mut m, side.vramcnt, side.bank);
-    (0..256).for_each(|i| w16(&mut m, side.palette + i * 2, entry(i)));
-    w32(&mut m, side.dispcnt, GRAPHICS_OBJ | extra);
+    enable(&mut m, side, extra);
     m
+}
+
+/// Maps the side's OBJ bank, fills its OBJ palette, and turns sprites on in display mode 1 with
+/// `extra` DISPCNT bits.
+fn enable(m: &mut Machine, side: Side, extra: u32) {
+    w8(m, side.vramcnt, side.bank);
+    (0..256).for_each(|i| w16(m, side.palette + i * 2, entry(i)));
+    w32(m, side.dispcnt, GRAPHICS_OBJ | extra);
 }
 
 /// Writes entry `index` of the side's OAM.
@@ -531,13 +538,14 @@ fn mode_cases(bits: [u16; 6], draws: [bool; 6]) -> Vec<(usize, usize, u32)> {
 }
 
 #[test]
-fn given_objects_of_modes_this_step_does_not_draw_when_drawn_then_only_the_normal_and_semi_transparent_ones_show()
+fn given_objects_of_each_mode_when_drawn_then_only_the_window_and_bitmap_modes_and_shape_3_are_skipped()
  {
-    // TODO(phase4): the OBJ window (mode 2, #33), bitmap objects (mode 3) and affine objects are
-    // not drawn yet; mode 1 draws as a normal object (#34). Shape 3 is not allowed.
+    // TODO(phase4): the OBJ window (mode 2, #33) and bitmap objects (mode 3) are not drawn yet;
+    // mode 1 draws as a normal object (#34). Shape 3 is not allowed. The affine object (entry 4)
+    // has zero parameters, so it samples one pixel of its tile everywhere, and that pixel is 1.
     let bits = [0, 1 << 10, 2 << 10, 3 << 10, 1 << 8, 3 << 14];
     assert_eq!(
-        mode_cases(bits, [true, true, false, false, false, false]),
+        mode_cases(bits, [true, true, false, false, true, false]),
         vec![]
     );
 }

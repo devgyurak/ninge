@@ -2,8 +2,8 @@
 //! Sprites (OBJ): one entry of OAM decoded ([`ObjAttrs`]) and the line of object pixels the
 //! engine makes before it puts the background layers behind them (`docs/hw/obj.md`).
 //!
-//! This step draws plain (non-affine) tile objects. The rest of the object kinds are markers
-//! here and come with the next steps of #31.
+//! This step draws plain and affine tile objects. Bitmap objects, mosaic and the line limit are
+//! markers here and come with the next steps of #31.
 
 use super::spec::EngineInputs;
 use super::text::{self, BG_PALETTE_BYTES};
@@ -15,6 +15,9 @@ const ENTRY_BYTES: usize = 8;
 
 /// attr0 bit 8: the object is affine.
 const ATTR0_AFFINE: u16 = 1 << 8;
+/// Where the fourth halfword of an entry is: the parameter of an affine group (`obj.md`, "The
+/// object table").
+const PARAMETER_OFFSET: usize = 6;
 /// attr0 bit 9: double-size (affine) or disabled (plain).
 const ATTR0_DOUBLE_OR_DISABLE: u16 = 1 << 9;
 const ATTR0_MODE_SHIFT: u32 = 10;
@@ -165,7 +168,7 @@ pub(super) type ObjLine = [Option<ObjPixel>; SCREEN_WIDTH];
 /// The line `y` of the object layer under `dispcnt` (`obj.md`, "Behavior"). Objects are walked in
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
 /// lower entry (`obj.md`, "Priority").
-// TODO(phase4): affine objects, bitmap objects, mosaic and the line limit are the next steps of #31;
+// TODO(phase4): bitmap objects, mosaic and the line limit are the next steps of #31;
 // semi-transparent objects draw as normal ones (#34), the OBJ window is not drawn (#33) and
 // extended palettes are not read (#32).
 pub(super) fn draw_line(inputs: &EngineInputs<'_>, dispcnt: u32, y: usize) -> ObjLine {
@@ -180,17 +183,47 @@ pub(super) fn draw_line(inputs: &EngineInputs<'_>, dispcnt: u32, y: usize) -> Ob
 
 /// Whether this step draws the object at all.
 // TODO(hw-unverified): shape 3 draws nothing (`obj.md`, "Edge cases").
-// TODO(phase4): affine objects (next step of #31), bitmap objects (mode 3, #31) and the OBJ window
-// (mode 2, #33) are not drawn.
+// TODO(phase4): bitmap objects (mode 3, #31) and the OBJ window (mode 2, #33) are not drawn.
 fn drawn(obj: &ObjAttrs) -> bool {
-    !obj.affine
-        && !obj.disabled
+    !obj.disabled
         && obj.mode != MODE_WINDOW
         && obj.mode != MODE_BITMAP
         && obj.shape != SHAPE_PROHIBITED
 }
 
-/// Draws the part of a plain tile object that lies on line `y` into `line`.
+/// Parameter group `group` of an affine object: PA, PB, PC, PD, each the fourth halfword of one of
+/// four consecutive entries (`obj.md`, "An affine object"). A group the slice does not hold reads
+/// as zeros.
+fn parameters(oam: &[u8], group: u8) -> [i32; 4] {
+    std::array::from_fn(|n| {
+        let at = (usize::from(group) * 4 + n) * ENTRY_BYTES + PARAMETER_OFFSET;
+        oam.get(at..at + 2)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map_or(0, |bytes| i32::from(i16::from_le_bytes(bytes)))
+    })
+}
+
+/// Where the object's picture is sampled for the box pixel (`column`, `row`) of an affine object
+/// whose box is `box_width` by `box_height`: the offset from the box centre, through PA-PD, plus
+/// the picture's centre (`obj.md`, "An affine object"). `None` outside the `width` by `height`
+/// picture.
+// TODO(hw-unverified): the arithmetic is inferred from the BG's convention, not stated for
+// objects (`obj.md`, "Unverified").
+fn affine_source(
+    [pa, pb, pc, pd]: [i32; 4],
+    (width, height): (u32, u32),
+    (box_width, box_height): (u32, u32),
+    (column, row): (u32, u32),
+) -> Option<(u32, u32)> {
+    let dx = column as i32 - (box_width / 2) as i32;
+    let dy = row as i32 - (box_height / 2) as i32;
+    let u = (pa.wrapping_mul(dx).wrapping_add(pb.wrapping_mul(dy)) >> 8) + (width / 2) as i32;
+    let v = (pc.wrapping_mul(dx).wrapping_add(pd.wrapping_mul(dy)) >> 8) + (height / 2) as i32;
+    let inside = |at: i32, size: u32| u32::try_from(at).ok().filter(|&at| at < size);
+    Some((inside(u, width)?, inside(v, height)?))
+}
+
+/// Draws the part of a tile object that lies on line `y` into `line`.
 fn draw_object(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
@@ -205,12 +238,17 @@ fn draw_object(
     // The box covers lines `(Y + r) mod 256`, so a box that runs past line 255 shows at the top
     // (`obj.md`, "Where an object is on the screen").
     // TODO(hw-unverified): the DS page's vertical wrap is followed (`obj.md`, "Unverified").
+    // An affine object with double-size is drawn in a box twice as wide and as high.
+    let (box_width, box_height) = match obj.double_size {
+        true => (2 * width, 2 * height),
+        false => (width, height),
+    };
     let row = (y as u32).wrapping_sub(u32::from(obj.y)) & 0xFF;
-    if row >= height {
+    if row >= box_height {
         return;
     }
-    let src_row = if obj.v_flip { height - 1 - row } else { row };
-    (0..width).for_each(|column| {
+    let group = obj.affine.then(|| parameters(inputs.oam, obj.group));
+    (0..box_width).for_each(|column| {
         let screen_x = i32::from(obj.x) + column as i32;
         let Some(slot) = usize::try_from(screen_x)
             .ok()
@@ -218,10 +256,26 @@ fn draw_object(
         else {
             return;
         };
-        let src_column = if obj.h_flip {
-            width - 1 - column
-        } else {
-            column
+        // The picture's pixel this box pixel shows: a plain object's flips, or an affine object's
+        // transform (the picture is cut at the box).
+        let source = match group {
+            Some(parameters) => affine_source(
+                parameters,
+                (width, height),
+                (box_width, box_height),
+                (column, row),
+            ),
+            None => Some((
+                if obj.h_flip {
+                    width - 1 - column
+                } else {
+                    column
+                },
+                if obj.v_flip { height - 1 - row } else { row },
+            )),
+        };
+        let Some((src_column, src_row)) = source else {
+            return;
         };
         let value = tile_value(inputs, dispcnt, obj, width, src_column, src_row);
         if value == 0 {

@@ -8,6 +8,7 @@ use super::*;
 use crate::debug::{EngineId, ObjAttrs};
 
 mod affine;
+mod bitmap;
 
 const VRAMCNT_B: u32 = 0x0400_0241;
 const VRAMCNT_D: u32 = 0x0400_0243;
@@ -538,11 +539,12 @@ fn mode_cases(bits: [u16; 6], draws: [bool; 6]) -> Vec<(usize, usize, u32)> {
 }
 
 #[test]
-fn given_objects_of_each_mode_when_drawn_then_only_the_window_and_bitmap_modes_and_shape_3_are_skipped()
- {
-    // TODO(phase4): the OBJ window (mode 2, #33) and bitmap objects (mode 3) are not drawn yet;
-    // mode 1 draws as a normal object (#34). Shape 3 is not allowed. The affine object (entry 4)
-    // has zero parameters, so it samples one pixel of its tile everywhere, and that pixel is 1.
+fn given_objects_of_each_mode_when_drawn_then_only_the_window_mode_and_shape_3_are_skipped() {
+    // TODO(phase4): the OBJ window (mode 2, #33) is not drawn yet; mode 1 draws as a normal object
+    // (#34). Shape 3 is not allowed. The affine object (entry 4) has zero parameters, so it
+    // samples one pixel of its tile everywhere, and that pixel is 1. The bitmap object (entry 3)
+    // reads halfwords of the tile data, which has bit 15 clear everywhere, so nothing shows
+    // (`bitmap.rs` covers bitmap objects).
     let bits = [0, 1 << 10, 2 << 10, 3 << 10, 1 << 8, 3 << 14];
     assert_eq!(
         mode_cases(bits, [true, true, false, false, true, false]),

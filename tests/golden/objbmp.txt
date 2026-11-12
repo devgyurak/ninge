@@ -1,0 +1,2 @@
+# Golden frames for testroms/objbmp. Format and review flow: tests/golden/README.md.
+frames=5 top=5fb3468f4d1743d2 bottom=88fc3392d901c23f

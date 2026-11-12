@@ -34,9 +34,9 @@ fn slot_address(slot: u32) -> u32 {
     }
 }
 
-/// A machine that booted the `vrambanks` ROM and ran the frames both CPUs need to finish their
+/// A machine that booted the `vrambanks` ROM and ran the two frames both CPUs need to finish their
 /// hand-shaken steps.
-fn boot_one_frame() -> Machine {
+fn boot_and_run() -> Machine {
     let rom = load_rom_file(&testrom_path("vrambanks")).expect("vrambanks ROM is built");
     let mut machine = Machine::new();
     machine
@@ -268,52 +268,50 @@ fn mismatches(machine: &Machine, wanted: impl Fn(u32) -> bool) -> Vec<Mismatch> 
 }
 
 fn mismatches_in(first: u32, last: u32) -> Vec<Mismatch> {
-    mismatches(&boot_one_frame(), |slot| (first..=last).contains(&slot))
+    mismatches(&boot_and_run(), |slot| (first..=last).contains(&slot))
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_every_bank_holds_its_own_first_word() {
+fn given_vrambanks_rom_when_run_then_every_bank_holds_its_own_first_word() {
     assert_eq!(mismatches_in(0, 8), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_every_bank_holds_its_own_last_word() {
+fn given_vrambanks_rom_when_run_then_every_bank_holds_its_own_last_word() {
     assert_eq!(mismatches_in(9, 17), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_bank_alone_does_not_map_the_word_below_its_window()
-{
+fn given_vrambanks_rom_when_run_then_a_bank_alone_does_not_map_the_word_below_its_window() {
     assert_eq!(mismatches_in(18, 26), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_bank_alone_does_not_map_the_word_above_its_window()
-{
+fn given_vrambanks_rom_when_run_then_a_bank_alone_does_not_map_the_word_above_its_window() {
     assert_eq!(mismatches_in(27, 35), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_byte_store_to_any_bank_is_ignored() {
+fn given_vrambanks_rom_when_run_then_a_byte_store_to_any_bank_is_ignored() {
     assert_eq!(mismatches_in(36, 44), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_disabled_bank_reads_zero_and_keeps_its_bytes_as_the_note_models_unverified()
+fn given_vrambanks_rom_when_run_then_a_disabled_bank_reads_zero_and_keeps_its_bytes_as_the_note_models_unverified()
  {
     // TODO(hw-unverified): vram-banks.md "Unverified", a disabled bank reads zero.
     assert_eq!(mismatches_in(45, 46), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_vramcnt_reads_zero_as_the_note_models_unverified() {
+fn given_vrambanks_rom_when_run_then_vramcnt_reads_zero_as_the_note_models_unverified() {
     // TODO(hw-unverified): vram-banks.md "Unverified", the VRAMCNT registers read 0.
     assert_eq!(mismatches_in(47, 47), Vec::<Mismatch>::new());
 }
 
 /// The entries `first..last` of group 5 (slots `100 + 5 * e` onward).
 fn entry_mismatches(first: u32, last: u32) -> Vec<Mismatch> {
-    mismatches(&boot_one_frame(), |slot| {
+    mismatches(&boot_and_run(), |slot| {
         (100 + 5 * first..100 + 5 * last).contains(&slot)
     })
 }
@@ -325,51 +323,49 @@ fn given_the_note_when_the_window_entries_are_counted_then_there_are_47_matching
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_every_mst_and_ofs_puts_a_bank_in_engine_a_bg_vram_at_the_note_address()
+fn given_vrambanks_rom_when_run_then_every_mst_and_ofs_puts_a_bank_in_engine_a_bg_vram_at_the_note_address()
  {
     assert_eq!(entry_mismatches(0, 25), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_every_mst_and_ofs_puts_a_bank_in_engine_a_obj_vram_at_the_note_address()
+fn given_vrambanks_rom_when_run_then_every_mst_and_ofs_puts_a_bank_in_engine_a_obj_vram_at_the_note_address()
  {
     // TODO(hw-unverified): OFS.1 of A and B in OBJ mode is ignored (vram-banks.md "Unverified").
     assert_eq!(entry_mismatches(25, 42), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_banks_c_d_h_and_i_sit_where_the_note_puts_them_in_engine_b_vram()
+fn given_vrambanks_rom_when_run_then_banks_c_d_h_and_i_sit_where_the_note_puts_them_in_engine_b_vram()
  {
     assert_eq!(entry_mismatches(42, 47), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_the_earlier_bank_wins_where_banks_overlap_as_the_note_models_unverified()
+fn given_vrambanks_rom_when_run_then_the_earlier_bank_wins_where_banks_overlap_as_the_note_models_unverified()
  {
     // TODO(hw-unverified): vram-banks.md "Unverified", overlapping banks.
     assert_eq!(mismatches_in(340, 353), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_bank_in_a_texture_or_extended_palette_mode_is_at_no_cpu_address()
+fn given_vrambanks_rom_when_run_then_a_bank_in_a_texture_or_extended_palette_mode_is_at_no_cpu_address()
  {
     assert_eq!(mismatches_in(360, 371), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_byte_store_to_each_window_is_ignored() {
+fn given_vrambanks_rom_when_run_then_a_byte_store_to_each_window_is_ignored() {
     assert_eq!(mismatches_in(380, 383), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_a_bank_keeps_its_bytes_when_it_moves_between_mappings()
- {
+fn given_vrambanks_rom_when_run_then_a_bank_keeps_its_bytes_when_it_moves_between_mappings() {
     assert_eq!(mismatches_in(390, 393), Vec::<Mismatch>::new());
 }
 
 #[test]
-fn given_vrambanks_rom_when_run_one_frame_then_all_groups_finished_and_the_sentinel_was_written_last()
- {
+fn given_vrambanks_rom_when_run_then_all_groups_finished_and_the_sentinel_was_written_last() {
     assert_eq!(mismatches_in(48, 49), Vec::<Mismatch>::new());
 }
 

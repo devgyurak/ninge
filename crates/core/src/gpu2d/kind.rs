@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What each background layer of a BG mode is (`docs/hw/bg-modes.md`, "The mode table").
 
+use super::spec::DISPCNT_BG0_3D;
+
 /// How a layer gets its pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -16,8 +18,6 @@ use Kind::{Affine, Other, Text};
 
 /// DISPCNT bits 0-2: the BG mode.
 const DISPCNT_BG_MODE_MASK: u32 = 0x7;
-/// DISPCNT bit 3: BG0 shows the 3D engine instead of its own map.
-const DISPCNT_BG0_3D: u32 = 1 << 3;
 /// DISPCNT bits 8-11: BG0-BG3 on.
 const DISPCNT_LAYER_SHIFT: u32 = 8;
 

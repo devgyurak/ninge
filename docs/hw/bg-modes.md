@@ -271,9 +271,12 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
 - **Mosaic on transparent pixels**: a block whose first pixel is transparent is transparent. —
   `mosaic::source` — verify likewise.
 - **Large bitmap sizes 2 and 3** are not defined; a layer with them draws nothing. —
-  `bitmap::large_size` — verify likewise.
+  `AffineBg::decode` in `crates/core/src/gpu2d/affine.rs` — verify likewise.
 - **Large bitmap and the area overflow bit** are not described together; the bit works as in the
-  other bitmaps. — `bitmap::pixel` — verify likewise.
+  other bitmaps. — `affine::pixel` — verify likewise.
+- **BGxCNT bits 7 and 2 in mode 6** do nothing: BG2 is the large bitmap whatever they say (they
+  pick the kind only in the extended modes). — `AffineBg::decode` — verify likewise.
+- **Mode 6 on engine B** (reserved) draws no layer. — `kind::kind_of` — verify likewise.
 - **Extended map with the standard palette**: the palette number of a 16-bit entry has no
   effect and the colour is the standard BG palette entry `value`. GBATEK lists the extended
   palette as the one these tiles use and does not say what the standard palette does for them.

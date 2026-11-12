@@ -12,45 +12,47 @@ use super::*;
 use crate::debug::AffineFormat;
 
 /// VRAMCNT_B..D, for the 512 KiB of engine A's BG window: banks A-D at OFS 0-3.
-const VRAMCNT_B: u32 = 0x0400_0241;
+pub(super) const VRAMCNT_B: u32 = 0x0400_0241;
 const VRAMCNT_D: u32 = 0x0400_0243;
-const BANK_B_BG: u8 = 0x89;
+pub(super) const BANK_B_BG: u8 = 0x89;
 const BANK_D_BG: u8 = 0x99;
 const BANK_C_BG_A: u8 = 0x91;
 /// BGxCNT bits 2 and 7: the extended format selection.
 const CNT_BITMAP: u16 = 1 << 7;
 const CNT_DIRECT: u16 = 1 << 2;
 /// The backdrop, palette entry 0.
-const BACKDROP: u32 = 0x0000_00FF;
+pub(super) const BACKDROP: u32 = 0x0000_00FF;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Fmt {
+pub(super) enum Fmt {
     Map16,
     Bitmap256,
     BitmapDirect,
+    /// The large bitmap of BG mode 6: 256 colours, no base.
+    Large,
 }
 
 /// One extended layer as a scene sets it up.
 #[derive(Clone, Copy)]
-struct Ext {
-    eng: Eng,
+pub(super) struct Ext {
+    pub(super) eng: Eng,
     /// 2 or 3.
-    layer: u32,
+    pub(super) layer: u32,
     /// BG mode 3-5, which makes the layer extended.
-    bg_mode: u32,
-    fmt: Fmt,
-    size_code: u16,
-    wrap: bool,
+    pub(super) bg_mode: u32,
+    pub(super) fmt: Fmt,
+    pub(super) size_code: u16,
+    pub(super) wrap: bool,
     /// BGxCNT bits 8-12: screen block (2 KiB for a tile layer, 16 KiB for a bitmap).
-    block: u16,
+    pub(super) block: u16,
     /// BGxCNT bits 2-5, the character block, for the tile format.
-    char_block: u16,
+    pub(super) char_block: u16,
     /// DISPCNT bits beyond the display mode, BG mode and layer enable.
-    extra: u32,
-    p: Params,
+    pub(super) extra: u32,
+    pub(super) p: Params,
 }
 
-const MAP_A: Ext = Ext {
+pub(super) const MAP_A: Ext = Ext {
     eng: ENG_A,
     layer: 2,
     bg_mode: 5,
@@ -68,6 +70,8 @@ impl Ext {
     fn dims(&self) -> (i64, i64) {
         match (self.fmt, self.size_code) {
             (Fmt::Map16, c) => (128 << c, 128 << c),
+            (Fmt::Large, 0) => (512, 1024),
+            (Fmt::Large, _) => (1024, 512),
             (_, 2) => (512, 256),
             (_, 3) => (512, 512),
             (_, c) => (128 << c, 128 << c),
@@ -77,7 +81,7 @@ impl Ext {
     fn bgcnt(&self) -> u16 {
         let format = match self.fmt {
             Fmt::Map16 => self.char_block << 2,
-            Fmt::Bitmap256 => CNT_BITMAP,
+            Fmt::Bitmap256 | Fmt::Large => CNT_BITMAP,
             Fmt::BitmapDirect => CNT_BITMAP | CNT_DIRECT,
         };
         format | (self.block << 8) | (self.size_code << 14) | if self.wrap { WRAP } else { 0 }
@@ -87,6 +91,8 @@ impl Ext {
     fn base(&self) -> u32 {
         match self.fmt {
             Fmt::Map16 => u32::from(self.block) * 0x800,
+            // The large bitmap has no base: the screen block is not used.
+            Fmt::Large => 0,
             _ => u32::from(self.block) * 0x4000,
         }
     }
@@ -134,7 +140,7 @@ fn texel_color(e: &Ext, tx: i64, ty: i64) -> Option<u16> {
             };
             Some(color15((16 * tile + ((3 * r + c) & 15)) as u32))
         }
-        Fmt::Bitmap256 => match bitmap_value(tx, ty) {
+        Fmt::Bitmap256 | Fmt::Large => match bitmap_value(tx, ty) {
             0 => None,
             value => Some(color15(value)),
         },
@@ -146,7 +152,7 @@ fn texel_color(e: &Ext, tx: i64, ty: i64) -> Option<u16> {
 }
 
 /// The xRGB pixel the note gives at (`x`, `y`) for the layer drawn alone.
-fn expected(e: &Ext, x: usize, y: usize) -> u32 {
+pub(super) fn expected(e: &Ext, x: usize, y: usize) -> u32 {
     let (w, h) = e.dims();
     let p = e.p;
     let origin_x = i64::from(p.x) + i64::from(p.pb) * y as i64;
@@ -163,7 +169,7 @@ fn expected(e: &Ext, x: usize, y: usize) -> u32 {
 
 /// Writes the scene's data and registers: palette, tile data or bitmap, BGxCNT, transform,
 /// DISPCNT.
-fn build(e: &Ext) -> Machine {
+pub(super) fn build(e: &Ext) -> Machine {
     let mut m = Machine::new();
     let eng = e.eng;
     w16(&mut m, POWCNT1_ADDR, POWCNT1_ON_TOP);
@@ -190,7 +196,7 @@ fn build(e: &Ext) -> Machine {
             (1..=4u32).for_each(|tile| tile_rows(&mut m, char_base + tile * 64, tile));
             fill_map16(&mut m, base, (w / 8) as u32);
         }
-        Fmt::Bitmap256 => fill_bitmap256(&mut m, base, w, h),
+        Fmt::Bitmap256 | Fmt::Large => fill_bitmap256(&mut m, base, w, h),
         Fmt::BitmapDirect => fill_direct(&mut m, base, w, h),
     }
     w16(&mut m, eng.bg_regs + e.layer * 2, e.bgcnt());
@@ -226,7 +232,7 @@ fn fill_direct(m: &mut Machine, base: u32, w: i64, h: i64) {
 }
 
 /// The pixels of the drawn frame that differ from the model's, as (x, y, got, want).
-fn failures(e: &Ext) -> Diff {
+pub(super) fn failures(e: &Ext) -> Diff {
     let mut m = build(e);
     m.render_frame();
     (0..SCREEN_HEIGHT)
@@ -240,7 +246,7 @@ fn failures(e: &Ext) -> Diff {
         .collect()
 }
 
-fn with(e: Ext, fmt: Fmt, size_code: u16, wrap: bool, p: Params) -> Ext {
+pub(super) fn with(e: Ext, fmt: Fmt, size_code: u16, wrap: bool, p: Params) -> Ext {
     Ext {
         fmt,
         size_code,
@@ -250,7 +256,7 @@ fn with(e: Ext, fmt: Fmt, size_code: u16, wrap: bool, p: Params) -> Ext {
     }
 }
 
-const BMP256_A: Ext = Ext {
+pub(super) const BMP256_A: Ext = Ext {
     fmt: Fmt::Bitmap256,
     ..MAP_A
 };
@@ -258,7 +264,7 @@ const DIRECT_A: Ext = Ext {
     fmt: Fmt::BitmapDirect,
     ..MAP_A
 };
-const MAP_B: Ext = Ext {
+pub(super) const MAP_B: Ext = Ext {
     eng: ENG_B,
     layer: 3,
     bg_mode: 3,

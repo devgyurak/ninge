@@ -180,8 +180,7 @@ impl Gpu2d {
     /// Affine layer `layer` (2 or 3; others are taken modulo 2) as engine `which` sees it, with
     /// its internal reference point. A debugger's BG panel (#58) shows it.
     pub fn affine_bg(&self, which: EngineId, layer: usize) -> AffineBg {
-        let engine = self.engine(which);
-        engine.affine_bg(which.spec().dispcnt(engine.dispcnt()), layer)
+        self.engine(which).affine_bg(which.spec(), layer)
     }
 
     /// A visible line has been drawn: both engines' affine reference points step down one line

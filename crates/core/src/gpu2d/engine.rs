@@ -5,7 +5,7 @@
 
 use super::affine::{self, Affine, AffineBg};
 use super::kind::{Kind, drawn_kind, kind_of};
-use super::spec::EngineInputs;
+use super::spec::{EngineInputs, EngineSpec};
 use super::text::{self, TextBg};
 use super::{expand_color, with_byte};
 use serde::{Deserialize, Serialize};
@@ -76,15 +76,16 @@ impl Engine {
         TextBg::decode(dispcnt, self.bgcnt[n], self.bghofs[n], self.bgvofs[n])
     }
 
-    /// Affine or extended layer `layer` (2 or 3; others are taken modulo 2) decoded under `dispcnt`, the
-    /// DISPCNT as the engine sees it.
-    pub(super) fn affine_bg(&self, dispcnt: u32, layer: usize) -> AffineBg {
-        let extended = kind_of(dispcnt, (layer & 1) + 2) == Kind::Extended;
+    /// Affine, extended or large-bitmap layer `layer` (2 or 3; others are taken modulo 2) decoded for
+    /// an engine of `spec`.
+    pub(super) fn affine_bg(&self, spec: &EngineSpec, layer: usize) -> AffineBg {
+        let dispcnt = spec.dispcnt(self.dispcnt);
+        let kind = kind_of(dispcnt, (layer & 1) + 2, spec);
         AffineBg::decode(
             dispcnt,
             self.bgcnt[(layer & 1) + 2],
             &self.affine[layer & 1],
-            extended,
+            kind,
         )
     }
 
@@ -169,7 +170,7 @@ impl Engine {
     /// Line `y` of the layers (display mode 1): each pixel is the front-most layer that is not
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
     /// together").
-    // TODO(phase4): OBJ, large-bitmap layers, windows, blending, extended palettes
+    // TODO(phase4): OBJ, windows, blending, extended palettes
     // and mosaic complete the line.
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
         let dispcnt = inputs.spec.dispcnt(self.dispcnt);
@@ -178,7 +179,7 @@ impl Engine {
             .get(..text::BG_PALETTE_BYTES)
             .unwrap_or(inputs.palette);
         let texts: [TextBg; 4] = std::array::from_fn(|n| self.text_bg(dispcnt, n));
-        let affines: [AffineBg; 2] = std::array::from_fn(|n| self.affine_bg(dispcnt, n + 2));
+        let affines: [AffineBg; 2] = std::array::from_fn(|n| self.affine_bg(inputs.spec, n + 2));
         // The layer in front is the one with the lowest priority value, and among equals the lower
         // number: sorting by (priority, number) puts the front-most first.
         let mut order = [0usize, 1, 2, 3];
@@ -187,9 +188,9 @@ impl Engine {
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
             *pixel = order
                 .iter()
-                .find_map(|&n| match drawn_kind(dispcnt, n)? {
+                .find_map(|&n| match drawn_kind(dispcnt, n, inputs.spec)? {
                     Kind::Text => text::pixel(&texts[n], &inputs.vram, palette, x as u32, y as u32),
-                    Kind::Affine | Kind::Extended => {
+                    Kind::Affine | Kind::Extended | Kind::Large => {
                         affine::pixel(&affines[n & 1], &inputs.vram, palette, x as u32)
                     }
                     Kind::Other => None,

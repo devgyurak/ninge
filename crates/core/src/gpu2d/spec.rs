@@ -23,16 +23,21 @@ pub(crate) struct EngineSpec {
     // TODO(hw-unverified): the bits engine B lacks are stored as written and ignored
     // (`bg-modes.md`, "Unverified").
     pub(crate) dispcnt_mask: u32,
+    /// Whether BG mode 6 exists: BG2 as the large bitmap (`bg-modes.md`, "Large bitmap").
+    pub(crate) large_bitmap: bool,
 }
 
 /// Engine A: every field.
 pub(crate) const MAIN_SPEC: EngineSpec = EngineSpec {
     dispcnt_mask: u32::MAX,
+    large_bitmap: true,
 };
 
-/// Engine B: no 3D BG0, display modes 0-1 only, no VRAM block, no character or screen base.
+/// Engine B: no 3D BG0, display modes 0-1 only, no VRAM block, no character or screen base, no
+/// BG mode 6.
 pub(crate) const SUB_SPEC: EngineSpec = EngineSpec {
     dispcnt_mask: !(DISPCNT_BG0_3D | DISPCNT_MODE_HIGH | DISPCNT_VRAM_BLOCK | DISPCNT_BASES),
+    large_bitmap: false,
 };
 
 impl EngineSpec {

@@ -200,8 +200,8 @@ pub(super) fn draw_line(
 ) -> ObjLine {
     let mut line: ObjLine = [None; SCREEN_WIDTH];
     let palette = inputs.palette.get(BG_PALETTE_BYTES..).unwrap_or(&[]);
-    // TODO(hw-unverified): bit 23 only changes the budget here; whether OAM access timing changes the
-    // picture is not modelled (`obj.md`, "Unverified").
+    // TODO(hw-unverified): bit 23 only changes the budget here; whether OAM access timing changes
+    // the picture is not modelled (`obj.md`, "Unverified").
     let mut budget = match dispcnt & DISPCNT_OBJ_HBLANK != 0 {
         true => BUDGET_HBLANK,
         false => BUDGET,

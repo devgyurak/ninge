@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The per-line object budget (issue #31). Every expected value comes from `docs/hw/obj.md` ("The
-//! line limit"): 1210 cycles a line, 954 with DISPCNT bit 23; a plain object costs its box width, an
-//! affine one 10 plus twice it; objects are looked at in entry order and, once one does not fit,
+//! line limit"): 1210 cycles a line, 954 with DISPCNT bit 23; a plain object costs its box
+//! width, an affine one 10 plus twice it; objects are looked at in entry order and, once one does not fit,
 //! it and every later one is dropped. Each scene puts costly objects off the left of the screen
 //! (they cost as much as visible ones) and then 8-wide probe objects, and counts the probes that
 //! show; the arithmetic is worked out in each test's comment.

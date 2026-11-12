@@ -27,7 +27,7 @@ OAM is not a register block. It is 2 KiB of memory the ARM9 reads and writes.
 
 The 2 KiB repeat through the whole 16 MiB block `0700_0000h`-`07FF_FFFFh`, like palette RAM
 (`palette-ram.md`). Only the ARM9 sees OAM. A store is a halfword or a word; a byte store is
-ignored and changes nothing (`vram-banks.md`, "Behavior"). A word or halfword store goes to the
+ignored and changes nothing (`vram-banks.md`, "Behavior"; GBATEK "Writing 8bit Data to Video Memory" states that 8-bit writes to OAM are ignored). A word or halfword store goes to the
 aligned address (`arm9-memory-map.md`, "Alignment").
 
 ### DISPCNT bits used here
@@ -295,18 +295,23 @@ Each item gets `TODO(hw-unverified)` at its code site.
   with a rotated test pattern.
 - **Flip on a bitmap object** is taken to be the same as on a tile object. — `obj::bitmap_color`
   — verify likewise.
-- **Whether the budget numbers of the GBA hold on the DS**, and whether a double-size affine
-  object costs `10 + 2 * 2W`. GBATEK's table says so ("16..128 pixels"). — `Placement::cost` in `obj.rs` —
+- **Whether the budget numbers of the GBA hold on the DS.** 1210 and 954 are GBATEK's GBA values
+  (240 visible dots, 308 dots a line); the DS has 256 visible dots and 355 a line, so the real
+  numbers are probably different. Also whether a double-size affine object costs `10 + 2 * 2W`. GBATEK's table says so ("16..128 pixels"). — `Placement::cost` in `obj.rs` —
   verify likewise.
 - **The cost of an object that is off-screen** horizontally, or **not on the current line**: GBATEK
   says offscreen objects cost and asks whether vertically offscreen ones do too. This model charges
   every object that the line reaches and one whose vertical range does not contain the line costs
-  nothing. — `Placement::cost` in `obj.rs` — verify likewise.
+  nothing. — `obj::draw_line` — verify likewise.
 - **The cost of a disabled object** (attr0 bit 9 on a plain object). Assumed to be 0. —
-  `Placement::cost` in `obj.rs` — verify likewise.
+  `obj::draw_line` — verify likewise.
 - **Which object loses when the budget runs out in the middle of one:** the whole object is
   dropped here, and so are all later ones; the hardware may draw part of it. — `obj::draw_line` —
   verify likewise.
+- **Bit 23's polarity.** On the GBA the bit is "H-Blank Interval Free": set, OAM may be used in
+  H-Blank and the budget is 954. GBATEK names the DS bit "OBJ Processing during H-Blank" and says
+  only that it moved from GBA bit 5; read literally that is the opposite polarity. This note takes
+  the GBA meaning (set = 954). — `obj::draw_line` — verify likewise.
 - **Bit 23's effect beyond the budget.** GBATEK states only the two budgets; whether OAM access
   timing changes the picture is not modelled. — `obj::draw_line` — verify likewise.
 - **The mosaic block origin for objects** is the screen's, as for the backgrounds; GBATEK says

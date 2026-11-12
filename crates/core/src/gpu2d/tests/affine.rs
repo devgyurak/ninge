@@ -158,7 +158,7 @@ pub(super) fn set_params(m: &mut Machine, eng: Eng, layer: u32, p: Params) {
 }
 
 /// An engine with the scene's BG2 layer: size code `size_code` (0-3), wrap as given.
-fn scene(eng: Eng, size_code: u16, wrap: bool, p: Params) -> Machine {
+pub(super) fn scene(eng: Eng, size_code: u16, wrap: bool, p: Params) -> Machine {
     let mut m = Machine::new();
     scene_memory(&mut m, eng, 128 << size_code);
     let cnt = CHAR_BLOCK_4 | (size_code << 14) | if wrap { WRAP } else { 0 };

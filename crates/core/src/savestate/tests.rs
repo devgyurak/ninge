@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_212_653;
-const PINNED_HASH: u64 = 0x5f9857b49c0832a5;
+const PINNED_LEN: usize = 5_212_655;
+const PINNED_HASH: u64 = 0x19b6f4fc0008da5c;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -55,9 +55,10 @@ const PINNED_HASH: u64 = 0x5f9857b49c0832a5;
 /// Version 20 (#30) added engine B's registers (13 bytes, all zero at power on), and the booted machine
 /// now draws engine B's screen white instead of black, which costs three more bytes in each of its
 /// 2 x 49,152 lower-screen pixels. Version 21 (#30) added the affine layers' registers and internal
-/// reference points: 2 engines x 2 layers x 8 bytes while they are zero.
-const PINNED_BOOTED_LEN: usize = 5_802_568;
-const PINNED_BOOTED_HASH: u64 = 0xbb501529619bd9c7;
+/// reference points: 2 engines x 2 layers x 8 bytes while they are zero. Version 22 (#30) added both
+/// engines' MOSAIC: one byte each while it is zero.
+const PINNED_BOOTED_LEN: usize = 5_802_570;
+const PINNED_BOOTED_HASH: u64 = 0x79d675e5de09ed54;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

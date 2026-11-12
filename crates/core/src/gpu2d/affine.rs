@@ -7,7 +7,7 @@
 
 use super::kind::Kind;
 use super::text::{
-    CHAR_BLOCK_SIZE, CNT_CHAR_MASK, CNT_CHAR_SHIFT, CNT_PRIORITY_MASK, CNT_SCREEN_MASK,
+    CHAR_BLOCK_SIZE, CNT_CHAR_MASK, CNT_CHAR_SHIFT, CNT_MOSAIC, CNT_PRIORITY_MASK, CNT_SCREEN_MASK,
     CNT_SCREEN_SHIFT, CNT_SIZE_SHIFT, DISPCNT_BASE_MASK, DISPCNT_BASE_SIZE, DISPCNT_CHAR_SHIFT,
     DISPCNT_SCREEN_SHIFT, SCREEN_BLOCK_SIZE, palette_color,
 };
@@ -140,6 +140,8 @@ pub struct AffineBg {
     pub height: u16,
     /// Whether the layer wraps around (BGxCNT bit 13) rather than being transparent outside.
     pub wrap: bool,
+    /// Whether mosaic is on for the layer (BGxCNT bit 6).
+    pub mosaic: bool,
     /// PA, PB, PC, PD as signed 8.8 numbers.
     pub params: [i16; 4],
     /// BGxX and BGxY, sign-extended from 28 bits, 20.8.
@@ -196,6 +198,7 @@ impl AffineBg {
             width,
             height,
             wrap: cnt & CNT_WRAP != 0,
+            mosaic: cnt & CNT_MOSAIC != 0,
             params: regs.params,
             reference: [sign_extend_28(regs.x), sign_extend_28(regs.y)],
             internal: [regs.ref_x, regs.ref_y],

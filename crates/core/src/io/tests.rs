@@ -215,6 +215,9 @@ fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it
         // BG2PA at offset 32 and BG3Y's last byte at 63.
         (0x0400_0020, Some(Owner::Io(Port::Gpu2d, 32))),
         (0x0400_003F, Some(Owner::Io(Port::Gpu2d, 63))),
+        // MOSAIC at offset 4Ch, in a 4-byte block.
+        (0x0400_004C, Some(Owner::Io(Port::Gpu2d, 0x4C))),
+        (0x0400_004F, Some(Owner::Io(Port::Gpu2d, 0x4F))),
     ];
     let arm7 = [
         (0x0400_0008, None),
@@ -250,8 +253,10 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         (IPCFIFOSEND_ADDR + 4, None),
         (IPCFIFORECV_ADDR + 4, None),
         // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`) is the
-        // transform block, which ends at `0400_003Fh`.
+        // transform block, which ends at `0400_003Fh`; MOSAIC's block is `0400_004Ch`-`004Fh`.
         (0x0400_0040, None),
+        (0x0400_004B, None),
+        (0x0400_0050, None),
         (0x0000_0000, None),
     ];
     assert_eq!(

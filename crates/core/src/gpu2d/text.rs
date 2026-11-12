@@ -12,6 +12,8 @@ pub(super) const CNT_PRIORITY_MASK: u16 = 0x3;
 pub(super) const CNT_CHAR_SHIFT: u32 = 2;
 pub(super) const CNT_CHAR_MASK: u16 = 0xF;
 pub(super) const CHAR_BLOCK_SIZE: u32 = 16 << 10;
+/// BGxCNT bit 6: mosaic on for this layer (`bg-modes.md`, "Mosaic").
+pub(super) const CNT_MOSAIC: u16 = 1 << 6;
 /// BGxCNT bit 7: 256 colors (8 bits per pixel) instead of 16 palettes of 16.
 const CNT_EIGHT_BPP: u16 = 1 << 7;
 /// BGxCNT bits 8-12: the screen base block, in 2 KiB units.
@@ -56,6 +58,8 @@ pub struct TextBg {
     pub screen_base: u32,
     /// Whether a pixel is 8 bits (256 colors) rather than 4.
     pub eight_bpp: bool,
+    /// Whether mosaic is on for the layer (BGxCNT bit 6).
+    pub mosaic: bool,
     /// The layer's width in pixels, 256 or 512.
     pub width: u16,
     /// The layer's height in pixels, 256 or 512.
@@ -80,6 +84,7 @@ impl TextBg {
             char_base,
             screen_base,
             eight_bpp: cnt & CNT_EIGHT_BPP != 0,
+            mosaic: cnt & CNT_MOSAIC != 0,
             // Size bit 0 doubles the width, bit 1 the height.
             width: 256 << (size & 1),
             height: 256 << (size >> 1),
@@ -130,7 +135,7 @@ fn tile_pixel(layer: &TextBg, vram: &VramWindow<'_>, px: u32, py: u32) -> (u8, u
 
 /// The 15-bit colour of layer `layer` at screen pixel (`x`, `y`), or `None` where it is
 /// transparent.
-// TODO(phase4): extended palettes (DISPCNT bit 30) and mosaic (BGxCNT bit 6).
+// TODO(phase4): extended palettes (DISPCNT bit 30).
 // TODO(hw-unverified): the standard palette is used for 8 bits per pixel whatever DISPCNT bit 30
 // says (`bg-text.md`, "Unverified").
 pub(super) fn pixel(

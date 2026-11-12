@@ -8,16 +8,16 @@ use crate::cart::test_image::{Image, words};
 
 /// The registers and memory of one engine, as the tests address them.
 #[derive(Clone, Copy)]
-struct Eng {
-    dispcnt: u32,
-    bg_regs: u32,
-    affine: u32,
-    vram: u32,
-    palette: u32,
-    screen: Screen,
+pub(super) struct Eng {
+    pub(super) dispcnt: u32,
+    pub(super) bg_regs: u32,
+    pub(super) affine: u32,
+    pub(super) vram: u32,
+    pub(super) palette: u32,
+    pub(super) screen: Screen,
 }
 
-const ENG_A: Eng = Eng {
+pub(super) const ENG_A: Eng = Eng {
     dispcnt: DISPCNT_A_ADDR,
     bg_regs: BG_REGS_ADDR,
     affine: AFFINE_REGS_ADDR,
@@ -25,7 +25,7 @@ const ENG_A: Eng = Eng {
     palette: 0x0500_0000,
     screen: Screen::Top,
 };
-const ENG_B: Eng = Eng {
+pub(super) const ENG_B: Eng = Eng {
     dispcnt: DISPCNT_B_ADDR,
     bg_regs: BG_REGS_B_ADDR,
     affine: AFFINE_REGS_B_ADDR,
@@ -35,30 +35,30 @@ const ENG_B: Eng = Eng {
 };
 
 /// VRAMCNT_C, and the two ways the engines' BG VRAM is mapped: bank A MST 1, bank C MST 4.
-const VRAMCNT_C: u32 = 0x0400_0242;
-const BANK_A_BG: u8 = 0x81;
-const BANK_C_BG_B: u8 = 0x84;
+pub(super) const VRAMCNT_C: u32 = 0x0400_0242;
+pub(super) const BANK_A_BG: u8 = 0x81;
+pub(super) const BANK_C_BG_B: u8 = 0x84;
 /// Character block 4: the tile data sits at 64 KiB, clear of the biggest map (16 KiB).
-const CHAR_BLOCK_4: u16 = 4 << 2;
-const CHAR_BASE: u32 = 4 * 0x4000;
-const WRAP: u16 = 1 << 13;
+pub(super) const CHAR_BLOCK_4: u16 = 4 << 2;
+pub(super) const CHAR_BASE: u32 = 4 * 0x4000;
+pub(super) const WRAP: u16 = 1 << 13;
 /// Display mode 1, BG mode 2 (BG2 and BG3 affine), BG2 on.
 const MODE2_BG2: u32 = (1 << 16) | 2 | (1 << 10);
 /// The backdrop, palette entry 0: blue.
-const BACKDROP_BLUE: u32 = 0x0000_00FF;
+pub(super) const BACKDROP_BLUE: u32 = 0x0000_00FF;
 
 /// The transform of a scene: PA-PD as written, and X and Y as signed 20.8 numbers.
 #[derive(Clone, Copy)]
-struct Params {
-    pa: i16,
-    pb: i16,
-    pc: i16,
-    pd: i16,
-    x: i32,
-    y: i32,
+pub(super) struct Params {
+    pub(super) pa: i16,
+    pub(super) pb: i16,
+    pub(super) pc: i16,
+    pub(super) pd: i16,
+    pub(super) x: i32,
+    pub(super) y: i32,
 }
 
-const IDENTITY: Params = Params {
+pub(super) const IDENTITY: Params = Params {
     pa: 0x100,
     pb: 0,
     pc: 0,
@@ -68,12 +68,12 @@ const IDENTITY: Params = Params {
 };
 
 /// The 15-bit colour of palette entry `i`, as the scenes set it: distinct for 1..=80.
-fn color15(i: u32) -> u16 {
+pub(super) fn color15(i: u32) -> u16 {
     ((i & 31) | ((3 * i) & 31) << 5 | ((5 * i) & 31) << 10) as u16
 }
 
 /// A 15-bit colour as the xRGB the renderer makes (`display-mode-vram.md`, "Colour expansion").
-fn expand15(color: u16) -> u32 {
+pub(super) fn expand15(color: u16) -> u32 {
     let channel = |c: u16| {
         let c = u32::from(c & 31);
         (c << 3) | (c >> 2)
@@ -111,7 +111,7 @@ fn expected(p: Params, origin: (i32, i32), x: usize, size: i64, wrap: bool) -> u
 }
 
 /// Palette, tile data and map of the scene, and the BG VRAM bank of `eng`.
-fn scene_memory(m: &mut Machine, eng: Eng, size: u32) {
+pub(super) fn scene_memory(m: &mut Machine, eng: Eng, size: u32) {
     let (bank_reg, bank) = match eng.screen {
         Screen::Top => (VRAMCNT_A, BANK_A_BG),
         Screen::Bottom => (VRAMCNT_C, BANK_C_BG_B),
@@ -130,7 +130,7 @@ fn scene_memory(m: &mut Machine, eng: Eng, size: u32) {
 }
 
 /// The 64 bytes of tile `tile`: row r, column c holds `16 tile + ((3r + c) mod 16)`.
-fn tile_rows(m: &mut Machine, at: u32, tile: u32) {
+pub(super) fn tile_rows(m: &mut Machine, at: u32, tile: u32) {
     (0..8u32).for_each(|r| {
         let byte = |c: u32| (16 * tile + ((3 * r + c) & 15)) as u8;
         w32(
@@ -147,7 +147,7 @@ fn tile_rows(m: &mut Machine, at: u32, tile: u32) {
 }
 
 /// The transform registers of BG2 (layer 0) or BG3 (layer 1).
-fn set_params(m: &mut Machine, eng: Eng, layer: u32, p: Params) {
+pub(super) fn set_params(m: &mut Machine, eng: Eng, layer: u32, p: Params) {
     let at = eng.affine + layer * 16;
     [p.pa, p.pb, p.pc, p.pd]
         .iter()
@@ -194,15 +194,15 @@ fn picture_failures(
         .collect()
 }
 
-type Diff = Vec<(usize, usize, u32, u32)>;
+pub(super) type Diff = Vec<(usize, usize, u32, u32)>;
 
 fn drawn(eng: Eng, size_code: u16, wrap: bool, p: Params) -> Diff {
     picture_failures(&mut scene(eng, size_code, wrap, p), eng, p, size_code, wrap)
 }
 
-const NONE: Diff = Vec::new();
+pub(super) const NONE: Diff = Vec::new();
 
-const SHEAR: Params = Params {
+pub(super) const SHEAR: Params = Params {
     pa: 0xE0,
     pb: -0x80,
     pc: 0x80,
@@ -471,7 +471,7 @@ fn given_bgcnt_of_an_affine_layer_when_decoded_then_size_wrap_and_bases_come_fro
             layer.priority,
             layer.char_base,
             layer.screen_base,
-            layer.size,
+            layer.width,
             layer.wrap
         ),
         (
@@ -570,7 +570,7 @@ fn render_lines(m: &mut Machine, count: usize) {
 }
 
 /// Runs rounds until the frame is at line `line`.
-fn run_to_line(m: &mut Machine, line: u16) {
+pub(super) fn run_to_line(m: &mut Machine, line: u16) {
     while m.inspect().vcount() < line {
         crate::scheduler::run_round(m);
     }

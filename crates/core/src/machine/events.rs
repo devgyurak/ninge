@@ -123,6 +123,9 @@ impl Machine {
         if self.io.timing().vcount() == FIRST_VBLANK_LINE {
             self.io
                 .trigger_dma(&mut self.scheduler, Trigger::VBlank, time);
+            // The affine layers' reference points come from their registers again
+            // (`docs/hw/bg-modes.md`, "Affine layers").
+            self.io.gpu2d_mut().vblank_started();
         }
         let line = usize::from(self.io.timing().vcount());
         // The last visible line is drawn: the frame is whole and becomes the one callers read.

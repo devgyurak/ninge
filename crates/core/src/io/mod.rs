@@ -153,6 +153,11 @@ impl Io {
         &self.gpu2d
     }
 
+    /// The 2D engines, to step them between lines.
+    pub(crate) fn gpu2d_mut(&mut self) -> &mut Gpu2d {
+        &mut self.gpu2d
+    }
+
     /// VCOUNT and each CPU's DISPSTAT.
     pub(crate) fn timing(&self) -> &Timing {
         &self.timing

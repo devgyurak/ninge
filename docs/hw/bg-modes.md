@@ -255,7 +255,7 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
   what a read gives. — `Engine::read_byte` — verify likewise.
 - **The 28-bit width of the internal reference point.** GBATEK says the registers hold 28 bits
   and does not say whether the internal point keeps adding at 28 bits or at 32; this model adds
-  at 32 bits (wrapping). — `Engine::end_line` — verify likewise.
+  at 32 bits (wrapping). — `Affine::end_line` — verify likewise.
 - **The sampling instant** of PA-PD, BGxX and BGxY inside a line is the line's start, as for every
   register (`bg-text.md`, "Unverified"); the hardware reads them while it draws. — `Machine::render_line`
   — verify against a trace.

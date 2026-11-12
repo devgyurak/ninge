@@ -177,16 +177,23 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
 fn given_engine_b_register_addresses_when_decoded_then_the_arm9_reaches_them_in_the_gpu_space_and_the_arm7_does_not()
  {
     // Engine B's block is engine A's 1000h on: DISPCNT at offset 1000h, BG0CNT at 1008h, the last
-    // scroll byte at 101Fh (`bg-modes.md`, "Registers"); the bytes between and after are holes.
+    // scroll byte at 101Fh and the transform block at 1020h-103Fh (`bg-modes.md`, "Registers"); the
+    // bytes between and after are holes.
     let arm9 = [
         (0x0400_1000, Some(Owner::Io(Port::Gpu2d, 0x1000))),
         (0x0400_1003, Some(Owner::Io(Port::Gpu2d, 0x1003))),
         (0x0400_1004, None),
         (0x0400_1008, Some(Owner::Io(Port::Gpu2d, 0x1008))),
         (0x0400_101F, Some(Owner::Io(Port::Gpu2d, 0x101F))),
+        (0x0400_1020, Some(Owner::Io(Port::Gpu2d, 0x1020))),
+        (0x0400_103F, Some(Owner::Io(Port::Gpu2d, 0x103F))),
+        (0x0400_1040, None),
+    ];
+    let arm7 = [
+        (0x0400_1000, None),
+        (0x0400_1008, None),
         (0x0400_1020, None),
     ];
-    let arm7 = [(0x0400_1000, None), (0x0400_1008, None)];
     assert_eq!(
         (
             decode_failures::<true>(&arm9),
@@ -205,8 +212,15 @@ fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it
         (0x0400_000F, Some(Owner::Io(Port::Gpu2d, 15))),
         (0x0400_0010, Some(Owner::Io(Port::Gpu2d, 16))),
         (0x0400_001F, Some(Owner::Io(Port::Gpu2d, 31))),
+        // BG2PA at offset 32 and BG3Y's last byte at 63.
+        (0x0400_0020, Some(Owner::Io(Port::Gpu2d, 32))),
+        (0x0400_003F, Some(Owner::Io(Port::Gpu2d, 63))),
     ];
-    let arm7 = [(0x0400_0008, None), (0x0400_001F, None)];
+    let arm7 = [
+        (0x0400_0008, None),
+        (0x0400_001F, None),
+        (0x0400_0020, None),
+    ];
     assert_eq!(
         (
             decode_failures::<true>(&arm9),
@@ -235,8 +249,9 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         (IPCSYNC_ADDR - 1, None),
         (IPCFIFOSEND_ADDR + 4, None),
         (IPCFIFORECV_ADDR + 4, None),
-        // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`).
-        (0x0400_0020, None),
+        // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`) is the
+        // transform block, which ends at `0400_003Fh`.
+        (0x0400_0040, None),
         (0x0000_0000, None),
     ];
     assert_eq!(

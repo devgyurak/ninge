@@ -263,7 +263,8 @@ fn given_bgtext_rom_when_4_frames_run_then_every_pixel_of_the_upper_screen_is_th
 
 #[test]
 fn given_bgtext_rom_when_4_frames_run_then_the_lower_screen_is_black() {
-    // Engine B is a black placeholder in Phase 3 (`display-mode-vram.md`).
+    // The ROM writes POWCNT1 = 0x8003: engine B is powered off, so its screen is black
+    // (`bg-modes.md`, "Engine B").
     let machine = boot_frames();
     assert!(
         machine

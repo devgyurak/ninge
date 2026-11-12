@@ -44,7 +44,7 @@ Engine B's POWCNT1 enable is bit 9 of `0400_0304h` (`display-mode-vram.md`).
 | 16-17 | display mode | engine A 0-3, engine B 0-1 |
 | 24-26 | character base, `N * 64 KiB` | engine A only; engine B's is 0 |
 | 27-29 | screen base, `N * 64 KiB` | engine A only; engine B's is 0 |
-| 30 | BG extended palettes | both (`TODO(phase4)`, #32) |
+| 30 | BG extended palettes (`extended-palettes.md`) | both (`TODO(phase4)`, #32) |
 
 ### BGxCNT bits that this note adds to `bg-text.md`
 

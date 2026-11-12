@@ -8,8 +8,9 @@ mapping of banks C and D with VRAMSTAT)
 The DS has nine VRAM banks, A to I (656 KiB in all). Each has its own control register on the
 ARM9 side. This note grows with #35. It models every bank, its register, the plain CPU (LCDC)
 mapping, the BG and OBJ mappings of both 2D engines, and the ARM7's own mapping of banks C and D.
-The mappings only the display controller sees (textures and extended
-palettes) are decoded but not read: the renderer side is `TODO(phase7)` (#32).
+The mappings only the display controller sees are decoded but not read by the CPU: the texture ones
+are the renderer's `TODO(phase7)`; the extended-palette ones are read by the 2D engines
+(`extended-palettes.md`, #32).
 
 ## The banks
 

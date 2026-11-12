@@ -319,3 +319,14 @@ fn given_two_layers_in_both_engines_when_rendered_then_each_screen_shows_its_own
         (GREEN, RED)
     );
 }
+
+#[test]
+fn given_offsets_around_engine_bs_gated_ports_when_checked_then_only_1008h_to_105fh_are_gated() {
+    // Offsets inside the block: DISPCNT (0-3), the first and last gated byte, then MASTER_BRIGHT
+    // (6Ch) and beyond (`bg-modes.md`, "Engine B").
+    let gated = [0u32, 3, 7, 8, 0x5F, 0x60, 0x6C, 0x6D].map(is_gated_port);
+    assert_eq!(
+        gated,
+        [false, false, false, true, true, false, false, false]
+    );
+}

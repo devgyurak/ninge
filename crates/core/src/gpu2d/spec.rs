@@ -53,17 +53,9 @@ impl EngineSpec {
 pub(crate) struct EngineInputs<'a> {
     pub(crate) vram: VramWindow<'a>,
     /// The OBJ window, where sprites read their tiles.
-    #[expect(
-        dead_code,
-        reason = "the sprite renderer reads it in the next PR (#31)"
-    )]
     pub(crate) obj_vram: VramWindow<'a>,
     pub(crate) palette: &'a [u8],
     /// The engine's 1 KiB of OAM: 128 entries of 8 bytes.
-    #[expect(
-        dead_code,
-        reason = "the sprite renderer reads it in the next PR (#31)"
-    )]
     pub(crate) oam: &'a [u8],
     pub(crate) spec: &'static EngineSpec,
 }

@@ -5,9 +5,11 @@
 
 use super::affine::{self, Affine, AffineBg};
 use super::kind::{Kind, drawn_kind, kind_of};
+use super::obj;
 use super::spec::{EngineInputs, EngineSpec};
 use super::text::{self, TextBg};
 use super::{expand_color, with_byte};
+use crate::SCREEN_WIDTH;
 use serde::{Deserialize, Serialize};
 
 /// The engine's register block starts at DISPCNT; these are offsets from there, the same in
@@ -26,6 +28,8 @@ pub(super) const MOSAIC_BLOCK_BYTES: u32 = 4;
 /// Bytes of one layer's transform registers, and of both.
 const AFFINE_LAYER_BYTES: u32 = 16;
 pub(super) const AFFINE_REGS_BYTES: u32 = 2 * AFFINE_LAYER_BYTES;
+/// DISPCNT bit 12: sprites on (`obj.md`, "DISPCNT bits used here").
+const DISPCNT_OBJ_ON: u32 = 1 << 12;
 /// The scroll registers hold 9 bits (`bg-text.md`, "BGxHOFS / BGxVOFS").
 const SCROLL_MASK: u32 = 0x1FF;
 
@@ -204,8 +208,9 @@ impl Engine {
 
     /// Line `y` of the layers (display mode 1): each pixel is the front-most layer that is not
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
-    /// together").
-    // TODO(phase4): OBJ, windows, blending and extended palettes complete the line.
+    /// together"). An object is in front of a background layer whose priority value is the same or
+    /// greater (`obj.md`, "Priority").
+    // TODO(phase4): windows, blending and extended palettes complete the line.
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
         let dispcnt = inputs.spec.dispcnt(self.dispcnt);
         let palette = inputs
@@ -239,13 +244,17 @@ impl Engine {
         // number: sorting by (priority, number) puts the front-most first.
         let mut order = [0usize, 1, 2, 3];
         order.sort_unstable_by_key(|&n| (texts[n].priority, n));
-        let backdrop = expand_color(text::palette_color(palette, 0));
+        let backdrop = text::palette_color(palette, 0);
+        // The object layer, when DISPCNT bit 12 is set (`obj.md`, "The layer is on when").
+        let objects = match dispcnt & DISPCNT_OBJ_ON != 0 {
+            true => obj::draw_line(inputs, dispcnt, y),
+            false => [None; SCREEN_WIDTH],
+        };
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
             // The first column of the pixel's block, for a mosaic layer.
             let block_x = (x - x % block_w) as u32;
-            *pixel = order
-                .iter()
-                .find_map(|&n| match drawn_kind(dispcnt, n, inputs.spec)? {
+            let layer = order.iter().find_map(|&n| {
+                match drawn_kind(dispcnt, n, inputs.spec)? {
                     Kind::Text => {
                         let (px, py) = match texts[n].mosaic {
                             true => (block_x, block_y),
@@ -259,8 +268,16 @@ impl Engine {
                         affine::pixel(layer, &inputs.vram, palette, px)
                     }
                     Kind::Other => None,
-                })
-                .map_or(backdrop, expand_color);
+                }
+                .map(|color| (color, texts[n].priority))
+            });
+            *pixel = expand_color(match (objects[x], layer) {
+                // An object is behind a layer of a smaller priority value.
+                (Some(object), Some((color, priority))) if object.priority > priority => color,
+                (Some(object), _) => object.color,
+                (None, Some((color, _))) => color,
+                (None, None) => backdrop,
+            });
         });
     }
 }

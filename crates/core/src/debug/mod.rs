@@ -14,9 +14,12 @@
 use crate::bus::{BANK_COUNT, TcmConfig};
 use crate::cpu::Cpu;
 use crate::machine::Machine;
+use crate::machine::OAM_HALF;
 
 pub use crate::bus::{VramBankState, VramMapping, WramShare, WramState};
-pub use crate::gpu2d::{AffineBg, AffineFormat, EngineId, Gpu2d, Mosaic, TextBg};
+pub use crate::gpu2d::{
+    AffineBg, AffineFormat, EngineId, Gpu2d, Mosaic, OBJ_COUNT, ObjAttrs, TextBg,
+};
 pub use crate::hle::SwiRecord;
 pub use crate::io::divsqrt::DivSqrt;
 pub use crate::io::dma::Dma;
@@ -108,6 +111,20 @@ impl<'a> Inspect<'a> {
     // The debugger's IO register panel will show them (#58 shows the VRAM view).
     pub fn gpu2d(&self) -> &'a Gpu2d {
         self.machine.io.gpu2d()
+    }
+
+    /// OAM entry `index` (0-127) of engine `which`, decoded (`obj.md`, "The object table"); an
+    /// index past 127 is taken modulo 128.
+    // The debugger's OAM view (#58) shows it.
+    pub fn obj(&self, which: EngineId, index: usize) -> ObjAttrs {
+        let (oam_a, oam_b) = self.machine.memory.oam().split_at(OAM_HALF);
+        ObjAttrs::decode(
+            match which {
+                EngineId::A => oam_a,
+                EngineId::B => oam_b,
+            },
+            index,
+        )
     }
 
     /// The ARM9's interrupt controller (IME, IE, IF).

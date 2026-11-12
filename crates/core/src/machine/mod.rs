@@ -210,6 +210,9 @@ impl Machine {
             let inputs = EngineInputs::sub(self.memory.vram_window(VramWindowKind::BgB), palette_b);
             gpu.render_line_b(y, &inputs, out);
         }
+        // The affine layers' reference points move down a line (`bg-modes.md`, "When the picture is
+        // made"). Both render paths come through here.
+        self.io.gpu2d_mut().end_line();
     }
 
     /// Whether all four frame buffers have the size `new` allocates; a savestate that decodes
@@ -231,6 +234,8 @@ impl Machine {
     /// result: a whole frame without the line timing, for tests that set the state directly.
     #[cfg(test)]
     pub(crate) fn render_frame(&mut self) {
+        // A frame starts from the registers, as VBlank leaves it.
+        self.io.gpu2d_mut().vblank_started();
         (0..SCREEN_HEIGHT).for_each(|y| self.render_line(y));
         self.present_frame();
     }

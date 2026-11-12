@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Engine A's text backgrounds: what one layer shows at one pixel (`docs/hw/bg-text.md`,
+//! The text backgrounds: what one layer shows at one pixel (`docs/hw/bg-text.md`,
 //! "The picture of one layer at one pixel"). Pure functions of the registers and the bytes they
 //! point at; nothing is allocated, formatted or collected, so a line can be drawn from the bus
 //! hot path of a frame.
@@ -25,12 +25,6 @@ const DISPCNT_CHAR_SHIFT: u32 = 24;
 const DISPCNT_SCREEN_SHIFT: u32 = 27;
 const DISPCNT_BASE_MASK: u32 = 0x7;
 const DISPCNT_BASE_SIZE: u32 = 64 << 10;
-/// DISPCNT bits 0-2: the BG mode.
-const DISPCNT_BG_MODE_MASK: u32 = 0x7;
-/// DISPCNT bit 3: BG0 shows the 3D engine instead of its own map.
-const DISPCNT_BG0_3D: u32 = 1 << 3;
-/// DISPCNT bits 8-11: BG0-BG3 on.
-const DISPCNT_LAYER_SHIFT: u32 = 8;
 
 /// A screen entry (`bg-text.md`, "The picture of one layer at one pixel", step 3).
 const ENTRY_TILE_MASK: u16 = 0x3FF;
@@ -47,33 +41,8 @@ const TILE_BYTES_4BPP: u32 = 32;
 const TILE_BYTES_8BPP: u32 = 64;
 /// Colors in one 4-bits-per-pixel palette.
 const PALETTE_COLORS: u32 = 16;
-/// The bytes of the engine A BG palette (256 colors of 16 bits); the OBJ palette follows it.
+/// The bytes of an engine's BG palette (256 colors of 16 bits); the OBJ palette follows it.
 pub(super) const BG_PALETTE_BYTES: usize = 512;
-
-/// What a layer of a BG mode is (`bg-text.md`, "Which layers exist").
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
-    Text,
-    /// Affine, extended, large bitmap or absent: nothing is drawn (`TODO(phase4)`).
-    Other,
-}
-
-use Kind::{Other, Text};
-
-/// The kind of each layer for BG mode 0-7.
-// TODO(hw-unverified): mode 7 is not defined and draws nothing (`bg-text.md`, "Unverified").
-const KINDS: [[Kind; 4]; 8] = [
-    [Text, Text, Text, Text],
-    [Text, Text, Text, Other],
-    [Text, Text, Other, Other],
-    [Text, Text, Text, Other],
-    [Text, Text, Other, Other],
-    [Text, Text, Other, Other],
-    // Mode 6: BG0 is the 3D layer only (GBATEK "DS Video BG Modes / Control").
-    // TODO(phase7): the 3D layer.
-    [Other, Other, Other, Other],
-    [Other, Other, Other, Other],
-];
 
 /// A text layer's registers, decoded (`bg-text.md`, "BGxCNT bits"). A debugger's BG panel (#58)
 /// shows it.
@@ -81,9 +50,9 @@ const KINDS: [[Kind; 4]; 8] = [
 pub struct TextBg {
     /// Bits 0-1 of BGxCNT; 0 is in front.
     pub priority: u8,
-    /// Where the tile data starts, counted from the start of engine A's BG VRAM.
+    /// Where the tile data starts, counted from the start of the engine's BG VRAM.
     pub char_base: u32,
-    /// Where the map starts, counted from the start of engine A's BG VRAM.
+    /// Where the map starts, counted from the start of the engine's BG VRAM.
     pub screen_base: u32,
     /// Whether a pixel is 8 bits (256 colors) rather than 4.
     pub eight_bpp: bool,
@@ -118,15 +87,6 @@ impl TextBg {
             vofs,
         }
     }
-}
-
-/// Whether layer `layer` is a text layer this call draws: switched on in DISPCNT, a text layer in
-/// the BG mode, and not BG0 handed to the 3D engine (`TODO(phase7)`).
-pub(super) fn is_drawn(dispcnt: u32, layer: usize) -> bool {
-    let mode = (dispcnt & DISPCNT_BG_MODE_MASK) as usize;
-    let on = dispcnt >> (DISPCNT_LAYER_SHIFT + layer as u32) & 1 != 0;
-    let three_d = layer == 0 && dispcnt & DISPCNT_BG0_3D != 0;
-    on && !three_d && KINDS[mode][layer] == Text
 }
 
 /// The map cell entry for the layer point (`px`, `py`).

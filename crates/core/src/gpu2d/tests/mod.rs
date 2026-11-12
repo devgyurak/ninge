@@ -22,6 +22,7 @@ const POWCNT1_ON_TOP: u16 = 0x820F;
 const POWCNT1_ON_BOTTOM: u16 = 0x020F;
 const PIXELS: usize = SCREEN_WIDTH * SCREEN_HEIGHT;
 
+mod affine;
 mod engine_b;
 mod text;
 

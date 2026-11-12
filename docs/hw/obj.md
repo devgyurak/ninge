@@ -8,7 +8,7 @@ GBATEK "LCD I/O Mosaic Function" (MOSAIC); GBATEK "LCD I/O BG Rotation/Scaling" 
 GBATEK "LCD Color Palettes" (the OBJ palette, transparent colour 0); GBATEK "DS Memory Control -
 Memory Access" and "DS Memory Maps" (OAM location and the write widths).
 Used by: `crates/core/src/gpu2d/`, `crates/core/src/bus/memory/`   Phase: 4 (#31); the
-semi-transparent mode (#34), the OBJ window (#33), capture (#36) and the OAM panel in the
+semi-transparent mode (#34), the OBJ window (#33, `windows.md`), capture (#36) and the OAM panel in the
 debugger (#58) are other issues; the OBJ extended palettes are `extended-palettes.md` (#32)
 
 `bg-text.md` describes the picture of one line and `bg-modes.md` the layers behind the sprites.
@@ -71,7 +71,7 @@ three halfwords of its own:
 | 0-7 | Y, 0-255 |
 | 8 | 1 = affine object (rotation/scaling) |
 | 9 | affine object: 1 = double-size; plain object: 1 = **disabled**, not drawn |
-| 10-11 | mode: 0 normal, 1 semi-transparent (`TODO(phase4)`, #34), 2 OBJ window (`TODO(phase4)`, #33), 3 bitmap object |
+| 10-11 | mode: 0 normal, 1 semi-transparent (`TODO(phase4)`, #34), 2 OBJ window (`TODO(phase4)`, #33, `windows.md`), 3 bitmap object |
 | 12 | mosaic on for this object |
 | 13 | 0 = 16 colours of 16 palettes, 1 = 256 colours of one palette (not for a bitmap object, where it should be 0) |
 | 14-15 | shape: 0 square, 1 wide, 2 tall, 3 not allowed |
@@ -223,7 +223,7 @@ the best background pixel; otherwise the best background pixel; otherwise the ba
 
 DISPCNT bit 12 is set and the engine's display mode is the normal picture (mode 1,
 `display-mode-vram.md`); with bit 12 clear no object is drawn, whatever OAM holds. An object
-with mode 2 (OBJ window) is not drawn (`TODO(phase4)`, #33); one with mode 1 is drawn as a normal
+with mode 2 (OBJ window) draws no colour and marks the window mask (`windows.md`; `TODO(phase4)`, #33); one with mode 1 is drawn as a normal
 object (`TODO(phase4)`, #34).
 
 ### Mosaic

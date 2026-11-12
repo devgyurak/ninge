@@ -177,8 +177,8 @@ PA-PD move it like any other affine layer. BG0, BG1 and BG3 do not exist in this
 ### Mosaic
 
 MOSAIC has four 4-bit fields: BG horizontal size minus 1 (bits 0-3), BG vertical size minus 1
-(4-7), and OBJ's (8-11 and 12-15; sprites are `TODO(phase4)`, #31, so they are stored and
-ignored). A layer is mosaic when BGxCNT bit 6 is set; with both BG fields 0 the effect does nothing.
+(4-7), and OBJ's (8-11 and 12-15; they size the sprite mosaic, `obj.md`, "Mosaic", and
+the BG layers ignore them). A layer is mosaic when BGxCNT bit 6 is set; with both BG fields 0 the effect does nothing.
 
 With size `h = field + 1` a mosaic pixel is a block of `h` screen pixels, and each takes the colour
 of the first pixel of its block:

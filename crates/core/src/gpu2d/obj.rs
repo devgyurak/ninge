@@ -2,9 +2,10 @@
 //! Sprites (OBJ): one entry of OAM decoded ([`ObjAttrs`]) and the line of object pixels the
 //! engine makes before it puts the background layers behind them (`docs/hw/obj.md`).
 //!
-//! This step draws plain and affine tile and bitmap objects. Mosaic and the line limit are
-//! markers here and come with the next steps of #31.
+//! This step draws plain and affine tile and bitmap objects, with mosaic. The line limit is a
+//! marker here and comes with the next step of #31.
 
+use super::Mosaic;
 use super::spec::EngineInputs;
 use super::text::{self, BG_PALETTE_BYTES};
 use crate::SCREEN_WIDTH;
@@ -182,16 +183,21 @@ pub(super) type ObjLine = [Option<ObjPixel>; SCREEN_WIDTH];
 /// The line `y` of the object layer under `dispcnt` (`obj.md`, "Behavior"). Objects are walked in
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
 /// lower entry (`obj.md`, "Priority").
-// TODO(phase4): mosaic and the line limit are the next steps of #31;
+// TODO(phase4): the line limit is the next step of #31;
 // semi-transparent objects draw as normal ones (#34), the OBJ window is not drawn (#33) and
 // extended palettes are not read (#32).
-pub(super) fn draw_line(inputs: &EngineInputs<'_>, dispcnt: u32, y: usize) -> ObjLine {
+pub(super) fn draw_line(
+    inputs: &EngineInputs<'_>,
+    dispcnt: u32,
+    mosaic: Mosaic,
+    y: usize,
+) -> ObjLine {
     let mut line: ObjLine = [None; SCREEN_WIDTH];
     let palette = inputs.palette.get(BG_PALETTE_BYTES..).unwrap_or(&[]);
     (0..OBJ_COUNT)
         .map(|index| ObjAttrs::decode(inputs.oam, index))
         .filter(drawn)
-        .for_each(|obj| draw_object(inputs, dispcnt, palette, &obj, y, &mut line));
+        .for_each(|obj| draw_object(inputs, dispcnt, palette, mosaic, &obj, y, &mut line));
     line
 }
 
@@ -239,6 +245,7 @@ fn draw_object(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
     palette: &[u8],
+    mosaic: Mosaic,
     obj: &ObjAttrs,
     y: usize,
     line: &mut ObjLine,
@@ -254,19 +261,36 @@ fn draw_object(
         true => (2 * width, 2 * height),
         false => (width, height),
     };
-    let row = (y as u32).wrapping_sub(u32::from(obj.y)) & 0xFF;
+    // A mosaic object shows, at each screen pixel, what it would show at the first pixel of the
+    // pixel's block; blocks are counted from the top left of the screen (`obj.md`, "Mosaic"). So
+    // the line is the block's first line, and the columns run on to the end of the last block.
+    // TODO(hw-unverified): the block origin is the screen's, and an affine object's block pixel is
+    // transformed after the pick (`obj.md`, "Unverified").
+    let (block_width, block_height) = match obj.mosaic {
+        true => (u32::from(mosaic.obj_h), u32::from(mosaic.obj_v)),
+        false => (1, 1),
+    };
+    let block_y = y as u32 - y as u32 % block_height;
+    let row = block_y.wrapping_sub(u32::from(obj.y)) & 0xFF;
     if row >= box_height {
         return;
     }
     let group = obj.affine.then(|| parameters(inputs.oam, obj.group));
-    (0..box_width).for_each(|column| {
-        let screen_x = i32::from(obj.x) + column as i32;
-        let Some(slot) = usize::try_from(screen_x)
-            .ok()
-            .and_then(|at| line.get_mut(at))
-        else {
+    let first = i32::from(obj.x).max(0);
+    let end = (i32::from(obj.x) + (box_width + block_width - 1) as i32).min(SCREEN_WIDTH as i32);
+    (first..end).for_each(|screen_x| {
+        let block_x = screen_x - screen_x % block_width as i32;
+        let (Some(slot), Ok(column)) = (
+            usize::try_from(screen_x)
+                .ok()
+                .and_then(|at| line.get_mut(at)),
+            u32::try_from(block_x - i32::from(obj.x)),
+        ) else {
             return;
         };
+        if column >= box_width {
+            return;
+        }
         // The picture's pixel this box pixel shows: a plain object's flips, or an affine object's
         // transform (the picture is cut at the box).
         let source = match group {

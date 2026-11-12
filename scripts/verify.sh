@@ -98,10 +98,15 @@ COVERAGE_FLOOR=90
 step "tests + coverage (floor ${COVERAGE_FLOOR}%)"
 INSTALL="cargo install --locked cargo-llvm-cov && rustup component add llvm-tools-preview"
 need cargo llvm-cov --version
+# Coverage counters are memory increments, so in the optimized emulator loops they cost more
+# than the work they count. Counter promotion keeps a loop's counts in registers and stores
+# them when the loop exits; the counts, and so the coverage, are the same.
+COV_RUSTFLAGS="-C llvm-args=-do-counter-promotion=true -C llvm-args=-speculative-counter-promotion-to-loop=true"
+COV_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$COV_RUSTFLAGS"
 if cargo nextest --version >/dev/null 2>&1; then
-  cargo llvm-cov nextest --workspace --locked --fail-under-lines "$COVERAGE_FLOOR"
+  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked --fail-under-lines "$COVERAGE_FLOOR"
 else
-  cargo llvm-cov --workspace --locked --fail-under-lines "$COVERAGE_FLOOR"
+  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov --workspace --locked --fail-under-lines "$COVERAGE_FLOOR"
 fi
 step "doc tests"
 cargo test --workspace --locked --doc

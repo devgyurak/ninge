@@ -20,7 +20,7 @@ the BIOS at `FFFF0000h` is `hle-swi.md` (#27). Regions not listed below are simp
 | `0300_0000h` | 0, 16 or 32 KiB | Shared WRAM | mapped by WRAMCNT (`wramcnt.md`); empty when the ARM9 owns none |
 | `0400_0000h` | | I/O ports | VRAMCNT_A-I and WRAMCNT; the rest reads 0 |
 | `0500_0000h` | 2 KiB | Palette RAM, repeated through the 16 MiB block | mapped, always (`palette-ram.md`, #28) |
-| `0700_0000h` | 2 KiB | OAM, repeated through the 16 MiB block | unmapped until #31's `add/oam` (`obj.md`), `TODO(phase4)` |
+| `0700_0000h` | | OAM | unmapped, `TODO(phase4)` |
 | `0600_0000h` | up to 512 KiB | Engine A BG VRAM | the banks in that mapping (`vram-banks.md`, "Where each bank goes") |
 | `0620_0000h` | up to 128 KiB | Engine B BG VRAM | likewise |
 | `0640_0000h` | up to 256 KiB | Engine A OBJ VRAM | likewise |

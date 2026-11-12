@@ -14,7 +14,7 @@ BLOCKSDS := $(WONDERFUL)/thirdparty/blocksds/core
 CC := $(GCC_BIN)/arm-none-eabi-gcc
 CROMS := console
 
-ROMS := smoke boot memmap vramdisp vrambanks bgtext bgengb bgaffine bgext sched wramcnt irq disptime ipc timers dma swi keypad divsqrt
+ROMS := smoke boot memmap vramdisp vrambanks bgtext bgengb bgaffine bgext bglarge sched wramcnt irq disptime ipc timers dma swi keypad divsqrt
 OUT := build
 
 # Per-ROM load and entry addresses: ARM9_RAM_<rom>, ARM9_ENTRY_<rom>, ARM7_RAM_<rom> and
@@ -28,6 +28,7 @@ ARM9_ENTRY_bgtext := 0x02000100
 ARM9_ENTRY_bgengb := 0x02000100
 ARM9_ENTRY_bgaffine := 0x02000100
 ARM9_ENTRY_bgext := 0x02000100
+ARM9_ENTRY_bglarge := 0x02000100
 ARM9_RAM_DEFAULT := 0x02000000
 ARM7_RAM_DEFAULT := 0x02380000
 

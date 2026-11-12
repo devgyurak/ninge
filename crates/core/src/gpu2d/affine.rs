@@ -5,6 +5,7 @@
 //! texel is. Pure functions of the registers and the bytes they point at; nothing is allocated,
 //! formatted or collected.
 
+use super::kind::Kind;
 use super::text::palette_color;
 use crate::bus::VramWindow;
 use serde::{Deserialize, Serialize};
@@ -125,7 +126,8 @@ pub enum AffineFormat {
     Tiles8,
     /// Tiles of 256 colours with 16-bit map entries: tile, flips, palette number.
     Tiles16,
-    /// A bitmap of one byte a pixel, through the palette; value 0 is transparent.
+    /// A bitmap of one byte a pixel, through the palette; value 0 is transparent (this is also the
+    /// large bitmap of BG mode 6).
     Bitmap256,
     /// A bitmap of 15-bit colours, bit 15 set for a shown pixel.
     BitmapDirect,
@@ -145,9 +147,9 @@ pub struct AffineBg {
     /// Where the map (tile formats) or the bitmap (bitmap formats) starts, counted from the start
     /// of the engine's BG VRAM.
     pub screen_base: u32,
-    /// The layer's width in pixels: 128 to 1024.
+    /// The layer's width in pixels: 128 to 1024; 0 for a large bitmap of an undefined size.
     pub width: u16,
-    /// The layer's height in pixels: 128 to 1024.
+    /// The layer's height in pixels: 128 to 1024; 0 for a large bitmap of an undefined size.
     pub height: u16,
     /// Whether the layer wraps around (BGxCNT bit 13) rather than being transparent outside.
     pub wrap: bool,
@@ -161,31 +163,39 @@ pub struct AffineBg {
 
 impl AffineBg {
     /// Decodes BGxCNT and the transform registers of one layer under `dispcnt`, the DISPCNT as the
-    /// engine sees it; `extended` is whether the BG mode makes this layer an extended one.
-    pub(super) fn decode(dispcnt: u32, cnt: u16, regs: &Affine, extended: bool) -> Self {
-        let format = match (extended, cnt & CNT_BITMAP != 0, cnt & CNT_DIRECT != 0) {
-            (false, _, _) => AffineFormat::Tiles8,
-            (true, false, _) => AffineFormat::Tiles16,
-            (true, true, false) => AffineFormat::Bitmap256,
-            (true, true, true) => AffineFormat::BitmapDirect,
+    /// engine sees it; `kind` is what the BG mode makes this layer.
+    pub(super) fn decode(dispcnt: u32, cnt: u16, regs: &Affine, kind: Kind) -> Self {
+        let format = match (kind, cnt & CNT_BITMAP != 0, cnt & CNT_DIRECT != 0) {
+            (Kind::Large, _, _) => AffineFormat::Bitmap256,
+            (Kind::Extended, false, _) => AffineFormat::Tiles16,
+            (Kind::Extended, true, false) => AffineFormat::Bitmap256,
+            (Kind::Extended, true, true) => AffineFormat::BitmapDirect,
+            _ => AffineFormat::Tiles8,
         };
         let bitmap = matches!(format, AffineFormat::Bitmap256 | AffineFormat::BitmapDirect);
         let char_base = ((dispcnt >> DISPCNT_CHAR_SHIFT) & DISPCNT_BASE_MASK) * DISPCNT_BASE_SIZE
             + u32::from((cnt >> CNT_CHAR_SHIFT) & CNT_CHAR_MASK) * CHAR_BLOCK_SIZE;
         let block = u32::from((cnt >> CNT_SCREEN_SHIFT) & CNT_SCREEN_MASK);
-        // A bitmap does not add the DISPCNT screen base, and counts its block in 16 KiB.
-        let screen_base = match bitmap {
-            true => block * BITMAP_BLOCK_SIZE,
-            false => {
+        // A bitmap does not add the DISPCNT screen base, and counts its block in 16 KiB; the large
+        // bitmap has no base at all (`bg-modes.md`, "Sizes and where the data is").
+        let screen_base = match (bitmap, kind) {
+            (_, Kind::Large) => 0,
+            (true, _) => block * BITMAP_BLOCK_SIZE,
+            (false, _) => {
                 ((dispcnt >> DISPCNT_SCREEN_SHIFT) & DISPCNT_BASE_MASK) * DISPCNT_BASE_SIZE
                     + block * SCREEN_BLOCK_SIZE
             }
         };
         let size = cnt >> CNT_SIZE_SHIFT;
-        // The tile layers are square; a bitmap's size 2 is 512x256 and 3 is 512x512.
-        let (width, height) = match (bitmap, size) {
-            (true, 2) => (512, 256),
-            (true, 3) => (512, 512),
+        // The tile layers are square; a bitmap's size 2 is 512x256 and 3 is 512x512; the large
+        // bitmap is 512x1024 or 1024x512, and sizes 2 and 3 are not defined: 0x0 draws nothing.
+        // TODO(hw-unverified): `bg-modes.md`, "Unverified".
+        let (width, height) = match (kind, bitmap, size) {
+            (Kind::Large, _, 0) => (512, 1024),
+            (Kind::Large, _, 1) => (1024, 512),
+            (Kind::Large, _, _) => (0, 0),
+            (_, true, 2) => (512, 256),
+            (_, true, 3) => (512, 512),
             _ => {
                 let side = (BASE_SIZE << size) as u16;
                 (side, side)
@@ -224,6 +234,9 @@ pub(super) fn pixel(
     // An arithmetic shift rounds toward minus infinity, as the note says.
     let (tx, ty) = (u >> FRACTION_BITS, v >> FRACTION_BITS);
     let (width, height) = (i32::from(layer.width), i32::from(layer.height));
+    if width == 0 {
+        return None;
+    }
     let inside = (0..width).contains(&tx) && (0..height).contains(&ty);
     if !inside && !layer.wrap {
         return None;

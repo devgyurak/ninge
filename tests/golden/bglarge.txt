@@ -1,0 +1,2 @@
+# Golden frames for testroms/bglarge. Format and review flow: tests/golden/README.md.
+frames=4 top=0cc7c129800de796 bottom=37bb6fb31ef02325

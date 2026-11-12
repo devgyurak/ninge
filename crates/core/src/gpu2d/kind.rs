@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What each background layer of a BG mode is (`docs/hw/bg-modes.md`, "The mode table").
 
+use super::spec::EngineSpec;
+
 /// How a layer gets its pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -11,11 +13,13 @@ pub(super) enum Kind {
     /// An extended layer: 16-bit map entries, a 256-colour bitmap or a direct-colour bitmap, by
     /// BGxCNT bits 7 and 2 (`bg-modes.md`, "Extended layers").
     Extended,
-    /// Large bitmap or absent: nothing is drawn (`TODO(phase4)`).
+    /// The large 256-colour bitmap of BG mode 6 (engine A only).
+    Large,
+    /// The 3D layer or absent: nothing is drawn (`TODO(phase7)` for the 3D layer).
     Other,
 }
 
-use Kind::{Affine, Extended, Other, Text};
+use Kind::{Affine, Extended, Large, Other, Text};
 
 /// DISPCNT bits 0-2: the BG mode.
 const DISPCNT_BG_MODE_MASK: u32 = 0x7;
@@ -33,24 +37,28 @@ const KINDS: [[Kind; 4]; 8] = [
     [Text, Text, Text, Extended],
     [Text, Text, Affine, Extended],
     [Text, Text, Extended, Extended],
-    // Mode 6: BG0 is the 3D layer only (GBATEK "DS Video BG Modes / Control").
+    // Mode 6: BG0 is the 3D layer only, BG2 the large bitmap (GBATEK "DS Video BG Modes / Control").
     // TODO(phase7): the 3D layer.
-    [Other, Other, Other, Other],
+    [Other, Other, Large, Other],
     [Other, Other, Other, Other],
 ];
 
 /// The kind the BG mode of `dispcnt` (as the engine sees it) gives layer `layer`, whether or not
-/// the layer is switched on.
-pub(super) fn kind_of(dispcnt: u32, layer: usize) -> Kind {
-    KINDS[(dispcnt & DISPCNT_BG_MODE_MASK) as usize][layer & 3]
+/// the layer is switched on. An engine without BG mode 6 has no large bitmap: the layer is
+/// absent.
+pub(super) fn kind_of(dispcnt: u32, layer: usize, spec: &EngineSpec) -> Kind {
+    match KINDS[(dispcnt & DISPCNT_BG_MODE_MASK) as usize][layer & 3] {
+        Large if !spec.large_bitmap => Other,
+        kind => kind,
+    }
 }
 
 /// The kind of layer `layer` if this call draws it: switched on in `dispcnt` (the DISPCNT as the
 /// engine sees it), a kind this phase draws in the BG mode, and not BG0 handed to the 3D engine
 /// (`TODO(phase7)`).
-pub(super) fn drawn_kind(dispcnt: u32, layer: usize) -> Option<Kind> {
+pub(super) fn drawn_kind(dispcnt: u32, layer: usize, spec: &EngineSpec) -> Option<Kind> {
     let on = dispcnt >> (DISPCNT_LAYER_SHIFT + layer as u32) & 1 != 0;
     let three_d = layer == 0 && dispcnt & DISPCNT_BG0_3D != 0;
-    let kind = kind_of(dispcnt, layer);
+    let kind = kind_of(dispcnt, layer, spec);
     (on && !three_d && kind != Other).then_some(kind)
 }

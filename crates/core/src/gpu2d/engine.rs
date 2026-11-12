@@ -55,7 +55,7 @@ pub struct Mosaic {
     pub bg_h: u8,
     /// BG vertical size, 1-16 lines.
     pub bg_v: u8,
-    /// OBJ horizontal size, 1-16 pixels (sprites are `TODO(phase4)`, #31).
+    /// OBJ horizontal size, 1-16 pixels.
     pub obj_h: u8,
     /// OBJ vertical size, 1-16 lines.
     pub obj_v: u8,
@@ -247,7 +247,7 @@ impl Engine {
         let backdrop = text::palette_color(palette, 0);
         // The object layer, when DISPCNT bit 12 is set (`obj.md`, "The layer is on when").
         let objects = match dispcnt & DISPCNT_OBJ_ON != 0 {
-            true => obj::draw_line(inputs, dispcnt, y),
+            true => obj::draw_line(inputs, dispcnt, mosaic, y),
             false => [None; SCREEN_WIDTH],
         };
         out.iter_mut().enumerate().for_each(|(x, pixel)| {

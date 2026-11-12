@@ -28,3 +28,11 @@ missing_docs = "warn"
 undocumented_unsafe_blocks = "deny"
 # A module with children is `dir/mod.rs`, never `dir.rs` beside `dir/` (AGENTS.md §4).
 self_named_module_files = "deny"
+
+# The emulator is too slow to test unoptimized: a test ROM run of 10 frames took 6.4 s at
+# opt-level 0 and 0.26 s at 1, and the CI test step took 9-12 minutes. opt-level 1 keeps
+# debug-assertions and overflow-checks, so a guest value that should wrap still panics a test
+# (AGENTS.md §4), and line coverage measured the same (94.44%) at both. `cargo test`, `cargo llvm-cov`
+# and `cargo run` all build with this profile.
+[profile.dev]
+opt-level = 1

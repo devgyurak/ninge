@@ -43,8 +43,8 @@ changes that byte alone.
 | 27-29 | screen base: maps start `N * 64 KiB` into BG VRAM |
 | 30 | BG extended palettes (`extended-palettes.md`) |
 
-The other bits (OBJ, windows, OBJ mappings, OBJ extended palettes, VRAM block, 31) belong to
-Phase 4 and are stored and ignored.
+The other bits (windows, the VRAM block) belong to Phase 4 and are stored and ignored. The OBJ
+bits are `obj.md` and bit 31 is `extended-palettes.md`.
 
 ### BGxCNT bits
 

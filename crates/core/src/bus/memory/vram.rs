@@ -252,11 +252,11 @@ impl<'a> VramWindow<'a> {
 /// Bytes of one extended-palette slot: 16 palettes of 256 colours of 2 bytes
 /// (`docs/hw/extended-palettes.md`, "Where the palette is").
 const EXT_SLOT_BYTES: u32 = 8 << 10;
-/// Bytes of one palette of 256 colours.
-const EXT_PALETTE_BYTES: u32 = 512;
 /// Palette numbers a slot holds, and colours in a palette.
 const EXT_PALETTES: u32 = 16;
 const EXT_COLORS: u32 = 256;
+/// Bytes of one palette of 256 colours of 2 bytes.
+const EXT_PALETTE_BYTES: u32 = EXT_COLORS * 2;
 
 /// Where one extended-palette slot's 8 KiB is: the bank that backs it (A = 0 to I = 8) and the
 /// byte offset of the slot in the VRAM buffer.

@@ -7,24 +7,24 @@
 use crate::bus::VramWindow;
 
 /// BGxCNT bits 0-1: priority.
-const CNT_PRIORITY_MASK: u16 = 0x3;
+pub(super) const CNT_PRIORITY_MASK: u16 = 0x3;
 /// BGxCNT bits 2-5: the character base block, in 16 KiB units.
-const CNT_CHAR_SHIFT: u32 = 2;
-const CNT_CHAR_MASK: u16 = 0xF;
-const CHAR_BLOCK_SIZE: u32 = 16 << 10;
+pub(super) const CNT_CHAR_SHIFT: u32 = 2;
+pub(super) const CNT_CHAR_MASK: u16 = 0xF;
+pub(super) const CHAR_BLOCK_SIZE: u32 = 16 << 10;
 /// BGxCNT bit 7: 256 colors (8 bits per pixel) instead of 16 palettes of 16.
 const CNT_EIGHT_BPP: u16 = 1 << 7;
 /// BGxCNT bits 8-12: the screen base block, in 2 KiB units.
-const CNT_SCREEN_SHIFT: u32 = 8;
-const CNT_SCREEN_MASK: u16 = 0x1F;
-const SCREEN_BLOCK_SIZE: u32 = 2 << 10;
+pub(super) const CNT_SCREEN_SHIFT: u32 = 8;
+pub(super) const CNT_SCREEN_MASK: u16 = 0x1F;
+pub(super) const SCREEN_BLOCK_SIZE: u32 = 2 << 10;
 /// BGxCNT bits 14-15: the screen size.
-const CNT_SIZE_SHIFT: u32 = 14;
+pub(super) const CNT_SIZE_SHIFT: u32 = 14;
 /// DISPCNT bits 24-26 and 27-29: the character and screen base, in 64 KiB units.
-const DISPCNT_CHAR_SHIFT: u32 = 24;
-const DISPCNT_SCREEN_SHIFT: u32 = 27;
-const DISPCNT_BASE_MASK: u32 = 0x7;
-const DISPCNT_BASE_SIZE: u32 = 64 << 10;
+pub(super) const DISPCNT_CHAR_SHIFT: u32 = 24;
+pub(super) const DISPCNT_SCREEN_SHIFT: u32 = 27;
+pub(super) const DISPCNT_BASE_MASK: u32 = 0x7;
+pub(super) const DISPCNT_BASE_SIZE: u32 = 64 << 10;
 
 /// A screen entry (`bg-text.md`, "The picture of one layer at one pixel", step 3).
 const ENTRY_TILE_MASK: u16 = 0x3FF;

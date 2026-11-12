@@ -185,6 +185,8 @@ impl Machine {
     ///
     /// Engine A goes to the screen POWCNT1 bit 15 picks and engine B to the other one
     /// (`docs/hw/bg-modes.md`, "Engine B").
+    // TODO(hw-unverified): the registers, the transform and the reference point are sampled at the
+    // start of the line, where the hardware reads them while it draws (`bg-modes.md`, "Unverified").
     pub(crate) fn render_line(&mut self, y: usize) {
         if y >= SCREEN_HEIGHT {
             return;

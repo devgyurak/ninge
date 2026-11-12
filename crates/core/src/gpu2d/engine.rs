@@ -126,8 +126,8 @@ impl Engine {
     }
 
     /// The byte at `offset` in the register block; 0 where no register is.
-    // TODO(hw-unverified): the scroll registers are write-only and read 0 (`bg-text.md`,
-    // "Unverified").
+    // TODO(hw-unverified): the scroll registers and the transform registers (PA-PD, BGxX, BGxY) are
+    // write-only and read 0 (`bg-text.md` and `bg-modes.md`, "Unverified").
     pub(super) fn read_byte(&self, offset: u32) -> u8 {
         let Some((field, byte)) = Self::locate(offset) else {
             return 0;
@@ -142,7 +142,9 @@ impl Engine {
     }
 
     /// Writes one byte of a register; an offset that is no register is ignored.
-    // TODO(hw-unverified): BGxCNT bit 13 is kept as written (`bg-text.md`, "Unverified").
+    // TODO(hw-unverified): BGxCNT bit 13 is kept as written (`bg-text.md`, "Unverified"); a BGxX or
+    // BGxY write on the line where VBlank reloads the point wins over the reload (`bg-modes.md`,
+    // "Unverified").
     pub(super) fn write_byte(&mut self, offset: u32, value: u8) {
         let Some((field, byte)) = Self::locate(offset) else {
             return;

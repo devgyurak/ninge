@@ -5,20 +5,14 @@
 //! texel is. Pure functions of the registers and the bytes they point at; nothing is allocated,
 //! formatted or collected.
 
-use super::text::palette_color;
+use super::text::{
+    CHAR_BLOCK_SIZE, CNT_CHAR_MASK, CNT_CHAR_SHIFT, CNT_PRIORITY_MASK, CNT_SCREEN_MASK,
+    CNT_SCREEN_SHIFT, CNT_SIZE_SHIFT, DISPCNT_BASE_MASK, DISPCNT_BASE_SIZE, DISPCNT_CHAR_SHIFT,
+    DISPCNT_SCREEN_SHIFT, SCREEN_BLOCK_SIZE, palette_color,
+};
 use crate::bus::VramWindow;
 use serde::{Deserialize, Serialize};
 
-/// BGxCNT bits 0-1: priority.
-const CNT_PRIORITY_MASK: u16 = 0x3;
-/// BGxCNT bits 2-5: the character base block, in 16 KiB units.
-const CNT_CHAR_SHIFT: u32 = 2;
-const CNT_CHAR_MASK: u16 = 0xF;
-const CHAR_BLOCK_SIZE: u32 = 16 << 10;
-/// BGxCNT bits 8-12: the screen base block, in 2 KiB units.
-const CNT_SCREEN_SHIFT: u32 = 8;
-const CNT_SCREEN_MASK: u16 = 0x1F;
-const SCREEN_BLOCK_SIZE: u32 = 2 << 10;
 /// BGxCNT bit 2 and bit 7 select the extended format (`bg-modes.md`, "Extended layers"): bit 7
 /// clear is a tile layer with 16-bit entries; with it set, bit 2 picks the direct-colour bitmap.
 const CNT_BITMAP: u16 = 1 << 7;
@@ -34,15 +28,8 @@ const ENTRY_V_FLIP: u16 = 1 << 11;
 const DIRECT_OPAQUE: u16 = 1 << 15;
 /// BGxCNT bit 13: area overflow, 0 = transparent outside the layer, 1 = wrap around.
 const CNT_WRAP: u16 = 1 << 13;
-/// BGxCNT bits 14-15: the size.
-const CNT_SIZE_SHIFT: u32 = 14;
 /// The smallest affine layer is 128 pixels square; each size step doubles it.
 const BASE_SIZE: u32 = 128;
-/// DISPCNT bits 24-26 and 27-29: the character and screen base, in 64 KiB units.
-const DISPCNT_CHAR_SHIFT: u32 = 24;
-const DISPCNT_SCREEN_SHIFT: u32 = 27;
-const DISPCNT_BASE_MASK: u32 = 0x7;
-const DISPCNT_BASE_SIZE: u32 = 64 << 10;
 /// Pixels in a tile row, and the mask for a position inside a tile.
 const TILE_SIZE: i32 = 8;
 const TILE_MASK: i32 = 7;

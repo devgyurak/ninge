@@ -11,7 +11,7 @@
 //! Breakpoint and trace hooks (plan §4.1) are not here yet: the debugger is a parallel track, and
 //! they join this module with its stepping and trace panels (#56, #60).
 
-use crate::bus::TcmConfig;
+use crate::bus::{BANK_COUNT, TcmConfig};
 use crate::cpu::Cpu;
 use crate::machine::Machine;
 
@@ -189,7 +189,7 @@ impl<'a> Inspect<'a> {
 
     /// All nine VRAMCNT registers as decoded, bank A first.
     // The debugger's VRAM bank map (#58) shows them with the mapping each one means.
-    pub fn vram_banks(&self) -> [VramBankState; 9] {
+    pub fn vram_banks(&self) -> [VramBankState; BANK_COUNT] {
         self.machine.memory.vram_banks()
     }
 

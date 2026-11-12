@@ -4,7 +4,7 @@
 //! against (`read32(&tcm, addr)` for the peek, `write32_arm7(now, addr, value)` through the
 //! ARM7's view), so each case stays the scenario it was.
 
-use super::{Arm7View, Arm9View, Memory, Region, TcmConfig, VramBankState, WramState};
+use super::{Arm7View, Arm9View, BANK_COUNT, Memory, Region, TcmConfig, VramBankState, WramState};
 use crate::cpu::{ARM9_INSTRUCTION_COST, Bus};
 use crate::io::Io;
 use crate::io::irq::InterruptController;
@@ -120,7 +120,7 @@ impl Bench {
     pub(crate) fn vram_a(&self) -> VramBankState {
         self.memory.vram_a()
     }
-    pub(crate) fn vram_banks(&self) -> [VramBankState; 9] {
+    pub(crate) fn vram_banks(&self) -> [VramBankState; BANK_COUNT] {
         self.memory.vram_banks()
     }
     pub(crate) fn wramcnt(&self) -> WramState {

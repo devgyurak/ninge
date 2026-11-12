@@ -3,7 +3,7 @@
 //! and OBJ windows of the two 2D engines, and the renderer's view of a window ([`VramWindow`])
 //! (`docs/hw/vram-banks.md`, "Where each bank goes" and "The 2D engines' view of a window").
 
-use super::{Memory, PAGE_MASK, Region, page_of};
+use super::{Memory, PAGE_MASK, Region, VRAM_BLOCK_BASE, page_of};
 
 /// The banks are named by their index, A = 0 to I = 8.
 const A: usize = 0;
@@ -97,7 +97,7 @@ impl VramWindowKind {
     /// The CPU address the window starts at.
     pub(crate) const fn base(self) -> u32 {
         match self {
-            Self::BgA => 0x0600_0000,
+            Self::BgA => VRAM_BLOCK_BASE,
             Self::BgB => 0x0620_0000,
             Self::ObjA => 0x0640_0000,
             Self::ObjB => 0x0660_0000,
@@ -115,11 +115,15 @@ impl VramWindowKind {
 }
 
 /// Where the ARM7 sees banks C and D: `0600_0000h` (`vram-banks.md`, "Where each bank goes").
-pub(crate) const ARM7_BASE: u32 = 0x0600_0000;
+const ARM7_BASE: u32 = VRAM_BLOCK_BASE;
 /// Bytes in one 128 KiB bank slot of a BG window.
 const SLOT_128K: u32 = 0x2_0000;
 /// Bytes in one 16 KiB step of banks F and G.
 const STEP_16K: u32 = 0x4000;
+/// Bytes in one 64 KiB step of banks F and G (OFS.1).
+const STEP_64K: u32 = 0x1_0000;
+/// Extended-palette slots a 16 KiB bank covers (F, G in BG mode: OFS.0 picks the pair).
+const SLOT_PAIR: u8 = 2;
 /// Engine B BG: where bank I sits next to bank H's 32 KiB.
 const BG_B_BANK_I: u32 = 0x8000;
 
@@ -134,7 +138,7 @@ pub(crate) fn mapping(bank: usize, enabled: bool, mst: u8, ofs: u8) -> VramMappi
     let ofs = u32::from(ofs);
     let (ofs0, ofs1) = (ofs & 1, (ofs >> 1) & 1);
     // Banks F and G step through a 64 KiB window in 16 KiB pieces.
-    let fg_offset = STEP_16K * ofs0 + 4 * STEP_16K * ofs1;
+    let fg_offset = STEP_16K * ofs0 + STEP_64K * ofs1;
     match (bank, mst) {
         (_, 0) => VramMapping::Lcdc,
         (A..=D, 1) => VramMapping::BgA {
@@ -158,8 +162,8 @@ pub(crate) fn mapping(bank: usize, enabled: bool, mst: u8, ofs: u8) -> VramMappi
         },
         (E, 4) => VramMapping::BgExtPaletteA { first: 0, count: 4 },
         (F | G, 4) => VramMapping::BgExtPaletteA {
-            first: 2 * ofs0 as u8,
-            count: 2,
+            first: SLOT_PAIR * ofs0 as u8,
+            count: SLOT_PAIR,
         },
         (F | G, 5) => VramMapping::ObjExtPaletteA,
         (C, 4) | (H, 1) => VramMapping::BgB { offset: 0 },

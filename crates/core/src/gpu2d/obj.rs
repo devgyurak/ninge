@@ -5,7 +5,7 @@
 //! Plain and affine tile and bitmap objects, with mosaic and the per-line cycle budget.
 
 use super::Mosaic;
-use super::spec::EngineInputs;
+use super::spec::{DISPCNT_OBJ_BITMAP_BOUNDARY_SHIFT, EngineInputs};
 use super::text::{self, BG_PALETTE_BYTES};
 use crate::SCREEN_WIDTH;
 
@@ -51,8 +51,7 @@ const MODE_BITMAP: u8 = 3;
 const DISPCNT_BITMAP_WIDE: u32 = 1 << 5;
 /// DISPCNT bit 6: bitmap OBJ mapping, 1 = 1D.
 const DISPCNT_BITMAP_1D: u32 = 1 << 6;
-/// DISPCNT bit 22: the bitmap OBJ 1D boundary is 256 bytes instead of 128 (engine A only).
-const DISPCNT_BITMAP_BOUNDARY_SHIFT: u32 = 22;
+/// The bitmap OBJ 1D boundary is 128 bytes, or 256 with DISPCNT bit 22 (engine A only, `spec.rs`).
 const BITMAP_BOUNDARY: u32 = 128;
 /// A bitmap pixel is a halfword; bit 15 set means opaque.
 const BITMAP_PIXEL: u32 = 2;
@@ -198,6 +197,8 @@ pub(super) fn draw_line(
 ) -> ObjLine {
     let mut line: ObjLine = [None; SCREEN_WIDTH];
     let palette = inputs.palette.get(BG_PALETTE_BYTES..).unwrap_or(&[]);
+    // TODO(hw-unverified): bit 23 only changes the budget here; whether OAM access timing changes the
+    // picture is not modelled (`obj.md`, "Unverified").
     let mut budget = match dispcnt & DISPCNT_OBJ_HBLANK != 0 {
         true => BUDGET_HBLANK,
         false => BUDGET,
@@ -440,7 +441,7 @@ fn bitmap_color(
         }
         // 1D: the first pixel is at tile * boundary and a row is the object's own width.
         (true, false) => {
-            let boundary = BITMAP_BOUNDARY << ((dispcnt >> DISPCNT_BITMAP_BOUNDARY_SHIFT) & 1);
+            let boundary = BITMAP_BOUNDARY << ((dispcnt >> DISPCNT_OBJ_BITMAP_BOUNDARY_SHIFT) & 1);
             (tile * boundary, width * BITMAP_PIXEL)
         }
         (true, true) => return None,

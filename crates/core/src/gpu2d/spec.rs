@@ -10,6 +10,8 @@ use crate::bus::{ExtPalette, VramWindow};
 pub(super) const DISPCNT_BG0_3D: u32 = 1 << 3;
 /// DISPCNT bit 30: the BG layers read extended palettes (`extended-palettes.md`, "Registers").
 pub(super) const DISPCNT_BG_EXT_PALETTE: u32 = 1 << 30;
+/// DISPCNT bit 31: 256-colour objects read the OBJ extended palette (`extended-palettes.md`).
+pub(super) const DISPCNT_OBJ_EXT_PALETTE: u32 = 1 << 31;
 /// DISPCNT bit 17: with bit 16 the display mode; engine B has modes 0-1 only.
 const DISPCNT_MODE_HIGH: u32 = 1 << 17;
 /// DISPCNT bits 18-19: the VRAM block of display mode 2 (engine A only).
@@ -68,6 +70,8 @@ pub(crate) struct EngineInputs<'a> {
     pub(crate) palette: &'a [u8],
     /// The engine's BG extended palettes, read when DISPCNT bit 30 is set.
     pub(crate) ext_bg: ExtPalette<'a>,
+    /// The engine's OBJ extended palette (slot 0), read when DISPCNT bit 31 is set.
+    pub(crate) ext_obj: ExtPalette<'a>,
     /// The engine's 1 KiB of OAM: 128 entries of 8 bytes.
     pub(crate) oam: &'a [u8],
     pub(crate) spec: &'static EngineSpec,
@@ -80,6 +84,7 @@ impl<'a> EngineInputs<'a> {
         obj_vram: VramWindow<'a>,
         palette: &'a [u8],
         ext_bg: ExtPalette<'a>,
+        ext_obj: ExtPalette<'a>,
         oam: &'a [u8],
     ) -> Self {
         Self {
@@ -87,6 +92,7 @@ impl<'a> EngineInputs<'a> {
             obj_vram,
             palette,
             ext_bg,
+            ext_obj,
             oam,
             spec: &MAIN_SPEC,
         }
@@ -98,6 +104,7 @@ impl<'a> EngineInputs<'a> {
         obj_vram: VramWindow<'a>,
         palette: &'a [u8],
         ext_bg: ExtPalette<'a>,
+        ext_obj: ExtPalette<'a>,
         oam: &'a [u8],
     ) -> Self {
         Self {
@@ -105,6 +112,7 @@ impl<'a> EngineInputs<'a> {
             obj_vram,
             palette,
             ext_bg,
+            ext_obj,
             oam,
             spec: &SUB_SPEC,
         }

@@ -469,8 +469,15 @@ impl Memory {
 
     /// Which bank backs each extended-palette slot of engine A, or of engine B when `engine_b`
     /// (`extended-palettes.md`, "Which bank backs a slot").
-    pub fn ext_palette_banks(&self, engine_b: bool) -> ExtPaletteBanks {
+    pub(crate) fn ext_palette_banks(&self, engine_b: bool) -> ExtPaletteBanks {
         self.ext_slots().banks(engine_b)
+    }
+
+    /// The OBJ extended palette of engine A, or of engine B when `engine_b`: slot 0 only.
+    pub(crate) fn ext_obj_palette(&self, engine_b: bool) -> ExtPalette<'_> {
+        let slots = self.ext_slots();
+        let slot = if engine_b { slots.obj_b } else { slots.obj_a };
+        ExtPalette::new(&self.vram, [slot, None, None, None])
     }
 
     /// The BG extended palettes of engine A, or of engine B when `engine_b`.

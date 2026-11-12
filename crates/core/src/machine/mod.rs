@@ -205,6 +205,9 @@ impl Machine {
         let (palette_a, palette_b) = palette
             .split_at_checked(PALETTE_HALF)
             .unwrap_or((palette, &[]));
+        // The extended palettes come from the banks VRAMCNT maps now.
+        // TODO(hw-unverified): their slots are read as the line starts, though the hardware reads
+        // them while it draws (`extended-palettes.md`, "Unverified").
         // OAM is one half for each engine too (`obj.md`, "Registers and memory").
         // TODO(hw-unverified): OAM is read at the start of the line, and a store during a visible
         // line lands at once (`obj.md`, "Unverified").
@@ -216,6 +219,7 @@ impl Machine {
                 self.memory.vram_window(VramWindowKind::ObjA),
                 palette_a,
                 self.memory.ext_bg_palette(false),
+                self.memory.ext_obj_palette(false),
                 oam_a,
             );
             gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs, out);
@@ -226,6 +230,7 @@ impl Machine {
                 self.memory.vram_window(VramWindowKind::ObjB),
                 palette_b,
                 self.memory.ext_bg_palette(true),
+                self.memory.ext_obj_palette(true),
                 oam_b,
             );
             gpu.render_line_b(y, &inputs, out);

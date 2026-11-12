@@ -106,17 +106,19 @@ Each item gets `TODO(hw-unverified)` at its code site.
 
 - **A slot no bank backs.** GBATEK does not say what a pixel reads when the enable bit is set but
   the bank is missing; the colour reads as 0, as an unbacked VRAM window does (`vram-banks.md`,
-  "Unverified"). A value of 0 stays transparent either way. — `ExtPalettes::color` in
+  "Unverified"). A value of 0 stays transparent either way. — `ExtPalette::color` in
   `crates/core/src/bus/memory/` — verify by a test ROM on real hardware.
 - **Two banks on one slot.** The earlier letter wins, as for the CPU windows; GBATEK says nothing
-  about the display side. — `ExtPalettes::resolve` — verify likewise.
-- **BGxCNT bit 13 with DISPCNT bit 30 clear** is taken to do nothing. — `gpu2d/engine.rs` — verify
-  likewise.
+  about the display side. — `ext_slots` in `crates/core/src/bus/memory/vram.rs` — verify likewise.
+- **BGxCNT bit 13 with DISPCNT bit 30 clear** is taken to do nothing. — `TextBg::decode` in
+  `gpu2d/text.rs` — verify likewise.
+- **The 16-bit tile format of an extended layer with bit 30 clear** reads the standard palette by the
+  value alone; this is `bg-modes.md`'s "Unverified" item, marked at `affine::pixel`.
 - **A text layer in 16-colour mode with bit 30 set** is taken to keep the standard palette, as
   GBATEK's list says. — `text::pixel` — verify likewise.
 - **When the slots are read.** The banks are read when the line is made, like every other register
   and memory (`bg-text.md`, "Unverified"); the hardware reads them while it draws. —
-  `Machine::render_line` — verify against a trace.
+  `Machine::render_line` (the marker next to the `ext_*_palette` calls) — verify against a trace.
 
 ## Test ROM
 

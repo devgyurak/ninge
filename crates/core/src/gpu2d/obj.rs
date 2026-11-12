@@ -5,7 +5,7 @@
 //! Plain and affine tile and bitmap objects, with mosaic and the per-line cycle budget.
 
 use super::Mosaic;
-use super::spec::{DISPCNT_OBJ_BITMAP_BOUNDARY_SHIFT, EngineInputs};
+use super::spec::{DISPCNT_OBJ_BITMAP_BOUNDARY_SHIFT, DISPCNT_OBJ_EXT_PALETTE, EngineInputs};
 use super::text::{self, BG_PALETTE_BYTES};
 use crate::SCREEN_WIDTH;
 
@@ -190,8 +190,8 @@ pub(super) type ObjLine = [Option<ObjPixel>; SCREEN_WIDTH];
 /// The line `y` of the object layer under `dispcnt` (`obj.md`, "Behavior"). Objects are walked in
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
 /// lower entry (`obj.md`, "Priority").
-// TODO(phase4): semi-transparent objects draw as normal ones (#34), the OBJ window is not drawn
-// (#33) and extended palettes are not read (#32).
+// TODO(phase4): semi-transparent objects draw as normal ones (#34) and the OBJ window is not drawn
+// (#33).
 pub(super) fn draw_line(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
@@ -409,6 +409,16 @@ fn tile_color(
     row: u32,
 ) -> Option<u16> {
     let value = tile_value(inputs, dispcnt, obj, width, column, row);
+    // With DISPCNT bit 31 set a 256-colour object reads the OBJ extended palette: attr2's palette
+    // number picks the palette and the value the colour in it (`extended-palettes.md`, "Behavior").
+    // A 16-colour object keeps the standard palette.
+    if value != 0 && obj.eight_bpp && dispcnt & DISPCNT_OBJ_EXT_PALETTE != 0 {
+        return Some(
+            inputs
+                .ext_obj
+                .color(0, u32::from(obj.palette), u32::from(value)),
+        );
+    }
     let index = match (value, obj.eight_bpp) {
         (0, _) => return None,
         (value, true) => u32::from(value),

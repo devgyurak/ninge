@@ -204,10 +204,12 @@ impl Gpu2d {
     }
 
     /// Writes one byte of a register; an offset that is no register is not ours and is ignored,
-    /// and so is a write to engine B's registers while POWCNT1 bit 9 is clear: the ports of a
-    /// powered-off engine are read-only (`bg-modes.md`, "Engine B").
+    /// and so is a write to engine B's ports `1008h-105Fh` while POWCNT1 bit 9 is clear: the ports
+    /// of a powered-off engine are read-only, and DISPCNT at `1000h` is not among them
+    /// (`bg-modes.md`, "Engine B").
     // TODO(hw-unverified): POWCNT1's undefined bits are kept as written
-    // (`display-mode-vram.md`, "Unverified").
+    // (`display-mode-vram.md`, "Unverified"); the palette of a powered-off engine is not read as
+    // zero (`bg-modes.md`, "Unverified").
     fn write_byte(&mut self, offset: u32, value: u8) {
         match Self::route(offset) {
             Route::Powcnt1(byte) => {
@@ -215,7 +217,7 @@ impl Gpu2d {
             }
             Route::Engine(EngineId::A, at) => self.a.write_byte(at, value),
             Route::Engine(EngineId::B, at) => {
-                if self.engine_b_on() {
+                if self.engine_b_on() || at < BGCNT_OFFSET {
                     self.b.write_byte(at, value);
                 }
             }

@@ -4,6 +4,7 @@
 //! point at; nothing is allocated, formatted or collected, so a line can be drawn from the bus
 //! hot path of a frame.
 
+use super::spec::DISPCNT_BG0_3D;
 use crate::bus::VramWindow;
 
 /// BGxCNT bits 0-1: priority.
@@ -27,8 +28,6 @@ const DISPCNT_BASE_MASK: u32 = 0x7;
 const DISPCNT_BASE_SIZE: u32 = 64 << 10;
 /// DISPCNT bits 0-2: the BG mode.
 const DISPCNT_BG_MODE_MASK: u32 = 0x7;
-/// DISPCNT bit 3: BG0 shows the 3D engine instead of its own map.
-const DISPCNT_BG0_3D: u32 = 1 << 3;
 /// DISPCNT bits 8-11: BG0-BG3 on.
 const DISPCNT_LAYER_SHIFT: u32 = 8;
 

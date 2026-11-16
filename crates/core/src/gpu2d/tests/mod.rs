@@ -8,6 +8,11 @@ use super::*;
 use crate::cpu::Bus;
 use crate::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 
+/// The xRGB8888 value of a white pixel.
+const WHITE: u32 = 0x00FF_FFFF;
+/// The xRGB8888 value of a black pixel.
+const BLACK: u32 = 0;
+
 /// VRAMCNT_A (`docs/hw/vram-banks.md`).
 const VRAMCNT_A: u32 = 0x0400_0240;
 /// Bank A's LCDC window.

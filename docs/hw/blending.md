@@ -153,8 +153,8 @@ on **6-bit** red, green and blue values, with the factor clamped to 16. Mode 0 a
 In the block diagram (GBATEK, "DS Video Display System Block Diagram") the master brightness
 stage of engine A sits after the display-mode selection: it applies to the layered picture
 (mode 1), the VRAM display (mode 2) and the main-memory display (mode 3), not only to the layers.
-It sits after the capture unit's source tap, so a capture reads the line without it (`TODO(phase4)`,
-#36). Engine B's stage follows its layering and effects stage.
+It sits after the capture unit's source tap, so a capture reads the line without it
+(`display-capture.md`, #36). Engine B's stage follows its layering and effects stage.
 
 ### Colour depth
 

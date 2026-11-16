@@ -32,8 +32,8 @@ None in Phase 0.
 
 ## Not implemented yet
 
-- Engine A's graphics (mode 1) and main-memory display (mode 3) pictures (`TODO(phase3)`,
-  `TODO(phase4)`).
+- Engine A's main-memory display (mode 3) picture and display capture: `display-capture.md`
+  (`TODO(phase4)`, #36).
 - Per-scanline drawing; a frame is rendered at once at the end of `run_frame` (`TODO(phase3)`, #104).
 
 Engine A's display-off (white) and VRAM-display pictures and the POWCNT1 bit-15 routing are in

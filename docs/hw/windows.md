@@ -187,9 +187,9 @@ Each item carries `TODO(hw-unverified)` at its code site.
   likewise.
 - **The window on the 3D layer**, and GBATEK's own doubt there that the effect bit may be
   overridden when the 3D layer is in front. — none until Phase 7.
-- **Windows outside the normal picture mode.** We apply them only in display mode 1, where the
-  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). —
-  `Gpu2d::render_line_a` — verify likewise.
+- **Windows outside the normal picture mode.** The layers are composed, windows included, in every
+  display mode when a capture reads source A; only display mode 1 shows them
+  (`display-capture.md`). — `Gpu2d::compose_line_a` — verify likewise.
 
 ## Evidence
 

@@ -360,7 +360,10 @@ impl Gpu2d {
     /// colour, whatever display mode the engine shows: this is what a capture reads as source A
     /// (`display-capture.md`, "Where the capture unit sits"). A line past the last visible one is
     /// not drawn.
-    // TODO(hw-unverified): windows apply in display mode 1 only (`windows.md`, "Unverified").
+    // TODO(hw-unverified): windows apply to the composed layers in every display mode, since a
+    // capture reads them whatever the mode (`windows.md`, "Unverified").
+    // TODO(hw-unverified): source A is still the composed layers with display mode 0 or the screen
+    // forced blank (`display-capture.md`, "Unverified").
     // TODO(phase7): the 3D layer joins BG0 here.
     pub(crate) fn compose_line_a(
         &self,
@@ -376,9 +379,9 @@ impl Gpu2d {
 
     /// Picks what engine A's screen shows for line `y` (0-191) into `line` in 15-bit colour, given
     /// the bytes of banks A-D where the CPU sees them as LCDC VRAM, what the engine reads
-    /// ([`EngineInputs`]) and the line [`Gpu2d::compose_line_a`] made (read in display mode 1
-    /// only), and returns the master brightness to apply to it. A line past the last visible one is
-    /// not drawn.
+    /// ([`EngineInputs`]) and the line [`Gpu2d::compose_line_a`] made (read in display mode 1 only),
+    /// and returns the master brightness to apply to it. A line past the last visible one is not
+    /// drawn.
     // TODO(phase4): mode 3 draws the main-memory bitmap, and the master brightness applies to it
     // too (`blending.md`, "Master brightness"); the placeholder black is left alone.
     // TODO(hw-unverified): the master brightness applies to the white of display mode 0

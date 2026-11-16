@@ -232,7 +232,8 @@ fn given_mmdisp_rom_when_run_then_each_picture_matches_the_note() {
 #[test]
 fn given_mmdisp_rom_when_run_then_the_pictures_follow_the_fifo_the_capture_and_the_brightness() {
     // A guard against a scene that went flat: the bank shown in mode 2 is the bitmap the FIFO
-    // delivered, the brightness changes it, and the dry FIFO shows black while the bank stays.
+    // delivered, the brightness changes it, and the screen goes black once the source runs past the bitmap (the FIFO is fed zeros,
+    // not left to run empty) while the bank stays.
     let pictures = expected();
     let black = pictures[5].top.iter().all(|&p| p == 0);
     assert_eq!(

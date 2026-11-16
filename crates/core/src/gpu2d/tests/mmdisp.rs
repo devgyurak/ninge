@@ -190,3 +190,53 @@ fn given_a_half_filled_fifo_when_saved_and_loaded_then_it_holds_the_same_pixels(
     let result = loaded.load_state(&m.save_state());
     assert_eq!((result.is_ok(), loaded.io.gpu2d().fifo().len()), (true, 4));
 }
+
+/// A saved state holding one FIFO pixel, `0x7FFF`, with byte `index` of the FIFO's encoding
+/// replaced by `byte`; `None` when the encoding is not found exactly once. The encoding is the
+/// pixel `Vec` (a varint length `80 02`, then 256 varint pixels, `FF FF 01` first) and the length.
+fn state_with_fifo_byte(index: usize, byte: u8) -> Option<Vec<u8>> {
+    let mut m = Machine::new();
+    push(&mut m, &[0x7FFF]);
+    let needle = postcard::to_allocvec(m.io.gpu2d().fifo()).expect("plain data encodes");
+    let bytes = m.save_state();
+    let hits: Vec<usize> = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle.as_slice())
+        .map(|(at, _)| at)
+        .collect();
+    let at = *hits.first().filter(|_| hits.len() == 1)?;
+    let mut patched = bytes;
+    patched[at + index] = byte;
+    Some(patched)
+}
+
+#[test]
+fn given_a_state_whose_fifo_has_a_pixel_with_bit_15_when_loaded_then_it_is_refused_as_corrupt() {
+    // The third byte of the first pixel's varint, 01h, becomes 02h: 7FFFh + 4000h * 1 = FFFFh.
+    let bytes = state_with_fifo_byte(4, 0x02).expect("the FIFO is found once");
+    assert_eq!(
+        Machine::new().load_state(&bytes),
+        Err(crate::savestate::SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_whose_fifo_has_a_pixel_past_its_length_when_loaded_then_it_is_refused_as_corrupt()
+{
+    // The length byte is last: 1 pixel becomes 0, leaving the pixel past it.
+    let last = 2 + 3 + 255 + 1 - 1;
+    let bytes = state_with_fifo_byte(last, 0).expect("the FIFO is found once");
+    assert_eq!(
+        Machine::new().load_state(&bytes),
+        Err(crate::savestate::SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_whose_fifo_is_valid_when_patched_to_the_same_value_then_it_loads() {
+    // Patching a byte to itself proves the harness finds the right bytes, so the refusals above
+    // are about the patched values.
+    let bytes = state_with_fifo_byte(4, 0x01).expect("the FIFO is found once");
+    assert_eq!(Machine::new().load_state(&bytes), Ok(()));
+}

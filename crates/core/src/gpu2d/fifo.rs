@@ -20,34 +20,44 @@ const COLOR_MASK: u32 = 0x7FFF;
 // (`display-capture.md`, "Unverified").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplayFifo {
+    // Always one line long, with `len` of it valid, so a push writes in place and never grows the
+    // `Vec` (a loaded state would otherwise come back with no spare capacity). serde has no array
+    // of this size.
     pixels: Vec<u16>,
+    len: u16,
 }
 
 impl DisplayFifo {
     pub(super) fn new() -> Self {
         Self {
-            pixels: Vec::with_capacity(SCREEN_WIDTH),
+            pixels: vec![0; SCREEN_WIDTH],
+            len: 0,
         }
     }
 
     /// How many pixels are waiting.
     pub fn len(&self) -> usize {
-        self.pixels.len()
+        usize::from(self.len)
     }
 
     /// Whether no pixel is waiting.
     pub fn is_empty(&self) -> bool {
-        self.pixels.is_empty()
+        self.len == 0
     }
 
     /// Whether the FIFO holds only what it can: a savestate that decodes to more is corrupt.
     pub(super) fn well_formed(&self) -> bool {
-        self.pixels.len() <= SCREEN_WIDTH && self.pixels.iter().all(|&p| u32::from(p) <= COLOR_MASK)
+        self.pixels.len() == SCREEN_WIDTH
+            && self.len() <= SCREEN_WIDTH
+            && self.pixels.iter().all(|&p| u32::from(p) <= COLOR_MASK)
+            && self.pixels.iter().skip(self.len()).all(|&p| p == 0)
     }
 
     fn push(&mut self, pixel: u32) {
-        if self.pixels.len() < SCREEN_WIDTH {
-            self.pixels.push((pixel & COLOR_MASK) as u16);
+        let at = self.len();
+        if let Some(slot) = self.pixels.get_mut(at) {
+            *slot = (pixel & COLOR_MASK) as u16;
+            self.len += 1;
         }
     }
 
@@ -72,9 +82,12 @@ impl DisplayFifo {
     // line, shown or not, and an underrun reads 0 (`display-capture.md`, "Unverified").
     pub(super) fn take_line(&mut self) -> [u16; SCREEN_WIDTH] {
         let mut line = [0; SCREEN_WIDTH];
+        // The part past `len` is always 0, so the whole line is copied.
         line.iter_mut()
-            .zip(self.pixels.drain(..))
-            .for_each(|(slot, pixel)| *slot = pixel);
+            .zip(self.pixels.iter())
+            .for_each(|(slot, &pixel)| *slot = pixel);
+        self.pixels.fill(0);
+        self.len = 0;
         line
     }
 }

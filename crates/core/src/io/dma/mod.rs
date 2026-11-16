@@ -153,6 +153,8 @@ struct Channel {
     rearmed: bool,
     // The channel was enabled since the last frame start, so a main-memory display start waits for
     // the next frame ("Transfer starts at next frame", `display-capture.md`).
+    // TODO(hw-unverified): a channel enabled mid-frame waits for the last line of that frame, and
+    // enabling it again waits again (`display-capture.md`, "Unverified").
     frame_wait: bool,
 }
 
@@ -326,7 +328,11 @@ impl<const ARM9: bool> Dma<ARM9> {
         channel.rearmed = false;
         let word = channel.control & CONTROL_WORD != 0;
         // A main-memory display start moves a whole line: `MAIN_MEMORY_REQUESTS` requests of the
-        // programmed count in one transfer (`display-capture.md`, "The main-memory display").
+        // programmed count in one transfer (`display-capture.md`, "The main-memory display"). A
+        // guest count of 0 or the largest one makes a transfer of tens of millions of units inside
+        // one event: it stalls, it does not panic.
+        // TODO(hw-unverified): without repeat the transfer is still 32 requests and raises one IRQ per
+        // line (`display-capture.md`, "Unverified").
         let count = if Self::start_of(channel.control) == Start::MainMemory {
             channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS)
         } else {

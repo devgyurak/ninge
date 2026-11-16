@@ -131,3 +131,51 @@ fn given_a_start_of_display_channel_without_repeat_when_a_frame_has_run_then_it_
     run_until(&mut m, 2, 1);
     assert_eq!((peek_words(&m, DST, 3), busy9(&m, 0)), (vec![1, 2, 0], 0));
 }
+
+#[test]
+fn given_a_main_memory_channel_without_repeat_when_a_line_is_due_then_it_moves_32_requests_and_stops()
+ {
+    // One request is `count` = 4 words; a line is 32 of them, moved in one transfer
+    // (`display-capture.md`, "Unverified"). The destination is plain RAM so the words can be read.
+    let mut m = machine();
+    let words: Vec<u32> = (1..=130).collect();
+    poke_words(&mut m, SRC, &words);
+    set9(&mut m, 0, SRC, DST, ENABLE | WORD | MAIN_MEMORY | 4);
+    run_frames(&mut m, 2);
+    assert_eq!(
+        (peek_words(&m, DST + 127 * 4, 3), busy9(&m, 0)),
+        (vec![128, 0, 0], 0)
+    );
+}
+
+/// A machine saved in the middle of frame 1 with a channel waiting for the next frame and a FIFO
+/// holding a few pixels, loaded into a fresh machine.
+fn saved_mid_frame_and_loaded() -> (Machine, Machine) {
+    let mut m = bitmap_machine();
+    run_until(&mut m, 1, 100);
+    start_streaming(&mut m);
+    m.bus9().write32(DISP_MMEM_FIFO, 0x0001_0001);
+    let mut loaded = machine();
+    let result = loaded.load_state(&m.save_state());
+    assert_eq!(result, Ok(()));
+    (m, loaded)
+}
+
+#[test]
+fn given_a_state_saved_with_a_waiting_channel_and_a_filled_fifo_when_loaded_and_run_then_the_frames_match_an_uninterrupted_run()
+ {
+    let (mut straight, mut resumed) = saved_mid_frame_and_loaded();
+    run_frames(&mut straight, 2);
+    run_frames(&mut resumed, 2);
+    assert!(resumed.frame(Screen::Top) == straight.frame(Screen::Top));
+}
+
+#[test]
+fn given_a_state_saved_with_a_waiting_channel_when_loaded_then_the_channel_still_waits_for_the_next_frame()
+ {
+    let (_, mut resumed) = saved_mid_frame_and_loaded();
+    // Enabled in frame 1, it must not feed frame 1's remaining lines: the screen has only what the
+    // FIFO held, none of the bitmap.
+    resumed.run_frame();
+    assert!(lit(&resumed) <= 2);
+}

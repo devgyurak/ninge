@@ -305,3 +305,142 @@ fn given_a_state_whose_dispcapcnt_is_valid_when_patched_to_the_same_value_then_i
     let bytes = state_with_capture_byte(0, 0x95).expect("the register is found once");
     assert_eq!(Machine::new().load_state(&bytes), Ok(()));
 }
+
+// ------------------------------------------------------------------------ sources B and A+B
+
+/// Capture source B (bits 29-30 = 1) and A+B blended (2).
+const SOURCE_B: u32 = 1 << 29;
+const SOURCE_BLEND: u32 = 2 << 29;
+/// The read offset field at bits 26-27, and EVA and EVB at bits 0-4 and 8-12.
+const fn read_offset(n: u32) -> u32 {
+    n << 26
+}
+const fn factors(eva: u32, evb: u32) -> u32 {
+    eva | evb << 8
+}
+const ALPHA: u16 = 0x8000;
+const GREEN15: u16 = 0x03E0;
+
+/// Bank A (the read block, block 0) and bank B (the write block) in LCDC mode, engine A showing the
+/// graphics with `backdrop` as its backdrop colour.
+fn blend_machine(backdrop: u16) -> Machine {
+    let mut m = capture_machine();
+    w8(&mut m, VRAMCNT_A, ENABLE_MST0);
+    w16(&mut m, BACKDROP, backdrop);
+    m
+}
+
+/// The halfword stored at pixel 0 of bank B when `control` captures one frame of `m`.
+fn stored(mut m: Machine, control: u32) -> u16 {
+    w32(&mut m, DISPCAPCNT, ENABLE | WRITE_B | size(3) | control);
+    m.render_frame();
+    bank_b(&m, 0)
+}
+
+/// Blend cases: (backdrop, source B halfword, EVA, EVB, the stored halfword).
+const BLEND_CASES: [(u16, u16, u32, u32, u16); 9] = [
+    // Only A: full red, with the alpha rule (A has alpha and EVA > 0).
+    (RED15, ALPHA | GREEN15, 16, 0, ALPHA | RED15),
+    // Half and half: 31 * 8 / 16 = 15 in red and in green.
+    (RED15, ALPHA | GREEN15, 8, 8, ALPHA | 0x01EF),
+    // Both at 16: red and green each reach 31.
+    (RED15, ALPHA | GREEN15, 16, 16, ALPHA | 0x03FF),
+    // Both factors 0: no colour and no alpha.
+    (RED15, ALPHA | GREEN15, 0, 0, 0),
+    // Red from both: 31 + 31 saturates at 31.
+    (RED15, ALPHA | RED15, 16, 16, ALPHA | RED15),
+    // B without alpha adds nothing: A at 8 / 16 gives 15, and the alpha comes from A.
+    (RED15, GREEN15, 8, 16, ALPHA | 0x000F),
+    // B alone has the alpha: the result has it, and A's colour is gone at EVA 0.
+    (RED15, ALPHA | GREEN15, 0, 16, ALPHA | GREEN15),
+    // A factor above 16 counts as 16: 8 * 16 / 16, not 8 * 31 / 16.
+    (0x0008, ALPHA, 31, 0, ALPHA | 0x0008),
+    // A truncation: 5 * 9 / 16 = 2 (not 3).
+    (0x0005, ALPHA, 9, 0, ALPHA | 0x0002),
+];
+
+/// The blend cases that store something else.
+fn blend_failures() -> Vec<(usize, u16, u16)> {
+    BLEND_CASES
+        .iter()
+        .enumerate()
+        .map(|(i, &(backdrop, b, eva, evb, want))| {
+            let mut m = blend_machine(backdrop);
+            w16(&mut m, LCDC_A, b);
+            (i, stored(m, SOURCE_BLEND | factors(eva, evb)), want)
+        })
+        .filter(|&(_, got, want)| got != want)
+        .collect()
+}
+
+#[test]
+fn given_the_blend_cases_when_a_and_b_are_captured_then_each_stores_the_notes_pixel() {
+    assert_eq!(blend_failures(), vec![]);
+}
+
+#[test]
+fn given_capture_source_3_when_captured_then_it_blends_like_source_2() {
+    let mut m = blend_machine(RED15);
+    w16(&mut m, LCDC_A, ALPHA | GREEN15);
+    assert_eq!(stored(m, (3 << 29) | factors(8, 8)), ALPHA | 0x01EF);
+}
+
+#[test]
+fn given_source_b_when_captured_then_the_vram_halfword_is_stored_with_its_own_alpha() {
+    let mut m = blend_machine(RED15);
+    w16(&mut m, LCDC_A, GREEN15);
+    assert_eq!(stored(m, SOURCE_B), GREEN15);
+}
+
+#[test]
+fn given_a_read_offset_when_source_b_is_captured_then_the_read_starts_at_that_offset() {
+    let mut m = blend_machine(RED15);
+    w16(&mut m, LCDC_A, GREEN15);
+    w16(&mut m, LCDC_A + 0x1_0000, BLUE15);
+    assert_eq!(stored(m, SOURCE_B | read_offset(2)), BLUE15);
+}
+
+#[test]
+fn given_display_mode_2_when_source_b_is_captured_then_the_read_offset_is_ignored() {
+    let mut m = blend_machine(RED15);
+    w32(&mut m, DISPCNT_A_ADDR, MODE2);
+    w16(&mut m, LCDC_A, GREEN15);
+    w16(&mut m, LCDC_A + 0x1_0000, BLUE15);
+    assert_eq!(stored(m, SOURCE_B | read_offset(2)), GREEN15);
+}
+
+#[test]
+fn given_dispcnt_names_block_1_when_source_b_is_captured_then_it_reads_bank_b() {
+    let mut m = blend_machine(RED15);
+    w32(&mut m, DISPCNT_A_ADDR, MODE1_ONLY | (1 << 18));
+    w16(&mut m, LCDC_A, GREEN15);
+    w16(&mut m, LCDC_B, BLUE15);
+    // Bank B is the write block too: pixel 0 is read as BLUE15, then overwritten with it.
+    assert_eq!(stored(m, SOURCE_B), BLUE15);
+}
+
+#[test]
+fn given_a_read_block_that_is_not_in_lcdc_mode_when_source_b_is_captured_then_zero_is_stored() {
+    let mut m = blend_machine(RED15);
+    w16(&mut m, LCDC_A, GREEN15);
+    w8(&mut m, VRAMCNT_A, 0);
+    w16(&mut m, LCDC_B, 0x1234);
+    assert_eq!(stored(m, SOURCE_B), 0);
+}
+
+#[test]
+fn given_a_small_size_when_source_b_is_captured_then_its_rows_use_the_capture_width_as_stride() {
+    // Size 0 (128 wide): row 1 pixel 0 is read from byte 256 of the block and stored at byte 256.
+    let mut m = blend_machine(RED15);
+    w16(&mut m, LCDC_A + 256, GREEN15);
+    w32(&mut m, DISPCAPCNT, ENABLE | WRITE_B | size(0) | SOURCE_B);
+    m.render_frame();
+    assert_eq!(bank_b(&m, 256), GREEN15);
+}
+
+#[test]
+fn given_source_a_when_the_capture_unit_runs_then_the_vram_block_is_not_read() {
+    let mut m = blend_machine(RED15);
+    w16(&mut m, LCDC_A, GREEN15);
+    assert_eq!(stored(m, 0), ALPHA | RED15);
+}

@@ -15,7 +15,16 @@ fn capture_tap(memory: &mut Memory, gpu: &Gpu2d, y: usize, composed: &[u16; SCRE
     let Some(capture) = gpu.capture_line(y) else {
         return;
     };
-    let pixels = capture.pixels(composed);
+    // Source B is read in full before the line is written, so a read and a write of one bank on one
+    // line see the read first (`display-capture.md`, "Unverified").
+    // TODO(hw-unverified): the read-before-write order for one bank on one line.
+    let read_bank = memory
+        .lcdc_banks()
+        .get(capture.read_block())
+        .copied()
+        .flatten();
+    let b = capture.source_b(y, read_bank);
+    let pixels = capture.pixels(composed, &b);
     if let Some(bank) = memory.lcdc_bank_mut(capture.write_block()) {
         capture.store(y, bank, &pixels);
     }

@@ -1,0 +1,2 @@
+# Golden frames for testroms/capblend. Format and review flow: tests/golden/README.md.
+frames=14 top=04fb52f54c87c325 bottom=37bb6fb31ef02325

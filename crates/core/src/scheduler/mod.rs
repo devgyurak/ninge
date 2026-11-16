@@ -22,9 +22,10 @@ pub const FRAME_CYCLES: u64 = 263 * LINE_CYCLES;
 /// "Interleaving"). A model choice, not a hardware fact.
 // TODO(hw-unverified): see `scheduler.md`, "Unverified". Decided in #102.
 pub const SLICE: u64 = 64;
-/// Events the queue holds without growing: a line start, an HBlank start, eight timers and eight
-/// DMA starts. Reserved up front so scheduling on the hot path does not allocate.
-const EVENT_CAPACITY: usize = 24;
+/// Events the queue holds without growing: a line start, an HBlank start and every event slot the
+/// devices register ([`crate::io::EVENT_SLOTS`]: the timers and the DMA starts of both CPUs).
+/// Reserved up front so scheduling on the hot path does not allocate.
+const EVENT_CAPACITY: usize = 2 + crate::io::EVENT_SLOTS;
 
 /// The latest time the clock or an event may hold, about 2,180 years of emulated time. A
 /// savestate beyond it is refused, so line starts never reach the saturation point of `u64`.

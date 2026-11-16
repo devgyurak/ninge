@@ -50,6 +50,10 @@ impl Width {
     }
 }
 
+/// A set of one device's event slots, bit n for slot n. 32 bits: the SPU will want 16 slots, and
+/// a `u8` was already the cap for two devices.
+pub(crate) type SlotMask = u32;
+
 /// What a register access asks of its caller: the IF bits to raise, and which of the device's
 /// event slots must be replaced. Every device returns this one type, so the caller handles an
 /// access the same way whatever it reached.
@@ -59,7 +63,7 @@ pub(crate) struct Effect {
     pub(crate) requests: Requests,
     /// Bit n: the device's event slot n changed and its scheduler event must be replaced. The
     /// four timers are slots 0-3 of their device, and so are the four DMA channels.
-    pub(crate) reschedule: u8,
+    pub(crate) reschedule: SlotMask,
 }
 
 impl Effect {
@@ -96,6 +100,11 @@ pub(crate) trait Device<const ARM9: bool> {
 
     /// A CPU's write of `width` at `offset`.
     fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect;
+
+    /// How many event slots the device has, at most [`SlotMask::BITS`]; 0 for a device with no
+    /// events. The scheduler's queue capacity is the sum of these over the registered devices
+    /// ([`crate::io::EVENT_SLOTS`]).
+    const SLOTS: u8 = 0;
 
     /// The scheduler event that carries event slot `slot`, or `None` when the device has no such
     /// slot (a device with no events has none).

@@ -432,7 +432,7 @@ fn given_an_immediate_channel_when_enable_is_written_then_a_start_is_queued_on_i
 
 /// The slots each of channels 0-3 reschedules when armed Immediate, as `(channel, got)` for the
 /// channels that do not reschedule exactly their own bit.
-fn wrong_slots<const A: bool>() -> Vec<(u32, u8)> {
+fn wrong_slots<const A: bool>() -> Vec<(u32, SlotMask)> {
     (0..4)
         .filter_map(|ch| {
             let mut dma = Dma::<A>::new();
@@ -611,7 +611,7 @@ fn given_a_channel_waiting_for_its_trigger_when_enable_is_cleared_then_the_trigg
 // ------------------------------------------------------------------------------ triggers
 
 /// The slot mask `trigger` marks on channel 0 armed with `control`.
-fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> u8 {
+fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> SlotMask {
     let mut dma = Dma::<A>::new();
     arm(&mut dma, 0, MAIN, OTHER, control);
     dma.trigger(trigger)
@@ -620,8 +620,8 @@ fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> u8 {
 /// `(timing, VBlank mask, HBlank mask)` for each timing value whose masks differ from `want`.
 fn trigger_failures<const A: bool>(
     shift: fn(u32) -> u32,
-    want: &[(u32, u8, u8)],
-) -> Vec<(u32, u8, u8)> {
+    want: &[(u32, SlotMask, SlotMask)],
+) -> Vec<(u32, SlotMask, SlotMask)> {
     want.iter()
         .filter_map(|&(timing, vblank, hblank)| {
             let control = ENABLE | shift(timing) | 4;

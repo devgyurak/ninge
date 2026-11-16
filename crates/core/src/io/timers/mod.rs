@@ -12,7 +12,7 @@
 //! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_kind`,
 //! `slot_due` and `slot_fire`).
 
-use crate::io::device::{Device, Effect, Fired, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::{EventKind, SLICE};
 use serde::{Deserialize, Serialize};
@@ -290,7 +290,7 @@ impl<const ARM9: bool> Timers<ARM9> {
     ///
     /// Returns the mask of timers whose overflow event no longer matches: the timer itself when
     /// the write started, stopped or retimed it, nothing otherwise.
-    fn write_control(&mut self, index: usize, value: u8, now: u64) -> u8 {
+    fn write_control(&mut self, index: usize, value: u8, now: u64) -> SlotMask {
         let was_running = self.timers.get(index).is_some_and(Timer::running);
         let settled = self.counter(index, now);
         let Some(timer) = self.timers.get_mut(index) else {
@@ -351,6 +351,8 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
         })
     }
 
+    const SLOTS: u8 = TIMER_COUNT as u8;
+
     fn slot_kind(&self, slot: u8) -> Option<EventKind> {
         (usize::from(slot) < TIMER_COUNT).then(|| Self::event_kind(usize::from(slot)))
     }
@@ -369,7 +371,7 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
         let index = usize::from(slot);
         let mut effect = self.settle_timer(index, now);
         // A slot past the last timer (a hand-made event) has no bit to set.
-        effect.reschedule |= 1_u8.checked_shl(u32::from(slot)).unwrap_or(0);
+        effect.reschedule |= 1_u32.checked_shl(u32::from(slot)).unwrap_or(0);
         Fired {
             effect,
             transfer: None,

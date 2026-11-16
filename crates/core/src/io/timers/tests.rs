@@ -47,7 +47,7 @@ fn read_byte(timers: &Arm9Timers, offset: u32, now: u64) -> u8 {
 
 /// A halfword write: bytes in ascending address order, as the bus splits it. Returns the mask of
 /// timers whose overflow event the write made stale.
-fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> u8 {
+fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> SlotMask {
     let low = write_byte(timers, offset, value as u8, now);
     let high = write_byte(timers, offset + 1, (value >> 8) as u8, now);
     low.reschedule | high.reschedule
@@ -55,7 +55,7 @@ fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> u8 {
 
 /// A word write: four bytes in ascending address order (`timers.md`, "Writing a 32-bit word").
 /// Returns the mask of timers whose overflow event the write made stale.
-fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> u8 {
+fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> SlotMask {
     value
         .to_le_bytes()
         .iter()
@@ -66,7 +66,7 @@ fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> u8 {
 }
 
 /// Writes timer `index`'s reload, then its control, at `now`. Returns the reschedule mask.
-fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) -> u8 {
+fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) -> SlotMask {
     write16(timers, reload_offset(index), reload, now)
         | write16(timers, control_offset(index), control, now)
 }

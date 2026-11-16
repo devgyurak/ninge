@@ -365,6 +365,24 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
 }
 
 #[test]
+fn given_slots_above_bit_7_when_effects_merged_then_the_high_bits_are_kept() {
+    let merged = Effect {
+        requests: Requests::default(),
+        reschedule: 1 << 9,
+    }
+    .merge(Effect {
+        requests: Requests::default(),
+        reschedule: 1 << 31,
+    });
+    assert_eq!(merged.reschedule, (1 << 9) | (1 << 31));
+}
+
+#[test]
+fn given_timers_and_dma_of_both_cpus_when_event_slots_counted_then_there_are_sixteen() {
+    assert_eq!(EVENT_SLOTS, 16);
+}
+
+#[test]
 fn given_power_on_devices_when_checked_then_they_are_well_formed() {
     assert!(Io::new().is_well_formed(0));
 }

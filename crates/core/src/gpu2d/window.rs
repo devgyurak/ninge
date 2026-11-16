@@ -2,11 +2,10 @@
 //! The window feature: the rectangles of WIN0 and WIN1, the layer sets WININ and WINOUT give each
 //! region, and which set applies at a pixel (`docs/hw/windows.md`).
 
-use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::SCREEN_WIDTH;
+use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use serde::{Deserialize, Serialize};
 
-/// Scanlines of one frame, 0 to 262 (`windows.md`, "The vertical test").
-const FRAME_LINES: u16 = 263;
 /// Only the low eight bits of the scanline number are compared with Y1 and Y2.
 const LINE_MASK: u16 = 0xFF;
 
@@ -80,8 +79,7 @@ impl Latches {
     fn step(&mut self, line: u16, winv: [u16; 2]) {
         let low = line & LINE_MASK;
         self.on.iter_mut().zip(winv).for_each(|(on, reg)| {
-            *on = *on || low == reg >> 8;
-            *on = *on && low != reg & LINE_MASK;
+            *on = (*on || low == reg >> 8) && low != reg & LINE_MASK;
         });
     }
 
@@ -89,8 +87,9 @@ impl Latches {
     /// the last visible one.
     pub(super) fn begin_line(&mut self, y: usize, winv: [u16; 2]) {
         if y == 0 {
-            (SCREEN_HEIGHT as u16..FRAME_LINES).for_each(|line| self.step(line, winv));
+            (FIRST_VBLANK_LINE..LINES).for_each(|line| self.step(line, winv));
         }
+        // `y` is a visible line, below 192, so it fits.
         self.step(y as u16, winv);
     }
 
@@ -140,6 +139,9 @@ pub struct Windows {
     pub rects: [WindowRect; 2],
     /// Whether DISPCNT turns window 0, window 1 and the OBJ window on.
     pub enabled: [bool; 3],
+    /// Whether window 0 and window 1 are switched on at the line last made (`windows.md`, "The
+    /// vertical test").
+    pub latched: [bool; 2],
     /// The layers inside window 0 and inside window 1 (WININ).
     pub inside: [LayerSet; 2],
     /// The layers outside every window (WINOUT, low byte).
@@ -156,6 +158,7 @@ impl Windows {
         winv: [u16; 2],
         winin: u16,
         winout: u16,
+        latches: Latches,
     ) -> Self {
         let group = |reg: u16, shift: u32| LayerSet::new((reg >> shift) as u8);
         Self {
@@ -165,6 +168,7 @@ impl Windows {
                 dispcnt & DISPCNT_WIN1 != 0,
                 dispcnt & DISPCNT_OBJ_WINDOW != 0,
             ],
+            latched: [latches.on(0), latches.on(1)],
             inside: [group(winin, 0), group(winin, GROUP_SHIFT)],
             outside: group(winout, 0),
             obj_window: group(winout, GROUP_SHIFT),

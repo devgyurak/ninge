@@ -45,8 +45,8 @@ pixel only when its DISPCNT bit **and** the enable bit of the region the pixel i
 | WINxH | X2: the rightmost column of the window, plus 1 | X1: the leftmost column |
 | WINxV | Y2: the bottom row of the window, plus 1 | Y1: the top row |
 
-So a window covers the columns `X1 <= x < X2` and the rows `Y1 <= y < Y2`: the end value is one
-past the last pixel, the start value is the first one.
+So a window covers the columns `X1 <= x < X2`: the end value is one past the last pixel, the start
+value is the first one. The rows follow "The vertical test" below, not a plain `Y1 <= y < Y2`.
 
 ### WININ and WINOUT
 
@@ -98,7 +98,10 @@ runs from X1 to the right edge. A window with `X1 = X2` covers nothing.
 
 ### The vertical test
 
-The rows are not compared with Y1 and Y2 line by line. Each window keeps an on/off state that
+GBATEK says only that the low eight bits of the scanline number are compared with Y1 and Y2 and
+that the window then comes on in VBlank and stays on into line 0. That can only be a state that
+lasts across lines, so this note models it as a latch (our inference, see "Unverified"). Each
+window keeps an on/off state that
 changes as the scanlines go by: the scanline whose number equals Y1 switches it on and the one
 whose number equals Y2 switches it off (with `Y1 = Y2` it stays off). The window covers the
 visible line while it is on.
@@ -108,7 +111,7 @@ and Y2. The lines 192 to 262 are the VBlank. So a Y1 of `00h` to `06h` also matc
 `100h` to `106h`: the window switches on in VBlank and is on at line 0 and after, so Y1 = 1 to 6
 looks like Y1 = 0. A Y2 of 192 to 255 matches a VBlank line and switches the window off there, so
 the window runs to the bottom edge and stops. With Y1 greater than Y2 the window stays on across
-VBlank: it covers line 0 up to Y2, is off from Y2 up to Y1 and is on again from Y1 to the bottom.
+VBlank: it covers line 0 up to Y2 (when Y2 is 7 or more; a Y2 of 0 to 6 switches it off in VBlank already), is off from Y2 up to Y1 and is on again from Y1 to the bottom.
 (That is the first frame of such a window without the part before Y2: it starts off, as at power-on.)
 
 ### The OBJ window
@@ -140,7 +143,7 @@ later phase (`TODO(phase7)`).
 - DISPCNT 13-15 all clear: the registers are inert, the picture is the one without windows.
 - A window with X2 before X1: it does not vanish and does not wrap; X2 becomes the right edge. With
   Y2 before Y1 the window is on from Y1 to the bottom and, from the second frame on, from the top to
-  Y2.
+  Y2 (for Y2 of 7 or more).
 - Two windows covering a pixel: window 0's group applies; window 1's does not combine with it.
 - An OBJ window pixel inside window 0 or window 1 belongs to that window.
 - A region whose OBJ bit is clear: sprites do not show there, and neither do they decide
@@ -155,12 +158,13 @@ Each item carries `TODO(hw-unverified)` at its code site.
   We use 256. With X2 eight bits wide only X1 > X2 can apply. — `gpu2d::window::WindowRect::decode`
   — verify with a test ROM on hardware.
 - **Y1 greater than Y2.** The GBA rule ("counts as Y2 = 160") and the latch of "The vertical test"
-  disagree, and we follow the latch. The window then covers line 0 up to Y2 from the second frame
-  on. — `gpu2d::window::Latches::step` — verify likewise.
+  disagree, and we follow the latch. The window then covers line 0 up to Y2 (Y2 of 7 or more) from
+  the second frame on. — `gpu2d::window::Latches::step` — verify likewise.
 - **The latch details.** GBATEK says only that the window is switched on in VBlank for Y1 = 00h-06h.
   We step the state at every scanline with the registers as they stand; the VBlank lines are stepped
   together, with the registers at the next frame's line 0, so a write during VBlank counts for all
-  of them. The state moves whether or not DISPCNT turns the window on, a window starts off, and Y2
+  of them. Y2 of 192 to 255 and Y1 = Y2 (stays off) are our reading of the same model. The state
+  moves whether or not DISPCNT turns the window on or the engine is powered, a window starts off, and Y2
   is judged after Y1 on the same line. A mid-frame write to WINxV acts at the next matching line.
   — `gpu2d::window::Latches` — verify likewise.
 - **Mosaic.** We judge the windows at the screen pixel, not at the mosaic block's first pixel, so

@@ -152,7 +152,14 @@ impl Engine {
 
     /// The windows the registers hold, decoded under `dispcnt` (`windows.md`).
     pub(super) fn windows(&self, dispcnt: u32) -> Windows {
-        Windows::decode(dispcnt, self.winh, self.winv, self.winin, self.winout)
+        Windows::decode(
+            dispcnt,
+            self.winh,
+            self.winv,
+            self.winin,
+            self.winout,
+            self.latches,
+        )
     }
 
     /// Visible line `y` is about to be made: the windows' vertical state moves to it

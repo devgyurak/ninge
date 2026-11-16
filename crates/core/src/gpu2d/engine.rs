@@ -9,7 +9,8 @@ use super::obj;
 use super::spec::{EngineInputs, EngineSpec};
 use super::text::{self, TextBg};
 use super::window::{GROUP_MASK, Latches, LineWindows, WINDOW_BLOCK_BYTES, WINDOW_OFFSET, Windows};
-use super::{expand_color, with_byte};
+use super::with_byte;
+use crate::SCREEN_WIDTH;
 use serde::{Deserialize, Serialize};
 
 /// The engine's register block starts at DISPCNT; these are offsets from there, the same in
@@ -280,14 +281,19 @@ impl Engine {
         }
     }
 
-    /// Line `y` of the layers (display mode 1): each pixel is the front-most layer that is not
-    /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
-    /// together"). An object is in front of a background layer whose priority value is the same or
-    /// greater (`obj.md`, "Priority").
+    /// Line `y` of the layers (display mode 1) in 15-bit colour: each pixel is the front-most layer
+    /// that is not transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the
+    /// layers together"). An object is in front of a background layer whose priority value is the
+    /// same or greater (`obj.md`, "Priority").
     // TODO(phase4): blending completes the line (#34).
     // TODO(hw-unverified): the backdrop has no enable bit and shows when every layer is hidden
     // (`windows.md`, "Unverified").
-    pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
+    pub(super) fn render_line(
+        &self,
+        y: usize,
+        inputs: &EngineInputs<'_>,
+        out: &mut [u16; SCREEN_WIDTH],
+    ) {
         let dispcnt = inputs.spec.dispcnt(self.dispcnt);
         let palette = inputs
             .palette
@@ -364,13 +370,13 @@ impl Engine {
                 .map(|color| (color, texts[n].priority))
             });
             let object = objects.pixels[x].filter(|_| shown.obj());
-            *pixel = expand_color(match (object, layer) {
+            *pixel = match (object, layer) {
                 // An object is behind a layer of a smaller priority value.
                 (Some(object), Some((color, priority))) if object.priority > priority => color,
                 (Some(object), _) => object.color,
                 (None, Some((color, _))) => color,
                 (None, None) => backdrop,
-            });
+            };
         });
     }
 }

@@ -75,10 +75,11 @@ pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
 pub const WINDOW_REGS_B_ADDR: u32 = WINDOW_REGS_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block.
 pub const WINDOW_REGS_BYTES: u32 = ENGINE_WINDOW_BYTES;
-/// The xRGB8888 value of a white pixel.
-pub const WHITE: u32 = 0x00FF_FFFF;
-/// The xRGB8888 value of a black pixel.
-pub const BLACK: u32 = 0;
+
+/// A white pixel as 15-bit colour; it expands to xRGB8888 `00FF_FFFFh`.
+const WHITE_COLOR: u16 = 0x7FFF;
+/// A black pixel as 15-bit colour; it expands to xRGB8888 zero.
+const BLACK_COLOR: u16 = 0;
 
 /// DISPCNT bits 16-17: the display mode.
 const DISPCNT_MODE_SHIFT: u32 = 16;
@@ -164,6 +165,13 @@ fn expand_color(halfword: u16) -> u32 {
     (expand_channel(halfword) << 16)
         | (expand_channel(halfword >> GREEN_SHIFT) << 8)
         | expand_channel(halfword >> BLUE_SHIFT)
+}
+
+/// `line` as xRGB8888 into `out`, one host pixel for each 15-bit one.
+fn expand_line(line: &[u16; SCREEN_WIDTH], out: &mut [u32]) {
+    out.iter_mut().zip(line).for_each(|(pixel, &color)| {
+        *pixel = expand_color(color);
+    });
 }
 
 /// `reg` with its byte `index` replaced by `value`.
@@ -329,12 +337,14 @@ impl Gpu2d {
         let dispcnt = inputs.spec.dispcnt(self.a.dispcnt());
         let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
         let block = (dispcnt >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
+        // The line is made in 15-bit colour and expanded for the host at the end, so a stage
+        // between the layers and the screen works on the colour the hardware has.
+        let mut line = [BLACK_COLOR; SCREEN_WIDTH];
         if mode == MODE_OFF {
-            out.fill(WHITE);
+            line.fill(WHITE_COLOR);
         } else if mode == MODE_GRAPHICS {
-            self.a.render_line(y, inputs, out);
+            self.a.render_line(y, inputs, &mut line);
         } else if mode == MODE_VRAM {
-            out.fill(BLACK);
             let row = lcdc
                 .get(block as usize)
                 .copied()
@@ -342,12 +352,11 @@ impl Gpu2d {
                 .and_then(|bank| bank.get(y * SCREEN_WIDTH * 2..(y + 1) * SCREEN_WIDTH * 2))
                 .unwrap_or(&[]);
             let (pairs, _) = row.as_chunks::<2>();
-            out.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
-                *pixel = expand_color(u16::from_le_bytes(bytes));
+            line.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
+                *pixel = u16::from_le_bytes(bytes);
             });
-        } else {
-            out.fill(BLACK);
         }
+        expand_line(&line, out);
     }
 
     /// Draws line `y` of engine B's picture into `out`. Engine B has the display modes 0 (white)
@@ -360,13 +369,15 @@ impl Gpu2d {
         }
         let dispcnt = inputs.spec.dispcnt(self.b.dispcnt());
         let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
+        let mut line = [BLACK_COLOR; SCREEN_WIDTH];
         if !self.engine_b_on() {
-            out.fill(BLACK);
+            line.fill(BLACK_COLOR);
         } else if mode == MODE_GRAPHICS {
-            self.b.render_line(y, inputs, out);
+            self.b.render_line(y, inputs, &mut line);
         } else {
-            out.fill(WHITE);
+            line.fill(WHITE_COLOR);
         }
+        expand_line(&line, out);
     }
 }
 

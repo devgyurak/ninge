@@ -101,18 +101,18 @@ runs from X1 to the right edge. A window with `X1 = X2` covers nothing.
 GBATEK says only that the low eight bits of the scanline number are compared with Y1 and Y2 and
 that the window then comes on in VBlank and stays on into line 0. That can only be a state that
 lasts across lines, so this note models it as a latch (our inference, see "Unverified"). Each
-window keeps an on/off state that
-changes as the scanlines go by: the scanline whose number equals Y1 switches it on and the one
-whose number equals Y2 switches it off (with `Y1 = Y2` it stays off). The window covers the
-visible line while it is on.
+window keeps an on/off state that changes as the scanlines go by: the scanline whose number equals
+Y1 switches it on and the one whose number equals Y2 switches it off (with `Y1 = Y2` it stays
+off). The window covers the visible line while it is on.
 
 The DS counts scanlines 0 to 262 (`106h`), of which only the low eight bits are compared with Y1
 and Y2. The lines 192 to 262 are the VBlank. So a Y1 of `00h` to `06h` also matches the VBlank lines
 `100h` to `106h`: the window switches on in VBlank and is on at line 0 and after, so Y1 = 1 to 6
 looks like Y1 = 0. A Y2 of 192 to 255 matches a VBlank line and switches the window off there, so
 the window runs to the bottom edge and stops. With Y1 greater than Y2 the window stays on across
-VBlank: it covers line 0 up to Y2 (when Y2 is 7 or more; a Y2 of 0 to 6 switches it off in VBlank already), is off from Y2 up to Y1 and is on again from Y1 to the bottom.
-(That is the first frame of such a window without the part before Y2: it starts off, as at power-on.)
+VBlank: it covers line 0 up to Y2 (when Y2 is 7 or more; a Y2 of 0 to 6 switches it off in VBlank
+already), is off from Y2 up to Y1 and is on again from Y1 to the bottom. (The first frame of such a
+window lacks the part before Y2: it starts off, as at power-on.)
 
 ### The OBJ window
 

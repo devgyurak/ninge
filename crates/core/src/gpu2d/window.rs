@@ -65,7 +65,8 @@ impl LayerSet {
 /// counting the VBlank lines (`windows.md`, "The vertical test").
 // TODO(hw-unverified): the state follows the registers as they are when the lines are made; the
 // VBlank lines are stepped together with the registers of the next frame's first line, and the
-// state moves whether or not DISPCNT turns the window on (`windows.md`, "Unverified").
+// state moves whether or not DISPCNT turns the window on or the engine is powered. A Y2 of 192 to
+// 255 switches the window off in VBlank, and `Y1 = Y2` leaves it off (`windows.md`, "Unverified").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Latches {
     on: [bool; 2],

@@ -542,6 +542,23 @@ fn given_x1_and_x2_0_when_drawn_then_the_window_covers_nothing() {
     assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
 }
 
+/// The latches of engine A after lines 0 to `last` have been made.
+fn latched_after(m: &mut Machine, last: usize) -> [bool; 2] {
+    (0..=last).for_each(|y| m.render_line(y));
+    m.inspect().gpu2d().windows(EngineId::A).latched
+}
+
+#[test]
+fn given_window_0_rows_10_to_20_and_window_1_y1_equal_to_y2_when_line_15_is_made_then_only_window_0_is_latched()
+ {
+    let mut m = layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | WIN0_ON | WIN1_ON,
+        &[(WIN0V, range(10, 20)), (WIN1V, range(15, 15))],
+    );
+    assert_eq!(latched_after(&mut m, 15), [true, false]);
+}
+
 // ------------------------------------------------------------------------- the registers
 
 #[test]

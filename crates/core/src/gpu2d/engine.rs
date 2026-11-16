@@ -102,7 +102,7 @@ enum Field {
 impl Engine {
     /// Registers in their power-on state.
     // TODO(hw-unverified): every register starts at 0, which GBATEK does not state
-    // (`display-mode-vram.md`, `bg-text.md` and `windows.md`, "Unverified").
+    // (`display-mode-vram.md`, `bg-text.md`, `windows.md` and `blending.md`, "Unverified").
     pub(super) fn new() -> Self {
         Self {
             dispcnt: 0,
@@ -250,7 +250,8 @@ impl Engine {
     /// The byte at `offset` in the register block; 0 where no register is.
     // TODO(hw-unverified): the scroll registers and the transform registers (PA-PD, BGxX, BGxY) are
     // write-only and read 0 (`bg-text.md` and `bg-modes.md`, "Unverified"), and so are the window
-    // rectangles (`windows.md`, "Unverified").
+    // rectangles (`windows.md`, "Unverified"); BLDALPHA reads back its used bits and BLDY reads 0
+    // (`blending.md`, "Unverified").
     pub(super) fn read_byte(&self, offset: u32) -> u8 {
         let Some((field, byte)) = Self::locate(offset) else {
             return 0;

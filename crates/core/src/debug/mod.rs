@@ -14,7 +14,6 @@
 use crate::bus::{BANK_COUNT, TcmConfig};
 use crate::cpu::Cpu;
 use crate::machine::Machine;
-use crate::machine::OAM_HALF;
 
 pub use crate::bus::{ExtPaletteBanks, VramBankState, VramMapping, WramShare, WramState};
 pub use crate::gpu2d::{
@@ -118,15 +117,7 @@ impl<'a> Inspect<'a> {
     /// index past 127 is taken modulo 128.
     // The debugger's OAM view (#58) shows it.
     pub fn obj(&self, which: EngineId, index: usize) -> ObjAttrs {
-        let oam = self.machine.memory.oam();
-        let (oam_a, oam_b) = oam.split_at_checked(OAM_HALF).unwrap_or((oam, &[]));
-        ObjAttrs::decode(
-            match which {
-                EngineId::A => oam_a,
-                EngineId::B => oam_b,
-            },
-            index,
-        )
+        ObjAttrs::decode(self.machine.memory.oam_of(which), index)
     }
 
     /// The ARM9's interrupt controller (IME, IE, IF).

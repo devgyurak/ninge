@@ -204,6 +204,13 @@ impl Gpu2d {
         self.engine(which).affine_bg(which.spec(), layer)
     }
 
+    /// Visible line `y` is about to be made: both engines' windows move to it
+    /// (`windows.md`, "The vertical test").
+    pub(crate) fn begin_line(&mut self, y: usize) {
+        self.a.begin_line(y);
+        self.b.begin_line(y);
+    }
+
     /// A visible line has been drawn: both engines' affine reference points step down one line
     /// (`bg-modes.md`, "When the picture is made").
     pub(crate) fn end_line(&mut self) {

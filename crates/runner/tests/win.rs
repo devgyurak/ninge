@@ -40,8 +40,10 @@ fn expand(color: u16) -> u32 {
     (channel(color) << 16) | (channel(color >> 5) << 8) | channel(color >> 10)
 }
 
-/// A rectangle as the ROM's registers hold it: X1 and X2, Y1 and Y2 (`windows.md`, "The
-/// rectangles"). The end is clamped to the screen when it is past it or before the start.
+/// A rectangle as the ROM's registers hold it: X1 and X2, Y1 and Y2 (`windows.md`, "The rectangles"
+/// and "The vertical test"). X2 before X1 counts as the right edge. The rows are the frames after the
+/// first: Y1 switches the window on, Y2 off, and with Y1 past Y2 it is on from Y1 to the bottom and
+/// from the top to Y2.
 #[derive(Clone, Copy)]
 struct Rect {
     x: (usize, usize),
@@ -50,12 +52,16 @@ struct Rect {
 
 impl Rect {
     fn contains(self, x: usize, y: usize) -> bool {
-        let end = |(start, end): (usize, usize), limit: usize| match end > limit || start > end {
-            true => limit,
-            false => end,
+        let right = match self.x.0 > self.x.1 {
+            true => SCREEN_WIDTH,
+            false => self.x.1,
         };
-        (self.x.0..end(self.x, SCREEN_WIDTH)).contains(&x)
-            && (self.y.0..end(self.y, SCREEN_HEIGHT)).contains(&y)
+        let rows = match self.y.0.cmp(&self.y.1) {
+            std::cmp::Ordering::Less => (self.y.0..self.y.1).contains(&y),
+            std::cmp::Ordering::Greater => y >= self.y.0 || y < self.y.1,
+            std::cmp::Ordering::Equal => false,
+        };
+        (self.x.0..right).contains(&x) && rows
     }
 }
 
@@ -196,7 +202,7 @@ fn given_win_rom_when_4_frames_run_then_the_rom_wrote_the_registers_it_set() {
             0x0001_4F00,
             [(40, 160, 30, 120), (100, 220, 80, 170)],
             [true, true, false],
-            (180, 256, 100, 192),
+            (180, 256, 100, 40),
             [false, true, false],
         )
     );

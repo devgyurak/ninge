@@ -2,7 +2,12 @@
 //! The window feature: the rectangles of WIN0 and WIN1, the layer sets WININ and WINOUT give each
 //! region, and which set applies at a pixel (`docs/hw/windows.md`).
 
-use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::SCREEN_WIDTH;
+use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
+use serde::{Deserialize, Serialize};
+
+/// Only the low eight bits of the scanline number are compared with Y1 and Y2.
+const LINE_MASK: u16 = 0xFF;
 
 /// WIN0H, at offset `40h` of an engine's register block; the block runs WIN0H, WIN1H, WIN0V,
 /// WIN1V, WININ, WINOUT, two bytes each (`windows.md`, "Registers").
@@ -55,38 +60,75 @@ impl LayerSet {
     }
 }
 
+/// The vertical state of both windows: whether each is switched on at the line being made. A
+/// window switches on at the line whose low eight bits equal Y1 and off at the one that equal Y2,
+/// counting the VBlank lines (`windows.md`, "The vertical test").
+// TODO(hw-unverified): the state follows the registers as they are when the lines are made; the
+// VBlank lines are stepped together with the registers of the next frame's first line. The state
+// moves whether or not DISPCNT turns the window on, and whether or not the engine is powered. A
+// window starts off, Y2 is judged after Y1 on the same line, a Y2 of 192 to 255 switches the window
+// off in VBlank, and `Y1 = Y2` leaves it off (`windows.md`, "Unverified").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Latches {
+    on: [bool; 2],
+}
+
+impl Latches {
+    // TODO(hw-unverified): with Y1 greater than Y2 the window stays on across VBlank, where the
+    // GBA rule reads Y2 as the screen height (`windows.md`, "Unverified").
+    /// Scanline `line` (0-262) goes by with the window rows `winv` hold: Y1 switches a window on,
+    /// then Y2 switches it off, so `Y1 = Y2` leaves it off.
+    fn step(&mut self, line: u16, winv: [u16; 2]) {
+        let low = line & LINE_MASK;
+        self.on.iter_mut().zip(winv).for_each(|(on, reg)| {
+            *on = (*on || low == reg >> 8) && low != reg & LINE_MASK;
+        });
+    }
+
+    /// Visible line `y` is about to be made. Line 0 first takes the VBlank lines that came after
+    /// the last visible one.
+    pub(super) fn begin_line(&mut self, y: usize, winv: [u16; 2]) {
+        if y == 0 {
+            (FIRST_VBLANK_LINE..LINES).for_each(|line| self.step(line, winv));
+        }
+        // `y` is a visible line, below 192, so it fits.
+        self.step(y as u16, winv);
+    }
+
+    /// Whether window `n` is switched on at the line being made.
+    fn on(self, n: usize) -> bool {
+        self.on.get(n).copied().unwrap_or(false)
+    }
+}
+
 /// One window's rectangle after the rules for odd values (`windows.md`, "The rectangles"): the
-/// columns `left..right` and the rows `top..bottom`.
+/// columns `left..right`, and Y1 and Y2 as written, which the vertical test uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowRect {
     /// The first column (X1).
     pub left: u16,
     /// One past the last column (X2, or the screen width when X2 is past it or before X1).
     pub right: u16,
-    /// The first row (Y1).
+    /// Y1, as written.
     pub top: u16,
-    /// One past the last row (Y2, or the screen height when Y2 is past it or before Y1).
+    /// Y2, as written.
     pub bottom: u16,
 }
 
 impl WindowRect {
     /// The rectangle `winh` and `winv` hold: bits 0-7 the end, bits 8-15 the start.
-    // TODO(hw-unverified): the limits are the DS screen's, 256 by 192, where GBATEK gives the GBA's
-    // 240 by 160, and a window is judged by comparing the line against Y1 and Y2 as the line is
-    // made (`windows.md`, "Unverified").
+    // TODO(hw-unverified): the width limit is the DS screen's, 256, where GBATEK gives the GBA's
+    // 240; X1 greater than X2 reads as X2 = 256 (`windows.md`, "Unverified").
     fn decode(winh: u16, winv: u16) -> Self {
-        let end = |reg: u16, limit: u16| {
-            let (start, end) = (reg >> 8, reg & 0xFF);
-            match end > limit || start > end {
-                true => limit,
-                false => end,
-            }
-        };
+        let (start, end) = (winh >> 8, winh & 0xFF);
         Self {
-            left: winh >> 8,
-            right: end(winh, SCREEN_WIDTH as u16),
+            left: start,
+            right: match start > end {
+                true => SCREEN_WIDTH as u16,
+                false => end,
+            },
             top: winv >> 8,
-            bottom: end(winv, SCREEN_HEIGHT as u16),
+            bottom: winv & 0xFF,
         }
     }
 }
@@ -99,6 +141,9 @@ pub struct Windows {
     pub rects: [WindowRect; 2],
     /// Whether DISPCNT turns window 0, window 1 and the OBJ window on.
     pub enabled: [bool; 3],
+    /// Whether window 0 and window 1 are switched on at the line last made (`windows.md`, "The
+    /// vertical test").
+    pub latched: [bool; 2],
     /// The layers inside window 0 and inside window 1 (WININ).
     pub inside: [LayerSet; 2],
     /// The layers outside every window (WINOUT, low byte).
@@ -115,6 +160,7 @@ impl Windows {
         winv: [u16; 2],
         winin: u16,
         winout: u16,
+        latches: Latches,
     ) -> Self {
         let group = |reg: u16, shift: u32| LayerSet::new((reg >> shift) as u8);
         Self {
@@ -124,6 +170,7 @@ impl Windows {
                 dispcnt & DISPCNT_WIN1 != 0,
                 dispcnt & DISPCNT_OBJ_WINDOW != 0,
             ],
+            latched: [latches.on(0), latches.on(1)],
             inside: [group(winin, 0), group(winin, GROUP_SHIFT)],
             outside: group(winout, 0),
             obj_window: group(winout, GROUP_SHIFT),
@@ -133,31 +180,30 @@ impl Windows {
 
 /// The regions of one line, ready to be asked about each pixel.
 pub(super) struct LineWindows {
-    /// The columns each window covers on this line, empty when the window is off or the line is
-    /// outside its rows.
+    /// The columns each window covers on this line, empty when the window is off or its latch is
+    /// off.
     spans: [(usize, usize); 2],
     inside: [LayerSet; 2],
+    /// The OBJ window's layers, when DISPCNT turns it on.
+    obj_window: Option<LayerSet>,
     outside: LayerSet,
 }
 
 impl LineWindows {
-    /// The regions of line `y` (`windows.md`, "The four regions").
-    // TODO(hw-unverified): the row test compares the line against Y1 and Y2 as the line is made
-    // (`windows.md`, "Unverified").
-    // TODO(phase4): the OBJ window region (#33) is not made yet; its pixels fall to the outside.
-    pub(super) fn new(windows: &Windows, y: usize) -> Self {
+    /// The regions of the line the `latches` stand at (`windows.md`, "The four regions").
+    pub(super) fn new(windows: &Windows, latches: Latches) -> Self {
         // With no window on at all there is no windowing: every layer shows everywhere.
         if !windows.enabled.iter().any(|&on| on) {
             return Self {
                 spans: [(0, 0); 2],
                 inside: [LayerSet::ALL; 2],
+                obj_window: None,
                 outside: LayerSet::ALL,
             };
         }
         let span = |n: usize| {
             let rect = windows.rects[n];
-            let on = windows.enabled[n] && (rect.top as usize..rect.bottom as usize).contains(&y);
-            match on {
+            match windows.enabled[n] && latches.on(n) {
                 true => (rect.left as usize, rect.right as usize),
                 false => (0, 0),
             }
@@ -165,17 +211,20 @@ impl LineWindows {
         Self {
             spans: [span(0), span(1)],
             inside: windows.inside,
+            obj_window: windows.enabled[2].then_some(windows.obj_window),
             outside: windows.outside,
         }
     }
 
-    /// The layers column `x` shows: window 0's, else window 1's, else the outside set.
-    pub(super) fn layers(&self, x: usize) -> LayerSet {
+    /// The layers column `x` shows: window 0's, else window 1's, else the OBJ window's where
+    /// `obj_window` marks the column, else the outside set.
+    pub(super) fn layers(&self, x: usize, obj_window: &[bool; SCREEN_WIDTH]) -> LayerSet {
         let hit = |n: usize| (self.spans[n].0..self.spans[n].1).contains(&x);
-        match (hit(0), hit(1)) {
-            (true, _) => self.inside[0],
-            (false, true) => self.inside[1],
-            (false, false) => self.outside,
+        match (hit(0), hit(1), self.obj_window) {
+            (true, _, _) => self.inside[0],
+            (false, true, _) => self.inside[1],
+            (false, false, Some(set)) if obj_window[x] => set,
+            _ => self.outside,
         }
     }
 }

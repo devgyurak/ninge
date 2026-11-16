@@ -1,0 +1,2 @@
+# Golden frames for testroms/objwin. Format and review flow: tests/golden/README.md.
+frames=4 top=0fad1a72c4ffe605 bottom=f4e48c5d2732e325

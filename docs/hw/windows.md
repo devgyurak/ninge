@@ -1,9 +1,9 @@
 # Windows: WIN0, WIN1, the OBJ window and the outside region (both engines)
 
 Sources: GBATEK "LCD I/O Window Feature" (the registers, the rectangle rules, the OBJ window,
-the priority of the regions); GBATEK "DS Video BG Modes / Control" (DISPCNT bits 8-15); GBATEK "DS
-Video 3D Display Control" (the one line that says the window feature works on the DS as on the
-GBA).
+the priority of the regions); GBATEK "DS Window Glitches" (the scanlines past the screen and the
+8-bit coordinates); GBATEK "DS Video BG Modes / Control" (DISPCNT bits 8-15); GBATEK "DS Video 3D
+Display Control" (the one line that says the window feature works on the DS as on the GBA).
 Used by: `crates/core/src/gpu2d/`   Phase: 4 (#33); the colour special effects the window
 enables are #34, the debugger panel that shows the rectangles is #58
 
@@ -45,8 +45,8 @@ pixel only when its DISPCNT bit **and** the enable bit of the region the pixel i
 | WINxH | X2: the rightmost column of the window, plus 1 | X1: the leftmost column |
 | WINxV | Y2: the bottom row of the window, plus 1 | Y1: the top row |
 
-So a window covers the columns `X1 <= x < X2` and the rows `Y1 <= y < Y2`: the end value is one
-past the last pixel, the start value is the first one.
+So a window covers the columns `X1 <= x < X2`: the end value is one past the last pixel, the start
+value is the first one. The rows follow "The vertical test" below, not a plain `Y1 <= y < Y2`.
 
 ### WININ and WINOUT
 
@@ -88,14 +88,31 @@ window on, WINOUT decides everything outside it.
 
 ### The rectangles
 
-A window's rectangle is read from its two registers as they stand when the line is made
-(`bg-text.md`, "When the picture is made"). The columns are those of the screen, `0` to `255`, the
-rows `0` to `191`.
+A window's columns are read from its register as it stands when the line is made (`bg-text.md`,
+"When the picture is made"). The columns are those of the screen, `0` to `255`.
 
-Values outside the screen are not an error: X2 greater than the screen width, or X1 greater than
-X2, count as X2 = the width; Y2 greater than the screen height, or Y1 greater than Y2, count as Y2 =
-the height. The start value is used as written. A window with `X1 = X2` or `Y1 = Y2` (after that
-rule) covers nothing.
+The coordinates are eight bits wide, which cannot say "the whole 256": X1 `00h` is the left edge,
+X2 `00h` counts as `100h`, the right edge, and a window with `X1 = X2 = 00h` is not shown at all, so
+a window is at most 255 columns wide. In general X1 greater than X2 counts as X2 = 256: the window
+runs from X1 to the right edge. A window with `X1 = X2` covers nothing.
+
+### The vertical test
+
+GBATEK says only that the low eight bits of the scanline number are compared with Y1 and Y2 and
+that the window then comes on in VBlank and stays on into line 0. That can only be a state that
+lasts across lines, so this note models it as a latch (our inference, see "Unverified"). Each
+window keeps an on/off state that changes as the scanlines go by: the scanline whose number equals
+Y1 switches it on and the one whose number equals Y2 switches it off (with `Y1 = Y2` it stays
+off). The window covers the visible line while it is on.
+
+The DS counts scanlines 0 to 262 (`106h`), of which only the low eight bits are compared with Y1
+and Y2. The lines 192 to 262 are the VBlank. So a Y1 of `00h` to `06h` also matches the VBlank lines
+`100h` to `106h`: the window switches on in VBlank and is on at line 0 and after, so Y1 = 1 to 6
+looks like Y1 = 0. A Y2 of 192 to 255 matches a VBlank line and switches the window off there, so
+the window runs to the bottom edge and stops. With Y1 greater than Y2 the window stays on across
+VBlank: it covers line 0 up to Y2 (when Y2 is 7 or more; a Y2 of 0 to 6 switches it off in VBlank
+already), is off from Y2 up to Y1 and is on again from Y1 to the bottom. (The first frame of such a
+window lacks the part before Y2: it starts off, as at power-on.)
 
 ### The OBJ window
 
@@ -124,8 +141,9 @@ later phase (`TODO(phase7)`).
 ## Edge cases
 
 - DISPCNT 13-15 all clear: the registers are inert, the picture is the one without windows.
-- A window with its end before its start: it does not vanish and does not wrap; its end becomes the
-  screen edge, so it covers from the start to the edge.
+- A window with X2 before X1: it does not vanish and does not wrap; X2 becomes the right edge. With
+  Y2 before Y1 the window is on from Y1 to the bottom and, from the second frame on, from the top to
+  Y2 (for Y2 of 7 or more).
 - Two windows covering a pixel: window 0's group applies; window 1's does not combine with it.
 - An OBJ window pixel inside window 0 or window 1 belongs to that window.
 - A region whose OBJ bit is clear: sprites do not show there, and neither do they decide
@@ -135,16 +153,24 @@ later phase (`TODO(phase7)`).
 
 Each item carries `TODO(hw-unverified)` at its code site.
 
-- **The screen limit of the clamp.** GBATEK writes the rule for the GBA screen: "X2 > 240 or X1 >
-  X2 counts as X2 = 240", "Y2 > 160 or Y1 > Y2 counts as Y2 = 160". The DS screen is 256 by 192.
-  We use the DS size. With X2 an 8-bit field the X2 > width part can never apply, so only X1 > X2
-  matters horizontally. — `gpu2d::window::WindowRect::decode` — verify with a test ROM on hardware.
-- **X2 or Y2 equal to 0, X1 or Y1 at 255.** Not stated; they follow from the rule (an empty window,
-  or X1 > X2 and so the full width). — `gpu2d::window::WindowRect::decode` — verify likewise.
-- **Vertical test.** Whether the row test is a comparison of the current line against Y1 and Y2, or
-  a latch that switches on at Y1 and off at Y2 (so that changing the registers mid-frame behaves
-  differently). We compare the line number against the values as they stand when the line is made.
-  — `gpu2d::window::LineWindows::new` — verify with a mid-frame write.
+- **The screen width of the clamp.** GBATEK writes the rule for the GBA screen: "X2 > 240 or X1 > X2
+  counts as X2 = 240". The DS screen is 256 wide, and "DS Window Glitches" gives X2 = 00h as 100h.
+  We use 256. With X2 eight bits wide only X1 > X2 can apply. —
+  `gpu2d::window::WindowRect::decode`
+  — verify with a test ROM on hardware.
+- **Y1 greater than Y2.** The GBA rule ("counts as Y2 = 160") and the latch of "The vertical test"
+  disagree, and we follow the latch. The window then covers line 0 up to Y2 (Y2 of 7 or more) from
+  the second frame on. — `gpu2d::window::Latches::step` — verify likewise.
+- **The latch details.** GBATEK says only that the window is switched on in VBlank for Y1 = 00h-06h.
+  We step the state at every scanline with the registers as they stand; the VBlank lines are stepped
+  together, with the registers at the next frame's line 0, so a write during VBlank counts for all
+  of them. Y2 of 192 to 255 and Y1 = Y2 (stays off) are our reading of the same model. The state
+  moves whether or not DISPCNT turns the window on or the engine is powered, a window starts off,
+  and Y2
+  is judged after Y1 on the same line. A mid-frame write to WINxV acts at the next matching line.
+  — `gpu2d::window::Latches` — verify likewise.
+- **Mosaic.** We judge the windows at the screen pixel, not at the mosaic block's first pixel, so
+  the edge of a window cuts a block. — `Engine::render_line` — verify likewise.
 - **Reads.** WIN0H-WIN1V are marked write-only; we return 0 for them, as for the other
   write-only registers (`bg-modes.md`). — `Engine::read_byte` — verify likewise.
 - **WININ and WINOUT bits 6-7 and 14-15** ("not used"): we clear them on write, so they read back
@@ -154,13 +180,21 @@ Each item carries `TODO(hw-unverified)` at its code site.
 - **The backdrop with every layer hidden:** it has no enable bit and is shown. This is what the
   absence of a bit implies; GBATEK does not spell it out. — `Engine::render_line` — verify
   likewise.
+- **What an OBJ window object goes through.** GBATEK does not say that a mode 2 object has the
+  same cost, affine transform, mosaic and line limit as a drawn one. We give it all of them, so the
+  mask can be cut off by the limit and follows a transform. — `obj::draw_line` — verify
+  likewise.
 - **The window on the 3D layer**, and GBATEK's own doubt there that the effect bit may be
   overridden when the 3D layer is in front. — none until Phase 7.
 - **Windows outside the normal picture mode.** We apply them only in display mode 1, where the
-  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). — `Gpu2d::render_line_a` and `render_line_b` — verify likewise.
+  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). —
+  `Gpu2d::render_line_a` — verify likewise.
 
 ## Evidence
 
-Test ROMs will pin this note (#33): `win` (WIN0, WIN1 and the outside region, on both engines,
-through halfword and byte writes) and `objwin` (the OBJ window). Their expected pixels are worked
-out from this note, never read from the emulator.
+Test ROMs pin this note (#33): `win` (WIN0, WIN1 and the outside region on both engines, one with
+the rectangle rules for a start past an end) and `objwin` (mode 2 objects: plain, affine,
+half-transparent and mosaic, with ordinary sprites and window 1 over them). Their expected pixels
+are worked out from this note, never read from the emulator. The unit tests in
+`gpu2d/tests/window.rs`
+add byte and halfword writes, the register masks, the line budget and the savestate.

@@ -8,9 +8,8 @@ use super::kind::{Kind, drawn_kind, kind_of};
 use super::obj;
 use super::spec::{EngineInputs, EngineSpec};
 use super::text::{self, TextBg};
-use super::window::{GROUP_MASK, LineWindows, WINDOW_BLOCK_BYTES, WINDOW_OFFSET, Windows};
+use super::window::{GROUP_MASK, Latches, LineWindows, WINDOW_BLOCK_BYTES, WINDOW_OFFSET, Windows};
 use super::{expand_color, with_byte};
-use crate::SCREEN_WIDTH;
 use serde::{Deserialize, Serialize};
 
 /// The engine's register block starts at DISPCNT; these are offsets from there, the same in
@@ -51,6 +50,8 @@ pub(super) struct Engine {
     winv: [u16; 2],
     winin: u16,
     winout: u16,
+    // Whether each window is switched on at the line being made (`windows.md`, "The vertical test").
+    latches: Latches,
 }
 
 /// The mosaic block sizes in pixels of an engine (`bg-modes.md`, "Mosaic"): each is the register's
@@ -89,7 +90,7 @@ enum Field {
 impl Engine {
     /// Registers in their power-on state.
     // TODO(hw-unverified): every register starts at 0, which GBATEK does not state
-    // (`display-mode-vram.md` and `bg-text.md`, "Unverified").
+    // (`display-mode-vram.md`, `bg-text.md` and `windows.md`, "Unverified").
     pub(super) fn new() -> Self {
         Self {
             dispcnt: 0,
@@ -102,6 +103,7 @@ impl Engine {
             winv: [0; 2],
             winin: 0,
             winout: 0,
+            latches: Latches::default(),
         }
     }
 
@@ -150,7 +152,20 @@ impl Engine {
 
     /// The windows the registers hold, decoded under `dispcnt` (`windows.md`).
     pub(super) fn windows(&self, dispcnt: u32) -> Windows {
-        Windows::decode(dispcnt, self.winh, self.winv, self.winin, self.winout)
+        Windows::decode(
+            dispcnt,
+            self.winh,
+            self.winv,
+            self.winin,
+            self.winout,
+            self.latches,
+        )
+    }
+
+    /// Visible line `y` is about to be made: the windows' vertical state moves to it
+    /// (`windows.md`, "The vertical test").
+    pub(super) fn begin_line(&mut self, y: usize) {
+        self.latches.begin_line(y, self.winv);
     }
 
     /// A visible line has been drawn: both affine layers' internal reference points move down one
@@ -269,7 +284,7 @@ impl Engine {
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
     /// together"). An object is in front of a background layer whose priority value is the same or
     /// greater (`obj.md`, "Priority").
-    // TODO(phase4): blending completes the line (#34), and the OBJ window (#33) joins the regions.
+    // TODO(phase4): blending completes the line (#34).
     // TODO(hw-unverified): the backdrop has no enable bit and shows when every layer is hidden
     // (`windows.md`, "Unverified").
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
@@ -309,12 +324,14 @@ impl Engine {
         // The object layer, when DISPCNT bit 12 is set (`obj.md`, "The layer is on when").
         let objects = match dispcnt & DISPCNT_OBJ_ON != 0 {
             true => obj::draw_line(inputs, dispcnt, mosaic, y),
-            false => [None; SCREEN_WIDTH],
+            false => obj::ObjLayer::EMPTY,
         };
         // The regions of the line: which layers each pixel may show (`windows.md`).
-        let regions = LineWindows::new(&self.windows(dispcnt), y);
+        // TODO(hw-unverified): a window is judged at the screen pixel, not at a mosaic block's first
+        // pixel (`windows.md`, "Unverified").
+        let regions = LineWindows::new(&self.windows(dispcnt), self.latches);
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
-            let shown = regions.layers(x);
+            let shown = regions.layers(x, &objects.window);
             // The first column of the pixel's block, for a mosaic layer.
             let block_x = (x - x % block_w) as u32;
             let layer = order.iter().find_map(|&n| {
@@ -346,7 +363,7 @@ impl Engine {
                 }
                 .map(|color| (color, texts[n].priority))
             });
-            let object = objects[x].filter(|_| shown.obj());
+            let object = objects.pixels[x].filter(|_| shown.obj());
             *pixel = expand_color(match (object, layer) {
                 // An object is behind a layer of a smaller priority value.
                 (Some(object), Some((color, priority))) if object.priority > priority => color,

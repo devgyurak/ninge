@@ -543,8 +543,8 @@ fn mode_cases(bits: [u16; 6], draws: [bool; 6]) -> Vec<(usize, usize, u32)> {
 
 #[test]
 fn given_objects_of_each_mode_when_drawn_then_only_the_window_mode_and_shape_3_are_skipped() {
-    // TODO(phase4): the OBJ window (mode 2, #33) is not drawn yet; mode 1 draws as a normal object
-    // (#34). Shape 3 is not allowed. The affine object (entry 4) has zero parameters, so it
+    // An object of mode 2 draws no colour (it marks the OBJ window, `windows.rs` covers that); mode 1
+    // draws as a normal object (`TODO(phase4)`, #34). Shape 3 is not allowed. The affine object (entry 4) has zero parameters, so it
     // samples one pixel of its tile everywhere, and that pixel is 1. The bitmap object (entry 3)
     // reads halfwords of the tile data, which has bit 15 clear everywhere, so nothing shows
     // (`bitmap.rs` covers bitmap objects).

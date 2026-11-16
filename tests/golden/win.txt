@@ -1,2 +1,2 @@
 # Golden frames for testroms/win. Format and review flow: tests/golden/README.md.
-frames=4 top=483e80182701a425 bottom=783dac1dba0ca025
+frames=4 top=483e80182701a425 bottom=d3fc867707320e25

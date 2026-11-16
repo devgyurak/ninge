@@ -193,6 +193,7 @@ impl Machine {
         if y >= SCREEN_HEIGHT {
             return;
         }
+        self.io.gpu2d_mut().begin_line(y);
         let gpu = self.io.gpu2d();
         let (engine_a, engine_b) = if gpu.engine_a_on_top() {
             (&mut self.work_top, &mut self.work_bottom)

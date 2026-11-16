@@ -265,7 +265,8 @@ fn given_x1_past_x2_when_drawn_then_the_window_runs_from_x1_to_the_right_edge() 
 }
 
 #[test]
-fn given_y1_past_y2_when_drawn_then_the_window_runs_from_y1_to_the_bottom_edge() {
+fn given_y1_past_y2_when_the_first_frame_is_drawn_then_the_window_runs_from_y1_to_the_bottom_edge()
+{
     let mut m = layers_scene(
         ENG_A,
         GRAPHICS_BGS | WIN0_ON,
@@ -454,6 +455,93 @@ fn given_the_obj_bit_set_inside_a_window_and_clear_outside_when_drawn_then_only_
     assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
 }
 
+/// A machine with window 0 over every column, rows Y1 `top` and Y2 `bottom`, showing BG1 (green)
+/// inside and BG2 (blue) outside.
+fn rows_scene(top: u16, bottom: u16) -> Machine {
+    layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | WIN0_ON,
+        &[
+            (WIN0H, range(0, 255)),
+            (WIN0V, range(top, bottom)),
+            (WININ, BG1),
+            (WINOUT, BG2),
+        ],
+    )
+}
+
+#[test]
+fn given_y1_in_0_to_6_when_drawn_then_the_window_is_already_on_at_line_0() {
+    // Y1 = 3 is met again at VBlank line 259 (low byte 3), so the window is on from line 0.
+    let mut m = rows_scene(3, 50);
+    let probes = [(5, 0, GREEN), (5, 49, GREEN), (5, 50, BLUE)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_y1_7_when_drawn_then_the_window_starts_at_line_7() {
+    // 7 is the first value VBlank never reaches (lines run to 262, low byte 6).
+    let mut m = rows_scene(7, 50);
+    let probes = [(5, 0, BLUE), (5, 6, BLUE), (5, 7, GREEN), (5, 49, GREEN)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_y1_past_y2_when_the_second_frame_is_drawn_then_the_window_also_covers_the_lines_before_y2()
+{
+    // The window stays on across VBlank, and line 100 switches it off.
+    let mut m = rows_scene(150, 100);
+    m.render_frame();
+    let probes = [
+        (5, 0, GREEN),
+        (5, 99, GREEN),
+        (5, 100, BLUE),
+        (5, 149, BLUE),
+        (5, 150, GREEN),
+    ];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_y1_equal_to_y2_when_drawn_then_the_window_covers_nothing() {
+    let mut m = rows_scene(100, 100);
+    m.render_frame();
+    let probes = [(5, 99, BLUE), (5, 100, BLUE), (5, 101, BLUE), (5, 0, BLUE)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_x2_0_when_drawn_then_the_window_runs_to_the_right_edge() {
+    let mut m = layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | WIN0_ON,
+        &[
+            (WIN0H, range(50, 0)),
+            (WIN0V, range(0, 192)),
+            (WININ, BG1),
+            (WINOUT, BG2),
+        ],
+    );
+    let probes = [(49, 7, BLUE), (50, 7, GREEN), (255, 7, GREEN)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
+#[test]
+fn given_x1_and_x2_0_when_drawn_then_the_window_covers_nothing() {
+    let mut m = layers_scene(
+        ENG_A,
+        GRAPHICS_BGS | WIN0_ON,
+        &[
+            (WIN0H, range(0, 0)),
+            (WIN0V, range(0, 192)),
+            (WININ, BG1),
+            (WINOUT, BG2),
+        ],
+    );
+    let probes = [(0, 7, BLUE), (128, 7, BLUE), (255, 7, BLUE)];
+    assert_eq!(misses(&mut m, ENG_A, &probes), vec![]);
+}
+
 // ------------------------------------------------------------------------- the registers
 
 #[test]
@@ -477,7 +565,7 @@ fn given_the_window_registers_when_decoded_then_the_inspect_view_shows_the_clamp
             set_bits(windows.obj_window),
         ),
         (
-            [(200, 256, 10, 192), (5, 77, 8, 9)],
+            [(200, 256, 10, 250), (5, 77, 8, 9)],
             [true, false, true],
             [
                 [true, false, true, false, true, false],

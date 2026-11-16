@@ -26,7 +26,7 @@
 @   The two windows overlap in columns 100-159, rows 80-119, where window 0 wins.
 @ Engine B: DISPCNT 0x00014F00 (display mode 1, BG0-BG3 on, window 1 on).
 @   WIN1H 0xB43C (X1 = 180 is past X2 = 60: columns 180-255), WIN1V 0x6428 (Y1 = 100 is past Y2 =
-@   40: rows 100-191), WIN0H and WIN0V 0 (window 0 is off),
+@   40: from the second frame on, rows 0-39 and 100-191), WIN0H and WIN0V 0 (window 0 is off),
 @   WININ 0x0100: inside window 1 BG0 only, WINOUT 0x0006: outside BG1 and BG2.
     .equ POWCNT1, 0x04000304
     .equ DISPCNT_A, 0x04000000

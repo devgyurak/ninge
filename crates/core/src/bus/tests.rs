@@ -2159,14 +2159,8 @@ const FAR_FLOOR: u64 = 5000;
 /// whose floor is `FAR_FLOOR`. Unfloored, the event is at 32 (16 ticks of 2 cycles).
 fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
     let mut m = Bench::new();
-    let mut v = Arm9View::new(
-        &mut m.memory,
-        &mut m.io,
-        &mut m.scheduler,
-        plain(),
-        0,
-        FAR_FLOOR,
-    );
+    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, plain());
+    v.begin_step(0, FAR_FLOOR);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
     timer_event_times(&m, true, 0)
@@ -2175,7 +2169,8 @@ fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
 /// The same through the ARM7's view.
 fn arm7_event_after_start_with_far_floor() -> Vec<u64> {
     let mut m = Bench::new();
-    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0, FAR_FLOOR);
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0);
+    v.begin_step(0, FAR_FLOOR);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
     timer_event_times(&m, false, 0)
@@ -2191,6 +2186,51 @@ fn given_an_arm9_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_t
 fn given_an_arm7_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_the_event_is_at_the_floor()
  {
     assert_eq!(arm7_event_after_start_with_far_floor(), vec![FAR_FLOOR]);
+}
+
+/// The overflow event times of ARM9 timer 0 after START through a view built with no
+/// `begin_step`, while the master clock is at `FAR_FLOOR`.
+fn arm9_event_after_start_on_a_fresh_view() -> Vec<u64> {
+    let mut m = Bench::new();
+    m.scheduler.advance(FAR_FLOOR);
+    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, plain());
+    v.write16(TM0CNT_L, RELOAD_16_TICKS);
+    v.write16(TM0CNT_H, START);
+    timer_event_times(&m, true, 0)
+}
+
+/// The same through the ARM7's view, whose own clock is 0 behind the master clock.
+fn arm7_event_after_start_on_a_fresh_view() -> Vec<u64> {
+    let mut m = Bench::new();
+    m.scheduler.advance(FAR_FLOOR);
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0);
+    v.write16(TM0CNT_L, RELOAD_16_TICKS);
+    v.write16(TM0CNT_H, START);
+    timer_event_times(&m, false, 0)
+}
+
+#[test]
+fn given_a_fresh_arm9_view_when_a_timer_starts_then_now_and_floor_are_the_master_clock() {
+    // 16 ticks of 2 cycles after `now`, which is the master clock; the floor adds nothing.
+    assert_eq!(
+        arm9_event_after_start_on_a_fresh_view(),
+        vec![FAR_FLOOR + 32]
+    );
+}
+
+#[test]
+fn given_a_fresh_arm7_view_behind_the_master_clock_when_a_timer_starts_then_the_floor_is_the_master_clock()
+ {
+    assert_eq!(arm7_event_after_start_on_a_fresh_view(), vec![FAR_FLOOR]);
+}
+
+#[test]
+fn given_an_arm7_view_when_advanced_then_its_clock_moves_and_the_master_clock_stays() {
+    let mut m = Bench::new();
+    m.scheduler.advance(10);
+    let mut v = m.arm7(4);
+    v.advance(3);
+    assert_eq!((v.clock(), v.master_clock()), (7, 10));
 }
 
 // ------------------------------------------------------------------------------ the BIOS area

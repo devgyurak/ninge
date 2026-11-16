@@ -24,7 +24,7 @@ mod spec;
 mod text;
 mod window;
 
-use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
 use brightness::{BRIGHT_BLOCK_BYTES as ENGINE_BRIGHT_BYTES, BRIGHT_OFFSET};
@@ -522,11 +522,11 @@ impl Gpu2d {
 /// Both engines are wired to the ARM9 alone (`AGENTS.md` §4, "Per-CPU devices"). Their registers
 /// are bytes; a wider access is split into them.
 impl Device<true> for Gpu2d {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+    fn peek(&self, offset: u32, width: Width, _cx: Cx<'_>) -> u32 {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         // DISP_MMEM_FIFO takes whole pixels, so its write is not split into bytes.
         if (FIFO_OFFSET..FIFO_OFFSET + FIFO_BYTES).contains(&offset) {
             self.fifo.write(width, value);

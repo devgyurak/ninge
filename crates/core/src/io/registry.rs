@@ -62,6 +62,9 @@ macro_rules! registry {
                 $(#[$em])* $ef9: $et<true>,
                 $(#[$em])* $ef7: $et<false>,
             )*
+            /// The host's data, latched as a frame begins: stored once and handed to every device
+            /// through the access's context (`device::Cx`).
+            input: Input,
         }
 
         /// Event slots the registered devices have in all ([`Device::SLOTS`] summed): the
@@ -145,6 +148,7 @@ macro_rules! registry {
                     $( $af: $ai, )*
                     $( $bf: $bi, )*
                     $( $ef9: $ei, $ef7: $ei, )*
+                    input: Input::default(),
                 }
             }
 

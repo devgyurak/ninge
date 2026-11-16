@@ -18,8 +18,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_215_004;
-const PINNED_HASH: u64 = 0x0652b560b33c4767;
+const PINNED_LEN: usize = 5_215_001;
+const PINNED_HASH: u64 = 0x9d01afb8aaaa9976;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -68,8 +68,10 @@ const PINNED_HASH: u64 = 0x0652b560b33c4767;
 /// lengths grew by 2 and both hashes moved.
 /// Version 31 (#186) dropped the input waiting for the next frame, which `run_frame` now takes: a
 /// default `Input` is three one-byte fields, so both lengths shrank by 3 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_919;
-const PINNED_BOOTED_HASH: u64 = 0x40cc1dac82f11aa3;
+/// Version 32 (#186) moved the latched input out of both keypads (3 bytes each) into one copy in `Io`
+/// (3 bytes), so both lengths shrank by 3 again and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 5_804_916;
+const PINNED_BOOTED_HASH: u64 = 0x99cf12a568f77be2;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -618,6 +620,18 @@ fn given_a_state_saved_with_input_when_loaded_and_continued_then_it_equals_an_un
         .expect("a state this build saved");
     run_with_inputs(&mut resumed, 2..4);
     assert_eq!(resumed.save_state(), straight.save_state());
+}
+
+#[test]
+fn given_a_state_saved_after_a_frame_with_a_held_key_when_loaded_then_the_latched_input_is_kept() {
+    let held = Input::new().with_buttons(Buttons::A | Buttons::START);
+    let mut saver = booted(&counter_rom(), 0);
+    saver.run_frame(held);
+    let mut target = booted(&counter_rom(), 0);
+    target
+        .load_state(&saver.save_state())
+        .expect("a state this build saved");
+    assert_eq!(target.inspect().input(), held);
 }
 
 // ------------------------------------------------------------------------------ FNV-1a vectors

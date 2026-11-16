@@ -10,7 +10,9 @@
 //! fires (`dma.md`, "Model").
 
 use crate::cpu::Bus;
-use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
+use crate::io::device::{
+    Checked, Cx, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes,
+};
 use crate::io::irq::{DMA0_IRQ, Requests};
 use serde::{Deserialize, Serialize};
 
@@ -524,11 +526,11 @@ impl<const ARM9: bool> Checked for Dma<ARM9> {
 /// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
 /// split into them, and a read has no side effect.
 impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+    fn peek(&self, offset: u32, width: Width, _cx: Cx<'_>) -> u32 {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte))
     }
 

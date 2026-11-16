@@ -32,7 +32,7 @@ pub mod timing;
 use crate::gpu2d::Gpu2d;
 use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
-use device::{Checked, Device, Effect, Fired, SlotMask, Width};
+use device::{Checked, Cx, Device, Effect, Fired, SlotMask, Width};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -86,11 +86,17 @@ registry! {
 }
 
 impl Io {
-    /// Latches `input` into both CPUs' keypads, as a frame begins (`keypad.md`, "Where the bits
-    /// come from").
+    /// Latches `input` as a frame begins (`keypad.md`, "Where the bits come from"). The one copy
+    /// of the host's data: every device reads it through the access's [`Cx`].
+    // TODO(phase5): a device that must react when the input changes (the keypad IRQ, the hinge
+    // IRQ) needs a change hook here; the keypad only reads it for now.
     pub(crate) fn latch_input(&mut self, input: Input) {
-        self.keypad9.latch(input);
-        self.keypad7.latch(input);
+        self.input = input;
+    }
+
+    /// The input latched when the frame began, for the debugger.
+    pub(crate) fn input(&self) -> Input {
+        self.input
     }
 
     /// Raises the requests in the two masks on the matching controllers: IF latches them. The
@@ -110,7 +116,11 @@ impl Io {
         width: Width,
         now: u64,
     ) -> u32 {
-        device_call!(self, ARM9, port, ref, peek(offset, width, now), 0)
+        let cx = Cx {
+            now,
+            host: &self.input,
+        };
+        device_call!(self, ARM9, port, ref, peek(offset, width, cx), 0)
     }
 
     /// A CPU's read from `port`: what it returns, with the effect applied (IF bits raised, events
@@ -123,12 +133,16 @@ impl Io {
         offset: u32,
         width: Width,
     ) -> u32 {
+        let cx = Cx {
+            now: at.now,
+            host: &self.input,
+        };
         let (value, effect) = device_call!(
             self,
             ARM9,
             port,
             mut,
-            read(offset, width, at.now),
+            read(offset, width, cx),
             (0, Effect::default())
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
@@ -147,12 +161,16 @@ impl Io {
         width: Width,
         value: u32,
     ) {
+        let cx = Cx {
+            now: at.now,
+            host: &self.input,
+        };
         let effect = device_call!(
             self,
             ARM9,
             port,
             mut,
-            write(offset, width, value, at.now),
+            write(offset, width, value, cx),
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);

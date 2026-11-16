@@ -67,8 +67,9 @@ is closed. It arrives with `Machine::run_frame(input)`, so every frame's input i
 **it is latched as `run_frame` begins**: every read of KEYINPUT and EXTKEYIN during that frame
 sees the same buttons whichever CPU reads them, and an input log of one `Input` per frame replays
 the same machine. A debugger single-step does not latch: it keeps the buttons of the last frame
-that ran. Both CPUs' keypads are latched together. The latched input is machine state (it is saved); no input waits for the next frame, as
-`run_frame` takes it.
+that ran. Both CPUs' keypads are latched together: `Io` keeps the one latched copy, and each
+keypad read gets it with the access, so no keypad stores an input of its own. The latched input
+is machine state (it is saved); no input waits for the next frame, as `run_frame` takes it.
 
 A held button reads as 0 in its bit and a released one as 1. KEYINPUT bits 0-9 follow the ten
 keys; bits 10-15 read 0 as before. EXTKEYIN bit 0 follows X and bit 1 follows Y the same way, and

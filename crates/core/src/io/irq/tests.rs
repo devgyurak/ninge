@@ -6,6 +6,7 @@
 //! that differed); a test body only asserts.
 
 use super::*;
+use crate::io::device::cx_at;
 
 /// The registers' offsets in the controller's register space, which starts at IME.
 const IME: u32 = 0;
@@ -14,12 +15,12 @@ const IF: u32 = IF_ADDR - IME_ADDR;
 
 /// A byte write at `offset`.
 fn write_byte<const ARM9: bool>(c: &mut InterruptController<ARM9>, offset: u32, value: u8) {
-    c.write(offset, Width::Byte, u32::from(value), 0);
+    c.write(offset, Width::Byte, u32::from(value), cx_at(0));
 }
 
 /// A byte read at `offset`.
 fn read_byte<const ARM9: bool>(c: &InterruptController<ARM9>, offset: u32) -> u8 {
-    c.peek(offset, Width::Byte, 0) as u8
+    c.peek(offset, Width::Byte, cx_at(0)) as u8
 }
 
 /// The note's "IE and IF bits" table: (bit, exists on the ARM9, exists on the ARM7). Bits not

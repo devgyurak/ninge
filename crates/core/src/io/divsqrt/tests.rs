@@ -2,29 +2,30 @@
 //! The divider and square-root unit, from `docs/hw/divsqrt.md`.
 
 use super::*;
+use crate::io::device::cx_at;
 
 /// A unit after a division of `numer` by `denom` in `mode`, started at time 0.
 fn divided(mode: u32, numer: u64, denom: u64) -> DivSqrt {
     let mut unit = DivSqrt::new();
-    unit.write(0, Width::Word, mode, 0);
-    unit.write(NUMER, Width::Word, numer as u32, 0);
-    unit.write(NUMER + 4, Width::Word, (numer >> 32) as u32, 0);
-    unit.write(DENOM, Width::Word, denom as u32, 0);
-    unit.write(DENOM + 4, Width::Word, (denom >> 32) as u32, 0);
+    unit.write(0, Width::Word, mode, cx_at(0));
+    unit.write(NUMER, Width::Word, numer as u32, cx_at(0));
+    unit.write(NUMER + 4, Width::Word, (numer >> 32) as u32, cx_at(0));
+    unit.write(DENOM, Width::Word, denom as u32, cx_at(0));
+    unit.write(DENOM + 4, Width::Word, (denom >> 32) as u32, cx_at(0));
     unit
 }
 
 fn rooted(mode: u32, param: u64) -> DivSqrt {
     let mut unit = DivSqrt::new();
-    unit.write(SQRTCNT, Width::Word, mode, 0);
-    unit.write(SQRT_PARAM, Width::Word, param as u32, 0);
-    unit.write(SQRT_PARAM + 4, Width::Word, (param >> 32) as u32, 0);
+    unit.write(SQRTCNT, Width::Word, mode, cx_at(0));
+    unit.write(SQRT_PARAM, Width::Word, param as u32, cx_at(0));
+    unit.write(SQRT_PARAM + 4, Width::Word, (param >> 32) as u32, cx_at(0));
     unit
 }
 
 fn peek_u64(unit: &DivSqrt, offset: u32, now: u64) -> u64 {
-    u64::from(unit.peek(offset, Width::Word, now))
-        | u64::from(unit.peek(offset + 4, Width::Word, now)) << 32
+    u64::from(unit.peek(offset, Width::Word, cx_at(now)))
+        | u64::from(unit.peek(offset + 4, Width::Word, cx_at(now))) << 32
 }
 
 #[test]
@@ -32,11 +33,11 @@ fn given_a_new_unit_when_read_then_every_register_is_zero_and_nothing_is_busy() 
     let unit = DivSqrt::new();
     assert_eq!(
         (
-            unit.peek(0, Width::Word, 0),
+            unit.peek(0, Width::Word, cx_at(0)),
             peek_u64(&unit, RESULT, 0),
             peek_u64(&unit, REMAINDER, 0),
-            unit.peek(SQRTCNT, Width::Word, 0),
-            unit.peek(SQRT_RESULT, Width::Word, 0),
+            unit.peek(SQRTCNT, Width::Word, cx_at(0)),
+            unit.peek(SQRT_RESULT, Width::Word, cx_at(0)),
         ),
         (0, 0, 0, 0, 0)
     );
@@ -105,7 +106,7 @@ fn given_a_zero_denominator_when_divided_then_divcnt_bit_14_is_set_and_it_clears
  {
     let mut unit = divided(2, 5, 0);
     let flagged = unit.divcnt(1_000);
-    unit.write(DENOM, Width::Word, 1, 0);
+    unit.write(DENOM, Width::Word, 1, cx_at(0));
     assert_eq!((flagged, unit.divcnt(1_000)), (0x4002, 0x0002));
 }
 
@@ -138,7 +139,7 @@ fn given_a_division_started_at_time_0_when_read_around_its_end_then_busy_lasts_6
 #[test]
 fn given_a_busy_division_when_an_operand_is_written_again_then_the_count_restarts() {
     let mut unit = divided(0, 100, 7);
-    unit.write(DENOM, Width::Word, 9, 30);
+    unit.write(DENOM, Width::Word, 9, cx_at(30));
     assert_eq!((unit.divcnt(65), unit.divcnt(66)), (BUSY_BIT, 0));
 }
 
@@ -178,23 +179,23 @@ fn given_the_square_root_function_when_run_over_edges_then_it_is_the_floor() {
 #[test]
 fn given_byte_writes_to_the_numerator_when_the_last_one_lands_then_the_quotient_uses_all_of_them() {
     let mut unit = DivSqrt::new();
-    unit.write(DENOM, Width::Byte, 2, 0);
-    unit.write(NUMER, Width::Byte, 0x10, 0);
-    unit.write(NUMER + 1, Width::Byte, 0x01, 0);
-    assert_eq!(unit.peek(RESULT, Width::Word, 99), 0x88);
+    unit.write(DENOM, Width::Byte, 2, cx_at(0));
+    unit.write(NUMER, Width::Byte, 0x10, cx_at(0));
+    unit.write(NUMER + 1, Width::Byte, 0x01, cx_at(0));
+    assert_eq!(unit.peek(RESULT, Width::Word, cx_at(99)), 0x88);
 }
 
 #[test]
 fn given_a_write_to_a_result_register_when_read_back_then_it_is_unchanged_and_nothing_started() {
     let mut unit = divided(0, 100, 7);
-    unit.write(RESULT, Width::Word, 0x1234, 1_000);
-    unit.write(REMAINDER, Width::Word, 0x1234, 1_000);
-    unit.write(SQRT_RESULT, Width::Word, 0x1234, 1_000);
+    unit.write(RESULT, Width::Word, 0x1234, cx_at(1_000));
+    unit.write(REMAINDER, Width::Word, 0x1234, cx_at(1_000));
+    unit.write(SQRT_RESULT, Width::Word, 0x1234, cx_at(1_000));
     assert_eq!(
         (
-            unit.peek(RESULT, Width::Word, 1_000),
-            unit.peek(REMAINDER, Width::Word, 1_000),
-            unit.peek(0, Width::Word, 1_001) & BUSY_BIT,
+            unit.peek(RESULT, Width::Word, cx_at(1_000)),
+            unit.peek(REMAINDER, Width::Word, cx_at(1_000)),
+            unit.peek(0, Width::Word, cx_at(1_001)) & BUSY_BIT,
         ),
         (14, 2, 0)
     );
@@ -203,19 +204,19 @@ fn given_a_write_to_a_result_register_when_read_back_then_it_is_unchanged_and_no
 #[test]
 fn given_a_write_of_ffff_to_divcnt_when_read_back_then_only_the_mode_is_kept() {
     let mut unit = DivSqrt::new();
-    unit.write(0, Width::Word, 0xFFFF_FFFF, 0);
+    unit.write(0, Width::Word, 0xFFFF_FFFF, cx_at(0));
     assert_eq!(unit.divcnt(1_000), 0x4003);
 }
 
 #[test]
 fn given_a_write_in_the_holes_when_read_then_it_reads_zero_and_starts_nothing() {
     let mut unit = DivSqrt::new();
-    unit.write(0x04, Width::Word, 0xFFFF_FFFF, 0);
-    unit.write(0x3C + 4, Width::Byte, 0xFF, 0);
+    unit.write(0x04, Width::Word, 0xFFFF_FFFF, cx_at(0));
+    unit.write(0x3C + 4, Width::Byte, 0xFF, cx_at(0));
     assert_eq!(
         (
-            unit.peek(0x04, Width::Word, 0),
-            unit.peek(0, Width::Word, 0)
+            unit.peek(0x04, Width::Word, cx_at(0)),
+            unit.peek(0, Width::Word, cx_at(0))
         ),
         (0, 0)
     );
@@ -234,8 +235,8 @@ fn given_a_busy_end_far_beyond_the_longest_operation_when_checked_then_the_state
 #[test]
 fn given_the_debug_accessors_when_a_division_and_a_root_ran_then_they_return_the_results() {
     let mut unit = divided(0, 100, 7);
-    unit.write(SQRTCNT, Width::Word, 0, 0);
-    unit.write(SQRT_PARAM, Width::Word, 81, 0);
+    unit.write(SQRTCNT, Width::Word, 0, cx_at(0));
+    unit.write(SQRT_PARAM, Width::Word, 81, cx_at(0));
     assert_eq!((unit.division_result(), unit.sqrt_result()), ((14, 2), 9));
 }
 
@@ -243,12 +244,12 @@ fn given_the_debug_accessors_when_a_division_and_a_root_ran_then_they_return_the
 fn given_a_halfword_write_to_the_unused_upper_half_of_divcnt_when_read_then_nothing_started() {
     // `divsqrt.md`, "Registers": DIVCNT is 16 bits wide; bits 16-31 are not used.
     let mut unit = DivSqrt::new();
-    unit.write(2, Width::Half, 0xFFFF, 0);
-    unit.write(SQRTCNT + 2, Width::Half, 0xFFFF, 0);
+    unit.write(2, Width::Half, 0xFFFF, cx_at(0));
+    unit.write(SQRTCNT + 2, Width::Half, 0xFFFF, cx_at(0));
     assert_eq!(
         (
-            unit.peek(0, Width::Word, 0),
-            unit.peek(SQRTCNT, Width::Word, 0)
+            unit.peek(0, Width::Word, cx_at(0)),
+            unit.peek(SQRTCNT, Width::Word, cx_at(0))
         ),
         (0, 0)
     );
@@ -259,8 +260,8 @@ fn given_a_division_and_a_root_when_the_control_words_are_read_then_bits_16_to_3
     let (divider, root) = (divided(2, 5, 0), rooted(1, 100));
     assert_eq!(
         (
-            divider.peek(0, Width::Word, 0) >> 16,
-            root.peek(SQRTCNT, Width::Word, 0) >> 16
+            divider.peek(0, Width::Word, cx_at(0)) >> 16,
+            root.peek(SQRTCNT, Width::Word, cx_at(0)) >> 16
         ),
         (0, 0)
     );

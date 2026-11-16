@@ -11,6 +11,7 @@
 //! and CNT are at `12n`, `12n + 4` and `12n + 8`, and DMAnFILL is at `0x30 + 4n`.
 
 use super::*;
+use crate::io::device::cx_at;
 use std::collections::BTreeMap;
 
 const ENABLE: u32 = 1 << 31;
@@ -54,15 +55,15 @@ const MAIN: u32 = 0x0200_0000;
 const OTHER: u32 = 0x0300_0000;
 
 fn write32<const A: bool>(dma: &mut Dma<A>, offset: u32, value: u32) -> Effect {
-    dma.write(offset, Width::Word, value, 0)
+    dma.write(offset, Width::Word, value, cx_at(0))
 }
 
 fn write16<const A: bool>(dma: &mut Dma<A>, offset: u32, value: u16) -> Effect {
-    dma.write(offset, Width::Half, u32::from(value), 0)
+    dma.write(offset, Width::Half, u32::from(value), cx_at(0))
 }
 
 fn write8<const A: bool>(dma: &mut Dma<A>, offset: u32, value: u8) -> Effect {
-    dma.write(offset, Width::Byte, u32::from(value), 0)
+    dma.write(offset, Width::Byte, u32::from(value), cx_at(0))
 }
 
 /// Byte writes at `offset`, `offset + 1`, ... in that order.
@@ -73,7 +74,7 @@ fn write_bytes_in_turn<const A: bool>(dma: &mut Dma<A>, offset: u32, bytes: &[u8
 }
 
 fn read32<const A: bool>(dma: &Dma<A>, offset: u32) -> u32 {
-    dma.peek(offset, Width::Word, 0)
+    dma.peek(offset, Width::Word, cx_at(0))
 }
 
 /// Writes channel `ch`'s source, destination and control, in that order; returns the effect of
@@ -394,7 +395,7 @@ fn given_a_word_read_that_spans_two_channels_when_split_then_each_byte_comes_fro
     let mut dma = Arm9Dma::new();
     write32(&mut dma, cnt(0), 0x2ABB_CCDD);
     write32(&mut dma, sad(1), 0x1122_3344);
-    assert_eq!(dma.peek(10, Width::Word, 0), 0x3344_2ABB);
+    assert_eq!(dma.peek(10, Width::Word, cx_at(0)), 0x3344_2ABB);
 }
 
 #[test]
@@ -411,7 +412,7 @@ fn given_a_register_read_when_done_through_the_device_read_then_it_has_no_effect
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | 4);
     let before = dma.clone();
-    let (value, effect) = dma.read(cnt(0), Width::Word, 0);
+    let (value, effect) = dma.read(cnt(0), Width::Word, cx_at(0));
     assert_eq!(
         (value, effect, dma),
         (ENABLE | 4, Effect::default(), before)

@@ -35,7 +35,7 @@ fn rom_machine() -> Machine {
 }
 
 fn run(machine: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(ninge_core::Input::new()));
 }
 
 /// A machine that booted the `dma` ROM and ran long enough for both CPUs to finish.

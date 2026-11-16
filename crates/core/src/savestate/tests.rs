@@ -18,8 +18,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_215_007;
-const PINNED_HASH: u64 = 0x0db39ca2f81a4be2;
+const PINNED_LEN: usize = 5_215_004;
+const PINNED_HASH: u64 = 0x0652b560b33c4767;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -66,8 +66,10 @@ const PINNED_HASH: u64 = 0x0db39ca2f81a4be2;
 /// are zero, so both lengths grew by 6 and both hashes moved.
 /// Version 26 (#34) added both engines' MASTER_BRIGHT: 2 one-byte varints while they are zero, so both
 /// lengths grew by 2 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_922;
-const PINNED_BOOTED_HASH: u64 = 0xbd0a822b0b9f4924;
+/// Version 31 (#186) dropped the input waiting for the next frame, which `run_frame` now takes: a
+/// default `Input` is three one-byte fields, so both lengths shrank by 3 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 5_804_919;
+const PINNED_BOOTED_HASH: u64 = 0x40cc1dac82f11aa3;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -151,7 +153,7 @@ fn booted(rom: &[u8], frames: u32) -> Machine {
 
 /// Runs `frames` frames.
 fn run_frames(machine: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(crate::Input::new()));
 }
 
 /// `bytes` with `patch` written at `at`, growing the buffer if it is too short, so a stub that
@@ -580,11 +582,10 @@ fn input_for(frame: u32) -> Input {
     }
 }
 
-/// `machine` after one frame per `frames`, each with its input set first.
+/// `machine` after one frame per `frames`, each run with its own input.
 fn run_with_inputs(machine: &mut Machine, frames: std::ops::Range<u32>) {
     frames.for_each(|frame| {
-        machine.set_input(input_for(frame));
-        machine.run_frame();
+        machine.run_frame(input_for(frame));
     });
 }
 
@@ -610,14 +611,12 @@ fn given_a_state_saved_with_input_when_loaded_and_continued_then_it_equals_an_un
     run_with_inputs(&mut straight, 0..4);
     let mut first_half = booted(&counter_rom(), 0);
     run_with_inputs(&mut first_half, 0..2);
-    first_half.set_input(input_for(2));
     let bytes = first_half.save_state();
     let mut resumed = booted(&counter_rom(), 0);
     resumed
         .load_state(&bytes)
         .expect("a state this build saved");
-    resumed.run_frame();
-    run_with_inputs(&mut resumed, 3..4);
+    run_with_inputs(&mut resumed, 2..4);
     assert_eq!(resumed.save_state(), straight.save_state());
 }
 

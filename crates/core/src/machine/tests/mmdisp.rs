@@ -79,7 +79,7 @@ fn given_a_channel_enabled_in_the_middle_of_a_frame_when_that_frame_ends_then_th
     let mut m = bitmap_machine();
     run_until(&mut m, 1, 100);
     start_streaming(&mut m);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!(lit(&m), 0);
 }
 
@@ -176,6 +176,6 @@ fn given_a_state_saved_with_a_waiting_channel_when_loaded_then_the_channel_still
     let (_, mut resumed) = saved_mid_frame_and_loaded();
     // Enabled in frame 1, it must not feed frame 1's remaining lines: the screen has only what the
     // FIFO held, none of the bitmap.
-    resumed.run_frame();
+    resumed.run_frame(crate::Input::new());
     assert!(lit(&resumed) <= 2);
 }

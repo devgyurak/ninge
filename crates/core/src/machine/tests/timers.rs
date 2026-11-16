@@ -98,7 +98,7 @@ fn step(m: &mut Machine, steps: u64) {
 }
 
 fn run_frames(m: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| m.run_frame());
+    (0..frames).for_each(|_| m.run_frame(crate::Input::new()));
 }
 
 /// Writes timer `index` of the ARM9 (reload, then control) at the current time.

@@ -618,10 +618,10 @@ fn spinning(p: Params) -> Machine {
 /// `new_x`, each stepping by PB and PD.
 fn split_failures(p: Params, new_x: i32) -> Diff {
     let mut m = spinning(p);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     run_to_line(&mut m, 100);
     w32(&mut m, AFFINE_REGS_ADDR + 8, new_x as u32);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     (0..SCREEN_HEIGHT)
         .flat_map(|y| (0..SCREEN_WIDTH).map(move |x| (x, y)))
         .filter_map(|(x, y)| {
@@ -655,8 +655,8 @@ fn given_run_frame_and_render_frame_when_the_same_scene_is_drawn_then_the_screen
     // point; X is written first so that the reload has a value to differ from.
     let mut running = spinning(SHEAR);
     w32(&mut running, AFFINE_REGS_ADDR + 8, 0x3000);
-    running.run_frame();
-    running.run_frame();
+    running.run_frame(crate::Input::new());
+    running.run_frame(crate::Input::new());
     let mut whole = scene(ENG_A, 1, true, SHEAR);
     w32(&mut whole, AFFINE_REGS_ADDR + 8, 0x3000);
     whole.render_frame();
@@ -675,13 +675,13 @@ fn given_run_frame_and_render_frame_when_the_same_scene_is_drawn_then_the_screen
 fn given_an_affine_layer_when_saved_mid_frame_and_loaded_then_the_frame_equals_an_uninterrupted_one()
  {
     let mut m = spinning(SHEAR);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     run_to_line(&mut m, 60);
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");
     let result = loaded.load_state(&m.save_state());
-    m.run_frame();
-    loaded.run_frame();
+    m.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
     assert_eq!(
         (result, loaded.frame(Screen::Top) == m.frame(Screen::Top)),
         (Ok(()), true)

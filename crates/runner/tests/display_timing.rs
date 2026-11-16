@@ -36,7 +36,7 @@ fn boot() -> Machine {
     machine
         .load_rom(rom)
         .expect("disptime ROM has a valid header");
-    (0..8).for_each(|_| machine.run_frame());
+    (0..8).for_each(|_| machine.run_frame(ninge_core::Input::new()));
     machine
 }
 

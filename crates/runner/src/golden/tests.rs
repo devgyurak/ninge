@@ -342,10 +342,7 @@ fn given_unreadable_error_when_displayed_then_message_is_the_io_reason() {
 #[test]
 fn given_an_input_log_when_asked_inside_and_past_its_end_then_the_entry_or_the_default_comes_back()
 {
-    let held = Input {
-        buttons: ninge_core::Buttons::B,
-        ..Input::default()
-    };
+    let held = Input::new().with_buttons(ninge_core::Buttons::B);
     let log = InputLog::new(vec![Input::default(), held]);
     assert_eq!(
         (log.input_for(0), log.input_for(1), log.input_for(2)),

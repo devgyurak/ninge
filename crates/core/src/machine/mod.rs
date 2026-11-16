@@ -71,9 +71,6 @@ pub struct Machine {
     pub(crate) bios: BiosState,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
     pub(crate) header: Option<Header>,
-    // The input the host set for the next frame; `run_frame` latches it into the keypads
-    // (`docs/hw/keypad.md`, "Where the bits come from"). Plain state, so it is saved.
-    pub(crate) input: Input,
 }
 
 /// One ARM9 instruction through `view`, and its cost added to the master clock. If the
@@ -171,7 +168,6 @@ impl Machine {
             scheduler: Scheduler::new(),
             bios: BiosState::default(),
             header: None,
-            input: Input::default(),
         };
         machine.schedule_events();
         machine
@@ -240,10 +236,17 @@ impl Machine {
     ///
     /// A machine with no booted program (no ROM, or a refused one) runs no CPU and draws
     /// nothing: the frame only advances the counter and leaves both screens black.
+    ///
+    /// `input` is this frame's input: the buttons held, the touch point and the hinge. It is
+    /// latched into the keypad registers as the frame begins and read from there until the next
+    /// one, so every frame's input is explicit and one `Input` per frame is a complete input
+    /// log, which replays to the same frames and savestate bytes (`docs/hw/keypad.md`, "Where
+    /// the bits come from"). A host with no input passes `Input::default()`.
     // TODO(hw-unverified): the per-frame instruction counts are a model (`docs/hw/scheduler.md`).
-    pub fn run_frame(&mut self) {
-        // The frame boundary is where the host's input reaches the registers.
-        self.io.latch_input(self.input);
+    // TODO(hw-unverified): a button change reaches the registers at the frame boundary only
+    // (`docs/hw/keypad.md`, "Unverified").
+    pub fn run_frame(&mut self, input: Input) {
+        self.io.latch_input(input);
         if self.header.is_none() {
             self.frame_count = self.frame_count.wrapping_add(1);
             return;
@@ -333,22 +336,14 @@ impl Machine {
         self.arm7_clock = view.clock();
     }
 
-    /// Sets the input for the next frame: the buttons held, the touch point and the hinge. It is
-    /// latched into the keypad registers when [`Machine::run_frame`] begins and stays until the
-    /// next one, so `set_input` then `run_frame`, once per frame, is a complete input log and
-    /// replays to the same frames and savestate bytes (`docs/hw/keypad.md`, "Where the bits come
-    /// from"). [`Machine::load_rom`] starts from power-on and so clears the input.
-    // TODO(hw-unverified): a button change reaches the registers at the frame boundary only
-    // (`docs/hw/keypad.md`, "Unverified").
-    pub fn set_input(&mut self, input: Input) {
-        self.input = input;
-    }
-
     /// The audio the last frame made, as interleaved stereo `i16` samples.
     ///
-    /// The shape is fixed now so the frontend can be written against it: a slice the machine
-    /// owns, borrowed like [`Machine::frame`], valid until the next `run_frame`.
-    // TODO(phase6): the SPU (#47) fills this; until then no sound is made and it is empty.
+    /// The samples are interleaved stereo `i16`, the left channel then the right. The number of
+    /// samples may differ from frame to frame, so a host must not assume a fixed length. The
+    /// slice is the machine's own, borrowed like [`Machine::frame`], and valid until the next
+    /// `run_frame`.
+    // TODO(phase6): the SPU (#47) fills this and fixes the sample rate, a hardware fact with no
+    // `docs/hw/` note yet; until then no sound is made and it is empty.
     pub fn audio(&self) -> &[i16] {
         &[]
     }

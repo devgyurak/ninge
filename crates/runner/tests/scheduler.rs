@@ -41,7 +41,7 @@ fn booted() -> Machine {
 }
 
 fn run_frames(machine: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(ninge_core::Input::new()));
 }
 
 /// Expected counters: (name, address, expected value after the given number of frames).
@@ -66,7 +66,7 @@ fn mismatches(machine: &Machine, table: &[(&'static str, u32, u32)]) -> Vec<Mism
 #[test]
 fn given_sched_rom_when_run_one_frame_then_the_counters_show_the_model_instruction_counts() {
     let mut machine = booted();
-    machine.run_frame();
+    machine.run_frame(ninge_core::Input::new());
     assert_eq!(
         mismatches(&machine, AFTER_ONE_FRAME),
         Vec::<Mismatch>::new()
@@ -86,7 +86,7 @@ fn given_sched_rom_when_run_two_frames_then_the_counters_show_the_model_instruct
 #[test]
 fn given_sched_rom_when_run_one_frame_then_the_arm7_clock_is_half_the_arm9_clock_count() {
     let mut machine = booted();
-    machine.run_frame();
+    machine.run_frame(ninge_core::Input::new());
     assert_eq!(
         (
             machine.inspect().scheduler().now(),
@@ -126,8 +126,8 @@ fn mid_frame_round_trip_differences(steps: u32, frames: u32) -> Vec<String> {
         differences.push("saving right after the load gives other bytes".to_string());
     }
     for frame in 1..=frames {
-        original.run_frame();
-        resumed.run_frame();
+        original.run_frame(ninge_core::Input::new());
+        resumed.run_frame(ninge_core::Input::new());
         for screen in [Screen::Top, Screen::Bottom] {
             if original.frame(screen) != resumed.frame(screen) {
                 differences.push(format!("{screen:?} differs after frame {frame}"));

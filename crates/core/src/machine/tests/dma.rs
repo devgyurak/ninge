@@ -147,7 +147,7 @@ pub(super) fn run_until(m: &mut Machine, frame: u64, line: u16) {
 }
 
 pub(super) fn run_frames(m: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| m.run_frame());
+    (0..frames).for_each(|_| m.run_frame(crate::Input::new()));
 }
 
 /// The pending DMA start events as `(time, arm9, channel)`, in firing order.

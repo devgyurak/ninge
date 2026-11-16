@@ -19,7 +19,7 @@ mod timers;
 mod timing;
 
 fn run_frames(machine: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(crate::Input::new()));
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn given_new_machine_when_reading_frames_then_every_pixel_is_black() {
 #[test]
 fn given_saved_machine_when_loaded_onto_a_fresh_one_then_both_screens_are_full_size() {
     let mut saved = Machine::new();
-    saved.run_frame();
+    saved.run_frame(crate::Input::new());
     let mut machine = Machine::new();
     let result = machine.load_state(&saved.save_state());
     let lengths = [
@@ -75,7 +75,7 @@ fn given_six_byte_rom_when_loading_then_it_is_refused_as_too_short_and_not_kept(
 #[test]
 fn given_new_machine_when_running_one_frame_then_frame_count_is_one() {
     let mut machine = Machine::new();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(machine.frame_count(), 1);
 }
 
@@ -89,7 +89,7 @@ fn given_new_machine_when_reading_counters_then_frame_count_is_zero_and_rom_is_e
 fn given_empty_rom_when_running_a_frame_then_it_is_refused_rom_is_empty_and_frame_count_is_one() {
     let mut machine = Machine::new();
     let result = machine.load_rom(Vec::new());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(
         (result, machine.rom().len(), machine.frame_count()),
         (
@@ -105,7 +105,7 @@ fn given_odd_length_rom_when_running_a_frame_then_it_is_refused_rom_is_empty_and
  {
     let mut machine = Machine::new();
     let result = machine.load_rom(vec![1, 2, 3]);
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(
         (result, machine.rom().len(), machine.frame_count()),
         (
@@ -119,9 +119,9 @@ fn given_odd_length_rom_when_running_a_frame_then_it_is_refused_rom_is_empty_and
 #[test]
 fn given_three_frames_run_when_reading_frame_count_then_it_is_three() {
     let mut machine = Machine::new();
-    machine.run_frame();
-    machine.run_frame();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
+    machine.run_frame(crate::Input::new());
+    machine.run_frame(crate::Input::new());
     assert_eq!(machine.frame_count(), 3);
 }
 
@@ -153,8 +153,8 @@ fn given_savestate_map_without_frame_count_when_deserializing_machine_then_it_is
 #[test]
 fn given_machine_that_ran_two_frames_when_loading_rom_then_frame_count_is_zero() {
     let mut machine = Machine::new();
-    machine.run_frame();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
+    machine.run_frame(crate::Input::new());
     machine
         .load_rom(crate::cart::test_image::Image::valid().build())
         .expect("valid image");

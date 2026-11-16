@@ -885,8 +885,8 @@ fn spinning_scene() -> Machine {
 #[test]
 fn given_a_scene_in_memory_when_frames_run_then_the_presented_frame_is_the_whole_picture() {
     let mut m = spinning_scene();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (
             top(&m, 0, 0),
@@ -904,9 +904,9 @@ fn given_a_scroll_changed_after_a_frame_when_the_next_runs_then_line_0_keeps_the
     // Line 0 of a frame is drawn at the start of that line, which ends the frame before it; the
     // change comes after, so it shows from line 1 (`bg-text.md`, "Lines").
     let mut m = spinning_scene();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     w16(&mut m, BG0HOFS, 8);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (top(&m, 0, 0), top(&m, 0, 1), top(&m, 0, 7)),
         (RED, GREEN, GREEN)
@@ -916,8 +916,8 @@ fn given_a_scroll_changed_after_a_frame_when_the_next_runs_then_line_0_keeps_the
 #[test]
 fn given_a_frame_in_progress_when_the_presented_frame_is_read_then_it_is_the_last_complete_one() {
     let mut m = spinning_scene();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     w16(&mut m, BG0HOFS, 8);
     // Part of the next frame: lines are drawn, but the presented frame holds the finished one.
     run_to_line(&mut m, 100);
@@ -928,15 +928,15 @@ fn given_a_frame_in_progress_when_the_presented_frame_is_read_then_it_is_the_las
 /// one; both then run to the end of the frame. Returns whether both screens are equal.
 fn raster_save_matches() -> (Result<(), crate::savestate::SavestateError>, bool, bool) {
     let mut m = spinning_scene();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     run_to_line(&mut m, 50);
     w16(&mut m, BG0HOFS, 8);
     run_to_line(&mut m, 100);
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");
     let result = loaded.load_state(&m.save_state());
-    m.run_frame();
-    loaded.run_frame();
+    m.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
     (
         result,
         loaded.frame(Screen::Top) == m.frame(Screen::Top),
@@ -953,8 +953,8 @@ fn given_a_machine_saved_after_a_mid_frame_register_change_when_loaded_and_run_t
 #[test]
 fn given_a_machine_saved_mid_frame_when_loaded_then_the_last_finished_frame_is_still_shown() {
     let mut m = spinning_scene();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     run_to_line(&mut m, 100);
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");

@@ -28,7 +28,7 @@ fn boot_one_frame() -> Machine {
     machine
         .load_rom(rom)
         .expect("memmap ROM has a valid header");
-    machine.run_frame();
+    machine.run_frame(ninge_core::Input::new());
     machine
 }
 

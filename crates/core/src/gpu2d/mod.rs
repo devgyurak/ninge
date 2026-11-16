@@ -14,6 +14,7 @@
 
 mod affine;
 mod brightness;
+mod capture;
 mod effects;
 mod engine;
 mod kind;
@@ -27,6 +28,9 @@ use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
 use brightness::{BRIGHT_BLOCK_BYTES as ENGINE_BRIGHT_BYTES, BRIGHT_OFFSET};
 pub use brightness::{BrightnessMode, MasterBrightness};
+pub use capture::Capture;
+pub(crate) use capture::CaptureLine;
+use capture::{CAPTURE_BYTES as CAPTURE_BLOCK_BYTES, CAPTURE_OFFSET};
 use effects::{BLD_BLOCK_BYTES as ENGINE_BLD_BYTES, BLD_OFFSET};
 pub use effects::{EffectMode, Effects, Targets};
 pub use engine::Mosaic;
@@ -88,6 +92,10 @@ pub const MASTER_BRIGHT_ADDR: u32 = DISPCNT_A_ADDR + BRIGHT_OFFSET;
 pub const MASTER_BRIGHT_B_ADDR: u32 = MASTER_BRIGHT_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block.
 pub const MASTER_BRIGHT_BYTES: u32 = ENGINE_BRIGHT_BYTES;
+/// DISPCAPCNT of engine A, at `0400_0064h`: a word (`display-capture.md`, "Registers").
+pub const DISPCAPCNT_ADDR: u32 = DISPCNT_A_ADDR + CAPTURE_OFFSET;
+/// The bytes of that register.
+pub const DISPCAPCNT_BYTES: u32 = CAPTURE_BLOCK_BYTES;
 /// WIN0H, at `0400_0040h`: WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT, 12 bytes from here
 /// (`windows.md`, "Registers").
 pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
@@ -153,6 +161,8 @@ pub struct Gpu2d {
     a: Engine,
     b: Engine,
     powcnt1: u16,
+    // DISPCAPCNT and the capture latch (engine A only).
+    capture: Capture,
 }
 
 /// Where an offset in the register space of [`Gpu2d`] lands.
@@ -160,6 +170,8 @@ pub struct Gpu2d {
 enum Route {
     /// This byte of POWCNT1.
     Powcnt1(u32),
+    /// This byte of DISPCAPCNT.
+    Capture(u32),
     /// This offset in the register block of an engine.
     Engine(EngineId, u32),
 }
@@ -213,6 +225,7 @@ impl Gpu2d {
             a: Engine::new(),
             b: Engine::new(),
             powcnt1: POWCNT1_RESET,
+            capture: Capture::default(),
         }
     }
 
@@ -239,6 +252,7 @@ impl Gpu2d {
     /// Visible line `y` is about to be made: both engines' windows move to it
     /// (`windows.md`, "The vertical test").
     pub(crate) fn begin_line(&mut self, y: usize) {
+        self.capture.begin_line(y);
         self.a.begin_line(y);
         self.b.begin_line(y);
     }
@@ -252,6 +266,7 @@ impl Gpu2d {
 
     /// VBlank starts: both engines' affine reference points are loaded from their registers.
     pub(crate) fn vblank_started(&mut self) {
+        self.capture.vblank_started();
         self.a.vblank_started();
         self.b.vblank_started();
     }
@@ -278,6 +293,16 @@ impl Gpu2d {
     /// (#58) shows it.
     pub fn master_brightness(&self, which: EngineId) -> MasterBrightness {
         self.engine(which).master_brightness()
+    }
+
+    /// DISPCAPCNT and the capture latch. A debugger's video panel (#58) shows them.
+    pub fn capture(&self) -> Capture {
+        self.capture
+    }
+
+    /// What the capture unit does on visible line `y`, or `None` when it does nothing there.
+    pub(crate) fn capture_line(&self, y: usize) -> Option<CaptureLine> {
+        self.capture.line(y)
     }
 
     /// DISPCNT of engine A.
@@ -311,8 +336,11 @@ impl Gpu2d {
     /// Where `offset` in the register space (which starts at DISPCNT of engine A) lands.
     fn route(offset: u32) -> Route {
         let powcnt1_index = offset.wrapping_sub(POWCNT1_OFFSET);
+        let capture_index = offset.wrapping_sub(CAPTURE_OFFSET);
         if powcnt1_index < 2 {
             Route::Powcnt1(powcnt1_index)
+        } else if capture_index < CAPTURE_BLOCK_BYTES {
+            Route::Capture(capture_index)
         } else if offset >= ENGINE_B_OFFSET {
             Route::Engine(EngineId::B, offset - ENGINE_B_OFFSET)
         } else {
@@ -324,6 +352,7 @@ impl Gpu2d {
     fn read_byte(&self, offset: u32) -> u8 {
         match Self::route(offset) {
             Route::Powcnt1(byte) => (self.powcnt1 >> (byte * 8)) as u8,
+            Route::Capture(byte) => self.capture.read_byte(byte),
             Route::Engine(which, at) => self.engine(which).read_byte(at),
         }
     }
@@ -340,6 +369,7 @@ impl Gpu2d {
             Route::Powcnt1(byte) => {
                 self.powcnt1 = with_byte(u32::from(self.powcnt1), byte, value) as u16;
             }
+            Route::Capture(byte) => self.capture.write_byte(byte, value),
             Route::Engine(EngineId::A, at) => self.a.write_byte(at, value),
             Route::Engine(EngineId::B, at) => {
                 if self.engine_b_on() || !is_gated_port(at) {

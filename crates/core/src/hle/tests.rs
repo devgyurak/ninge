@@ -375,9 +375,9 @@ fn given_booted_machine_when_a_refused_rom_is_loaded_then_the_earlier_program_is
 fn given_refused_header_when_running_a_frame_then_only_the_frame_count_advances() {
     let mut machine = Machine::new();
     machine.load_rom(vec![0; 16]).ok();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     let mut expected = Machine::new();
-    expected.run_frame();
+    expected.run_frame(crate::Input::new());
     assert_eq!(machine, expected);
 }
 
@@ -385,7 +385,7 @@ fn given_refused_header_when_running_a_frame_then_only_the_frame_count_advances(
 fn given_refused_header_when_running_a_frame_then_the_arm9_is_not_stepped() {
     let mut machine = Machine::new();
     machine.load_rom(vec![0; 16]).ok();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(machine.inspect().arm9(), Machine::new().inspect().arm9());
 }
 
@@ -410,7 +410,7 @@ fn given_a_booted_program_when_loading_another_then_registers_are_the_new_progra
 #[test]
 fn given_a_counting_loop_when_running_one_frame_then_r0_is_560190() {
     let mut machine = booted(&loop_image());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     // 263 * 355 * 6 * 2 = 1,120,380 steps; the loop is two instructions per count.
     assert_eq!(machine.inspect().arm9().regs().get(0), 560_190);
 }
@@ -418,27 +418,27 @@ fn given_a_counting_loop_when_running_one_frame_then_r0_is_560190() {
 #[test]
 fn given_a_counting_loop_when_running_two_frames_then_r0_is_1120380() {
     let mut machine = booted(&loop_image());
-    machine.run_frame();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
+    machine.run_frame(crate::Input::new());
     assert_eq!(machine.inspect().arm9().regs().get(0), 1_120_380);
 }
 
 #[test]
 fn given_a_booted_program_when_running_a_frame_then_frame_count_is_one() {
     let mut machine = booted(&loop_image());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(machine.frame_count(), 1);
 }
 
 #[test]
 fn given_a_booted_program_when_cloned_after_one_frame_then_both_copies_agree_after_the_next() {
     let mut straight = booted(&loop_image());
-    straight.run_frame();
-    straight.run_frame();
+    straight.run_frame(crate::Input::new());
+    straight.run_frame(crate::Input::new());
     let mut resumed = booted(&loop_image());
-    resumed.run_frame();
+    resumed.run_frame(crate::Input::new());
     let mut copy = resumed.clone();
-    copy.run_frame();
+    copy.run_frame(crate::Input::new());
     assert_eq!(
         (straight == copy, copy.inspect().arm9().regs().get(0)),
         (true, 1_120_380)

@@ -122,8 +122,8 @@ impl<'a> Inspect<'a> {
         ObjAttrs::decode(self.machine.memory.oam_of(which), index)
     }
 
-    /// The input the keypad registers read: what `Machine::set_input` gave, as latched when the
-    /// last frame began.
+    /// The input the keypad registers read: what `Machine::run_frame` was given, as latched when
+    /// the last frame began.
     // The debugger's IO register panel will show it with the keypad registers.
     pub fn input(&self) -> Input {
         self.machine.io.keypad9().input()

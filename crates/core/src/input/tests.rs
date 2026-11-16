@@ -38,3 +38,24 @@ fn given_a_set_when_asked_for_a_member_and_a_non_member_then_contains_tells_them
         (true, true, false, false)
     );
 }
+
+#[test]
+fn given_the_builder_methods_when_chained_then_each_sets_its_own_field() {
+    let touch = Touch { x: 7, y: 9 };
+    assert_eq!(
+        Input::new()
+            .with_buttons(Buttons::A)
+            .with_touch(Some(touch))
+            .with_hinge_closed(true),
+        Input {
+            buttons: Buttons::A,
+            touch: Some(touch),
+            hinge_closed: true,
+        }
+    );
+}
+
+#[test]
+fn given_a_new_input_when_compared_with_the_default_then_they_are_equal() {
+    assert_eq!(Input::new(), Input::default());
+}

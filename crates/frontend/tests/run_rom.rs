@@ -54,7 +54,7 @@ fn app_with(size: TermSize) -> (App<Recorder>, Puts) {
 fn reference(frames: u64) -> Machine {
     let rom = std::fs::read(rom_path()).expect("vramdisp ROM is built");
     let mut machine = boot(rom).expect("valid header");
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(ninge_core::Input::new()));
     machine
 }
 

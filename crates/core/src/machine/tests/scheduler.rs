@@ -131,7 +131,7 @@ fn booted(rom: &[u8]) -> Machine {
 }
 
 fn run_frames(machine: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(crate::Input::new()));
 }
 
 fn step(machine: &mut Machine, steps: u64) {
@@ -154,7 +154,7 @@ fn record(machine: &Machine, slot: u32) -> u32 {
 #[test]
 fn given_one_frame_when_run_then_arm7_clock_is_exactly_half_of_arm9() {
     let mut machine = booted(&counting_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     // ARM9 cycles = scheduler.now = 1,120,380; ARM7 cycles = arm7_clock / 2 = 560,190.
     assert_eq!(
         (
@@ -168,7 +168,7 @@ fn given_one_frame_when_run_then_arm7_clock_is_exactly_half_of_arm9() {
 #[test]
 fn given_one_frame_when_run_then_both_clocks_are_one_frame_in_master_cycles() {
     let mut machine = booted(&counting_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(
         (
             machine.inspect().scheduler().now(),
@@ -198,7 +198,7 @@ fn given_counting_rom_when_one_frame_runs_then_the_counters_show_373459_arm9_and
     // ARM7: 560,190 instructions = 3 prologue + 4 * 140,046 + 3; the partial iteration
     // reached its `str`, so the counter is 140,047.
     let mut machine = booted(&counting_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(counters(&machine), (373_459, 140_047));
 }
 
@@ -231,7 +231,7 @@ fn given_booted_machine_when_nothing_runs_then_both_clocks_are_zero_and_no_count
 fn given_machine_without_rom_when_running_a_frame_then_the_clock_stays_zero_and_the_frame_is_counted()
  {
     let mut machine = Machine::new();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(
         (
             machine.inspect().scheduler().now(),
@@ -278,7 +278,7 @@ fn given_a_booted_machine_when_nothing_ran_then_hblank_and_the_next_line_start_a
 #[test]
 fn given_one_frame_run_when_listing_pending_then_the_next_line_events_follow_the_frame_end_time() {
     let mut machine = booted(&counting_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     let pending: Vec<(u64, EventKind)> = machine
         .inspect()
         .scheduler()
@@ -430,7 +430,7 @@ fn given_debug_steps_crossing_the_frame_end_time_when_listing_pending_then_the_n
 fn given_100_debug_steps_when_running_a_frame_then_it_ends_at_one_frame_of_master_cycles() {
     let mut machine = booted(&counting_rom());
     step(&mut machine, 100);
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(
         (
             machine.inspect().scheduler().now(),
@@ -536,7 +536,7 @@ fn given_valid_image_when_loading_then_the_arm7_clock_and_now_are_zero() {
 #[test]
 fn given_machine_that_ran_a_frame_when_loading_a_rom_then_both_clocks_restart_at_zero() {
     let mut machine = booted(&counting_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     machine.load_rom(counting_rom()).expect("valid image");
     assert_eq!(
         (
@@ -552,14 +552,14 @@ fn given_machine_that_ran_a_frame_when_loading_a_rom_then_both_clocks_restart_at
 #[test]
 fn given_arm7_program_when_run_one_frame_then_it_finished_every_step() {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(record(&machine, 5), 7);
 }
 
 #[test]
 fn given_arm7_stores_to_its_wram_when_it_reads_the_word_back_then_it_reads_the_stored_value() {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(record(&machine, 1), 0xA5);
 }
 
@@ -569,7 +569,7 @@ fn given_arm7_stores_to_its_wram_when_it_reads_the_word_back_then_it_reads_the_s
 fn given_arm7_stores_to_its_wram_when_it_reads_at_plus_64_kib_then_it_reads_the_mirror_as_the_note_models_unverified()
  {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(record(&machine, 0), 0xA5);
 }
 
@@ -578,7 +578,7 @@ fn given_arm7_stores_to_its_wram_when_it_reads_at_plus_64_kib_then_it_reads_the_
 fn given_arm7_reads_the_io_area_when_it_is_unmapped_then_it_reads_zero_as_the_note_models_unverified()
  {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(record(&machine, 2), 0x100);
 }
 
@@ -588,7 +588,7 @@ fn given_arm7_reads_the_io_area_when_it_is_unmapped_then_it_reads_zero_as_the_no
 fn given_arm7_reads_the_vram_window_when_it_is_unmapped_then_it_reads_zero_as_the_note_models_unverified()
  {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(record(&machine, 4), 0x100);
 }
 
@@ -598,14 +598,14 @@ fn given_arm7_reads_the_vram_window_when_it_is_unmapped_then_it_reads_zero_as_th
 fn given_arm7_stores_to_main_ram_when_it_reads_at_plus_4_mib_then_it_reads_the_mirror_as_the_note_models_unverified()
  {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(record(&machine, 3), 0xA5);
 }
 
 #[test]
 fn given_arm7_stores_to_main_ram_when_the_arm9_peeks_it_then_both_cpus_see_the_same_word() {
     let mut machine = booted(&arm7_memory_rom());
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
     assert_eq!(machine.inspect().arm9_peek32(RECORD + 0x100), 0xA5);
 }
 
@@ -619,8 +619,8 @@ fn frames_counted_at_the_edge_of_time() -> u64 {
     machine
         .scheduler
         .schedule(u64::MAX - FRAME_CYCLES, EventKind::Line(LineEvent::Start));
-    machine.run_frame();
-    machine.run_frame();
+    machine.run_frame(crate::Input::new());
+    machine.run_frame(crate::Input::new());
     machine.frame_count()
 }
 

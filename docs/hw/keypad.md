@@ -63,12 +63,13 @@ A bit is **0 while the key is pressed** and 1 while it is released.
 
 The host gives the machine one `Input` for a frame: which of the twelve buttons are held (the ten
 KEYINPUT keys plus X and Y), where the touch panel is pressed (if it is), and whether the hinge
-is closed. `Machine::set_input` stores it; **it is latched when `run_frame` begins**, so every
+is closed. It arrives with `Machine::run_frame(input)`, so every frame's input is explicit, and
+**it is latched as `run_frame` begins**, so every
 read of KEYINPUT and EXTKEYIN during that frame sees the same buttons whichever CPU reads them,
 and an input log of one `Input` per frame replays the same machine. A debugger single-step does
 not latch: it keeps the buttons of the last frame that ran. Both CPUs' keypads are latched
-together. The latched input is machine state (it is saved), and so is the input waiting for the
-next frame.
+together. The latched input is machine state (it is saved); no input waits for the next frame, as
+`run_frame` takes it.
 
 A held button reads as 0 in its bit and a released one as 1. KEYINPUT bits 0-9 follow the ten
 keys; bits 10-15 read 0 as before. EXTKEYIN bit 0 follows X and bit 1 follows Y the same way, and
@@ -117,4 +118,4 @@ controller's pen-IRQ enable. All three arrive with the keypad IRQ and the touch 
 
 - That a button change reaches the registers at a frame boundary only is a choice of the model:
   on hardware the key matrix is read when the CPU reads the register — `crates/core/src/input/`
-  (`Machine::set_input`) — verify by a test ROM that polls KEYINPUT during a frame.
+  (`Machine::run_frame`) — verify by a test ROM that polls KEYINPUT during a frame.

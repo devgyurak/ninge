@@ -276,8 +276,7 @@ fn step_frame_hashes(
 ) -> Vec<(u64, u64)> {
     (first_frame..first_frame + frames)
         .map(|frame| {
-            machine.set_input(log.input_for(frame));
-            machine.run_frame();
+            machine.run_frame(log.input_for(frame));
             (
                 frame_hash(machine.frame(Screen::Top)),
                 frame_hash(machine.frame(Screen::Bottom)),

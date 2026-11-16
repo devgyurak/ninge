@@ -25,7 +25,7 @@ fn pictures() -> Vec<Picture> {
     machine.load_rom(rom).expect("blend ROM has a valid header");
     (0..FRAMES)
         .map(|_| {
-            machine.run_frame();
+            machine.run_frame(ninge_core::Input::new());
             Picture {
                 top: machine.frame(Screen::Top).to_vec(),
                 bottom: machine.frame(Screen::Bottom).to_vec(),

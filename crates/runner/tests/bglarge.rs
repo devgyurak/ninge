@@ -23,7 +23,7 @@ fn boot_frames() -> Machine {
     machine
         .load_rom(rom)
         .expect("bglarge ROM has a valid header");
-    (0..FRAMES).for_each(|_| machine.run_frame());
+    (0..FRAMES).for_each(|_| machine.run_frame(ninge_core::Input::new()));
     machine
 }
 

@@ -2,8 +2,8 @@
 //! What the host gives the machine for one frame: the buttons held, where the touch panel is
 //! pressed and whether the hinge is closed (`docs/hw/keypad.md`, "Where the bits come from").
 //!
-//! The host builds an [`Input`] and hands it to `Machine::set_input`; the machine latches it when
-//! `run_frame` begins, so one `Input` per frame is a complete input log (AGENTS.md §2 rule 6).
+//! The host builds an [`Input`] and hands it to `Machine::run_frame`; the machine latches it as
+//! the frame begins, so one `Input` per frame is a complete input log (AGENTS.md §2 rule 6).
 
 use serde::{Deserialize, Serialize};
 use std::ops::BitOr;
@@ -81,7 +81,11 @@ pub struct Touch {
 }
 
 /// The host's state for one frame. The default is the console untouched with the lid open.
+///
+/// Non-exhaustive, so a field can be added without breaking a host: outside this crate build one
+/// with [`Input::new`] and the `with_*` methods, and read the fields directly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Input {
     /// The buttons held.
     pub buttons: Buttons,
@@ -91,6 +95,38 @@ pub struct Input {
     pub touch: Option<Touch>,
     /// Whether the hinge is closed (EXTKEYIN bit 7).
     pub hinge_closed: bool,
+}
+
+impl Input {
+    /// The console untouched with the lid open: the same as [`Input::default`].
+    pub const fn new() -> Self {
+        Self {
+            buttons: Buttons::empty(),
+            touch: None,
+            hinge_closed: false,
+        }
+    }
+
+    /// This input with `buttons` held.
+    #[must_use]
+    pub const fn with_buttons(mut self, buttons: Buttons) -> Self {
+        self.buttons = buttons;
+        self
+    }
+
+    /// This input with the panel pressed at `touch`, or released for `None`.
+    #[must_use]
+    pub const fn with_touch(mut self, touch: Option<Touch>) -> Self {
+        self.touch = touch;
+        self
+    }
+
+    /// This input with the hinge closed or open.
+    #[must_use]
+    pub const fn with_hinge_closed(mut self, hinge_closed: bool) -> Self {
+        self.hinge_closed = hinge_closed;
+        self
+    }
 }
 
 #[cfg(test)]

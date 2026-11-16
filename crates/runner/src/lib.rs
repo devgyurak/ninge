@@ -27,7 +27,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use ninge_core::{Machine, RomError, Screen};
+use ninge_core::{Input, Machine, RomError, Screen};
 
 /// Why the runner could not do what was asked.
 #[derive(Debug)]
@@ -209,7 +209,7 @@ pub fn run(rom: Vec<u8>, frames: u64) -> Result<RunReport, RunnerError> {
     let mut machine = Machine::new();
     machine.load_rom(rom)?;
     for _ in 0..frames {
-        machine.run_frame();
+        machine.run_frame(Input::new());
     }
     Ok(RunReport {
         frames: machine.frame_count(),

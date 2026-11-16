@@ -15,7 +15,7 @@ fn boot_one_frame() -> Machine {
     let rom = load_rom_file(&testrom_path("boot")).expect("boot ROM is built");
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("boot ROM has a valid header");
-    machine.run_frame();
+    machine.run_frame(ninge_core::Input::new());
     machine
 }
 

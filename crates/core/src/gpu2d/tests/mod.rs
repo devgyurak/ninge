@@ -442,7 +442,7 @@ fn given_a_saved_machine_when_loaded_onto_a_fresh_one_then_registers_and_rendere
 #[test]
 fn given_a_machine_with_no_program_when_a_frame_runs_then_both_screens_stay_black() {
     let mut m = Machine::new();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (
             not_equal_to(&m, Screen::Top, BLACK),

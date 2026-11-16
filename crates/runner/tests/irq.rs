@@ -32,8 +32,8 @@ fn boot() -> Machine {
     let rom = load_rom_file(&testrom_path("irq")).expect("irq ROM is built");
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("irq ROM has a valid header");
-    machine.run_frame();
-    machine.run_frame();
+    machine.run_frame(ninge_core::Input::new());
+    machine.run_frame(ninge_core::Input::new());
     machine
 }
 

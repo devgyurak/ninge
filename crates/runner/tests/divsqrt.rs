@@ -39,7 +39,7 @@ fn mismatches(rows: &[Row]) -> Vec<Mismatch> {
     machine
         .load_rom(rom)
         .expect("divsqrt ROM has a valid header");
-    (0..FRAMES).for_each(|_| machine.run_frame());
+    (0..FRAMES).for_each(|_| machine.run_frame(ninge_core::Input::new()));
     rows.iter()
         .map(|&(slot, name, want)| {
             (

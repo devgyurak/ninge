@@ -4,7 +4,6 @@
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
-use crate::gpu2d::EngineId;
 use crate::hle::BiosState;
 use crate::io::Io;
 use crate::scheduler::{EventKind, Scheduler};
@@ -177,39 +176,6 @@ impl Machine {
         }
     }
 
-    /// Draws visible line `y` of both screens into the frame being drawn, from the registers and
-    /// memory as they are now (`docs/hw/bg-text.md`, "Lines"). A line past the last visible one is
-    /// not drawn.
-    ///
-    /// Engine A goes to the screen POWCNT1 bit 15 picks and engine B to the other one
-    /// (`docs/hw/bg-modes.md`, "Engine B").
-    // TODO(hw-unverified): the registers, the transform and the reference point are sampled at the
-    // start of the line, where the hardware reads them while it draws (`bg-modes.md`, "Unverified").
-    pub(crate) fn render_line(&mut self, y: usize) {
-        if y >= SCREEN_HEIGHT {
-            return;
-        }
-        self.io.gpu2d_mut().begin_line(y);
-        let gpu = self.io.gpu2d();
-        let (engine_a, engine_b) = if gpu.engine_a_on_top() {
-            (&mut self.work_top, &mut self.work_bottom)
-        } else {
-            (&mut self.work_bottom, &mut self.work_top)
-        };
-        let line = y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH;
-        if let Some(out) = engine_a.get_mut(line.clone()) {
-            let inputs = self.memory.engine_inputs(EngineId::A);
-            gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs, out);
-        }
-        if let Some(out) = engine_b.get_mut(line) {
-            let inputs = self.memory.engine_inputs(EngineId::B);
-            gpu.render_line_b(y, &inputs, out);
-        }
-        // The affine layers' reference points move down a line (`bg-modes.md`, "When the picture is
-        // made"). Both render paths come through here.
-        self.io.gpu2d_mut().end_line();
-    }
-
     /// Whether all four frame buffers have the size `new` allocates; a savestate that decodes
     /// to anything else is corrupt.
     pub(crate) fn screens_well_formed(&self) -> bool {
@@ -356,6 +322,7 @@ impl Default for Machine {
 }
 
 mod events;
+mod render;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]

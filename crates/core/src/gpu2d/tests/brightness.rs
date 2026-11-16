@@ -169,3 +169,20 @@ fn given_the_register_written_when_inspected_then_the_decoded_view_is_the_note_s
         ((BrightnessMode::Up, 16), (BrightnessMode::Down, 3))
     );
 }
+
+#[test]
+fn given_a_master_brightness_when_the_native_line_is_made_then_it_is_unbrightened_and_the_factor_returned()
+ {
+    let mut m = mode2_machine();
+    put_pixel(&mut m, 0, 0, 0x001F);
+    w16(&mut m, DISPCNT_A_ADDR + MASTER_BRIGHT, UP | 8);
+    let mut line = [0; SCREEN_WIDTH];
+    let inputs = m.memory.engine_inputs(EngineId::A);
+    let applied =
+        m.io.gpu2d()
+            .render_line_a(0, m.memory.lcdc_banks(), &inputs, &mut line);
+    assert_eq!(
+        (line.first().copied(), applied.mode, applied.factor),
+        (Some(0x001F), BrightnessMode::Up, 8)
+    );
+}

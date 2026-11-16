@@ -188,7 +188,11 @@ fn expand_color(halfword: u16) -> u32 {
 }
 
 /// `line` as xRGB8888 into `out`, one host pixel for each 15-bit one, after the master brightness.
-fn expand_line(line: &[u16; SCREEN_WIDTH], brightness: MasterBrightness, out: &mut [u32]) {
+pub(crate) fn expand_line(
+    line: &[u16; SCREEN_WIDTH],
+    brightness: MasterBrightness,
+    out: &mut [u32],
+) {
     out.iter_mut().zip(line).for_each(|(pixel, &color)| {
         *pixel = brightness.expand(color);
     });
@@ -345,9 +349,10 @@ impl Gpu2d {
         }
     }
 
-    /// Draws line `y` (0-191) of engine A's picture into `out` (`SCREEN_WIDTH` pixels), given the
+    /// Draws line `y` (0-191) of engine A's picture into `line` in 15-bit colour, given the
     /// bytes of banks A-D where the CPU sees them as LCDC VRAM and what the engine reads
-    /// ([`EngineInputs`]). A line past the last visible one is not drawn.
+    /// ([`EngineInputs`]), and returns the master brightness to apply to it. A line past the last
+    /// visible one is not drawn.
     // TODO(hw-unverified): windows apply in display mode 1 only (`windows.md`, "Unverified").
     // TODO(phase4): mode 3 draws the main-memory bitmap, and the master brightness applies to it
     // too (`blending.md`, "Master brightness"); the placeholder black is left alone.
@@ -362,17 +367,17 @@ impl Gpu2d {
         y: usize,
         lcdc: [Option<&[u8]>; 4],
         inputs: &EngineInputs<'_>,
-        out: &mut [u32],
-    ) {
+        line: &mut [u16; SCREEN_WIDTH],
+    ) -> MasterBrightness {
         if y >= SCREEN_HEIGHT {
-            return;
+            return MasterBrightness::OFF;
         }
         let dispcnt = inputs.spec.dispcnt(self.a.dispcnt());
         let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
         let block = (dispcnt >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
-        // The line is made in 15-bit colour and expanded for the host at the end, so a stage
-        // between the layers and the screen works on the colour the hardware has.
-        let mut line = [BLACK_COLOR; SCREEN_WIDTH];
+        // The line is made in 15-bit colour; the caller expands it for the host after the stages
+        // between the layers and the screen, which work on the colour the hardware has.
+        line.fill(BLACK_COLOR);
         // Mode 3 is not drawn yet, so its placeholder is not brightened.
         let brightness = match mode {
             MODE_OFF | MODE_GRAPHICS | MODE_VRAM => self.a.master_brightness(),
@@ -381,7 +386,7 @@ impl Gpu2d {
         if mode == MODE_OFF {
             line.fill(WHITE_COLOR);
         } else if mode == MODE_GRAPHICS {
-            self.a.render_line(y, inputs, &mut line);
+            self.a.render_line(y, inputs, line);
         } else if mode == MODE_VRAM {
             let row = lcdc
                 .get(block as usize)
@@ -394,31 +399,37 @@ impl Gpu2d {
                 *pixel = u16::from_le_bytes(bytes);
             });
         }
-        expand_line(&line, brightness, out);
+        brightness
     }
 
-    /// Draws line `y` of engine B's picture into `out`. Engine B has the display modes 0 (white)
+    /// Draws line `y` of engine B's picture into `line` in 15-bit colour and returns the master
+    /// brightness to apply to it. Engine B has the display modes 0 (white)
     /// and 1 (the layers) only; a powered-off engine is black (`bg-modes.md`, "Engine B").
     // TODO(hw-unverified): what the screen of a powered-off engine shows (`bg-modes.md`,
     // "Unverified"), and whether the master brightness applies to it, here and to the white of display
     // mode 0 (`blending.md`, "Unverified").
-    pub(crate) fn render_line_b(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
+    pub(crate) fn render_line_b(
+        &self,
+        y: usize,
+        inputs: &EngineInputs<'_>,
+        line: &mut [u16; SCREEN_WIDTH],
+    ) -> MasterBrightness {
         if y >= SCREEN_HEIGHT {
-            return;
+            return MasterBrightness::OFF;
         }
         let dispcnt = inputs.spec.dispcnt(self.b.dispcnt());
         let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
-        let mut line = [BLACK_COLOR; SCREEN_WIDTH];
+        line.fill(BLACK_COLOR);
         let mut brightness = self.b.master_brightness();
         if !self.engine_b_on() {
             line.fill(BLACK_COLOR);
             brightness = MasterBrightness::OFF;
         } else if mode == MODE_GRAPHICS {
-            self.b.render_line(y, inputs, &mut line);
+            self.b.render_line(y, inputs, line);
         } else {
             line.fill(WHITE_COLOR);
         }
-        expand_line(&line, brightness, out);
+        brightness
     }
 }
 

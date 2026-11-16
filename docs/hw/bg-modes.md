@@ -7,7 +7,7 @@ I/O BG Control" (BGxCNT, screen sizes, area overflow); GBATEK "LCD I/O BG Rotati
 GBATEK "LCD VRAM BG Screen Data Format (BG Map)" (the one-byte affine entry); GBATEK "DS Power
 Control" (POWCNT1); GBATEK "DS Video Extended Palettes" (what the palettes do).
 Used by: `crates/core/src/gpu2d/`   Phase: 4 (#30); sprites (#31), extended palettes (#32),
-windows (#33), blending and master brightness (#34) and capture (#36) are other issues
+windows (#33, `windows.md`), blending and master brightness (#34) and capture (#36) are other issues
 
 `bg-text.md` describes the text layer and the picture of one line. This note adds the rest of the
 background layers (affine, extended, large bitmap), mosaic, and the second graphics engine. Both
@@ -223,7 +223,7 @@ the other one.
 ### Putting the layers together
 
 Unchanged from `bg-text.md`: at each pixel the front-most layer that is not transparent gives the
-colour, ordered by BGxCNT priority and then layer number, else the backdrop. Sprites, windows and
+colour, ordered by BGxCNT priority and then layer number, else the backdrop. Sprites, windows (`windows.md`) and
 blending are not part of this note.
 
 ### When the picture is made

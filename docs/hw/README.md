@@ -51,6 +51,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Background modes, affine layers and mosaic (both engines)](bg-modes.md)
 - [Sprites (OBJ): OAM, tile, affine and bitmap objects, priority, mosaic, line limit](obj.md)
 - [Extended palettes (BG and OBJ, both engines)](extended-palettes.md)
+- [Windows: WIN0, WIN1, the OBJ window and the outside region (both engines)](windows.md)
 
 **Boot and BIOS**
 

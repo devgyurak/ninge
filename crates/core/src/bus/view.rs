@@ -195,9 +195,12 @@ impl<const ARM9: bool> Access<'_, ARM9> {
 ///
 /// One view may serve a whole batch of instructions (`begin_step`, `set_tcm`): it is the step
 /// context of the run loop, by design, so the loop pays for the borrows and the TCM decode once.
+/// A separate context struct next to the view would add a borrow and a second thing to keep in
+/// sync with it.
 ///
 /// `now` is the ARM9's clock in master cycles, as of the access: a timer register reads the
-/// counter as of it (`docs/hw/timers.md`, "Model").
+/// counter as of it (`docs/hw/timers.md`, "Model"). The view starts at the master clock, with
+/// `floor` at `now`; [`Arm9View::begin_step`] is the only way to change either.
 pub struct Arm9View<'a> {
     memory: &'a mut Memory,
     io: &'a mut Io,
@@ -208,23 +211,25 @@ pub struct Arm9View<'a> {
 }
 
 impl<'a> Arm9View<'a> {
-    /// Builds the view for one step taken at the ARM9 clock `now`, in master cycles. `floor` is
-    /// the earliest an event the step schedules may fire: the end of the step.
+    /// Builds the view at the master clock, which is the ARM9's. `floor` is `now` too: the
+    /// earliest an event may fire is the clock itself, which is what a DMA unit's write needs (a
+    /// unit is not an instruction, so an event it queues waits for the next round and fires at
+    /// `now`; `dma.md`, "Model"). An instruction raises the floor to its end through
+    /// [`Arm9View::begin_step`].
     pub(crate) fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
         tcm: TcmConfig,
-        now: u64,
-        floor: u64,
     ) -> Self {
+        let now = scheduler.now();
         Self {
             memory,
             io,
             scheduler,
             tcm,
             now,
-            floor,
+            floor: now,
         }
     }
 
@@ -304,32 +309,39 @@ impl Bus for Arm9View<'_> {
 /// WRAM it owns, its own WRAM and WRAMSTAT (`docs/hw/wramcnt.md`) through the ARM7's own page
 /// table, and its own registers through `Io`. Not state.
 ///
-/// `now` is the ARM7's clock in master cycles, copied in before the step; it runs apart from the
-/// scheduler's (`docs/hw/scheduler.md`).
+/// Like the ARM9's, one view serves a batch of instructions: it is the run loop's step context,
+/// so the loop pays for the borrows once.
+///
+/// The view holds the ARM7's clock in master cycles, which runs apart from the scheduler's
+/// (`docs/hw/scheduler.md`); [`Arm7View::advance`] moves it and the caller writes it back when
+/// the batch ends. `now` is the clock as of the access. The view starts with `now` at the clock
+/// and `floor` at the master clock; [`Arm7View::begin_step`] is the only way to change either.
 pub struct Arm7View<'a> {
     memory: &'a mut Memory,
     io: &'a mut Io,
     scheduler: &'a mut Scheduler,
+    clock: u64,
     now: u64,
     floor: u64,
 }
 
 impl<'a> Arm7View<'a> {
-    /// Builds the view for one step taken at the ARM7 clock `now`, in master cycles. `floor` is
-    /// the earliest an event the step schedules may fire: the master clock, which the step leaves
-    /// where it is.
+    /// Builds the view at the ARM7 clock `clock`, in master cycles. `floor` is the master clock:
+    /// the earliest an event the step schedules may fire, since the ARM7's step leaves the master
+    /// clock where it is (`timers.md`, "Model").
     pub(crate) fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
-        now: u64,
-        floor: u64,
+        clock: u64,
     ) -> Self {
+        let floor = scheduler.now();
         Self {
             memory,
             io,
             scheduler,
-            now,
+            clock,
+            now: clock,
             floor,
         }
     }
@@ -349,6 +361,16 @@ impl<'a> Arm7View<'a> {
     /// The register devices, to take a HALTCNT request after an instruction.
     pub(crate) fn io_mut(&mut self) -> &mut Io {
         self.io
+    }
+
+    /// The ARM7's clock.
+    pub(crate) fn clock(&self) -> u64 {
+        self.clock
+    }
+
+    /// Advances the ARM7's clock by `cycles`: the instruction's cost. The master clock stays.
+    pub(crate) fn advance(&mut self, cycles: u64) {
+        self.clock = self.clock.saturating_add(cycles);
     }
 
     /// The master clock, which the ARM7's steps leave where it is.

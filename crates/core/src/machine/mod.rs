@@ -113,27 +113,23 @@ fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9V
     view.advance(cost);
 }
 
-/// One ARM7 instruction through `view` at the ARM7 clock `clock`, which it returns advanced by the
-/// cost; the master clock stays where it is, and that is the floor of what the instruction
+/// One ARM7 instruction through `view` at the view's ARM7 clock, which it advances by the cost;
+/// the master clock stays where it is, and that is the floor of what the instruction
 /// schedules. The IRQ entry takes the instruction's place as in [`arm9_instruction`]. A write of
 /// HALTCNT's halt mode halts the ARM7 from the next instruction (`docs/hw/interrupts.md`,
 /// "HALTCNT").
 // TODO(hw-unverified): the IRQ line is sampled before each instruction, as for the ARM9
 // (`docs/hw/interrupts.md`, "Unverified").
-fn arm7_instruction(
-    arm7: &mut Cpu<false>,
-    bios: &mut SwiRecord,
-    view: &mut Arm7View<'_>,
-    clock: u64,
-) -> u64 {
+fn arm7_instruction(arm7: &mut Cpu<false>, bios: &mut SwiRecord, view: &mut Arm7View<'_>) {
     if arm7.halted() {
         if !view.io().irq7().wakes() {
-            return clock.saturating_add(ARM7_INSTRUCTION_COST);
+            view.advance(ARM7_INSTRUCTION_COST);
+            return;
         }
         arm7.set_halted(false);
     }
     let irq = view.io().irq7().line();
-    view.begin_step(clock, view.master_clock());
+    view.begin_step(view.clock(), view.master_clock());
     let cost = match arm7.take_interrupt(view, irq, false) {
         Some(cost) => cost,
         None => match crate::hle::enter(arm7, view, bios) {
@@ -144,7 +140,7 @@ fn arm7_instruction(
     if view.io_mut().power_mut().take_halt() {
         arm7.set_halted(true);
     }
-    clock.saturating_add(cost)
+    view.advance(cost);
 }
 
 /// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
@@ -315,8 +311,6 @@ impl Machine {
             &mut self.io,
             &mut self.scheduler,
             TcmConfig::from_cp15(self.arm9.cp15()),
-            0,
-            0,
         );
         arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
     }
@@ -325,20 +319,14 @@ impl Machine {
     /// loop keeps one view for a whole batch instead; this is the lone step tests drive.
     #[cfg(test)]
     pub(crate) fn step_arm7_instruction(&mut self) {
-        let floor = self.scheduler.now();
         let mut view = Arm7View::new(
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
             self.arm7_clock,
-            floor,
         );
-        self.arm7_clock = arm7_instruction(
-            &mut self.arm7,
-            &mut self.bios.arm7,
-            &mut view,
-            self.arm7_clock,
-        );
+        arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
+        self.arm7_clock = view.clock();
     }
 
     /// Sets the input for the next frame: the buttons held, the touch point and the hinge. It is

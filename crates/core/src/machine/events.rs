@@ -28,8 +28,6 @@ impl Participants for Machine {
             &mut self.io,
             &mut self.scheduler,
             TcmConfig::from_cp15(self.arm9.cp15()),
-            0,
-            0,
         );
         while view.clock() < target
             && view
@@ -57,22 +55,20 @@ impl Participants for Machine {
     }
 
     fn run_arm7_until(&mut self, target: u64) {
-        let mut clock = self.arm7_clock;
         let mut view = Arm7View::new(
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
-            clock,
-            0,
+            self.arm7_clock,
         );
-        while clock < target {
+        while view.clock() < target {
             if self.arm7.halted() && !view.io().irq7().wakes() {
-                clock = target;
+                view.advance(target - view.clock());
                 break;
             }
-            clock = arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view, clock);
+            arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
         }
-        self.arm7_clock = clock;
+        self.arm7_clock = view.clock();
     }
 
     fn dispatch(&mut self, event: Event) {
@@ -100,7 +96,6 @@ impl Machine {
     // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
     // revisit with the Phase 8 timing work.
     fn run_dma(&mut self, transfer: crate::io::dma::Transfer) {
-        let now = self.scheduler.now();
         let end = if transfer.arm9 {
             let mut view = Arm9View::new(
                 &mut self.memory,
@@ -109,12 +104,10 @@ impl Machine {
                 // TODO(hw-unverified): DMA sees the address behind a TCM window, not a hole
                 // (`docs/hw/dma.md`, "Unverified").
                 TcmConfig::NONE,
-                now,
-                // A DMA unit's write is not an instruction, so its floor is `now`: an event it
-                // queues waits for the next round and fires at `now`, which is where a load
-                // rebuilds it (`dma.md`, "Model").
-                now,
             );
+            // A DMA unit's write is not an instruction, so the view's floor stays at `now`: an
+            // event it queues waits for the next round and fires at `now`, which is where a load
+            // rebuilds it (`dma.md`, "Model").
             transfer.run(&mut view)
         } else {
             let mut view = Arm7View::new(
@@ -122,7 +115,6 @@ impl Machine {
                 &mut self.io,
                 &mut self.scheduler,
                 self.arm7_clock,
-                now,
             );
             transfer.run(&mut view)
         };

@@ -12,7 +12,7 @@
 //! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_kind`,
 //! `slot_due` and `slot_fire`).
 
-use crate::io::device::{Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::{EventKind, SLICE};
 use serde::{Deserialize, Serialize};
@@ -335,6 +335,12 @@ impl<const ARM9: bool> Timers<ARM9> {
                 self.overflow_time(index)
                     .is_none_or(|due| now.saturating_sub(due) <= SLICE)
             })
+    }
+}
+
+impl<const ARM9: bool> Checked for Timers<ARM9> {
+    fn well_formed(&self, now: u64) -> bool {
+        self.is_well_formed(now)
     }
 }
 

@@ -22,7 +22,7 @@ mod spec;
 mod text;
 mod window;
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
 use brightness::{BRIGHT_BLOCK_BYTES as ENGINE_BRIGHT_BYTES, BRIGHT_OFFSET};
@@ -432,6 +432,8 @@ impl Gpu2d {
         brightness
     }
 }
+
+impl Checked for Gpu2d {}
 
 /// Both engines are wired to the ARM9 alone (`AGENTS.md` §4, "Per-CPU devices"). Their registers
 /// are bytes; a wider access is split into them.

@@ -126,6 +126,15 @@ pub(crate) trait Device<const ARM9: bool> {
     }
 }
 
+/// Whether a device holds only values that exist, for the check a savestate load runs. The
+/// default is yes: a device whose registers take every bit pattern has nothing to check.
+pub(crate) trait Checked {
+    /// Whether the state is one the device can reach, at master time `now`.
+    fn well_formed(&self, _now: u64) -> bool {
+        true
+    }
+}
+
 /// What a fired event asks of its caller: an [`Effect`], like a register access, and for DMA the
 /// transfer the machine must now move through the owning CPU's bus, which a device cannot reach.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

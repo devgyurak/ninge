@@ -10,7 +10,7 @@
 //! fires (`dma.md`, "Model").
 
 use crate::cpu::Bus;
-use crate::io::device::{Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{DMA0_IRQ, Requests};
 use crate::scheduler::EventKind;
 use serde::{Deserialize, Serialize};
@@ -480,6 +480,12 @@ impl<const ARM9: bool> Dma<ARM9> {
                 && channel.count_now <= Self::count_mask(index) + 1
                 && (!channel.pending || channel.control & CONTROL_ENABLE != 0)
         }) && (ARM9 || self.fill == [0; CHANNEL_COUNT])
+    }
+}
+
+impl<const ARM9: bool> Checked for Dma<ARM9> {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.is_well_formed()
     }
 }
 

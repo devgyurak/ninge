@@ -10,7 +10,7 @@
 //! fires (`dma.md`, "Model").
 
 use crate::cpu::Bus;
-use crate::io::device::{Device, Effect, Fired, Width, read_bytes, write_bytes};
+use crate::io::device::{Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{DMA0_IRQ, Requests};
 use crate::scheduler::EventKind;
 use serde::{Deserialize, Serialize};
@@ -271,7 +271,7 @@ impl<const ARM9: bool> Dma<ARM9> {
     /// times fire 0 to 3 (`dma.md`, "Starting").
     // TODO(hw-unverified): channels that start together go in ascending order (`dma.md`,
     // "Unverified").
-    pub(crate) fn trigger(&mut self, trigger: Trigger) -> u8 {
+    pub(crate) fn trigger(&mut self, trigger: Trigger) -> SlotMask {
         self.channels
             .iter_mut()
             .enumerate()
@@ -493,6 +493,8 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
     fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
         write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte))
     }
+
+    const SLOTS: u8 = CHANNEL_COUNT as u8;
 
     fn slot_kind(&self, slot: u8) -> Option<EventKind> {
         (usize::from(slot) < CHANNEL_COUNT).then(|| Self::event_kind(usize::from(slot)))

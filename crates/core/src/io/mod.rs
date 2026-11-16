@@ -29,7 +29,7 @@ pub mod timing;
 
 use crate::gpu2d::Gpu2d;
 use crate::scheduler::{EventKind, Scheduler};
-use device::{Device, Effect, Fired, Width};
+use device::{Device, Effect, Fired, SlotMask, Width};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -87,6 +87,13 @@ macro_rules! device_call {
         }
     };
 }
+
+/// Events the devices queue at most: each event slot of the two timers and the two DMA blocks,
+/// plus nothing else (the line and HBlank starts are the display's, not a device's). The
+/// scheduler sizes its queue from it, so a device with more slots grows the queue by registering.
+pub(crate) const EVENT_SLOTS: usize = 2
+    * (<Timers<true> as Device<true>>::SLOTS as usize
+        + <Dma<true> as Device<true>>::SLOTS as usize);
 
 /// When an access happens: the clock of the CPU making it, and the earliest time an event it
 /// schedules may fire.
@@ -321,10 +328,10 @@ impl Io {
         &self,
         scheduler: &mut Scheduler,
         port: Port,
-        mask: u8,
+        mask: SlotMask,
         floor: u64,
     ) {
-        (0..u8::BITS as u8)
+        (0..SlotMask::BITS as u8)
             .filter(|slot| mask & (1 << slot) != 0)
             .for_each(|slot| {
                 let kind = device_call!(self, ARM9, port, ref, slot_kind(slot), None);
@@ -342,10 +349,10 @@ impl Io {
     /// and the waiting DMA starts of both CPUs. A load calls it on an empty queue to rebuild what
     /// the savestate does not hold (`scheduler.md`, "Savestate checks").
     pub(crate) fn schedule_all(&self, scheduler: &mut Scheduler, now: u64) {
-        self.schedule_slots::<true>(scheduler, Port::Timers, u8::MAX, now);
-        self.schedule_slots::<false>(scheduler, Port::Timers, u8::MAX, now);
-        self.schedule_slots::<true>(scheduler, Port::Dma, u8::MAX, now);
-        self.schedule_slots::<false>(scheduler, Port::Dma, u8::MAX, now);
+        self.schedule_slots::<true>(scheduler, Port::Timers, SlotMask::MAX, now);
+        self.schedule_slots::<false>(scheduler, Port::Timers, SlotMask::MAX, now);
+        self.schedule_slots::<true>(scheduler, Port::Dma, SlotMask::MAX, now);
+        self.schedule_slots::<false>(scheduler, Port::Dma, SlotMask::MAX, now);
     }
 
     /// A device's event fired: it does what the device says ([`Device::slot_fire`]), its IF bits

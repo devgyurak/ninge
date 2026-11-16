@@ -303,7 +303,7 @@ impl Gpu2d {
 
     /// What the capture unit does on visible line `y`, or `None` when it does nothing there.
     pub(crate) fn capture_line(&self, y: usize) -> Option<CaptureLine> {
-        self.capture.line(y)
+        self.capture.line(y, self.a.dispcnt())
     }
 
     /// DISPCNT of engine A.

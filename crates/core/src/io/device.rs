@@ -5,8 +5,8 @@
 //! A device whose registers own scheduler events (the timers, the DMA channels) names them through
 //! the same interface: a slot is one event of the device, `Io` builds its
 //! [`EventKind::Slot`] from the device's [`DeviceId`], [`Device::slot_due`] the time it is next
-//! due and [`Device::slot_fire`] what happens when it fires. `Io` replaces the events of the slots an [`Effect`] names and fires them
-//! without knowing which device it is.
+//! due and [`Device::slot_fire`] what happens when it fires. `Io` replaces the events of the
+//! slots an [`Effect`] names and fires them without knowing which device it is.
 
 use crate::input::Input;
 use crate::io::dma::Transfer;

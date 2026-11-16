@@ -28,8 +28,8 @@ Engine A's block starts at `0400_0000h`, engine B's at `0400_1000h`.
 The reset values are not stated by GBATEK; zero means "no effect", which is also what makes a ROM
 that never touches these registers draw the same picture as before (see "Unverified").
 Engine B's `+0050h` block is behind POWCNT1 bit 9 like the rest of its 2D registers
-(`bg-modes.md`, "Engine B"); its MASTER_BRIGHT is not, as for the other ports outside the engine's
-`+0000h..+006Fh` block that `gpu2d::Gpu2d` already routes.
+(`bg-modes.md`, "Engine B"); its MASTER_BRIGHT at `106Ch` is not, since it lies outside the
+`1008h-105Fh` range GBATEK gives for that bit.
 
 ### BLDCNT bits
 

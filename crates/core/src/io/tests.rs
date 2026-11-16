@@ -254,12 +254,21 @@ fn given_the_effect_block_when_decoded_then_the_arm9_owns_it_in_the_gpu_space_an
         (0x0400_0058, None),
     ];
     let arm7 = [(0x0400_0050, None), (0x0400_0054, None)];
+    let master_bright = [
+        (0x0400_006C, Some(Owner::Io(Port::Gpu2d, 0x6C))),
+        (0x0400_006F, Some(Owner::Io(Port::Gpu2d, 0x6F))),
+        (0x0400_106C, Some(Owner::Io(Port::Gpu2d, 0x106C))),
+        (0x0400_106F, Some(Owner::Io(Port::Gpu2d, 0x106F))),
+        (0x0400_0070, None),
+        (0x0400_1070, None),
+    ];
     assert_eq!(
         (
             decode_failures::<true>(&arm9),
-            decode_failures::<false>(&arm7)
+            decode_failures::<false>(&arm7),
+            decode_failures::<true>(&master_bright)
         ),
-        (vec![], vec![])
+        (vec![], vec![], vec![])
     );
 }
 
@@ -286,6 +295,9 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         // transform block, which ends at `0400_003Fh`, then the window block `0400_0040h`-`004Bh`
         // and MOSAIC's `004Ch`-`004Fh`, then the effect block `0050h`-`0057h`.
         (0x0400_0058, None),
+        // MASTER_BRIGHT's block is `006Ch`-`006Fh`; DISPCAPCNT and the display FIFO below it are not
+        // ours.
+        (0x0400_0070, None),
         (0x0000_0000, None),
     ];
     assert_eq!(

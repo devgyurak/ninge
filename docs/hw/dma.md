@@ -65,8 +65,8 @@ ARM9 (bits 27-29):
 | 0 | Immediately | 3 (#26) |
 | 1 | VBlank start | 3 (#26) |
 | 2 | HBlank start | 3 (#26) |
-| 3 | Start of display (line 0; how often is Unverified, `display-capture.md`) | `TODO(phase4)` (#36) |
-| 4 | Main-memory display (`display-capture.md`) | `TODO(phase4)` (#36) |
+| 3 | Start of display (line 0; how often is Unverified, `display-capture.md`) | 4 (#36) |
+| 4 | Main-memory display (`display-capture.md`) | 4 (#36) |
 | 5 | DS cartridge slot | `TODO(phase5)` (#37) |
 | 6 | GBA cartridge slot | no phase plans it |
 | 7 | Geometry command FIFO | `TODO(phase7)` (#48) |
@@ -108,6 +108,12 @@ that polls it waits for the transfer to finish.
   "Hooks for later features"). Enabling during VBlank waits for the next one.
 - **HBlank start:** the transfer starts at the start of HBlank in each visible line, 0-191. See
   "Unverified" for the blank lines.
+
+- **Start of display (ARM9 mode 3):** the transfer starts at the start of line 0, once a frame.
+- **Main-memory display (ARM9 mode 4):** one transfer of 32 requests (a line of the bitmap) starts in
+  each visible line but the last, and in the last line of the frame, for the line after it; a channel
+  enabled during a frame waits for the last line of that frame. See `display-capture.md`, "The
+  main-memory display".
 
 When several channels of one CPU start at the same time, channel 0 goes first, then 1, 2, 3. When
 both CPUs have channels waiting for the same trigger, the ARM9's go before the ARM7's (the tie

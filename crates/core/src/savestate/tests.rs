@@ -16,8 +16,8 @@ use crate::io::irq::Requests;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_214_740;
-const PINNED_HASH: u64 = 0xcff89a424698abc9;
+const PINNED_LEN: usize = 5_215_007;
+const PINNED_HASH: u64 = 0x0db39ca2f81a4be2;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -64,8 +64,8 @@ const PINNED_HASH: u64 = 0xcff89a424698abc9;
 /// are zero, so both lengths grew by 6 and both hashes moved.
 /// Version 26 (#34) added both engines' MASTER_BRIGHT: 2 one-byte varints while they are zero, so both
 /// lengths grew by 2 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_655;
-const PINNED_BOOTED_HASH: u64 = 0xa6fc4051b3563daf;
+const PINNED_BOOTED_LEN: usize = 5_804_922;
+const PINNED_BOOTED_HASH: u64 = 0xbd0a822b0b9f4924;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -1318,6 +1318,7 @@ struct ChannelBytes {
     destination_now: u32,
     count_now: u32,
     pending: bool,
+    frame_wait: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -1335,6 +1336,7 @@ const fn idle_channel() -> ChannelBytes {
         destination_now: 0,
         count_now: 0,
         pending: false,
+        frame_wait: false,
     }
 }
 

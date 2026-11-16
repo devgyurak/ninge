@@ -11,7 +11,13 @@ use crate::gpu2d::{EngineId, Gpu2d, expand_line};
 /// colour the hardware has and before the master brightness, and stores it in the VRAM block
 /// DISPCAPCNT names (`docs/hw/display-capture.md`, "Where the capture unit sits"). A line the
 /// capture does not take (no capture is running, or its size has no such row) is left alone.
-fn capture_tap(memory: &mut Memory, gpu: &Gpu2d, y: usize, composed: &[u16; SCREEN_WIDTH]) {
+fn capture_tap(
+    memory: &mut Memory,
+    gpu: &Gpu2d,
+    y: usize,
+    composed: &[u16; SCREEN_WIDTH],
+    fifo: &[u16; SCREEN_WIDTH],
+) {
     let Some(capture) = gpu.capture_line(y) else {
         return;
     };
@@ -23,7 +29,7 @@ fn capture_tap(memory: &mut Memory, gpu: &Gpu2d, y: usize, composed: &[u16; SCRE
         .get(capture.read_block())
         .copied()
         .flatten();
-    let b = capture.source_b(y, read_bank);
+    let b = capture.source_b(y, read_bank, fifo);
     let pixels = capture.pixels(composed, &b);
     if let Some(bank) = memory.lcdc_bank_mut(capture.write_block()) {
         capture.store(y, bank, &pixels);
@@ -46,6 +52,9 @@ impl Machine {
             return;
         }
         self.io.gpu2d_mut().begin_line(y);
+        // The display takes this line's pixels out of the main-memory display FIFO, shown or not
+        // (`display-capture.md`, "The main-memory display").
+        let fifo = self.io.gpu2d_mut().take_fifo_line();
         let gpu = self.io.gpu2d();
         let mut line_a = [0; SCREEN_WIDTH];
         let mut line_b = [0; SCREEN_WIDTH];
@@ -64,11 +73,12 @@ impl Machine {
             self.memory.lcdc_banks(),
             &inputs_a,
             &composed,
+            &fifo,
             &mut line_a,
         );
         let inputs_b = self.memory.engine_inputs(EngineId::B);
         let brightness_b = gpu.render_line_b(y, &inputs_b, &mut line_b);
-        capture_tap(&mut self.memory, gpu, y, &composed);
+        capture_tap(&mut self.memory, gpu, y, &composed, &fifo);
         let (out_a, out_b) = if gpu.engine_a_on_top() {
             (&mut self.work_top, &mut self.work_bottom)
         } else {

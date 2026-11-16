@@ -17,6 +17,7 @@ mod brightness;
 mod capture;
 mod effects;
 mod engine;
+mod fifo;
 mod kind;
 mod obj;
 mod spec;
@@ -39,6 +40,8 @@ use engine::{
     BG_REGS_BYTES as ENGINE_BG_REGS_BYTES, BGCNT_OFFSET, Engine,
     MOSAIC_BLOCK_BYTES as ENGINE_MOSAIC_BYTES, MOSAIC_OFFSET,
 };
+pub use fifo::DisplayFifo;
+use fifo::{FIFO_BYTES, FIFO_OFFSET};
 pub use obj::{OBJ_COUNT, ObjAttrs};
 use serde::{Deserialize, Serialize};
 pub(crate) use spec::EngineInputs;
@@ -96,6 +99,11 @@ pub const MASTER_BRIGHT_BYTES: u32 = ENGINE_BRIGHT_BYTES;
 pub const DISPCAPCNT_ADDR: u32 = DISPCNT_A_ADDR + CAPTURE_OFFSET;
 /// The bytes of that register.
 pub const DISPCAPCNT_BYTES: u32 = CAPTURE_BLOCK_BYTES;
+/// DISP_MMEM_FIFO of engine A, at `0400_0068h`: a word, the destination of the main-memory display
+/// DMA (`display-capture.md`, "Registers").
+pub const DISP_MMEM_FIFO_ADDR: u32 = DISPCNT_A_ADDR + FIFO_OFFSET;
+/// The bytes of that register.
+pub const DISP_MMEM_FIFO_BYTES: u32 = FIFO_BYTES;
 /// WIN0H, at `0400_0040h`: WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT, 12 bytes from here
 /// (`windows.md`, "Registers").
 pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
@@ -106,6 +114,8 @@ pub const WINDOW_REGS_BYTES: u32 = ENGINE_WINDOW_BYTES;
 
 /// A white pixel as 15-bit colour; it expands to xRGB8888 `00FF_FFFFh`.
 const WHITE_COLOR: u16 = 0x7FFF;
+/// The colour bits of a halfword: bit 15 is not part of the colour.
+const COLOR_MASK_15: u16 = 0x7FFF;
 /// A black pixel as 15-bit colour; it expands to xRGB8888 zero.
 const BLACK_COLOR: u16 = 0;
 
@@ -118,6 +128,8 @@ const MODE_OFF: u32 = 0;
 const MODE_GRAPHICS: u32 = 1;
 /// Display mode 2: the bitmap read from a VRAM block.
 const MODE_VRAM: u32 = 2;
+/// Display mode 3: the main-memory display, the line the FIFO delivered.
+const MODE_FIFO: u32 = 3;
 /// DISPCNT bits 18-19: the VRAM block mode 2 reads.
 const DISPCNT_BLOCK_SHIFT: u32 = 18;
 const DISPCNT_BLOCK_MASK: u32 = 0x3;
@@ -163,6 +175,8 @@ pub struct Gpu2d {
     powcnt1: u16,
     // DISPCAPCNT and the capture latch (engine A only).
     capture: Capture,
+    // The main-memory display FIFO (engine A only).
+    fifo: DisplayFifo,
 }
 
 /// Where an offset in the register space of [`Gpu2d`] lands.
@@ -227,6 +241,7 @@ impl Gpu2d {
             powcnt1: POWCNT1_RESET,
             // TODO(hw-unverified): DISPCAPCNT resets to 0 (`display-capture.md`, "Unverified").
             capture: Capture::default(),
+            fifo: DisplayFifo::new(),
         }
     }
 
@@ -304,6 +319,17 @@ impl Gpu2d {
     /// What the capture unit does on visible line `y`, or `None` when it does nothing there.
     pub(crate) fn capture_line(&self, y: usize) -> Option<CaptureLine> {
         self.capture.line(y, self.a.dispcnt())
+    }
+
+    /// The main-memory display FIFO. A debugger's video panel (#58) shows it.
+    pub fn fifo(&self) -> &DisplayFifo {
+        &self.fifo
+    }
+
+    /// The display takes the next line of the main-memory display out of the FIFO, at the start of a
+    /// visible line (`display-capture.md`, "The main-memory display").
+    pub(crate) fn take_fifo_line(&mut self) -> [u16; SCREEN_WIDTH] {
+        self.fifo.take_line()
     }
 
     /// DISPCNT of engine A.
@@ -410,11 +436,9 @@ impl Gpu2d {
 
     /// Picks what engine A's screen shows for line `y` (0-191) into `line` in 15-bit colour, given
     /// the bytes of banks A-D where the CPU sees them as LCDC VRAM, what the engine reads
-    /// ([`EngineInputs`]) and the line [`Gpu2d::compose_line_a`] made (read in display mode 1 only),
-    /// and returns the master brightness to apply to it. A line past the last visible one is not
-    /// drawn.
-    // TODO(phase4): mode 3 draws the main-memory bitmap, and the master brightness applies to it
-    // too (`blending.md`, "Master brightness"); the placeholder black is left alone.
+    /// ([`EngineInputs`]), the line [`Gpu2d::compose_line_a`] made (read in display mode 1 only) and
+    /// the line the main-memory display FIFO delivered (read in display mode 3 only), and returns
+    /// the master brightness to apply to it. A line past the last visible one is not drawn.
     // TODO(hw-unverified): the master brightness applies to the white of display mode 0
     // (`blending.md`, "Unverified").
     // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored
@@ -427,6 +451,7 @@ impl Gpu2d {
         lcdc: [Option<&[u8]>; 4],
         inputs: &EngineInputs<'_>,
         composed: &[u16; SCREEN_WIDTH],
+        fifo: &[u16; SCREEN_WIDTH],
         line: &mut [u16; SCREEN_WIDTH],
     ) -> MasterBrightness {
         if y >= SCREEN_HEIGHT {
@@ -438,15 +463,16 @@ impl Gpu2d {
         // The line is made in 15-bit colour; the caller expands it for the host after the stages
         // between the layers and the screen, which work on the colour the hardware has.
         line.fill(BLACK_COLOR);
-        // Mode 3 is not drawn yet, so its placeholder is not brightened.
-        let brightness = match mode {
-            MODE_OFF | MODE_GRAPHICS | MODE_VRAM => self.a.master_brightness(),
-            _ => MasterBrightness::OFF,
-        };
+        // The master brightness applies to every display mode (`blending.md`, "Master brightness").
+        let brightness = self.a.master_brightness();
         if mode == MODE_OFF {
             line.fill(WHITE_COLOR);
         } else if mode == MODE_GRAPHICS {
             line.copy_from_slice(composed);
+        } else if mode == MODE_FIFO {
+            line.iter_mut().zip(fifo).for_each(|(pixel, &color)| {
+                *pixel = color & COLOR_MASK_15;
+            });
         } else if mode == MODE_VRAM {
             let row = lcdc
                 .get(block as usize)
@@ -501,6 +527,11 @@ impl Device<true> for Gpu2d {
     }
 
     fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+        // DISP_MMEM_FIFO takes whole pixels, so its write is not split into bytes.
+        if (FIFO_OFFSET..FIFO_OFFSET + FIFO_BYTES).contains(&offset) {
+            self.fifo.write(width, value);
+            return Effect::default();
+        }
         write_bytes(offset, width, value, |at, byte| {
             self.write_byte(at, byte);
             Effect::default()
@@ -510,7 +541,7 @@ impl Device<true> for Gpu2d {
 
 impl Checked for Gpu2d {
     fn well_formed(&self, _now: u64) -> bool {
-        self.capture.well_formed()
+        self.capture.well_formed() && self.fifo.well_formed()
     }
 }
 

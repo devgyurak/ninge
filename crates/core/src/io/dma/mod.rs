@@ -45,14 +45,21 @@ const CONTROL_ENABLE: u32 = 1 << 31;
 const CONTROL_BITS_ARM9: u32 = 0xFFE0_0000;
 const CONTROL_BITS_ARM7: u32 = 0xF7E0_0000;
 
+/// The requests of one line in the main-memory display: 256 pixels, 8 to a request of 4 words
+/// (`display-capture.md`, "The main-memory display").
+const MAIN_MEMORY_REQUESTS: u32 = 32;
+
 /// A start timing as the model sees it (`dma.md`, "Start timing").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Start {
     Immediate,
     VBlank,
     HBlank,
+    /// The ARM9's start of display, mode 3 (`display-capture.md`, "ARM9 DMA start modes 3 and 4").
+    Display,
+    /// The ARM9's main-memory display, mode 4: the display FIFO's requests for a line.
+    MainMemory,
     /// A start timing no phase implements yet: the channel is enabled and busy but never starts.
-    // TODO(phase4): the ARM9's start-of-display and main-memory-display starts.
     // TODO(phase5): the DS cartridge slot start of both CPUs (#37).
     // TODO(phase7): the ARM9's geometry command FIFO start (#48).
     // The GBA slot and the ARM7's wireless start have no phase.
@@ -67,6 +74,13 @@ pub(crate) enum Trigger {
     VBlank,
     /// The start of HBlank in a visible line.
     HBlank,
+    /// The start of line 0, the start of display.
+    StartOfDisplay,
+    /// The main-memory display wants a line's pixels: raised in the last line of a frame
+    /// (`frame_start`, which also ends the wait of a channel enabled during the frame) and in every
+    /// visible line but the last, each for the line after it (`display-capture.md`, "The
+    /// main-memory display").
+    MainMemory { frame_start: bool },
 }
 
 impl Trigger {
@@ -74,6 +88,8 @@ impl Trigger {
         match self {
             Self::VBlank => Start::VBlank,
             Self::HBlank => Start::HBlank,
+            Self::StartOfDisplay => Start::Display,
+            Self::MainMemory { .. } => Start::MainMemory,
         }
     }
 }
@@ -135,6 +151,11 @@ struct Channel {
     running: bool,
     #[serde(skip)]
     rearmed: bool,
+    // The channel was enabled since the last frame start, so a main-memory display start waits for
+    // the next frame ("Transfer starts at next frame", `display-capture.md`).
+    // TODO(hw-unverified): a channel enabled mid-frame waits for the last line of that frame, and
+    // enabling it again waits again (`display-capture.md`, "Unverified").
+    frame_wait: bool,
 }
 
 /// The four channels of one CPU: the ARM9's when `ARM9` is true, the ARM7's otherwise. Plain data.
@@ -253,6 +274,8 @@ impl<const ARM9: bool> Dma<ARM9> {
             (0, _) => Start::Immediate,
             (1, _) => Start::VBlank,
             (2, true) => Start::HBlank,
+            (3, true) => Start::Display,
+            (4, true) => Start::MainMemory,
             _ => Start::Unimplemented,
         }
     }
@@ -272,17 +295,24 @@ impl<const ARM9: bool> Dma<ARM9> {
     // TODO(hw-unverified): channels that start together go in ascending order (`dma.md`,
     // "Unverified").
     pub(crate) fn trigger(&mut self, trigger: Trigger) -> SlotMask {
+        let frame_start = matches!(trigger, Trigger::MainMemory { frame_start: true });
+        let main_memory = matches!(trigger, Trigger::MainMemory { .. });
         self.channels
             .iter_mut()
             .enumerate()
-            .filter(|(_, channel)| {
-                channel.control & CONTROL_ENABLE != 0
-                    && !channel.pending
-                    && Self::start_of(channel.control) == trigger.start()
-            })
             .fold(0, |mask, (index, channel)| {
-                channel.pending = true;
-                mask | 1 << index
+                let waiting = channel.control & CONTROL_ENABLE != 0
+                    && Self::start_of(channel.control) == trigger.start();
+                if waiting && frame_start {
+                    channel.frame_wait = false;
+                }
+                let held = main_memory && channel.frame_wait;
+                if waiting && !held && !channel.pending {
+                    channel.pending = true;
+                    mask | 1 << index
+                } else {
+                    mask
+                }
             })
     }
 
@@ -297,6 +327,17 @@ impl<const ARM9: bool> Dma<ARM9> {
         channel.running = true;
         channel.rearmed = false;
         let word = channel.control & CONTROL_WORD != 0;
+        // A main-memory display start moves a whole line: `MAIN_MEMORY_REQUESTS` requests of the
+        // programmed count in one transfer (`display-capture.md`, "The main-memory display"). A
+        // guest count of 0 or the largest one makes a transfer of tens of millions of units inside
+        // one event: it stalls, it does not panic.
+        // TODO(hw-unverified): without repeat the transfer is still 32 requests and raises one IRQ per
+        // line (`display-capture.md`, "Unverified").
+        let count = if Self::start_of(channel.control) == Start::MainMemory {
+            channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS)
+        } else {
+            channel.count_now
+        };
         // Addresses are aligned down to the unit (`dma.md`, "Transferring").
         let align = !(if word { 3 } else { 1 });
         let destination_field = channel.control >> CONTROL_DEST_SHIFT;
@@ -306,7 +347,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             channel: index as u8,
             source: channel.source_now & align,
             destination: channel.destination_now & align,
-            count: channel.count_now,
+            count,
             word,
             source_step: Step::of_source(channel.control >> CONTROL_SOURCE_SHIFT),
             destination_step: Step::of_destination(destination_field),
@@ -453,6 +494,7 @@ impl<const ARM9: bool> Dma<ARM9> {
                 channel.source_now = channel.source;
                 channel.destination_now = channel.destination;
                 channel.count_now = Self::count_of(new, index);
+                channel.frame_wait = true;
                 if Self::start_of(new) == Start::Immediate {
                     channel.pending = true;
                     slot

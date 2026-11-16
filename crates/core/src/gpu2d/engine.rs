@@ -4,6 +4,7 @@
 //! differs is data ([`EngineSpec`](super::spec::EngineSpec)) and the memory each reads.
 
 use super::affine::{self, Affine, AffineBg};
+use super::brightness::{BRIGHT_MASK, BRIGHT_OFFSET, MasterBrightness};
 use super::effects::{
     BLD_BLOCK_BYTES, BLD_OFFSET, BLDALPHA_MASK, BLDCNT_MASK, BLDY_MASK, Effects, LAYER_BACKDROP,
     LAYER_OBJ, Pixel,
@@ -61,6 +62,8 @@ pub(super) struct Engine {
     bldcnt: u16,
     bldalpha: u16,
     bldy: u16,
+    // MASTER_BRIGHT (`blending.md`, "Master brightness").
+    master_bright: u16,
 }
 
 /// The mosaic block sizes in pixels of an engine (`bg-modes.md`, "Mosaic"): each is the register's
@@ -97,6 +100,7 @@ enum Field {
     BldCnt,
     BldAlpha,
     BldY,
+    MasterBright,
 }
 
 impl Engine {
@@ -119,6 +123,7 @@ impl Engine {
             bldcnt: 0,
             bldalpha: 0,
             bldy: 0,
+            master_bright: 0,
         }
     }
 
@@ -182,6 +187,11 @@ impl Engine {
         Effects::decode(self.bldcnt, self.bldalpha, self.bldy)
     }
 
+    /// The master brightness MASTER_BRIGHT selects (`blending.md`, "Master brightness").
+    pub(super) fn master_brightness(&self) -> MasterBrightness {
+        MasterBrightness::decode(self.master_bright)
+    }
+
     /// Visible line `y` is about to be made: the windows' vertical state moves to it
     /// (`windows.md`, "The vertical test").
     pub(super) fn begin_line(&mut self, y: usize) {
@@ -242,6 +252,8 @@ impl Engine {
                 1 => (Field::BldAlpha, byte),
                 _ => (Field::BldY, byte),
             })
+        } else if (BRIGHT_OFFSET..BRIGHT_OFFSET + 2).contains(&offset) {
+            Some((Field::MasterBright, offset - BRIGHT_OFFSET))
         } else {
             None
         }
@@ -264,6 +276,7 @@ impl Engine {
             Field::BldAlpha => u32::from(self.bldalpha),
             // BLDY is write-only (`blending.md`, "Unverified").
             Field::BldY => 0,
+            Field::MasterBright => u32::from(self.master_bright),
             // The transform registers are write-only too (`bg-modes.md`, "Unverified"), and so
             // are the window rectangles (`windows.md`, "Unverified").
             Field::BgHofs(_)
@@ -320,6 +333,10 @@ impl Engine {
             }
             Field::BldY => {
                 self.bldy = (with_byte(u32::from(self.bldy), byte, value) as u16) & BLDY_MASK;
+            }
+            Field::MasterBright => {
+                self.master_bright =
+                    (with_byte(u32::from(self.master_bright), byte, value) as u16) & BRIGHT_MASK;
             }
         }
     }

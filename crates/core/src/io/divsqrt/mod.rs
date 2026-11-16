@@ -6,7 +6,7 @@
 //! follows the duration, and it is a function of the time of the read, so the unit has no
 //! scheduler event (`divsqrt.md`, "Modeling choice").
 
-use crate::io::device::{Device, Effect, Width, read_bytes};
+use crate::io::device::{Checked, Device, Effect, Width, read_bytes};
 use crate::scheduler::SLICE;
 use serde::{Deserialize, Serialize};
 
@@ -218,6 +218,12 @@ impl DivSqrt {
 fn with_byte(value: u64, index: u32, byte: u8) -> u64 {
     let shift = 8 * index;
     (value & !(0xFF << shift)) | (u64::from(byte) << shift)
+}
+
+impl Checked for DivSqrt {
+    fn well_formed(&self, now: u64) -> bool {
+        self.is_well_formed(now)
+    }
 }
 
 impl Device<true> for DivSqrt {

@@ -10,7 +10,7 @@
 // condition, the hinge IRQ and the pen bit's link to the touch controller come with it
 // (`keypad.md`, "Unverified").
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// KEYINPUT, at `0400_0130h`; the device's register space starts here. Both CPUs.
@@ -72,6 +72,8 @@ impl<const ARM9: bool> Keypad<ARM9> {
         }
     }
 }
+
+impl<const ARM9: bool> Checked for Keypad<ARM9> {}
 
 impl<const ARM9: bool> Device<ARM9> for Keypad<ARM9> {
     fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {

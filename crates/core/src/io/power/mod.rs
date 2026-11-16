@@ -5,7 +5,7 @@
 //! wait-for-interrupt instead. The register itself holds nothing: a write whose mode is "halt"
 //! leaves a request that the machine turns into the ARM7's halted state after the access.
 
-use crate::io::device::{Device, Effect, Width};
+use crate::io::device::{Checked, Device, Effect, Width};
 use serde::{Deserialize, Serialize};
 
 /// POSTFLG, then HALTCNT, at `0400_0300h` (ARM7). The device's register space starts at POSTFLG.
@@ -42,6 +42,8 @@ impl Power {
         std::mem::take(&mut self.halt_requested)
     }
 }
+
+impl Checked for Power {}
 
 impl Device<false> for Power {
     /// HALTCNT reads 0.

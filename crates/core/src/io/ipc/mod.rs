@@ -7,7 +7,7 @@
 //! reach a CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io`
 //! hands those to the two controllers.
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
 use crate::io::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};
 
@@ -425,6 +425,12 @@ impl Ipc {
         let mut ipc = Self::new();
         ipc.port9.sync_out = out;
         ipc
+    }
+}
+
+impl Checked for Ipc {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.is_well_formed()
     }
 }
 

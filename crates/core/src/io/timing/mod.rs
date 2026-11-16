@@ -10,7 +10,7 @@
 //! are generic over which CPU asks. That is the "seen by both CPUs" class of `AGENTS.md` §4
 //! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
 use crate::io::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use serde::{Deserialize, Serialize};
 
@@ -243,6 +243,12 @@ impl Timing {
     /// Sets the ARM7's stored DISPSTAT bits unchecked, to build a corrupt state in a test.
     pub(crate) fn set_arm7_control_for_test(&mut self, control: u16) {
         self.arm7.control = control;
+    }
+}
+
+impl Checked for Timing {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.is_well_formed()
     }
 }
 

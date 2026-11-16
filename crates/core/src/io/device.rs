@@ -105,6 +105,7 @@ pub(crate) trait Device<const ARM9: bool> {
     /// events. The scheduler's queue capacity is the sum of these over the registered devices
     /// ([`crate::io::EVENT_SLOTS`]).
     const SLOTS: u8 = 0;
+    // A device cannot declare more slots than a mask holds; `Io` checks it at compile time.
 
     /// The scheduler event that carries event slot `slot`, or `None` when the device has no such
     /// slot (a device with no events has none).

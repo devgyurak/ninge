@@ -193,6 +193,9 @@ impl<const ARM9: bool> Access<'_, ARM9> {
 /// configuration copied from CP15. It is not state, so it may hold borrows (AGENTS.md §2 rule 5
 /// covers state only).
 ///
+/// One view may serve a whole batch of instructions (`begin_step`, `set_tcm`): it is the step
+/// context of the run loop, by design, so the loop pays for the borrows and the TCM decode once.
+///
 /// `now` is the ARM9's clock in master cycles, as of the access: a timer register reads the
 /// counter as of it (`docs/hw/timers.md`, "Model").
 pub struct Arm9View<'a> {

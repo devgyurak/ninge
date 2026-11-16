@@ -85,6 +85,8 @@ pub struct Machine {
 /// wakes a CPU"); a halted core that does not wake idles for one instruction's time. `view` may
 /// live across many instructions: it is told each one's times here, and the caller refreshes its
 /// TCM when CP15 changes (`run_arm9_until`).
+// TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write reaches
+// it at once, here and in `arm7_instruction` (`docs/hw/interrupts.md`, "Unverified").
 fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9View<'_>) {
     if arm9.halted() {
         if !view.io().irq9().wakes() {
@@ -116,6 +118,8 @@ fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9V
 /// schedules. The IRQ entry takes the instruction's place as in [`arm9_instruction`]. A write of
 /// HALTCNT's halt mode halts the ARM7 from the next instruction (`docs/hw/interrupts.md`,
 /// "HALTCNT").
+// TODO(hw-unverified): the IRQ line is sampled before each instruction, as for the ARM9
+// (`docs/hw/interrupts.md`, "Unverified").
 fn arm7_instruction(
     arm7: &mut Cpu<false>,
     bios: &mut SwiRecord,
@@ -342,6 +346,8 @@ impl Machine {
     /// next one, so `set_input` then `run_frame`, once per frame, is a complete input log and
     /// replays to the same frames and savestate bytes (`docs/hw/keypad.md`, "Where the bits come
     /// from"). [`Machine::load_rom`] starts from power-on and so clears the input.
+    // TODO(hw-unverified): a button change reaches the registers at the frame boundary only
+    // (`docs/hw/keypad.md`, "Unverified").
     pub fn set_input(&mut self, input: Input) {
         self.input = input;
     }

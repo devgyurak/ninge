@@ -3,7 +3,7 @@
 //! (`docs/hw/display-mode-vram.md`), the text backgrounds (`docs/hw/bg-text.md`) and engine B
 //! (`docs/hw/bg-modes.md`).
 //!
-//! The picture is made one line at a time ([`Gpu2d::render_line_a`], [`Gpu2d::render_line_b`]),
+//! The picture is made one line at a time ([`Gpu2d::compose_line_a`], [`Gpu2d::select_line_a`], [`Gpu2d::render_line_b`]),
 //! from the registers and memory as they are when the line is asked for. No allocation, formatting
 //! or collection happens while pixels are made.
 //!
@@ -349,11 +349,36 @@ impl Gpu2d {
         }
     }
 
-    /// Draws line `y` (0-191) of engine A's picture into `line` in 15-bit colour, given the
-    /// bytes of banks A-D where the CPU sees them as LCDC VRAM and what the engine reads
-    /// ([`EngineInputs`]), and returns the master brightness to apply to it. A line past the last
-    /// visible one is not drawn.
+    /// Whether engine A's display mode shows the layers (display mode 1), i.e. whether the
+    /// composed line is what the screen gets (`display-capture.md`, "Where the capture unit sits").
+    pub(crate) fn shows_layers_a(&self, inputs: &EngineInputs<'_>) -> bool {
+        let dispcnt = inputs.spec.dispcnt(self.a.dispcnt());
+        (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK == MODE_GRAPHICS
+    }
+
+    /// Composes line `y` (0-191) of engine A's graphics screen (BG and OBJ) into `line` in 15-bit
+    /// colour, whatever display mode the engine shows: this is what a capture reads as source A
+    /// (`display-capture.md`, "Where the capture unit sits"). A line past the last visible one is
+    /// not drawn.
     // TODO(hw-unverified): windows apply in display mode 1 only (`windows.md`, "Unverified").
+    // TODO(phase7): the 3D layer joins BG0 here.
+    pub(crate) fn compose_line_a(
+        &self,
+        y: usize,
+        inputs: &EngineInputs<'_>,
+        line: &mut [u16; SCREEN_WIDTH],
+    ) {
+        line.fill(BLACK_COLOR);
+        if y < SCREEN_HEIGHT {
+            self.a.render_line(y, inputs, line);
+        }
+    }
+
+    /// Picks what engine A's screen shows for line `y` (0-191) into `line` in 15-bit colour, given
+    /// the bytes of banks A-D where the CPU sees them as LCDC VRAM, what the engine reads
+    /// ([`EngineInputs`]) and the line [`Gpu2d::compose_line_a`] made (read in display mode 1
+    /// only), and returns the master brightness to apply to it. A line past the last visible one is
+    /// not drawn.
     // TODO(phase4): mode 3 draws the main-memory bitmap, and the master brightness applies to it
     // too (`blending.md`, "Master brightness"); the placeholder black is left alone.
     // TODO(hw-unverified): the master brightness applies to the white of display mode 0
@@ -362,11 +387,12 @@ impl Gpu2d {
     // (`display-mode-vram.md`, "Unverified").
     // TODO(hw-unverified): a bank that is disabled or not in LCDC mode is drawn as zeros, i.e.
     // black (`display-mode-vram.md`, "Unverified").
-    pub(crate) fn render_line_a(
+    pub(crate) fn select_line_a(
         &self,
         y: usize,
         lcdc: [Option<&[u8]>; 4],
         inputs: &EngineInputs<'_>,
+        composed: &[u16; SCREEN_WIDTH],
         line: &mut [u16; SCREEN_WIDTH],
     ) -> MasterBrightness {
         if y >= SCREEN_HEIGHT {
@@ -386,7 +412,7 @@ impl Gpu2d {
         if mode == MODE_OFF {
             line.fill(WHITE_COLOR);
         } else if mode == MODE_GRAPHICS {
-            self.a.render_line(y, inputs, line);
+            line.copy_from_slice(composed);
         } else if mode == MODE_VRAM {
             let row = lcdc
                 .get(block as usize)

@@ -135,9 +135,9 @@ impl Effects {
     /// The colour of a screen position whose top pixel is `top` and whose next pixel, asked for only
     /// when the effect needs it, is `below` (`None` when nothing is below). `allowed` is the
     /// window region's effect bit (`blending.md`, "The effect bit of a window region").
-    // TODO(hw-unverified): the truncation of every sixteenth, a semi-transparent object in a region
-    // whose effect bit is clear showing unchanged, and one over a non-second target taking the
-    // BLDCNT brightness effect (`blending.md`, "Unverified").
+    // TODO(hw-unverified): a semi-transparent object in a region whose effect bit is clear shows
+    // unchanged, and one over a non-second target takes the BLDCNT brightness effect
+    // (`blending.md`, "Unverified").
     pub(super) fn apply(
         &self,
         top: Pixel,
@@ -165,6 +165,7 @@ impl Effects {
     }
 
     /// `top` and `below` mixed with EVA and EVB: `min(31, top * EVA + below * EVB)` in sixteenths.
+    // TODO(hw-unverified): the sum of sixteenths is truncated (`blending.md`, "Unverified").
     fn mix(&self, top: u16, below: u16) -> u16 {
         let (eva, evb) = (u16::from(self.eva), u16::from(self.evb));
         per_channel(top, below, |a, b| {
@@ -173,6 +174,7 @@ impl Effects {
     }
 
     /// `color` lightened or darkened by EVY when the effect is a brightness one, else unchanged.
+    // TODO(hw-unverified): the sixteenths of EVY are truncated (`blending.md`, "Unverified").
     fn brightness(&self, color: u16) -> u16 {
         let evy = u16::from(self.evy);
         match self.mode {

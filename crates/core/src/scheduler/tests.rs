@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The event queue and the round order. Expected values come from `docs/hw/scheduler.md`:
-//! "Events" (order is (timestamp, priority of the kind): LineStart, HBlankStart, timer overflows
+//! "Events" (order is (timestamp, priority of the kind): line start, HBlank start, timer overflows
 //! ARM9 0-3 then ARM7 0-3, DMA starts ARM9 0-3 then ARM7 0-3; never the scheduling order; a
 //! handler's event waits for the next round), "Interleaving" (target
 //! is the smaller of the next event and now + SLICE, `now` when an event is already due; the ARM9
@@ -368,6 +368,24 @@ fn given_the_line_events_and_every_device_slot_when_the_queue_is_sized_then_it_h
         (LineEvent::ALL.len(), crate::io::EVENT_SLOTS, EVENT_CAPACITY),
         (2, 16, 18)
     );
+}
+
+/// The devices registered after DMA that have event slots.
+fn devices_with_slots_after_dma() -> Vec<DeviceId> {
+    DeviceId::ALL
+        .iter()
+        .copied()
+        .skip_while(|&device| device != DeviceId::Dma)
+        .skip(1)
+        .filter(|device| device.slots() > 0)
+        .collect()
+}
+
+#[test]
+fn given_the_registry_when_the_devices_after_dma_are_listed_then_none_has_event_slots() {
+    // `scheduler.md` ("Events") puts DMA transfers last at one time because DMA is the last device
+    // with slots; a device registered after it must revisit that order.
+    assert_eq!(devices_with_slots_after_dma(), vec![]);
 }
 
 #[test]

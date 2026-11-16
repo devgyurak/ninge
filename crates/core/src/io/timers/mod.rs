@@ -9,8 +9,8 @@
 //! scheduler or an interrupt controller, so a write or an overflow hands back an [`Effect`]: the
 //! requests it would raise and the mask of timers whose overflow event must be replaced. `Io`
 //! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]); that
-//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_kind`,
-//! `slot_due` and `slot_fire`).
+//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_due` and
+//! `slot_fire`).
 
 use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};

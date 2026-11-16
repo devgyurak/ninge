@@ -455,7 +455,7 @@ fn given_a_timer_started_by_an_arm7_rom_store_when_the_store_has_run_then_the_ev
 #[test]
 fn given_a_timer_overflowing_at_the_same_time_as_a_line_start_when_both_fire_then_the_line_start_fires_first()
  {
-    // Reload 0xF7AE is 2130 ticks to overflow: 2130 * 2 = 4260 = one line, the first LineStart.
+    // Reload 0xF7AE is 2130 ticks to overflow: 2130 * 2 = 4260 = one line, the first line start.
     let mut m = machine();
     set9(&mut m, 0, 0xF7AE, START);
     step(&mut m, LINE_CYCLES);

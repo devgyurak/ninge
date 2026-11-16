@@ -4,7 +4,7 @@
 //! enable write retires, VBlank at line 192, HBlank in lines 0-191, channels 0 to 3 in order;
 //! "Transferring": through the owning CPU's bus with the TCM off; "Fill"; "The end of a
 //! transfer": IF bit 8 + n; "Edge cases": a register or an IPC FIFO as source or destination;
-//! "Model": one `DmaStart` event per channel, atomic transfer, an ARM7 start fires at the end of
+//! "Model": one DMA-start event per channel, atomic transfer, an ARM7 start fires at the end of
 //! the round), `docs/hw/display-timing.md` (line 192 begins at `192 * LINE_CYCLES`; "Hooks for
 //! later features"), `docs/hw/scheduler.md` ("Cost per instruction": ARM9 1 master cycle;
 //! "Interleaving"; "Savestate checks"), `docs/hw/ipc.md` ("Sending", "Error", "Disabled FIFO")

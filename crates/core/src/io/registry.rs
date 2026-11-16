@@ -86,6 +86,15 @@ macro_rules! registry {
         }
 
         impl DeviceId {
+            /// Every device, in registration order.
+            #[cfg(test)]
+            pub(crate) const ALL: &[DeviceId] = &[
+                $( Self::$st, )*
+                $( Self::$at, )*
+                $( Self::$bt, )*
+                $( Self::$et, )*
+            ];
+
             /// The device behind `port`. No wildcard: a port no entry names fails to compile.
             pub(crate) fn of(port: Port) -> Self {
                 match port {

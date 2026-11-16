@@ -141,7 +141,7 @@ struct Channel {
     source_now: u32,
     destination_now: u32,
     count_now: u32,
-    // A `DmaStart` event is queued for this channel. Enable stays set while it is true and
+    // A DMA-start event is queued for this channel. Enable stays set while it is true and
     // while the transfer runs, so a polling CPU waits (`dma.md`, "Enabling").
     pending: bool,
     // The channel's transfer is running (between `begin` and `finish`), and its own enable went
@@ -209,7 +209,7 @@ impl<const ARM9: bool> Dma<ARM9> {
         self.fill.get(index).copied().unwrap_or(0)
     }
 
-    /// Whether channel `index` has a start waiting to run: its `DmaStart` event is queued.
+    /// Whether channel `index` has a start waiting to run: its DMA-start event is queued.
     pub fn pending(&self, index: usize) -> bool {
         self.channels
             .get(index)

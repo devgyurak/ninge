@@ -8,9 +8,32 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use ninge_core::{Machine, Screen};
+use ninge_core::{Input, Machine, Screen};
 
 use crate::{RunReport, frame_hash, load_rom_file, run, testrom_path};
+
+/// The host's input for each frame of a run: entry `n` is set before the run's frame `n + 1`
+/// (counting from 1) and a frame past the end gets [`Input::default`] (nothing held, hinge open).
+/// One [`Input`] per frame is a complete input log: the same ROM and the same log give the same
+/// frames and savestate bytes (`docs/hw/keypad.md`, "Where the bits come from").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputLog(Vec<Input>);
+
+impl InputLog {
+    /// A log of `inputs`, one for each frame from the first.
+    pub fn new(inputs: Vec<Input>) -> Self {
+        Self(inputs)
+    }
+
+    /// The input for the frame with 0-based index `frame`.
+    pub fn input_for(&self, frame: u64) -> Input {
+        usize::try_from(frame)
+            .ok()
+            .and_then(|index| self.0.get(index))
+            .copied()
+            .unwrap_or_default()
+    }
+}
 
 /// Why a golden file or a comparison against it failed.
 #[derive(Debug, PartialEq, Eq)]
@@ -232,7 +255,7 @@ pub fn assert_frame_hash(rom: &str, frames: u64) {
 
 /// Runs `rom` for `frames` frames and returns the `(top, bottom)` hash after each frame.
 pub fn run_frame_hashes(rom: Vec<u8>, frames: u64) -> Vec<(u64, u64)> {
-    step_frame_hashes(&mut booted(rom), frames)
+    step_frame_hashes(&mut booted(rom), frames, 0, &InputLog::default())
 }
 
 /// Index of the first position where `a` and `b` differ; the shorter length if one is a prefix.
@@ -243,10 +266,17 @@ pub fn first_divergence(a: &[(u64, u64)], b: &[(u64, u64)]) -> Option<usize> {
         .or((a.len() != b.len()).then_some(common))
 }
 
-/// Hashes both screens after every frame of `machine`'s next `frames` frames.
-fn step_frame_hashes(machine: &mut Machine, frames: u64) -> Vec<(u64, u64)> {
-    (0..frames)
-        .map(|_| {
+/// Hashes both screens after every frame of `machine`'s next `frames` frames, which are the
+/// frames of `log` from index `first_frame`.
+fn step_frame_hashes(
+    machine: &mut Machine,
+    frames: u64,
+    first_frame: u64,
+    log: &InputLog,
+) -> Vec<(u64, u64)> {
+    (first_frame..first_frame + frames)
+        .map(|frame| {
+            machine.set_input(log.input_for(frame));
             machine.run_frame();
             (
                 frame_hash(machine.frame(Screen::Top)),
@@ -281,8 +311,16 @@ fn first_byte_difference(a: &[u8], b: &[u8]) -> Option<usize> {
 ///
 /// On `frames == 0` (nothing would be compared), a missing ROM, or a difference; the message
 /// names the first diverging frame, or the first differing savestate byte.
-// TODO(phase1): take an input log once the core has an input API (#61).
 pub fn assert_deterministic(rom: &str, frames: u64) {
+    assert_deterministic_with_input(rom, frames, &InputLog::default());
+}
+
+/// [`assert_deterministic`] with the host's input for each frame taken from `log`.
+///
+/// # Panics
+///
+/// As [`assert_deterministic`].
+pub fn assert_deterministic_with_input(rom: &str, frames: u64, log: &InputLog) {
     assert!(
         frames > 0,
         "assert_deterministic needs at least one frame to compare; got frames=0 for {rom}"
@@ -290,8 +328,8 @@ pub fn assert_deterministic(rom: &str, frames: u64) {
     let bytes = load_rom(rom);
     let mut first = booted(bytes.clone());
     let mut second = booted(bytes);
-    let first_hashes = step_frame_hashes(&mut first, frames);
-    let second_hashes = step_frame_hashes(&mut second, frames);
+    let first_hashes = step_frame_hashes(&mut first, frames, 0, log);
+    let second_hashes = step_frame_hashes(&mut second, frames, 0, log);
     if let Some(index) = first_divergence(&first_hashes, &second_hashes) {
         panic!(
             "{rom} is not deterministic: the two runs first differ at frame {}",
@@ -316,6 +354,21 @@ pub fn assert_deterministic(rom: &str, frames: u64) {
 /// a difference; the message names the first diverging frame, or the first differing
 /// savestate byte.
 pub fn assert_savestate_round_trip(rom: &str, frames_before: u64, frames_after: u64) {
+    assert_savestate_round_trip_with_input(rom, frames_before, frames_after, &InputLog::default());
+}
+
+/// [`assert_savestate_round_trip`] with the host's input for each frame taken from `log`; the
+/// resumed run takes the frames after `frames_before` from the same log.
+///
+/// # Panics
+///
+/// As [`assert_savestate_round_trip`].
+pub fn assert_savestate_round_trip_with_input(
+    rom: &str,
+    frames_before: u64,
+    frames_after: u64,
+    log: &InputLog,
+) {
     assert!(
         frames_after > 0,
         "assert_savestate_round_trip needs at least one frame after the load; got \
@@ -324,15 +377,16 @@ pub fn assert_savestate_round_trip(rom: &str, frames_before: u64, frames_after: 
     let bytes = load_rom(rom);
 
     let mut uninterrupted = booted(bytes.clone());
-    let expected_hashes = step_frame_hashes(&mut uninterrupted, frames_before + frames_after);
+    let expected_hashes =
+        step_frame_hashes(&mut uninterrupted, frames_before + frames_after, 0, log);
 
     let mut saver = booted(bytes.clone());
-    step_frame_hashes(&mut saver, frames_before);
+    step_frame_hashes(&mut saver, frames_before, 0, log);
     let mut resumed = booted(bytes);
     resumed
         .load_state(&saver.save_state())
         .unwrap_or_else(|error| panic!("{rom}: the savestate was refused: {error}"));
-    let resumed_hashes = step_frame_hashes(&mut resumed, frames_after);
+    let resumed_hashes = step_frame_hashes(&mut resumed, frames_after, frames_before, log);
 
     let after_load = &expected_hashes[usize::try_from(frames_before).expect("frame count fits")..];
     if let Some(index) = first_divergence(after_load, &resumed_hashes) {

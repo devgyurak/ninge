@@ -193,6 +193,9 @@ impl<const ARM9: bool> Access<'_, ARM9> {
 /// configuration copied from CP15. It is not state, so it may hold borrows (AGENTS.md §2 rule 5
 /// covers state only).
 ///
+/// One view may serve a whole batch of instructions (`begin_step`, `set_tcm`): it is the step
+/// context of the run loop, by design, so the loop pays for the borrows and the TCM decode once.
+///
 /// `now` is the ARM9's clock in master cycles, as of the access: a timer register reads the
 /// counter as of it (`docs/hw/timers.md`, "Model").
 pub struct Arm9View<'a> {
@@ -223,6 +226,39 @@ impl<'a> Arm9View<'a> {
             now,
             floor,
         }
+    }
+
+    /// A new instruction starts at the ARM9 clock `now`; an event it schedules fires no earlier
+    /// than `floor`. The view is kept across a batch of instructions and told each one's times.
+    pub(crate) fn begin_step(&mut self, now: u64, floor: u64) {
+        self.now = now;
+        self.floor = floor;
+    }
+
+    /// A CP15 write moved a TCM mapping: the next instruction sees `tcm`
+    /// (`docs/hw/arm9-memory-map.md`).
+    pub(crate) fn set_tcm(&mut self, tcm: TcmConfig) {
+        self.tcm = tcm;
+    }
+
+    /// The register devices, for the interrupt line and the wake test between instructions.
+    pub(crate) fn io(&self) -> &Io {
+        self.io
+    }
+
+    /// The master clock, which is the ARM9's.
+    pub(crate) fn clock(&self) -> u64 {
+        self.scheduler.now()
+    }
+
+    /// The time of the earliest queued event.
+    pub(crate) fn next_event_time(&self) -> Option<u64> {
+        self.scheduler.next_time()
+    }
+
+    /// Advances the master clock by `cycles`: the instruction's cost.
+    pub(crate) fn advance(&mut self, cycles: u64) {
+        self.scheduler.advance(cycles);
     }
 
     fn access(&mut self) -> Access<'_, true> {
@@ -296,6 +332,28 @@ impl<'a> Arm7View<'a> {
             now,
             floor,
         }
+    }
+
+    /// A new instruction starts at the ARM7 clock `now`; an event it schedules fires no earlier
+    /// than `floor`, the master clock. The view is kept across a batch of instructions.
+    pub(crate) fn begin_step(&mut self, now: u64, floor: u64) {
+        self.now = now;
+        self.floor = floor;
+    }
+
+    /// The register devices, for the interrupt line and the wake test between instructions.
+    pub(crate) fn io(&self) -> &Io {
+        self.io
+    }
+
+    /// The register devices, to take a HALTCNT request after an instruction.
+    pub(crate) fn io_mut(&mut self) -> &mut Io {
+        self.io
+    }
+
+    /// The master clock, which the ARM7's steps leave where it is.
+    pub(crate) fn master_clock(&self) -> u64 {
+        self.scheduler.now()
     }
 
     fn access(&mut self) -> Access<'_, false> {

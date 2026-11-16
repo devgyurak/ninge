@@ -155,7 +155,8 @@ Each item carries `TODO(hw-unverified)` at its code site.
 
 - **The screen width of the clamp.** GBATEK writes the rule for the GBA screen: "X2 > 240 or X1 > X2
   counts as X2 = 240". The DS screen is 256 wide, and "DS Window Glitches" gives X2 = 00h as 100h.
-  We use 256. With X2 eight bits wide only X1 > X2 can apply. — `gpu2d::window::WindowRect::decode`
+  We use 256. With X2 eight bits wide only X1 > X2 can apply. —
+  `gpu2d::window::WindowRect::decode`
   — verify with a test ROM on hardware.
 - **Y1 greater than Y2.** The GBA rule ("counts as Y2 = 160") and the latch of "The vertical test"
   disagree, and we follow the latch. The window then covers line 0 up to Y2 (Y2 of 7 or more) from
@@ -164,7 +165,8 @@ Each item carries `TODO(hw-unverified)` at its code site.
   We step the state at every scanline with the registers as they stand; the VBlank lines are stepped
   together, with the registers at the next frame's line 0, so a write during VBlank counts for all
   of them. Y2 of 192 to 255 and Y1 = Y2 (stays off) are our reading of the same model. The state
-  moves whether or not DISPCNT turns the window on or the engine is powered, a window starts off, and Y2
+  moves whether or not DISPCNT turns the window on or the engine is powered, a window starts off,
+  and Y2
   is judged after Y1 on the same line. A mid-frame write to WINxV acts at the next matching line.
   — `gpu2d::window::Latches` — verify likewise.
 - **Mosaic.** We judge the windows at the screen pixel, not at the mosaic block's first pixel, so
@@ -185,12 +187,14 @@ Each item carries `TODO(hw-unverified)` at its code site.
 - **The window on the 3D layer**, and GBATEK's own doubt there that the effect bit may be
   overridden when the 3D layer is in front. — none until Phase 7.
 - **Windows outside the normal picture mode.** We apply them only in display mode 1, where the
-  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). — `Gpu2d::render_line_a` — verify likewise.
+  layers are drawn; modes 0, 2 and 3 do not use layers (`display-mode-vram.md`). —
+  `Gpu2d::render_line_a` — verify likewise.
 
 ## Evidence
 
 Test ROMs pin this note (#33): `win` (WIN0, WIN1 and the outside region on both engines, one with
 the rectangle rules for a start past an end) and `objwin` (mode 2 objects: plain, affine,
 half-transparent and mosaic, with ordinary sprites and window 1 over them). Their expected pixels
-are worked out from this note, never read from the emulator. The unit tests in `gpu2d/tests/window.rs`
+are worked out from this note, never read from the emulator. The unit tests in
+`gpu2d/tests/window.rs`
 add byte and halfword writes, the register masks, the line budget and the savestate.

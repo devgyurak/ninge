@@ -156,6 +156,14 @@ impl Cp15 {
         }
     }
 
+    /// The registers the two TCM regions are resolved from: the control register's raw bits and
+    /// the DTCM and ITCM region registers. A bus view that keeps a [`Tcm`] pair between
+    /// instructions compares this to see whether a CP15 write moved a mapping, which costs three
+    /// loads and no decoding.
+    pub(crate) fn tcm_key(&self) -> [u32; 3] {
+        [self.control, self.dtcm, self.itcm]
+    }
+
     /// MRC: the value of the register CRn, CRm and opc2 select (opc1 = 0).
     // TODO(hw-unverified): a read of the write-only C7 and of an unmapped register returns 0
     // (`docs/hw/cp15.md`, "Unverified").

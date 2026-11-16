@@ -266,3 +266,30 @@ fn given_a_peek_through_a_dtcm_when_the_tcm_is_enabled_then_it_sees_the_tcm_word
         (X, 0)
     );
 }
+
+#[test]
+fn given_an_mcr_enabling_the_dtcm_when_a_batch_runs_then_the_next_str_in_the_same_batch_sees_it() {
+    use crate::scheduler::Participants;
+    let dtcm = 0x0210_0000;
+    let mut machine = boot(
+        &[MCR_DTCM_REGION, MCR_CONTROL_R1, STR_R3_R2],
+        &[(0, dtcm | 5 << 1), (1, 1 << 16), (2, dtcm), (3, X)],
+    );
+    // One call runs all three instructions through one bus view; the TCM the MCRs switched on
+    // must reach the STR that follows them without a new view.
+    machine.run_arm9_until(3 * ARM9_INSTRUCTION_COST);
+    let seen = (
+        machine.inspect().arm9_peek32(dtcm),
+        machine.inspect().arm9_peek32(dtcm + RAM_PERIOD),
+    );
+    assert_eq!(seen, (X, 0));
+}
+
+#[test]
+fn given_a_budget_of_four_instructions_when_a_batch_runs_then_exactly_four_run_and_the_clock_is_at_the_target()
+ {
+    use crate::scheduler::Participants;
+    let mut machine = boot(&[MOV_R6_55, MOV_R7_66, MOV_R6_55, MOV_R7_66, MOV_PC_0], &[]);
+    machine.run_arm9_until(4 * ARM9_INSTRUCTION_COST);
+    assert_eq!(machine.scheduler.now(), 4 * ARM9_INSTRUCTION_COST);
+}

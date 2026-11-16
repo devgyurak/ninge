@@ -3,7 +3,7 @@
 //! scheduler's view of the machine (run a CPU to a time, dispatch a due event); the handlers below
 //! it are the line, HBlank and DMA starts those events lead to (`docs/hw/scheduler.md`).
 
-use super::{Machine, SCREEN_HEIGHT};
+use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
 use crate::bus::{Arm7View, Arm9View, TcmConfig};
 use crate::io::dma::Trigger;
 use crate::io::timing::FIRST_VBLANK_LINE;
@@ -17,37 +17,62 @@ impl Participants for Machine {
     fn run_arm9_until(&mut self, target: u64) {
         // An instruction can queue an event before `target` (a timer write, #109); stop at it so
         // it sees every earlier instruction and none after (`scheduler.md`, "Interleaving").
-        // See #118. `next_time` is a heap peek: O(1), no allocation.
-        while self.scheduler.now() < target
-            && self
-                .scheduler
-                .next_time()
-                .is_none_or(|time| self.scheduler.now() < time)
+        // See #118. `next_event_time` is a heap peek: O(1), no allocation.
+        //
+        // One view serves the whole batch; only a CP15 write that moves a TCM mapping
+        // refreshes it, and it takes effect from the next instruction
+        // (`docs/hw/arm9-memory-map.md`).
+        let mut tcm_key = self.arm9.cp15().tcm_key();
+        let mut view = Arm9View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            TcmConfig::from_cp15(self.arm9.cp15()),
+            0,
+            0,
+        );
+        while view.clock() < target
+            && view
+                .next_event_time()
+                .is_none_or(|time| view.clock() < time)
         {
             // A halted ARM9 runs nothing, so its clock skips in one step to `target` or to an event
             // queued before it (by the instruction that halted it, say a timer write), whichever is
             // earlier: the event fires on time and the wake is tested after it
             // (`docs/hw/scheduler.md`, "Interleaving").
-            if self.arm9.halted() && !self.io.irq9().wakes() {
-                let stop = self
-                    .scheduler
-                    .next_time()
+            if self.arm9.halted() && !view.io().irq9().wakes() {
+                let stop = view
+                    .next_event_time()
                     .map_or(target, |time| time.min(target));
-                self.scheduler.advance(stop - self.scheduler.now());
+                view.advance(stop - view.clock());
                 break;
             }
-            self.step_arm9_instruction();
+            arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
+            let key = self.arm9.cp15().tcm_key();
+            if key != tcm_key {
+                tcm_key = key;
+                view.set_tcm(TcmConfig::from_cp15(self.arm9.cp15()));
+            }
         }
     }
 
     fn run_arm7_until(&mut self, target: u64) {
-        while self.arm7_clock < target {
-            if self.arm7.halted() && !self.io.irq7().wakes() {
-                self.arm7_clock = target;
+        let mut clock = self.arm7_clock;
+        let mut view = Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            clock,
+            0,
+        );
+        while clock < target {
+            if self.arm7.halted() && !view.io().irq7().wakes() {
+                clock = target;
                 break;
             }
-            self.step_arm7_instruction();
+            clock = arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view, clock);
         }
+        self.arm7_clock = clock;
     }
 
     fn dispatch(&mut self, event: Event) {

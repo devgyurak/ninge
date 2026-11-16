@@ -131,7 +131,7 @@ impl Cp15 {
     }
 
     /// The data TCM as the registers resolve it.
-    // The ARM9 bus view copies it before each step (`docs/hw/arm9-memory-map.md`).
+    // The ARM9 bus view reads it again whenever `tcm_key` changes (`docs/hw/arm9-memory-map.md`).
     // TODO(hw-unverified): a size field outside 3-23 and a base not aligned to the size are
     // reported as written (`docs/hw/cp15.md`, "Unverified").
     pub fn dtcm(&self) -> Tcm {
@@ -139,7 +139,7 @@ impl Cp15 {
     }
 
     /// The instruction TCM as the registers resolve it; its base is always 0.
-    // The ARM9 bus view copies it before each step (`docs/hw/arm9-memory-map.md`).
+    // The ARM9 bus view reads it again whenever `tcm_key` changes (`docs/hw/arm9-memory-map.md`).
     // TODO(hw-unverified): see `Cp15::dtcm`; the base is dropped on a write from GBATEK's
     // "always 00000000h" (`docs/hw/cp15.md`, "Unverified").
     pub fn itcm(&self) -> Tcm {
@@ -154,6 +154,14 @@ impl Cp15 {
             enabled: self.control & enable != 0,
             load_mode: self.control & load != 0,
         }
+    }
+
+    /// The registers the two TCM regions are resolved from: the control register's raw bits and
+    /// the DTCM and ITCM region registers. A bus view that keeps a [`Tcm`] pair between
+    /// instructions compares this to see whether a CP15 write moved a mapping, which costs three
+    /// loads and no decoding.
+    pub(crate) fn tcm_key(&self) -> [u32; 3] {
+        [self.control, self.dtcm, self.itcm]
     }
 
     /// MRC: the value of the register CRn, CRm and opc2 select (opc1 = 0).

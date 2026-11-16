@@ -70,6 +70,15 @@ macro_rules! registry {
             $( + <$et<true> as Device<true>>::SLOTS as usize
                + <$et<false> as Device<false>>::SLOTS as usize )*;
 
+        // No device may declare more slots than a `SlotMask` has bits.
+        const _: () = {
+            $( assert!(<$st as Device<true>>::SLOTS as u32 <= SlotMask::BITS); )*
+            $( assert!(<$at as Device<true>>::SLOTS as u32 <= SlotMask::BITS); )*
+            $( assert!(<$bt as Device<false>>::SLOTS as u32 <= SlotMask::BITS); )*
+            $( assert!(<$et<true> as Device<true>>::SLOTS as u32 <= SlotMask::BITS);
+               assert!(<$et<false> as Device<false>>::SLOTS as u32 <= SlotMask::BITS); )*
+        };
+
         impl Io {
             /// The devices in their power-on state.
             pub(crate) fn new() -> Self {
@@ -137,7 +146,8 @@ macro_rules! registry {
 
             /// Queues the event of every slot of every device, as at `now`. A load calls it on
             /// an empty queue to rebuild what the savestate does not hold (`scheduler.md`,
-            /// "Savestate checks"). A device with no event slots queues nothing.
+            /// "Savestate checks"). A device with no event slots queues nothing. Each entry is
+            /// asked through its first port: every port of one device reaches the same slots.
             pub(crate) fn schedule_all(&self, scheduler: &mut Scheduler, now: u64) {
                 $( self.schedule_slots::<true>(scheduler, $sp0, SlotMask::MAX, now); )*
                 $( self.schedule_slots::<true>(scheduler, $ap0, SlotMask::MAX, now); )*

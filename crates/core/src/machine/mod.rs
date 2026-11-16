@@ -4,7 +4,7 @@
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
-use crate::hle::BiosState;
+use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
 use crate::io::Io;
 use crate::scheduler::{EventKind, Scheduler};
@@ -74,6 +74,77 @@ pub struct Machine {
     // The input the host set for the next frame; `run_frame` latches it into the keypads
     // (`docs/hw/keypad.md`, "Where the bits come from"). Plain state, so it is saved.
     pub(crate) input: Input,
+}
+
+/// One ARM9 instruction through `view`, and its cost added to the master clock. If the
+/// controller's line was asserted before it and CPSR I is clear, the IRQ entry takes the
+/// instruction's place and costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ
+/// source.
+///
+/// A halted core runs nothing until `IE & IF` is not zero (`docs/hw/hle-swi.md`, "Halt, and what
+/// wakes a CPU"); a halted core that does not wake idles for one instruction's time. `view` may
+/// live across many instructions: it is told each one's times here, and the caller refreshes its
+/// TCM when CP15 changes (`run_arm9_until`).
+// TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write reaches
+// it at once, here and in `arm7_instruction` (`docs/hw/interrupts.md`, "Unverified").
+fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9View<'_>) {
+    if arm9.halted() {
+        if !view.io().irq9().wakes() {
+            view.advance(ARM9_INSTRUCTION_COST);
+            return;
+        }
+        arm9.set_halted(false);
+    }
+    let irq = view.io().irq9().line();
+    let now = view.clock();
+    // The cost is known only once the instruction ends, so the floor is handed in: an event the
+    // instruction schedules fires no earlier than its end (`timers.md`, "Model").
+    view.begin_step(now, now.saturating_add(ARM9_INSTRUCTION_COST));
+    // An interrupt comes first, even at a BIOS address: IntrWait waits with I clear, and the IRQ
+    // must be taken before its loop looks again. At the vectors I is set, so the BIOS's work,
+    // which takes the instruction's place there, is next (`docs/hw/hle-swi.md`).
+    let cost = match arm9.take_interrupt(view, irq, false) {
+        Some(cost) => cost,
+        None => match crate::hle::enter(arm9, view, bios) {
+            Some(cost) => cost,
+            None => arm9.step(view),
+        },
+    };
+    view.advance(cost);
+}
+
+/// One ARM7 instruction through `view` at the ARM7 clock `clock`, which it returns advanced by the
+/// cost; the master clock stays where it is, and that is the floor of what the instruction
+/// schedules. The IRQ entry takes the instruction's place as in [`arm9_instruction`]. A write of
+/// HALTCNT's halt mode halts the ARM7 from the next instruction (`docs/hw/interrupts.md`,
+/// "HALTCNT").
+// TODO(hw-unverified): the IRQ line is sampled before each instruction, as for the ARM9
+// (`docs/hw/interrupts.md`, "Unverified").
+fn arm7_instruction(
+    arm7: &mut Cpu<false>,
+    bios: &mut SwiRecord,
+    view: &mut Arm7View<'_>,
+    clock: u64,
+) -> u64 {
+    if arm7.halted() {
+        if !view.io().irq7().wakes() {
+            return clock.saturating_add(ARM7_INSTRUCTION_COST);
+        }
+        arm7.set_halted(false);
+    }
+    let irq = view.io().irq7().line();
+    view.begin_step(clock, view.master_clock());
+    let cost = match arm7.take_interrupt(view, irq, false) {
+        Some(cost) => cost,
+        None => match crate::hle::enter(arm7, view, bios) {
+            Some(cost) => cost,
+            None => arm7.step(view),
+        },
+    };
+    if view.io_mut().power_mut().take_halt() {
+        arm7.set_halted(true);
+    }
+    clock.saturating_add(cost)
 }
 
 /// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
@@ -235,61 +306,25 @@ impl Machine {
         }
     }
 
-    /// One ARM9 instruction and its cost, with nothing else. If the controller's line was
-    /// asserted before it and CPSR I is clear, the IRQ entry takes the instruction's place and
-    /// costs the same (`docs/hw/interrupts.md`, "Behavior"). The DS has no FIQ source.
+    /// One ARM9 instruction and its cost, with nothing else; see [`arm9_instruction`].
     // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
     // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
     fn step_arm9_instruction(&mut self) {
-        // A halted core runs nothing until `IE & IF` is not zero (`docs/hw/hle-swi.md`, "Halt, and
-        // what wakes a CPU"); a lone step of it idles for one instruction's time.
-        if self.arm9.halted() {
-            if !self.io.irq9().wakes() {
-                self.scheduler.advance(ARM9_INSTRUCTION_COST);
-                return;
-            }
-            self.arm9.set_halted(false);
-        }
-        let irq = self.io.irq9().line();
-        let now = self.scheduler.now();
-        let tcm = TcmConfig::from_cp15(self.arm9.cp15());
         let mut view = Arm9View::new(
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
-            tcm,
-            now,
-            // The cost is known only once the instruction ends, so the floor is handed in: an
-            // event the instruction schedules fires no earlier than its end (`timers.md`, "Model").
-            now.saturating_add(ARM9_INSTRUCTION_COST),
+            TcmConfig::from_cp15(self.arm9.cp15()),
+            0,
+            0,
         );
-        // An interrupt comes first, even at a BIOS address: IntrWait waits with I clear, and the
-        // IRQ must be taken before its loop looks again. At the vectors I is set, so the BIOS's
-        // work, which takes the instruction's place there, is next (`docs/hw/hle-swi.md`).
-        let cost = match self.arm9.take_interrupt(&mut view, irq, false) {
-            Some(cost) => cost,
-            None => match crate::hle::enter(&mut self.arm9, &mut view, &mut self.bios.arm9) {
-                Some(cost) => cost,
-                None => self.arm9.step(&mut view),
-            },
-        };
-        self.scheduler.advance(cost);
+        arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
     }
 
-    /// One ARM7 instruction and its cost, with nothing else; the IRQ entry takes its place as in
-    /// [`Machine::step_arm9_instruction`].
-    // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write
-    // reaches it at once (`docs/hw/interrupts.md`, "Unverified").
+    /// One ARM7 instruction and its cost, with nothing else; see [`arm7_instruction`]. The run
+    /// loop keeps one view for a whole batch instead; this is the lone step tests drive.
+    #[cfg(test)]
     pub(crate) fn step_arm7_instruction(&mut self) {
-        if self.arm7.halted() {
-            if !self.io.irq7().wakes() {
-                self.arm7_clock = self.arm7_clock.saturating_add(ARM7_INSTRUCTION_COST);
-                return;
-            }
-            self.arm7.set_halted(false);
-        }
-        let irq = self.io.irq7().line();
-        // The ARM7's step leaves the master clock where it is, so that is its floor.
         let floor = self.scheduler.now();
         let mut view = Arm7View::new(
             &mut self.memory,
@@ -298,19 +333,12 @@ impl Machine {
             self.arm7_clock,
             floor,
         );
-        let cost = match self.arm7.take_interrupt(&mut view, irq, false) {
-            Some(cost) => cost,
-            None => match crate::hle::enter(&mut self.arm7, &mut view, &mut self.bios.arm7) {
-                Some(cost) => cost,
-                None => self.arm7.step(&mut view),
-            },
-        };
-        self.arm7_clock = self.arm7_clock.saturating_add(cost);
-        // A write of HALTCNT's halt mode halts the ARM7 from the next instruction
-        // (`docs/hw/interrupts.md`, "HALTCNT").
-        if self.io.power_mut().take_halt() {
-            self.arm7.set_halted(true);
-        }
+        self.arm7_clock = arm7_instruction(
+            &mut self.arm7,
+            &mut self.bios.arm7,
+            &mut view,
+            self.arm7_clock,
+        );
     }
 
     /// Sets the input for the next frame: the buttons held, the touch point and the hinge. It is
@@ -318,6 +346,8 @@ impl Machine {
     /// next one, so `set_input` then `run_frame`, once per frame, is a complete input log and
     /// replays to the same frames and savestate bytes (`docs/hw/keypad.md`, "Where the bits come
     /// from"). [`Machine::load_rom`] starts from power-on and so clears the input.
+    // TODO(hw-unverified): a button change reaches the registers at the frame boundary only
+    // (`docs/hw/keypad.md`, "Unverified").
     pub fn set_input(&mut self, input: Input) {
         self.input = input;
     }

@@ -9,7 +9,12 @@ use crate::gpu2d::{EngineId, expand_line};
 
 /// The display capture stage: it sees engine A's finished line, in the colour the hardware has
 /// and before the master brightness, and will write it to VRAM.
-// TODO(phase4): display capture (#36) fills this in; it takes the memory so it can store the line
+///
+/// What a capture reads as source A is the graphics screen (BG, 3D and OBJ) whatever the display
+/// mode shows, so the line handed in here is not yet the right one in VRAM display mode 2: there
+/// `render_line_a` copies VRAM and does not compose the layers.
+// TODO(phase4): display capture (#36) splits `render_line_a` into composing the layers and picking
+// what the display shows, and passes the composed line here; it fills this in; it takes the memory so it can store the line
 // without another restructuring of `render_line` (`blending.md`, "Master brightness").
 fn capture_tap(_memory: &mut Memory, _y: usize, _line: &[u16; SCREEN_WIDTH]) {}
 

@@ -16,6 +16,7 @@
 
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::DeviceId;
 use crate::io::dma::Dma;
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
 use crate::machine::*;
@@ -156,7 +157,11 @@ fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
         .pending()
         .iter()
         .filter_map(|event| match event.kind {
-            EventKind::DmaStart { arm9, channel } => Some((event.time, arm9, channel)),
+            EventKind::Slot {
+                device: DeviceId::Dma,
+                arm9,
+                slot: channel,
+            } => Some((event.time, arm9, channel)),
             _ => None,
         })
         .collect()

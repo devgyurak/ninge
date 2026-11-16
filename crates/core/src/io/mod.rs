@@ -186,16 +186,19 @@ impl Io {
         mask: SlotMask,
         floor: u64,
     ) {
-        (0..SlotMask::BITS as u8)
+        let device = DeviceId::of(port);
+        (0..device.slots())
             .filter(|slot| mask & (1 << slot) != 0)
             .for_each(|slot| {
-                let kind = device_call!(self, ARM9, port, ref, slot_kind(slot), None);
-                if let Some(kind) = kind {
-                    scheduler.cancel(kind);
-                    let due = device_call!(self, ARM9, port, ref, slot_due(slot), None);
-                    if let Some(time) = due {
-                        scheduler.schedule(time.max(floor), kind);
-                    }
+                let kind = EventKind::Slot {
+                    device,
+                    arm9: ARM9,
+                    slot,
+                };
+                scheduler.cancel(kind);
+                let due = device_call!(self, ARM9, port, ref, slot_due(slot), None);
+                if let Some(time) = due {
+                    scheduler.schedule(time.max(floor), kind);
                 }
             });
     }
@@ -204,12 +207,14 @@ impl Io {
     /// are raised and its slots rescheduled from the master clock. A DMA start comes back as the
     /// transfer the machine must run. An event no device owns (a line or HBlank start) does
     /// nothing here.
+    ///
+    /// No device has an arm of its own: a DMA start needs no special event because its transfer
+    /// already comes back through the generic [`Fired::transfer`], and the machine runs it.
     pub(crate) fn fire(&mut self, scheduler: &mut Scheduler, kind: EventKind) -> Option<Transfer> {
-        let (arm9, port, slot) = match kind {
-            EventKind::TimerOverflow { arm9, index } => (arm9, Port::Timers, index),
-            EventKind::DmaStart { arm9, channel } => (arm9, Port::Dma, channel),
-            EventKind::LineStart | EventKind::HBlankStart => return None,
+        let EventKind::Slot { device, arm9, slot } = kind else {
+            return None;
         };
+        let port = device.first_port();
         // The one place the event's runtime CPU becomes the const generic.
         if arm9 {
             self.fire_slot::<true>(scheduler, port, slot)

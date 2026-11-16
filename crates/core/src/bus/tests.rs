@@ -8,6 +8,7 @@
 use super::bench::Bench;
 use super::*;
 use crate::cpu::{Bus, Tcm};
+use crate::io::DeviceId;
 use crate::io::irq::Requests;
 
 const RAM: u32 = 0x0200_0000;
@@ -2066,7 +2067,11 @@ const START: u16 = 0x80;
 const RELOAD_16_TICKS: u16 = 0xFFF0;
 
 fn timer_event_times(m: &Bench, arm9: bool, index: u8) -> Vec<u64> {
-    let kind = crate::scheduler::EventKind::TimerOverflow { arm9, index };
+    let kind = crate::scheduler::EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9,
+        slot: index,
+    };
     m.scheduler
         .pending()
         .iter()

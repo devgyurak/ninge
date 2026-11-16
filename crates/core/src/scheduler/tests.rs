@@ -68,7 +68,7 @@ impl Participants for Recorder {
 fn schedule_all(scheduler: &mut Scheduler, times: &[u64]) {
     times
         .iter()
-        .for_each(|&time| scheduler.schedule(time, EventKind::LineStart));
+        .for_each(|&time| scheduler.schedule(time, EventKind::Line(LineEvent::Start)));
 }
 
 /// Pops everything due at `now`, as `(time, kind)`.
@@ -134,25 +134,36 @@ fn given_popped_event_when_popping_again_then_it_does_not_come_back() {
 #[test]
 fn given_an_event_when_scheduled_then_it_keeps_its_time_and_kind() {
     let mut scheduler = Scheduler::new();
-    scheduler.schedule(77, EventKind::LineStart);
+    scheduler.schedule(77, EventKind::Line(LineEvent::Start));
     let event = scheduler.pop_due(77).expect("due");
-    assert_eq!((event.time, event.kind), (77, EventKind::LineStart));
+    assert_eq!(
+        (event.time, event.kind),
+        (77, EventKind::Line(LineEvent::Start))
+    );
 }
 
 // ------------------------------------------------------- tie order is the kind's priority
 
 const fn dma(arm9: bool, channel: u8) -> EventKind {
-    EventKind::DmaStart { arm9, channel }
+    EventKind::Slot {
+        device: DeviceId::Dma,
+        arm9,
+        slot: channel,
+    }
 }
 const fn timer(arm9: bool, index: u8) -> EventKind {
-    EventKind::TimerOverflow { arm9, index }
+    EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9,
+        slot: index,
+    }
 }
 
 /// Every kind in the order `scheduler.md` ("Events") fires it when several share one time:
 /// line start, HBlank start, ARM9 timers 0-3, ARM7 timers 0-3, ARM9 DMA 0-3, ARM7 DMA 0-3.
 const PRIORITY_ORDER: [EventKind; 18] = [
-    EventKind::LineStart,
-    EventKind::HBlankStart,
+    EventKind::Line(LineEvent::Start),
+    EventKind::Line(LineEvent::HBlank),
     timer(true, 0),
     timer(true, 1),
     timer(true, 2),
@@ -282,11 +293,11 @@ fn given_dma_channels_queued_in_reverse_when_they_tie_then_they_pop_in_channel_o
 fn given_a_low_priority_event_at_an_earlier_time_when_popped_then_it_still_comes_before_a_later_line_start()
  {
     let mut scheduler = Scheduler::new();
-    scheduler.schedule(11, EventKind::LineStart);
+    scheduler.schedule(11, EventKind::Line(LineEvent::Start));
     scheduler.schedule(10, dma(false, 3));
     assert_eq!(
         drain(&mut scheduler, 11),
-        vec![(10, dma(false, 3)), (11, EventKind::LineStart)]
+        vec![(10, dma(false, 3)), (11, EventKind::Line(LineEvent::Start))]
     );
 }
 
@@ -352,6 +363,19 @@ fn given_frame_cycles_when_computed_from_the_display_timing_then_it_is_1120380()
 }
 
 #[test]
+fn given_the_line_events_and_every_device_slot_when_the_queue_is_sized_then_it_holds_2_plus_16() {
+    assert_eq!(
+        (LineEvent::ALL.len(), crate::io::EVENT_SLOTS, EVENT_CAPACITY),
+        (2, 16, 18)
+    );
+}
+
+#[test]
+fn given_the_registered_devices_when_ordered_then_timers_come_before_dma() {
+    assert!(DeviceId::Timers < DeviceId::Dma);
+}
+
+#[test]
 fn given_the_slice_constant_when_read_then_it_is_64() {
     assert_eq!(SLICE, 64);
 }
@@ -395,7 +419,7 @@ fn given_event_due_exactly_at_the_target_when_running_a_round_then_arm9_then_arm
         vec![
             Step::Arm9(10),
             Step::Arm7(10),
-            Step::Dispatch(10, EventKind::LineStart)
+            Step::Dispatch(10, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -429,7 +453,7 @@ fn given_event_exactly_one_slice_away_when_running_a_round_then_it_is_dispatched
         vec![
             Step::Arm9(SLICE),
             Step::Arm7(SLICE),
-            Step::Dispatch(SLICE, EventKind::LineStart)
+            Step::Dispatch(SLICE, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -443,7 +467,7 @@ fn given_event_nearer_than_a_slice_when_running_a_round_then_target_is_the_event
         vec![
             Step::Arm9(120),
             Step::Arm7(120),
-            Step::Dispatch(120, EventKind::LineStart)
+            Step::Dispatch(120, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -457,7 +481,7 @@ fn given_event_at_now_when_running_a_round_then_target_is_now_and_the_event_is_d
         vec![
             Step::Arm9(100),
             Step::Arm7(100),
-            Step::Dispatch(100, EventKind::LineStart)
+            Step::Dispatch(100, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -472,7 +496,7 @@ fn given_event_already_overdue_when_running_a_round_then_target_is_now_and_the_e
         vec![
             Step::Arm9(100),
             Step::Arm7(100),
-            Step::Dispatch(50, EventKind::LineStart)
+            Step::Dispatch(50, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -484,16 +508,20 @@ fn given_events_scheduled_in_reverse_priority_at_the_target_when_running_a_round
     // (the reverse of their priority); the line start fires first, the timer last.
     let mut recorder = Recorder::at(0);
     recorder.scheduler.schedule(30, ARM9_TIMER0);
-    recorder.scheduler.schedule(30, EventKind::HBlankStart);
-    recorder.scheduler.schedule(30, EventKind::LineStart);
+    recorder
+        .scheduler
+        .schedule(30, EventKind::Line(LineEvent::HBlank));
+    recorder
+        .scheduler
+        .schedule(30, EventKind::Line(LineEvent::Start));
     run_round(&mut recorder);
     assert_eq!(
         recorder.log,
         vec![
             Step::Arm9(30),
             Step::Arm7(30),
-            Step::Dispatch(30, EventKind::LineStart),
-            Step::Dispatch(30, EventKind::HBlankStart),
+            Step::Dispatch(30, EventKind::Line(LineEvent::Start)),
+            Step::Dispatch(30, EventKind::Line(LineEvent::HBlank)),
             Step::Dispatch(30, ARM9_TIMER0)
         ]
     );
@@ -524,10 +552,10 @@ fn given_events_at_two_times_when_running_two_rounds_then_each_round_dispatches_
         vec![
             Step::Arm9(10),
             Step::Arm7(10),
-            Step::Dispatch(10, EventKind::LineStart),
+            Step::Dispatch(10, EventKind::Line(LineEvent::Start)),
             Step::Arm9(20),
             Step::Arm7(20),
-            Step::Dispatch(20, EventKind::LineStart)
+            Step::Dispatch(20, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -603,7 +631,7 @@ impl Participants for Arm9Queues {
         self.inner.log.push(Step::Arm9(target));
         self.inner
             .scheduler
-            .schedule(self.queued_at, EventKind::LineStart);
+            .schedule(self.queued_at, EventKind::Line(LineEvent::Start));
         self.inner.scheduler.now = self.queued_at;
     }
     fn run_arm7_until(&mut self, target: u64) {
@@ -629,7 +657,7 @@ fn given_the_arm9_queues_an_event_before_the_target_when_running_a_round_then_ar
         vec![
             Step::Arm9(SLICE),
             Step::Arm7(20),
-            Step::Dispatch(20, EventKind::LineStart)
+            Step::Dispatch(20, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -642,7 +670,10 @@ fn given_event_due_at_now_when_settling_then_arm7_runs_to_now_and_then_the_event
     settle(&mut recorder);
     assert_eq!(
         recorder.log,
-        vec![Step::Arm7(40), Step::Dispatch(40, EventKind::LineStart)]
+        vec![
+            Step::Arm7(40),
+            Step::Dispatch(40, EventKind::Line(LineEvent::Start))
+        ]
     );
 }
 
@@ -659,7 +690,10 @@ fn given_event_overdue_when_settling_then_it_is_dispatched_after_the_arm7() {
     settle(&mut recorder);
     assert_eq!(
         recorder.log,
-        vec![Step::Arm7(40), Step::Dispatch(30, EventKind::LineStart)]
+        vec![
+            Step::Arm7(40),
+            Step::Dispatch(30, EventKind::Line(LineEvent::Start))
+        ]
     );
 }
 
@@ -675,13 +709,15 @@ fn given_events_scheduled_in_reverse_priority_when_settling_then_they_dispatch_i
     let mut recorder = Recorder::at(40);
     recorder.scheduler.schedule(40, ARM7_TIMER0);
     recorder.scheduler.schedule(40, ARM9_TIMER0);
-    recorder.scheduler.schedule(40, EventKind::LineStart);
+    recorder
+        .scheduler
+        .schedule(40, EventKind::Line(LineEvent::Start));
     settle(&mut recorder);
     assert_eq!(
         recorder.log,
         vec![
             Step::Arm7(40),
-            Step::Dispatch(40, EventKind::LineStart),
+            Step::Dispatch(40, EventKind::Line(LineEvent::Start)),
             Step::Dispatch(40, ARM9_TIMER0),
             Step::Dispatch(40, ARM7_TIMER0)
         ]
@@ -692,17 +728,20 @@ fn given_events_scheduled_in_reverse_priority_when_settling_then_they_dispatch_i
 // `cancel` is the scheduler half of "a write to TMnCNT_H replaces that timer's event"
 // (`docs/hw/timers.md`, "Model"): it drops every pending event of one kind and nothing else.
 
-const ARM9_TIMER0: EventKind = EventKind::TimerOverflow {
+const ARM9_TIMER0: EventKind = EventKind::Slot {
+    device: DeviceId::Timers,
     arm9: true,
-    index: 0,
+    slot: 0,
 };
-const ARM9_TIMER1: EventKind = EventKind::TimerOverflow {
+const ARM9_TIMER1: EventKind = EventKind::Slot {
+    device: DeviceId::Timers,
     arm9: true,
-    index: 1,
+    slot: 1,
 };
-const ARM7_TIMER0: EventKind = EventKind::TimerOverflow {
+const ARM7_TIMER0: EventKind = EventKind::Slot {
+    device: DeviceId::Timers,
     arm9: false,
-    index: 0,
+    slot: 0,
 };
 
 /// The `(time, kind)` of every pending event, in firing order.
@@ -734,19 +773,19 @@ fn given_two_events_of_one_kind_when_cancelled_then_both_are_removed() {
 #[test]
 fn given_events_of_other_kinds_when_one_kind_is_cancelled_then_the_others_stay_in_order() {
     let mut scheduler = Scheduler::new();
-    scheduler.schedule(30, EventKind::LineStart);
+    scheduler.schedule(30, EventKind::Line(LineEvent::Start));
     scheduler.schedule(10, ARM9_TIMER0);
     scheduler.schedule(20, ARM9_TIMER1);
     scheduler.schedule(25, ARM7_TIMER0);
-    scheduler.schedule(40, EventKind::HBlankStart);
+    scheduler.schedule(40, EventKind::Line(LineEvent::HBlank));
     scheduler.cancel(ARM9_TIMER0);
     assert_eq!(
         pending_pairs(&scheduler),
         vec![
             (20, ARM9_TIMER1),
             (25, ARM7_TIMER0),
-            (30, EventKind::LineStart),
-            (40, EventKind::HBlankStart)
+            (30, EventKind::Line(LineEvent::Start)),
+            (40, EventKind::Line(LineEvent::HBlank))
         ]
     );
 }
@@ -764,7 +803,7 @@ fn given_the_same_timer_index_on_both_cpus_when_the_arm9_one_is_cancelled_then_t
 #[test]
 fn given_no_event_of_the_kind_when_cancelled_then_the_queue_is_unchanged() {
     let mut scheduler = Scheduler::new();
-    scheduler.schedule(10, EventKind::LineStart);
+    scheduler.schedule(10, EventKind::Line(LineEvent::Start));
     let before = scheduler.pending();
     scheduler.cancel(ARM9_TIMER0);
     assert_eq!(scheduler.pending(), before);
@@ -781,12 +820,12 @@ fn given_an_empty_queue_when_cancelled_then_it_is_still_empty() {
 fn given_a_cancelled_event_when_popping_due_then_it_does_not_fire() {
     let mut scheduler = Scheduler::new();
     scheduler.schedule(10, ARM9_TIMER0);
-    scheduler.schedule(10, EventKind::LineStart);
+    scheduler.schedule(10, EventKind::Line(LineEvent::Start));
     scheduler.cancel(ARM9_TIMER0);
     let fired: Vec<EventKind> = std::iter::from_fn(|| scheduler.pop_due(10))
         .map(|event| event.kind)
         .collect();
-    assert_eq!(fired, vec![EventKind::LineStart]);
+    assert_eq!(fired, vec![EventKind::Line(LineEvent::Start)]);
 }
 
 #[test]

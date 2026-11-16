@@ -93,8 +93,8 @@ fn given_a_booted_machine_when_nothing_ran_then_the_pending_events_are_hblank_th
     assert_eq!(
         pending,
         vec![
-            (HBLANK_AT, EventKind::HBlankStart),
-            (LINE, EventKind::LineStart)
+            (HBLANK_AT, EventKind::Line(LineEvent::HBlank)),
+            (LINE, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -140,8 +140,8 @@ fn given_a_frame_run_when_listing_pending_then_line_1_events_follow_the_wrap_fro
     assert_eq!(
         pending,
         vec![
-            (FRAME_CYCLES + HBLANK_AT, EventKind::HBlankStart),
-            (FRAME_CYCLES + LINE, EventKind::LineStart)
+            (FRAME_CYCLES + HBLANK_AT, EventKind::Line(LineEvent::HBlank)),
+            (FRAME_CYCLES + LINE, EventKind::Line(LineEvent::Start))
         ]
     );
 }

@@ -12,7 +12,6 @@
 use crate::cpu::Bus;
 use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{DMA0_IRQ, Requests};
-use crate::scheduler::EventKind;
 use serde::{Deserialize, Serialize};
 
 /// DMA0SAD, at `0400_00B0h` (`dma.md`, "Registers"). Channel *n* is `12n` bytes above it.
@@ -280,15 +279,6 @@ impl<const ARM9: bool> Dma<ARM9> {
         }
     }
 
-    /// The event that carries channel `index`'s start.
-    pub(crate) fn event_kind(index: usize) -> EventKind {
-        EventKind::DmaStart {
-            arm9: ARM9,
-            // The index is below 4 wherever it comes from a channel.
-            channel: index as u8,
-        }
-    }
-
     /// Marks every enabled channel that waits for `trigger` and has no start queued yet, and
     /// returns their slot mask. The machine schedules them in ascending channel order, so equal
     /// times fire 0 to 3 (`dma.md`, "Starting").
@@ -543,10 +533,6 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
     }
 
     const SLOTS: u8 = CHANNEL_COUNT as u8;
-
-    fn slot_kind(&self, slot: u8) -> Option<EventKind> {
-        (usize::from(slot) < CHANNEL_COUNT).then(|| Self::event_kind(usize::from(slot)))
-    }
 
     /// A waiting start is due at once: the caller raises it to the time the start was raised.
     fn slot_due(&self, slot: u8) -> Option<u64> {

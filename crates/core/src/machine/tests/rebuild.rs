@@ -11,6 +11,7 @@
 
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::DeviceId;
 use crate::machine::*;
 use crate::scheduler::{EventKind, LINE_CYCLES, run_round};
 
@@ -106,7 +107,11 @@ fn resume(original: &Machine, more: impl Fn(&mut Machine)) -> Resumed {
 }
 
 fn timer9(index: u8) -> EventKind {
-    EventKind::TimerOverflow { arm9: true, index }
+    EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9: true,
+        slot: index,
+    }
 }
 
 // ------------------------------------------------- (a) two timers tied, set in reverse order
@@ -173,7 +178,7 @@ fn given_a_timer_and_a_line_start_due_at_the_same_time_when_saved_and_loaded_the
             .map(|&(_, kind)| kind)
             .collect::<Vec<_>>()
     };
-    let expected = vec![EventKind::LineStart, timer9(0)];
+    let expected = vec![EventKind::Line(LineEvent::Start), timer9(0)];
     assert_eq!(
         (
             at_tie(&r.loaded_pending),
@@ -204,9 +209,10 @@ fn given_a_vblank_dma_start_queued_by_the_line_handler_when_saved_and_loaded_the
     let original = dma_start_waiting_at_now();
     let now = 192 * LINE_CYCLES;
     let r = resume(&original, |m| rounds(m, 3));
-    let dma_start = EventKind::DmaStart {
+    let dma_start = EventKind::Slot {
+        device: DeviceId::Dma,
         arm9: true,
-        channel: 0,
+        slot: 0,
     };
     let is_dma = |pending: &[(u64, EventKind)]| {
         pending
@@ -293,9 +299,10 @@ fn dma_unit_that_chains_an_immediate_channel() -> Machine {
 fn given_an_arm9_dma_unit_that_enables_an_immediate_channel_when_saved_and_loaded_then_the_run_matches_an_uninterrupted_one()
  {
     let original = dma_unit_that_chains_an_immediate_channel();
-    let chained_start = EventKind::DmaStart {
+    let chained_start = EventKind::Slot {
+        device: DeviceId::Dma,
         arm9: true,
-        channel: 1,
+        slot: 1,
     };
     let resumed = resume(&original, |m| rounds(m, 3));
     assert_eq!(

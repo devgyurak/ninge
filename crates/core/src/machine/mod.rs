@@ -7,7 +7,7 @@ use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
 use crate::io::Io;
-use crate::scheduler::{EventKind, Scheduler};
+use crate::scheduler::{EventKind, LineEvent, Scheduler};
 use serde::{Deserialize, Serialize};
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
@@ -183,10 +183,14 @@ impl Machine {
     /// "Savestate checks").
     pub(crate) fn schedule_events(&mut self) {
         let now = self.scheduler.now();
-        self.scheduler
-            .schedule(Scheduler::next_hblank_start(now), EventKind::HBlankStart);
-        self.scheduler
-            .schedule(Scheduler::next_line_start(now), EventKind::LineStart);
+        self.scheduler.schedule(
+            Scheduler::next_hblank_start(now),
+            EventKind::Line(LineEvent::HBlank),
+        );
+        self.scheduler.schedule(
+            Scheduler::next_line_start(now),
+            EventKind::Line(LineEvent::Start),
+        );
         self.io.schedule_all(&mut self.scheduler, now);
     }
 

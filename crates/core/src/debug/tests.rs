@@ -145,8 +145,8 @@ fn given_a_new_machine_when_inspected_then_pending_lists_the_line_events_in_firi
     assert_eq!(
         kinds,
         vec![
-            (HBLANK_START_CYCLES, EventKind::HBlankStart),
-            (LINE_CYCLES, EventKind::LineStart),
+            (HBLANK_START_CYCLES, EventKind::Line(LineEvent::HBlank)),
+            (LINE_CYCLES, EventKind::Line(LineEvent::Start)),
         ]
     );
 }
@@ -164,12 +164,13 @@ fn given_a_running_arm9_timer_when_inspected_then_pending_lists_its_overflow_fir
     assert_eq!(
         kinds,
         vec![
-            EventKind::TimerOverflow {
+            EventKind::Slot {
+                device: DeviceId::Timers,
                 arm9: true,
-                index: 0
+                slot: 0
             },
-            EventKind::HBlankStart,
-            EventKind::LineStart,
+            EventKind::Line(LineEvent::HBlank),
+            EventKind::Line(LineEvent::Start),
         ]
     );
 }

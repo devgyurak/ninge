@@ -82,6 +82,12 @@ is:
 3. `TimerOverflow`, ARM9 timers 0-3, then ARM7 timers 0-3
 4. `DmaStart`, ARM9 channels 0-3, then ARM7 channels 0-3
 
+The timer and DMA entries are not kinds of their own in the model: each is one event slot of a
+registered device, and the device order is the order the devices are registered in (the
+interrupt controllers, then the timers, then DMA, then the keypad). A device that registers
+later with events of its own sorts after these at the same time, the ARM9's copy before the
+ARM7's, lower slot first.
+
 Why this order: the order in which the events raise their IF bits changes nothing, because IF
 is only read between rounds. A tie matters only where one event's effect is seen by another,
 and that is the DMA transfer, which moves data that a line, HBlank or timer handler may have

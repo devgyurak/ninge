@@ -183,6 +183,7 @@ fn given_a_master_brightness_when_the_native_line_is_made_then_it_is_unbrightene
         m.memory.lcdc_banks(),
         &inputs,
         &[0; SCREEN_WIDTH],
+        &[0; SCREEN_WIDTH],
         &mut line,
     );
     assert_eq!(

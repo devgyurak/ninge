@@ -39,6 +39,7 @@ fn given_display_mode_2_when_the_screen_picks_its_line_then_the_vram_wins_over_t
         m.memory.lcdc_banks(),
         &inputs,
         &[RED15; SCREEN_WIDTH],
+        &[0; SCREEN_WIDTH],
         &mut line,
     );
     assert_eq!(line, [BLUE15; SCREEN_WIDTH]);
@@ -55,6 +56,7 @@ fn given_display_mode_1_when_the_screen_picks_its_line_then_it_is_the_composed_l
         m.memory.lcdc_banks(),
         &inputs,
         &[0x03E0; SCREEN_WIDTH],
+        &[0; SCREEN_WIDTH],
         &mut line,
     );
     assert_eq!(line, [0x03E0; SCREEN_WIDTH]);

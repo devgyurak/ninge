@@ -11,6 +11,7 @@ mod halt;
 mod input;
 mod ipc;
 mod irq;
+mod mmdisp;
 mod rebuild;
 mod scheduler;
 mod swi_data;

@@ -6,7 +6,7 @@
 use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
 use crate::bus::{Arm7View, Arm9View, TcmConfig};
 use crate::io::dma::Trigger;
-use crate::io::timing::FIRST_VBLANK_LINE;
+use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, Participants, Scheduler};
 
 impl Participants for Machine {
@@ -153,6 +153,7 @@ impl Machine {
             self.io.gpu2d_mut().vblank_started();
         }
         let line = usize::from(self.io.timing().vcount());
+        self.start_display_dma(line, time);
         // The last visible line is drawn: the frame is whole and becomes the one callers read.
         if line == SCREEN_HEIGHT {
             self.present_frame();
@@ -165,6 +166,28 @@ impl Machine {
         // From the event's own time, not `now`, so a line's length never drifts.
         self.scheduler
             .schedule(time.saturating_add(LINE_CYCLES), EventKind::LineStart);
+    }
+
+    /// The ARM9 DMA starts a line begins: the start of display at line 0, and the main-memory
+    /// display's requests for the next visible line, raised from the last line of the previous
+    /// frame so line 0 finds its pixels (`docs/hw/display-capture.md`, "ARM9 DMA start modes 3 and
+    /// 4"). The line itself is drawn right after, from what the FIFO holds now.
+    // TODO(hw-unverified): the start of display fires once per frame at line 0, and the line's
+    // requests are all raised at the start of the line before it (`display-capture.md`,
+    // "Unverified").
+    fn start_display_dma(&mut self, line: usize, time: u64) {
+        if line == 0 {
+            self.io
+                .trigger_dma(&mut self.scheduler, Trigger::StartOfDisplay, time);
+        }
+        let frame_start = line == usize::from(LINES) - 1;
+        if frame_start || line + 1 < SCREEN_HEIGHT {
+            self.io.trigger_dma(
+                &mut self.scheduler,
+                Trigger::MainMemory { frame_start },
+                time,
+            );
+        }
     }
 
     /// HBlank begins at `time` in the current line (`docs/hw/display-timing.md`); the one place

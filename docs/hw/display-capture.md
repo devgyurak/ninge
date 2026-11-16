@@ -115,8 +115,12 @@ At the start of each visible line, before anything draws, the display takes one 
 pixels, out of the FIFO whether or not anything shows it, and a pixel that is not there reads as 0
 (black). That line is what display mode 3 shows and what capture reads as source B = FIFO.
 
-A channel enabled with start mode 4 begins at the next line 0 ("Transfer starts at next frame"), not
-at the next line.
+A channel enabled with start mode 4 does not take part in the lines of the frame it was enabled
+in: it starts at the last line of that frame, the first request of the next one ("Transfer starts at
+next frame"), so the next frame's line 0 finds its pixels. Enabling it again (the enable bit going
+from 0 to 1) makes it wait again, and reloads the source address, which is how a program starts each
+frame at the top of its bitmap: the channel only repeats, so its source runs on past the bitmap
+after one frame.
 
 **Display mode 3** shows that line, the same way display mode 2 shows a VRAM line: 15-bit colour,
 then the master brightness and the host conversion (`blending.md`, "Master brightness").
@@ -129,7 +133,9 @@ then the master brightness and the host conversion (`blending.md`, "Master brigh
 | 4 | main-memory display: 32 requests per line, as above |
 
 Both are raised by the machine's line start (`dma.md`, "Starting"), like the VBlank and HBlank
-starts. Mode 3 is raised once per frame (see "Unverified").
+starts. Mode 3 is raised once per frame (see "Unverified"). The machine begins in the middle of the
+first frame, so line 0 of that frame is not a line start and starts nothing; the first line 0 that
+does is the next frame's.
 
 ## Edge cases
 

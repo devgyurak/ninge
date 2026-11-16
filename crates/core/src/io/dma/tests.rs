@@ -1517,3 +1517,94 @@ fn given_a_transfer_that_re_arms_its_own_channel_with_the_irq_bit_when_it_finish
     let effect = dma.finish(&t, END);
     assert_eq!(effect.requests.arm9, DMA0_IRQ << 1);
 }
+
+// ------------------------------------------------------- display starts (display-capture.md)
+
+#[test]
+fn given_start_timing_3_when_the_start_of_display_is_raised_then_the_channel_starts() {
+    assert_eq!(
+        trigger_mask::<true>(ENABLE | timing9(3) | 4, Trigger::StartOfDisplay),
+        1
+    );
+}
+
+#[test]
+fn given_start_timing_3_when_the_main_memory_display_is_raised_then_nothing_starts() {
+    let request = Trigger::MainMemory { frame_start: true };
+    assert_eq!(trigger_mask::<true>(ENABLE | timing9(3) | 4, request), 0);
+}
+
+#[test]
+fn given_start_timing_4_when_the_start_of_display_is_raised_then_nothing_starts() {
+    assert_eq!(
+        trigger_mask::<true>(ENABLE | timing9(4) | 4, Trigger::StartOfDisplay),
+        0
+    );
+}
+
+#[test]
+fn given_a_channel_enabled_during_the_frame_when_a_line_request_comes_then_it_waits_for_the_next_frame()
+ {
+    let request = Trigger::MainMemory { frame_start: false };
+    assert_eq!(trigger_mask::<true>(ENABLE | timing9(4) | 4, request), 0);
+}
+
+#[test]
+fn given_a_channel_enabled_during_the_frame_when_the_frame_starts_then_it_starts_and_stays_released()
+ {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(4) | 4);
+    let frame = dma.trigger(Trigger::MainMemory { frame_start: true });
+    let taken = dma.begin(0).is_some();
+    let line = dma.trigger(Trigger::MainMemory { frame_start: false });
+    assert_eq!((frame, taken, line), (1, true, 1));
+}
+
+#[test]
+fn given_a_channel_enabled_again_when_a_line_request_comes_then_it_waits_for_a_frame_start_again() {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(4) | 4);
+    dma.trigger(Trigger::MainMemory { frame_start: true });
+    write32(&mut dma, cnt(0), timing9(4) | 4);
+    write32(&mut dma, cnt(0), ENABLE | timing9(4) | 4);
+    assert_eq!(dma.trigger(Trigger::MainMemory { frame_start: false }), 0);
+}
+
+#[test]
+fn given_a_main_memory_start_with_count_4_when_taken_then_the_transfer_is_a_whole_line_of_128_words()
+ {
+    let transfer = started_by(
+        &mut Arm9Dma::new(),
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | REPEAT | timing9(4) | 4,
+        Trigger::MainMemory { frame_start: true },
+    );
+    assert_eq!(transfer.count, 128);
+}
+
+#[test]
+fn given_a_start_of_display_start_with_count_4_when_taken_then_the_transfer_is_4_words() {
+    let transfer = started_by(
+        &mut Arm9Dma::new(),
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | timing9(3) | 4,
+        Trigger::StartOfDisplay,
+    );
+    assert_eq!(transfer.count, 4);
+}
+
+#[test]
+fn given_arm7_start_timings_3_and_4_when_the_display_starts_are_raised_then_nothing_starts() {
+    let main = Trigger::MainMemory { frame_start: true };
+    assert_eq!(
+        (
+            trigger_mask::<false>(ENABLE | timing7(3) | 4, Trigger::StartOfDisplay),
+            trigger_mask::<false>(ENABLE | timing7(3) | 4, main)
+        ),
+        (0, 0)
+    );
+}

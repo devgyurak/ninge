@@ -203,15 +203,21 @@ impl CaptureLine {
 
     /// Source B from VRAM for row `y`: the halfwords of the read block, alpha in bit 15. A block
     /// that is not in LCDC mode (`None`) reads as zeros. The read offset is ignored in display
-    /// mode 2 (`display-capture.md`, "The capture pipeline").
+    /// mode 2 (`display-capture.md`, "The capture pipeline"). With source B set to the main-memory
+    /// display FIFO it is the line `fifo` delivered, alpha 1.
     // TODO(hw-unverified): a read block that is not in LCDC mode reads 0, and the 128-wide size
-    // reads with a row stride of 128 pixels (`display-capture.md`, "Unverified").
-    // TODO(phase4): the main-memory display FIFO as source B (#36).
-    pub(crate) fn source_b(&self, y: usize, bank: Option<&[u8]>) -> [u16; SCREEN_WIDTH] {
-        let mut line = [0; SCREEN_WIDTH];
+    // reads with a row stride of 128 pixels, and a FIFO pixel's alpha is 1 (`display-capture.md`,
+    // "Unverified").
+    pub(crate) fn source_b(
+        &self,
+        y: usize,
+        bank: Option<&[u8]>,
+        fifo: &[u16; SCREEN_WIDTH],
+    ) -> [u16; SCREEN_WIDTH] {
         if self.control & SOURCE_B_FIFO != 0 {
-            return line;
+            return fifo.map(|pixel| (pixel & COLOR_MASK) | ALPHA);
         }
+        let mut line = [0; SCREEN_WIDTH];
         let shift = if self.vram_display {
             None
         } else {

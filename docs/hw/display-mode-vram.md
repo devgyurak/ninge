@@ -55,7 +55,7 @@ kept anyway so a read returns what was written (see "Unverified").
   backgrounds; objects, windows and blending are `TODO(phase4)`.
 - **Mode 2, VRAM display:** the bitmap described below.
 - **Mode 3, main-memory display:** a bitmap streamed from main RAM through the display FIFO.
-  `display-capture.md` (#36); until it lands the screen is a black placeholder (`TODO(phase4)`).
+  the picture, its brightness and the DMA that feeds it are in `display-capture.md` (Phase 4, #36).
 
 Engine B has modes 0 and 1 only (`bg-modes.md`, "Engine B").
 

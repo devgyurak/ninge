@@ -36,6 +36,7 @@ mod engine_b;
 mod extended;
 mod extpal;
 mod large;
+mod mmdisp;
 mod mosaic;
 mod obj;
 mod text;

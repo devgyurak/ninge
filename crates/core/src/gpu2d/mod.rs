@@ -13,6 +13,7 @@
 //! and 3) or in [`EngineSpec`].
 
 mod affine;
+mod effects;
 mod engine;
 mod kind;
 mod obj;
@@ -23,6 +24,8 @@ mod window;
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
+use effects::{BLD_BLOCK_BYTES as ENGINE_BLD_BYTES, BLD_OFFSET};
+pub use effects::{EffectMode, Effects, Targets};
 pub use engine::Mosaic;
 use engine::{
     AFFINE_OFFSET, AFFINE_REGS_BYTES as ENGINE_AFFINE_REGS_BYTES,
@@ -68,6 +71,13 @@ pub const MOSAIC_ADDR: u32 = DISPCNT_A_ADDR + MOSAIC_OFFSET;
 pub const MOSAIC_B_ADDR: u32 = MOSAIC_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block.
 pub const MOSAIC_BYTES: u32 = ENGINE_MOSAIC_BYTES;
+/// BLDCNT, at `0400_0050h`: BLDCNT, BLDALPHA and BLDY, in a block of 8 bytes of the address map
+/// (`blending.md`, "Registers").
+pub const BLD_REGS_ADDR: u32 = DISPCNT_A_ADDR + BLD_OFFSET;
+/// Engine B's BLDCNT, at `0400_1050h`.
+pub const BLD_REGS_B_ADDR: u32 = BLD_REGS_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const BLD_REGS_BYTES: u32 = ENGINE_BLD_BYTES;
 /// WIN0H, at `0400_0040h`: WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT, 12 bytes from here
 /// (`windows.md`, "Registers").
 pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
@@ -242,6 +252,12 @@ impl Gpu2d {
     pub fn windows(&self, which: EngineId) -> Windows {
         let engine = self.engine(which);
         engine.windows(which.spec().dispcnt(engine.dispcnt()))
+    }
+
+    /// The colour special effects engine `which` selects: the effect, its targets and the
+    /// coefficients. A debugger's BG panel (#58) shows them.
+    pub fn effects(&self, which: EngineId) -> Effects {
+        self.engine(which).effects()
     }
 
     /// DISPCNT of engine A.

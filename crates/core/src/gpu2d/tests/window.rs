@@ -9,39 +9,39 @@ use crate::gpu2d::window::LayerSet;
 
 /// The colours of BG0-BG3 and the backdrop, as 15-bit values.
 const LAYER_COLORS: [u16; 4] = [0x001F, 0x03E0, 0x7C00, 0x03FF];
-const RED: u16 = LAYER_COLORS[0];
-const GREEN: u16 = LAYER_COLORS[1];
-const BLUE: u16 = LAYER_COLORS[2];
-const YELLOW: u16 = LAYER_COLORS[3];
-const WHITE15: u16 = 0x7FFF;
+pub(super) const RED: u16 = LAYER_COLORS[0];
+pub(super) const GREEN: u16 = LAYER_COLORS[1];
+pub(super) const BLUE: u16 = LAYER_COLORS[2];
+pub(super) const YELLOW: u16 = LAYER_COLORS[3];
+pub(super) const WHITE15: u16 = 0x7FFF;
 /// The colour of the test sprite.
-const MAGENTA: u16 = 0x7C1F;
+pub(super) const MAGENTA: u16 = 0x7C1F;
 
 /// Offsets of the window registers from an engine's DISPCNT.
-const WIN0H: u32 = 0x40;
+pub(super) const WIN0H: u32 = 0x40;
 const WIN1H: u32 = 0x42;
-const WIN0V: u32 = 0x44;
+pub(super) const WIN0V: u32 = 0x44;
 const WIN1V: u32 = 0x46;
-const WININ: u32 = 0x48;
-const WINOUT: u32 = 0x4A;
+pub(super) const WININ: u32 = 0x48;
+pub(super) const WINOUT: u32 = 0x4A;
 
 /// DISPCNT: display mode 1 with BG0-BG3 on, and the bits that turn windows on.
-const GRAPHICS_BGS: u32 = 1 << 16 | 0xF << 8;
-const WIN0_ON: u32 = 1 << 13;
+pub(super) const GRAPHICS_BGS: u32 = 1 << 16 | 0xF << 8;
+pub(super) const WIN0_ON: u32 = 1 << 13;
 const WIN1_ON: u32 = 1 << 14;
 const OBJ_WIN_ON: u32 = 1 << 15;
-const OBJ_ON: u32 = 1 << 12;
+pub(super) const OBJ_ON: u32 = 1 << 12;
 
 /// WININ / WINOUT group bits: BG0-BG3, OBJ and the effect.
-const BG0: u16 = 1;
-const BG1: u16 = 2;
-const BG2: u16 = 4;
-const BG3: u16 = 8;
-const OBJ: u16 = 1 << 4;
-const EFFECT: u16 = 1 << 5;
+pub(super) const BG0: u16 = 1;
+pub(super) const BG1: u16 = 2;
+pub(super) const BG2: u16 = 4;
+pub(super) const BG3: u16 = 8;
+pub(super) const OBJ: u16 = 1 << 4;
+pub(super) const EFFECT: u16 = 1 << 5;
 
 /// X1 in the high byte and X2 (or Y1 and Y2) in the low byte.
-const fn range(start: u16, end: u16) -> u16 {
+pub(super) const fn range(start: u16, end: u16) -> u16 {
     start << 8 | end
 }
 
@@ -52,7 +52,7 @@ const fn high(group: u16) -> u16 {
 
 /// A machine with the four layers of engine `eng` set up and `dispcnt` and the window registers
 /// written.
-fn layers_scene(eng: Eng, dispcnt: u32, regs: &[(u32, u16)]) -> Machine {
+pub(super) fn layers_scene(eng: Eng, dispcnt: u32, regs: &[(u32, u16)]) -> Machine {
     let mut m = Machine::new();
     let (bank_reg, bank) = match eng.screen {
         Screen::Top => (VRAMCNT_A, BANK_A_BG),
@@ -83,7 +83,7 @@ fn layers_scene(eng: Eng, dispcnt: u32, regs: &[(u32, u16)]) -> Machine {
 }
 
 /// The (x, y, got, want) of the probes whose pixel is not the colour wanted, after a frame.
-fn misses(
+pub(super) fn misses(
     m: &mut Machine,
     eng: Eng,
     probes: &[(usize, usize, u16)],
@@ -396,7 +396,7 @@ fn given_the_windows_of_engine_a_when_engine_b_has_none_then_engine_b_shows_the_
 
 /// Bank B as engine A's OBJ VRAM (MST 2): one solid tile 0 of colour 1 and a palette whose entry 1
 /// is magenta, with every OAM entry disabled.
-fn prepare_objects(m: &mut Machine) {
+pub(super) fn prepare_objects(m: &mut Machine) {
     w8(m, 0x0400_0241, 0x82);
     w16(m, 0x0500_0202, MAGENTA);
     (0..8).for_each(|row| w32(m, 0x0640_0000 + row * 4, 0x1111_1111));
@@ -404,7 +404,7 @@ fn prepare_objects(m: &mut Machine) {
 }
 
 /// Writes entry `entry` of engine A's OAM.
-fn put_object(m: &mut Machine, entry: u32, attrs: [u16; 3]) {
+pub(super) fn put_object(m: &mut Machine, entry: u32, attrs: [u16; 3]) {
     attrs
         .iter()
         .enumerate()

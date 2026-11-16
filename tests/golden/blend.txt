@@ -1,0 +1,2 @@
+# Golden frames for testroms/blend. Format and review flow: tests/golden/README.md.
+frames=14 top=26a8d9dc5ae83125 bottom=21639e98ef3e6725

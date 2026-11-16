@@ -65,8 +65,8 @@ ARM9 (bits 27-29):
 | 0 | Immediately | 3 (#26) |
 | 1 | VBlank start | 3 (#26) |
 | 2 | HBlank start | 3 (#26) |
-| 3 | Start of display (once per frame, line 0) | `TODO(phase4)` |
-| 4 | Main-memory display | `TODO(phase4)` |
+| 3 | Start of display (line 0; how often is Unverified, `display-capture.md`) | `TODO(phase4)` (#36) |
+| 4 | Main-memory display (`display-capture.md`) | `TODO(phase4)` (#36) |
 | 5 | DS cartridge slot | `TODO(phase5)` (#37) |
 | 6 | GBA cartridge slot | no phase plans it |
 | 7 | Geometry command FIFO | `TODO(phase7)` (#48) |

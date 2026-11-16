@@ -4,6 +4,10 @@
 //! differs is data ([`EngineSpec`](super::spec::EngineSpec)) and the memory each reads.
 
 use super::affine::{self, Affine, AffineBg};
+use super::effects::{
+    BLD_BLOCK_BYTES, BLD_OFFSET, BLDALPHA_MASK, BLDCNT_MASK, BLDY_MASK, Effects, LAYER_BACKDROP,
+    LAYER_OBJ, Pixel,
+};
 use super::kind::{Kind, drawn_kind, kind_of};
 use super::obj;
 use super::spec::{EngineInputs, EngineSpec};
@@ -53,6 +57,10 @@ pub(super) struct Engine {
     winout: u16,
     // Whether each window is switched on at the line being made (`windows.md`, "The vertical test").
     latches: Latches,
+    // BLDCNT, BLDALPHA and BLDY (`blending.md`, "Registers").
+    bldcnt: u16,
+    bldalpha: u16,
+    bldy: u16,
 }
 
 /// The mosaic block sizes in pixels of an engine (`bg-modes.md`, "Mosaic"): each is the register's
@@ -86,6 +94,9 @@ enum Field {
     WinV(usize),
     WinIn,
     WinOut,
+    BldCnt,
+    BldAlpha,
+    BldY,
 }
 
 impl Engine {
@@ -105,6 +116,9 @@ impl Engine {
             winin: 0,
             winout: 0,
             latches: Latches::default(),
+            bldcnt: 0,
+            bldalpha: 0,
+            bldy: 0,
         }
     }
 
@@ -163,6 +177,11 @@ impl Engine {
         )
     }
 
+    /// The colour special effects the registers select (`blending.md`).
+    pub(super) fn effects(&self) -> Effects {
+        Effects::decode(self.bldcnt, self.bldalpha, self.bldy)
+    }
+
     /// Visible line `y` is about to be made: the windows' vertical state moves to it
     /// (`windows.md`, "The vertical test").
     pub(super) fn begin_line(&mut self, y: usize) {
@@ -213,6 +232,16 @@ impl Engine {
             })
         } else if (MOSAIC_OFFSET..MOSAIC_OFFSET + 2).contains(&offset) {
             Some((Field::Mosaic, offset - MOSAIC_OFFSET))
+        } else if (BLD_OFFSET..BLD_OFFSET + BLD_BLOCK_BYTES - 2).contains(&offset) {
+            // BLDCNT, BLDALPHA, BLDY: halfwords in that order; the block's last two bytes are no
+            // register.
+            let at = offset - BLD_OFFSET;
+            let byte = at % 2;
+            Some(match at / 2 {
+                0 => (Field::BldCnt, byte),
+                1 => (Field::BldAlpha, byte),
+                _ => (Field::BldY, byte),
+            })
         } else {
             None
         }
@@ -231,6 +260,10 @@ impl Engine {
             Field::BgCnt(n) => u32::from(self.bgcnt[n & 3]),
             Field::WinIn => u32::from(self.winin),
             Field::WinOut => u32::from(self.winout),
+            Field::BldCnt => u32::from(self.bldcnt),
+            Field::BldAlpha => u32::from(self.bldalpha),
+            // BLDY is write-only (`blending.md`, "Unverified").
+            Field::BldY => 0,
             // The transform registers are write-only too (`bg-modes.md`, "Unverified"), and so
             // are the window rectangles (`windows.md`, "Unverified").
             Field::BgHofs(_)
@@ -278,6 +311,16 @@ impl Engine {
             Field::WinOut => {
                 self.winout = (with_byte(u32::from(self.winout), byte, value) as u16) & GROUP_MASK;
             }
+            Field::BldCnt => {
+                self.bldcnt = (with_byte(u32::from(self.bldcnt), byte, value) as u16) & BLDCNT_MASK;
+            }
+            Field::BldAlpha => {
+                self.bldalpha =
+                    (with_byte(u32::from(self.bldalpha), byte, value) as u16) & BLDALPHA_MASK;
+            }
+            Field::BldY => {
+                self.bldy = (with_byte(u32::from(self.bldy), byte, value) as u16) & BLDY_MASK;
+            }
         }
     }
 
@@ -285,7 +328,7 @@ impl Engine {
     /// that is not transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the
     /// layers together"). An object is in front of a background layer whose priority value is the
     /// same or greater (`obj.md`, "Priority").
-    // TODO(phase4): blending completes the line (#34).
+    // TODO(phase7): the 3D layer's alpha as a first target (`blending.md`, "The 3D layer").
     // TODO(hw-unverified): the backdrop has no enable bit and shows when every layer is hidden
     // (`windows.md`, "Unverified").
     pub(super) fn render_line(
@@ -336,11 +379,20 @@ impl Engine {
         // TODO(hw-unverified): a window is judged at the screen pixel, not at a mosaic block's first
         // pixel (`windows.md`, "Unverified").
         let regions = LineWindows::new(&self.windows(dispcnt), self.latches);
+        let effects = self.effects();
+        let backdrop = Pixel {
+            color: backdrop,
+            layer: LAYER_BACKDROP,
+            semi: false,
+        };
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
             let shown = regions.layers(x, &objects.window);
             // The first column of the pixel's block, for a mosaic layer.
             let block_x = (x - x % block_w) as u32;
-            let layer = order.iter().find_map(|&n| {
+            // The background pixels of the column from the front backwards, each with its layer
+            // priority; asked for lazily, so the layers behind the ones the effect needs are not
+            // drawn.
+            let mut backgrounds = order.iter().filter_map(|&n| {
                 // A layer the region hides is as if it were not there (`windows.md`).
                 if !shown.bg(n) {
                     return None;
@@ -367,15 +419,49 @@ impl Engine {
                     }
                     Kind::Other => None,
                 }
-                .map(|color| (color, texts[n].priority))
+                .map(|color| {
+                    let layer = Pixel {
+                        color,
+                        layer: n as u8,
+                        semi: false,
+                    };
+                    (layer, texts[n].priority)
+                })
             });
-            let object = objects.pixels[x].filter(|_| shown.obj());
-            *pixel = match (object, layer) {
-                // An object is behind a layer of a smaller priority value.
-                (Some(object), Some((color, priority))) if object.priority > priority => color,
-                (Some(object), _) => object.color,
-                (None, Some((color, _))) => color,
-                (None, None) => backdrop,
+            let object = objects.pixels[x].filter(|_| shown.obj()).map(|object| {
+                let layer = Pixel {
+                    color: object.color,
+                    layer: LAYER_OBJ,
+                    semi: object.semi,
+                };
+                (layer, object.priority)
+            });
+            // The top pixel and, if the effect asks, the one below it. An object is in front of a
+            // background layer whose priority value is the same or greater (`obj.md`, "Priority").
+            let front = backgrounds.next();
+            *pixel = match (object, front) {
+                (Some((top, priority)), front)
+                    if front.is_none_or(|(_, behind)| priority <= behind) =>
+                {
+                    let below = || Some(front.map_or(backdrop, |(layer, _)| layer));
+                    effects.apply(top, below, shown.effect())
+                }
+                (object, Some((top, _))) => {
+                    let below = || {
+                        let second = backgrounds.next();
+                        match object {
+                            Some((layer, priority))
+                                if second.is_none_or(|(_, behind)| priority <= behind) =>
+                            {
+                                Some(layer)
+                            }
+                            _ => Some(second.map_or(backdrop, |(layer, _)| layer)),
+                        }
+                    };
+                    effects.apply(top, below, shown.effect())
+                }
+                // No layer has a pixel here: the backdrop is on top, with nothing below it.
+                (_, None) => effects.apply(backdrop, || None, shown.effect()),
             };
         });
     }

@@ -43,8 +43,9 @@ const ATTR2_PRIORITY_SHIFT: u32 = 10;
 const ATTR2_PRIORITY_MASK: u16 = 0x3;
 const ATTR2_PALETTE_SHIFT: u32 = 12;
 
-/// OBJ mode 2 is the OBJ window (`windows.md`); mode 1 (semi-transparent, `TODO(phase4)`, #34) draws
-/// as mode 0.
+/// OBJ mode 1 is semi-transparent (`blending.md`).
+const MODE_SEMI: u8 = 1;
+/// OBJ mode 2 is the OBJ window (`windows.md`).
 const MODE_WINDOW: u8 = 2;
 /// OBJ mode 3 is a bitmap object.
 const MODE_BITMAP: u8 = 3;
@@ -178,11 +179,13 @@ impl ObjAttrs {
     }
 }
 
-/// One pixel of the object layer: the 15-bit colour and the priority of the object that made it.
+/// One pixel of the object layer: the 15-bit colour, the priority of the object that made it and
+/// whether that object is semi-transparent (`blending.md`, "Semi-transparent objects").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ObjPixel {
     pub(super) color: u16,
     pub(super) priority: u8,
+    pub(super) semi: bool,
 }
 
 /// The object layer of one line; `None` where no object has a pixel.
@@ -207,7 +210,6 @@ impl ObjLayer {
 /// entry order; at a column the object with the lowest priority value wins, and among equals the
 /// lower entry (`obj.md`, "Priority"). An object of mode 2 draws no colour: its opaque pixels
 /// mark the window mask instead.
-// TODO(phase4): semi-transparent objects draw as normal ones (#34).
 pub(super) fn draw_line(
     inputs: &EngineInputs<'_>,
     dispcnt: u32,
@@ -417,6 +419,7 @@ fn draw_object(
             *slot = Some(ObjPixel {
                 color,
                 priority: obj.priority,
+                semi: obj.mode == MODE_SEMI,
             });
         }
     });
@@ -454,8 +457,9 @@ fn tile_color(
 
 /// The 15-bit colour of the pixel (`column`, `row`) of a bitmap object's picture, or `None` where
 /// its bit 15 is clear (`obj.md`, "A bitmap object"). A bitmap object has no palette and its
-/// attr2 bits 12-15 are an alpha value, not read here (`TODO(phase4)`, #34).
-// TODO(hw-unverified): the flips work as on a tile object, a bitmap object with attr0 bit 13 set
+/// attr2 bits 12-15 are an alpha value, not read here.
+// TODO(hw-unverified): the alpha value has no formula in GBATEK, so a bitmap object is opaque
+// (`blending.md`, "Unverified"); the flips work as on a tile object, a bitmap object with attr0 bit 13 set
 // is still a bitmap object, and DISPCNT bits 5 and 6 both set (reserved) draw nothing
 // (`obj.md`, "Unverified").
 fn bitmap_color(

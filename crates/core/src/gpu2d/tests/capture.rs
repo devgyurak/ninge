@@ -256,3 +256,52 @@ fn given_a_capture_saved_at_line_100_when_loaded_and_finished_then_the_bank_matc
         (true, true)
     );
 }
+
+/// A saved state with DISPCAPCNT at `0x0001_0B15` and no capture running, with the byte of that
+/// register's encoding at `index` replaced by `byte`; `None` when the encoding is not found
+/// exactly once. The encoding is the control as a varint (`95 B6 04`), then the running flag.
+fn state_with_capture_byte(index: usize, byte: u8) -> Option<Vec<u8>> {
+    let mut m = capture_machine();
+    w32(&mut m, DISPCAPCNT, 0x0001_0B15);
+    let needle = postcard::to_allocvec(&m.io.gpu2d().capture()).expect("plain data encodes");
+    let bytes = m.save_state();
+    let hits: Vec<usize> = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle.as_slice())
+        .map(|(at, _)| at)
+        .collect();
+    let at = *hits.first().filter(|_| hits.len() == 1)?;
+    let mut patched = bytes;
+    patched[at + index] = byte;
+    Some(patched)
+}
+
+#[test]
+fn given_a_state_whose_dispcapcnt_has_an_unused_bit_when_loaded_then_it_is_refused_as_corrupt() {
+    // Bit 5 is unused: the low byte of the varint, 95h, becomes B5h.
+    let bytes = state_with_capture_byte(0, 0xB5).expect("the register is found once");
+    assert_eq!(
+        Machine::new().load_state(&bytes),
+        Err(crate::savestate::SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_that_runs_a_capture_with_the_enable_clear_when_loaded_then_it_is_refused_as_corrupt()
+ {
+    // The running flag is the byte after the three of the control.
+    let bytes = state_with_capture_byte(3, 1).expect("the register is found once");
+    assert_eq!(
+        Machine::new().load_state(&bytes),
+        Err(crate::savestate::SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_whose_dispcapcnt_is_valid_when_patched_to_the_same_value_then_it_loads() {
+    // Patching the low byte to itself proves the harness finds the right bytes, so the refusals
+    // above are about the patched values.
+    let bytes = state_with_capture_byte(0, 0x95).expect("the register is found once");
+    assert_eq!(Machine::new().load_state(&bytes), Ok(()));
+}

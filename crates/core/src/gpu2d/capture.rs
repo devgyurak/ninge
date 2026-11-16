@@ -63,6 +63,12 @@ enum Source {
 }
 
 impl Capture {
+    /// Whether the state is one the unit can reach: only the bits that exist, and a capture runs
+    /// only with the enable bit set. A savestate that decodes to anything else is corrupt.
+    pub(super) fn well_formed(&self) -> bool {
+        self.control & !CONTROL_BITS == 0 && (!self.running || self.control & ENABLE != 0)
+    }
+
     /// The register as read.
     pub fn control(&self) -> u32 {
         self.control
@@ -88,6 +94,8 @@ impl Capture {
 
     /// Line `y` is about to be made: line 0 begins a capture that was enabled
     /// (`display-capture.md`, "The capture pipeline").
+    // TODO(hw-unverified): the fields are read at each line; only the enable is latched at line 0
+    // (`display-capture.md`, "Unverified").
     pub(super) fn begin_line(&mut self, y: usize) {
         if y == 0 && self.control & ENABLE != 0 {
             self.running = true;
@@ -104,6 +112,7 @@ impl Capture {
 
     /// What to capture on visible line `y`, or `None` when no capture runs or the size has no row
     /// `y`.
+    // TODO(hw-unverified): the fields are read at each line (`display-capture.md`, "Unverified").
     pub(super) fn line(&self, y: usize) -> Option<CaptureLine> {
         let line = CaptureLine {
             control: self.control,

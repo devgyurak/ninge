@@ -225,6 +225,7 @@ impl Gpu2d {
             a: Engine::new(),
             b: Engine::new(),
             powcnt1: POWCNT1_RESET,
+            // TODO(hw-unverified): DISPCAPCNT resets to 0 (`display-capture.md`, "Unverified").
             capture: Capture::default(),
         }
     }
@@ -492,8 +493,6 @@ impl Gpu2d {
     }
 }
 
-impl Checked for Gpu2d {}
-
 /// Both engines are wired to the ARM9 alone (`AGENTS.md` §4, "Per-CPU devices"). Their registers
 /// are bytes; a wider access is split into them.
 impl Device<true> for Gpu2d {
@@ -506,6 +505,12 @@ impl Device<true> for Gpu2d {
             self.write_byte(at, byte);
             Effect::default()
         })
+    }
+}
+
+impl Checked for Gpu2d {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.capture.well_formed()
     }
 }
 

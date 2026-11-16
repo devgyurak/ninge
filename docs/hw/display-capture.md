@@ -171,3 +171,10 @@ GBATEK does not say the following; each is a model, marked `TODO(hw-unverified)`
 - **"Synchronize to start of display" (start mode 3):** once per frame, at line 0. GBATEK names the
   mode but not how often it fires.
 - **The DISPCAPCNT reset value:** 0.
+- **The unused DISPCAPCNT bits** (5-7, 13-15, 22-23, 28) read 0 and drop a write; GBATEK only says
+  "not used".
+- **The wait of a start-mode-4 channel:** one enabled mid-frame waits for the last line of that frame
+  (GBATEK: "Transfer starts at next frame"), and enabling it again waits again and reloads its source.
+- **A start-mode-4 channel without repeat:** it moves `32 * count` words in one transfer and then
+  disables, raising its IRQ (if enabled) once per line, not once per request. GBATEK's generic repeat
+  rule would suggest one request of `count` units.

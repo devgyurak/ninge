@@ -5,7 +5,7 @@ the priority of the regions); GBATEK "DS Window Glitches" (the scanlines past th
 8-bit coordinates); GBATEK "DS Video BG Modes / Control" (DISPCNT bits 8-15); GBATEK "DS Video 3D
 Display Control" (the one line that says the window feature works on the DS as on the GBA).
 Used by: `crates/core/src/gpu2d/`   Phase: 4 (#33); the colour special effects the window
-enables are #34, the debugger panel that shows the rectangles is #58
+enables are #34 (`blending.md`), the debugger panel that shows the rectangles is #58
 
 The window feature splits the screen into up to four regions and lets each region decide which
 layers are shown. `bg-text.md` and `bg-modes.md` say how the background layers make a pixel, and
@@ -129,8 +129,9 @@ budget as any other object, so a mask can be cut off by the line limit like a pi
 ### The colour special effect bit
 
 Bit 5 of each group says whether the colour special effect (blending, brightening, darkening)
-applies to the pixels of that region. The effect is #34; this note only records the bit. Until
-then the bit is stored and read back and changes no pixel.
+applies to the pixels of that region. The effect is `blending.md` (#34); this note only records the bit. The bit gates blending,
+brightening and darkening for the pixels of its region, as `blending.md`, "The effect bit of a
+window region" says.
 
 ### Both engines
 

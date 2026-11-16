@@ -72,7 +72,7 @@ channel. Bit 15 is not used by the colour; it has no effect on the displayed pix
 Blocks 0-3 are banks A-D, each read through its LCDC mapping (`vram-banks.md`, "Display mode 2 reads banks A-D").
 
 GBATEK also says modes 2 and 3 bypass the 2D and 3D pipelines but the master brightness unit
-still applies to their output. Master brightness is not modeled: `TODO(phase4)` (#34).
+still applies to their output. Master brightness is `blending.md` (#34).
 
 ### The screen swap (POWCNT1 bit 15)
 

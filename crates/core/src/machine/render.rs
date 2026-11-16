@@ -7,16 +7,13 @@ use super::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::bus::Memory;
 use crate::gpu2d::{EngineId, expand_line};
 
-/// The display capture stage: it sees engine A's finished line, in the colour the hardware has
-/// and before the master brightness, and will write it to VRAM.
+/// The display capture stage: it sees engine A's composed graphics screen for the line, in the
+/// colour the hardware has and before the master brightness, and will write it to VRAM
+/// (`docs/hw/display-capture.md`, "Where the capture unit sits").
 ///
-/// What a capture reads as source A is the graphics screen (BG, 3D and OBJ) whatever the display
-/// mode shows, so the line handed in here is not yet the right one in VRAM display mode 2: there
-/// `render_line_a` copies VRAM and does not compose the layers.
-// TODO(phase4): display capture (#36) splits `render_line_a` into composing the layers and picking
-// what the display shows, and passes the composed line here; it fills this in; it takes the memory so it can store the line
-// without another restructuring of `render_line` (`blending.md`, "Master brightness").
-fn capture_tap(_memory: &mut Memory, _y: usize, _line: &[u16; SCREEN_WIDTH]) {}
+/// It takes the memory so it can store the line without another restructuring of `render_line`.
+// TODO(phase4): display capture (#36) fills this in.
+fn capture_tap(_memory: &mut Memory, _y: usize, _composed: &[u16; SCREEN_WIDTH]) {}
 
 impl Machine {
     /// Draws visible line `y` of both screens into the frame being drawn, from the registers and
@@ -37,11 +34,23 @@ impl Machine {
         let gpu = self.io.gpu2d();
         let mut line_a = [0; SCREEN_WIDTH];
         let mut line_b = [0; SCREEN_WIDTH];
+        let mut composed = [0; SCREEN_WIDTH];
         let inputs_a = self.memory.engine_inputs(EngineId::A);
-        let brightness_a = gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs_a, &mut line_a);
+        // The layers are composed when the screen shows them; a capture reads them in every
+        // display mode, so it will ask for them too (`display-capture.md`).
+        if gpu.shows_layers_a(&inputs_a) {
+            gpu.compose_line_a(y, &inputs_a, &mut composed);
+        }
+        let brightness_a = gpu.select_line_a(
+            y,
+            self.memory.lcdc_banks(),
+            &inputs_a,
+            &composed,
+            &mut line_a,
+        );
         let inputs_b = self.memory.engine_inputs(EngineId::B);
         let brightness_b = gpu.render_line_b(y, &inputs_b, &mut line_b);
-        capture_tap(&mut self.memory, y, &line_a);
+        capture_tap(&mut self.memory, y, &composed);
         let (out_a, out_b) = if gpu.engine_a_on_top() {
             (&mut self.work_top, &mut self.work_bottom)
         } else {

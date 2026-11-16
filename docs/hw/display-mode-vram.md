@@ -123,12 +123,12 @@ stays white. Changing this formula changes every golden frame that contains colo
   by a test ROM that clears each bit and observes the screens on hardware.
 - **DISPCNT bit 7 (forced blank)** is stored but ignored. It draws a white line on the GBA;
   GBATEK has no DS description of its effect in display modes 0 and 2. —
-  `Gpu2d::render_line_a` — verify by a test ROM on real hardware that sets it in mode 2.
+  `Gpu2d::select_line_a` — verify by a test ROM on real hardware that sets it in mode 2.
 - **POWCNT1 undefined bits** (4-8, 10-14) read back as written. — `Gpu2d::write_byte`
   — verify likewise.
 - **A selected block that is not readable as LCDC VRAM** — its bank disabled, or its MST not
   0 — is drawn as if the block read zero, which is black. GBATEK describes mode 2 only for a
-  mapped block. — `Gpu2d::render_line_a` and `Memory::lcdc_banks` — verify likewise.
+  mapped block. — `Gpu2d::select_line_a` and `Memory::lcdc_banks` — verify likewise.
 - **Whether mode 2 shows a bank that is enabled with a non-LCDC MST** (for example MST 1,
   the BG mapping) is not settled; Phase 2 treats it as unreadable (previous item).
 - **Mirrors** of the I/O block are not modeled (`arm9-memory-map.md`, "Unverified").

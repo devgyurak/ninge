@@ -197,7 +197,7 @@ Each item carries `TODO(hw-unverified)` at its code site.
   verify likewise.
 - **Master brightness on display mode 0 (the white screen) and on a powered-off engine B.** We
   apply it to the white of mode 0 (the block diagram has it on every path) and not to the black of
-  a powered-off engine. — `gpu2d::Gpu2d::render_line_a`, `render_line_b` — verify likewise.
+  a powered-off engine. — `gpu2d::Gpu2d::select_line_a`, `render_line_b` — verify likewise.
 - **Read-back.** GBATEK marks BLDALPHA "R/W (not W)" and BLDY "W (not R/W)" and does not say what
   MASTER_BRIGHT reads. We make BLDCNT and BLDALPHA read back their used bits, BLDY read as zero, and
   MASTER_BRIGHT read back its used bits; the unused bits read as zero everywhere. — `gpu2d::Engine::read_byte`

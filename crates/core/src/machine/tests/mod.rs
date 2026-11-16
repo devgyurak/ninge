@@ -8,6 +8,7 @@ mod arm9;
 mod bios;
 mod dma;
 mod halt;
+mod input;
 mod ipc;
 mod irq;
 mod rebuild;

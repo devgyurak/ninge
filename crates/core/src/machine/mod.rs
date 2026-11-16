@@ -5,6 +5,7 @@ use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::BiosState;
+use crate::input::Input;
 use crate::io::Io;
 use crate::scheduler::{EventKind, Scheduler};
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,9 @@ pub struct Machine {
     pub(crate) bios: BiosState,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
     pub(crate) header: Option<Header>,
+    // The input the host set for the next frame; `run_frame` latches it into the keypads
+    // (`docs/hw/keypad.md`, "Where the bits come from"). Plain state, so it is saved.
+    pub(crate) input: Input,
 }
 
 /// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
@@ -100,6 +104,7 @@ impl Machine {
             scheduler: Scheduler::new(),
             bios: BiosState::default(),
             header: None,
+            input: Input::default(),
         };
         machine.schedule_events();
         machine
@@ -166,6 +171,8 @@ impl Machine {
     /// nothing: the frame only advances the counter and leaves both screens black.
     // TODO(hw-unverified): the per-frame instruction counts are a model (`docs/hw/scheduler.md`).
     pub fn run_frame(&mut self) {
+        // The frame boundary is where the host's input reaches the registers.
+        self.io.latch_input(self.input);
         if self.header.is_none() {
             self.frame_count = self.frame_count.wrapping_add(1);
             return;
@@ -304,6 +311,24 @@ impl Machine {
         if self.io.power_mut().take_halt() {
             self.arm7.set_halted(true);
         }
+    }
+
+    /// Sets the input for the next frame: the buttons held, the touch point and the hinge. It is
+    /// latched into the keypad registers when [`Machine::run_frame`] begins and stays until the
+    /// next one, so `set_input` then `run_frame`, once per frame, is a complete input log and
+    /// replays to the same frames and savestate bytes (`docs/hw/keypad.md`, "Where the bits come
+    /// from"). [`Machine::load_rom`] starts from power-on and so clears the input.
+    pub fn set_input(&mut self, input: Input) {
+        self.input = input;
+    }
+
+    /// The audio the last frame made, as interleaved stereo `i16` samples.
+    ///
+    /// The shape is fixed now so the frontend can be written against it: a slice the machine
+    /// owns, borrowed like [`Machine::frame`], valid until the next `run_frame`.
+    // TODO(phase6): the SPU (#47) fills this; until then no sound is made and it is empty.
+    pub fn audio(&self) -> &[i16] {
+        &[]
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.

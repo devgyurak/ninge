@@ -30,6 +30,7 @@ pub mod timers;
 pub mod timing;
 
 use crate::gpu2d::Gpu2d;
+use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
 use device::{Checked, Device, Effect, Fired, SlotMask, Width};
 use divsqrt::DivSqrt;
@@ -85,6 +86,13 @@ registry! {
 }
 
 impl Io {
+    /// Latches `input` into both CPUs' keypads, as a frame begins (`keypad.md`, "Where the bits
+    /// come from").
+    pub(crate) fn latch_input(&mut self, input: Input) {
+        self.keypad9.latch(input);
+        self.keypad7.latch(input);
+    }
+
     /// Raises the requests in the two masks on the matching controllers: IF latches them. The
     /// one path every source uses: the LCD, IPC, the timers and DMA.
     pub(crate) fn request_irq(&mut self, requests: Requests) {

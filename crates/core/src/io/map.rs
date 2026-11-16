@@ -7,7 +7,7 @@ use crate::bus::VRAMCNT_A_ADDR;
 use crate::gpu2d::{
     AFFINE_REGS_ADDR, AFFINE_REGS_B_ADDR, AFFINE_REGS_BYTES, BG_REGS_ADDR, BG_REGS_B_ADDR,
     BG_REGS_BYTES, DISPCNT_A_ADDR, DISPCNT_B_ADDR, MOSAIC_ADDR, MOSAIC_B_ADDR, MOSAIC_BYTES,
-    POWCNT1_ADDR,
+    POWCNT1_ADDR, WINDOW_REGS_ADDR, WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES,
 };
 use crate::io::divsqrt::{BLOCK_BYTES as DIVSQRT_BYTES, DIVCNT_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
@@ -87,13 +87,15 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 19] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 21] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
     (BG_REGS_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
     // BG2PA..BG3Y, the transform registers of the two affine layers.
     (AFFINE_REGS_ADDR, AFFINE_REGS_BYTES, Some(Port::Gpu2d)),
+    // WIN0H..WINOUT, the window registers.
+    (WINDOW_REGS_ADDR, WINDOW_REGS_BYTES, Some(Port::Gpu2d)),
     // MOSAIC, a halfword at the start of its block.
     (MOSAIC_ADDR, MOSAIC_BYTES, Some(Port::Gpu2d)),
     // DMA0SAD..DMA3CNT, twelve bytes a channel, then the fill registers.
@@ -116,6 +118,7 @@ pub(crate) const ARM9_PORTS: [PortEntry; 19] = [
     (DISPCNT_B_ADDR, 4, Some(Port::Gpu2d)),
     (BG_REGS_B_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
     (AFFINE_REGS_B_ADDR, AFFINE_REGS_BYTES, Some(Port::Gpu2d)),
+    (WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES, Some(Port::Gpu2d)),
     (MOSAIC_B_ADDR, MOSAIC_BYTES, Some(Port::Gpu2d)),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
 ];

@@ -18,7 +18,8 @@ use crate::machine::OAM_HALF;
 
 pub use crate::bus::{ExtPaletteBanks, VramBankState, VramMapping, WramShare, WramState};
 pub use crate::gpu2d::{
-    AffineBg, AffineFormat, EngineId, Gpu2d, Mosaic, OBJ_COUNT, ObjAttrs, TextBg,
+    AffineBg, AffineFormat, EngineId, Gpu2d, LayerSet, Mosaic, OBJ_COUNT, ObjAttrs, TextBg,
+    WindowRect, Windows,
 };
 pub use crate::hle::SwiRecord;
 pub use crate::io::divsqrt::DivSqrt;

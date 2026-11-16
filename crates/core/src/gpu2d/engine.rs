@@ -8,6 +8,7 @@ use super::kind::{Kind, drawn_kind, kind_of};
 use super::obj;
 use super::spec::{EngineInputs, EngineSpec};
 use super::text::{self, TextBg};
+use super::window::{GROUP_MASK, LineWindows, WINDOW_BLOCK_BYTES, WINDOW_OFFSET, Windows};
 use super::{expand_color, with_byte};
 use crate::SCREEN_WIDTH;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,11 @@ pub(super) struct Engine {
     affine: [Affine; 2],
     // MOSAIC: BG and OBJ horizontal and vertical sizes minus 1, a nibble each.
     mosaic: u16,
+    // WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT (`windows.md`, "Registers").
+    winh: [u16; 2],
+    winv: [u16; 2],
+    winin: u16,
+    winout: u16,
 }
 
 /// The mosaic block sizes in pixels of an engine (`bg-modes.md`, "Mosaic"): each is the register's
@@ -72,6 +78,12 @@ enum Field {
     /// byte.
     Affine(usize, u32),
     Mosaic,
+    /// WINxH of window 0 or 1.
+    WinH(usize),
+    /// WINxV of window 0 or 1.
+    WinV(usize),
+    WinIn,
+    WinOut,
 }
 
 impl Engine {
@@ -86,6 +98,10 @@ impl Engine {
             bgvofs: [0; 4],
             affine: [Affine::new(); 2],
             mosaic: 0,
+            winh: [0; 2],
+            winv: [0; 2],
+            winin: 0,
+            winout: 0,
         }
     }
 
@@ -132,6 +148,11 @@ impl Engine {
         }
     }
 
+    /// The windows the registers hold, decoded under `dispcnt` (`windows.md`).
+    pub(super) fn windows(&self, dispcnt: u32) -> Windows {
+        Windows::decode(dispcnt, self.winh, self.winv, self.winin, self.winout)
+    }
+
     /// A visible line has been drawn: both affine layers' internal reference points move down one
     /// line (`bg-modes.md`, "When the picture is made").
     pub(super) fn end_line(&mut self) {
@@ -164,6 +185,16 @@ impl Engine {
                 Field::Affine((at / AFFINE_LAYER_BYTES) as usize, at % AFFINE_LAYER_BYTES),
                 0,
             ))
+        } else if (WINDOW_OFFSET..WINDOW_OFFSET + WINDOW_BLOCK_BYTES).contains(&offset) {
+            // WIN0H, WIN1H, WIN0V, WIN1V, WININ, WINOUT: halfwords in that order.
+            let at = offset - WINDOW_OFFSET;
+            let (half, byte) = ((at / 2) as usize, at % 2);
+            Some(match half {
+                0..=1 => (Field::WinH(half), byte),
+                2..=3 => (Field::WinV(half - 2), byte),
+                4 => (Field::WinIn, byte),
+                _ => (Field::WinOut, byte),
+            })
         } else if (MOSAIC_OFFSET..MOSAIC_OFFSET + 2).contains(&offset) {
             Some((Field::Mosaic, offset - MOSAIC_OFFSET))
         } else {
@@ -173,7 +204,8 @@ impl Engine {
 
     /// The byte at `offset` in the register block; 0 where no register is.
     // TODO(hw-unverified): the scroll registers and the transform registers (PA-PD, BGxX, BGxY) are
-    // write-only and read 0 (`bg-text.md` and `bg-modes.md`, "Unverified").
+    // write-only and read 0 (`bg-text.md` and `bg-modes.md`, "Unverified"), and so are the window
+    // rectangles (`windows.md`, "Unverified").
     pub(super) fn read_byte(&self, offset: u32) -> u8 {
         let Some((field, byte)) = Self::locate(offset) else {
             return 0;
@@ -181,8 +213,16 @@ impl Engine {
         let value = match field {
             Field::Dispcnt => self.dispcnt,
             Field::BgCnt(n) => u32::from(self.bgcnt[n & 3]),
-            // The transform registers are write-only too (`bg-modes.md`, "Unverified").
-            Field::BgHofs(_) | Field::BgVofs(_) | Field::Affine(..) | Field::Mosaic => 0,
+            Field::WinIn => u32::from(self.winin),
+            Field::WinOut => u32::from(self.winout),
+            // The transform registers are write-only too (`bg-modes.md`, "Unverified"), and so
+            // are the window rectangles (`windows.md`, "Unverified").
+            Field::BgHofs(_)
+            | Field::BgVofs(_)
+            | Field::Affine(..)
+            | Field::Mosaic
+            | Field::WinH(_)
+            | Field::WinV(_) => 0,
         };
         (value >> (byte * 8)) as u8
     }
@@ -210,6 +250,18 @@ impl Engine {
             }
             Field::Affine(n, at) => self.affine[n & 1].write_byte(at, value),
             Field::Mosaic => self.mosaic = with_byte(u32::from(self.mosaic), byte, value) as u16,
+            Field::WinH(n) => {
+                self.winh[n & 1] = with_byte(u32::from(self.winh[n & 1]), byte, value) as u16;
+            }
+            Field::WinV(n) => {
+                self.winv[n & 1] = with_byte(u32::from(self.winv[n & 1]), byte, value) as u16;
+            }
+            Field::WinIn => {
+                self.winin = (with_byte(u32::from(self.winin), byte, value) as u16) & GROUP_MASK;
+            }
+            Field::WinOut => {
+                self.winout = (with_byte(u32::from(self.winout), byte, value) as u16) & GROUP_MASK;
+            }
         }
     }
 
@@ -217,7 +269,9 @@ impl Engine {
     /// transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers
     /// together"). An object is in front of a background layer whose priority value is the same or
     /// greater (`obj.md`, "Priority").
-    // TODO(phase4): windows and blending complete the line.
+    // TODO(phase4): blending completes the line (#34), and the OBJ window (#33) joins the regions.
+    // TODO(hw-unverified): the backdrop has no enable bit and shows when every layer is hidden
+    // (`windows.md`, "Unverified").
     pub(super) fn render_line(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
         let dispcnt = inputs.spec.dispcnt(self.dispcnt);
         let palette = inputs
@@ -257,10 +311,17 @@ impl Engine {
             true => obj::draw_line(inputs, dispcnt, mosaic, y),
             false => [None; SCREEN_WIDTH],
         };
+        // The regions of the line: which layers each pixel may show (`windows.md`).
+        let regions = LineWindows::new(&self.windows(dispcnt), y);
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
+            let shown = regions.layers(x);
             // The first column of the pixel's block, for a mosaic layer.
             let block_x = (x - x % block_w) as u32;
             let layer = order.iter().find_map(|&n| {
+                // A layer the region hides is as if it were not there (`windows.md`).
+                if !shown.bg(n) {
+                    return None;
+                }
                 match drawn_kind(dispcnt, n, inputs.spec)? {
                     Kind::Text => {
                         let (px, py) = match texts[n].mosaic {
@@ -285,7 +346,8 @@ impl Engine {
                 }
                 .map(|color| (color, texts[n].priority))
             });
-            *pixel = expand_color(match (objects[x], layer) {
+            let object = objects[x].filter(|_| shown.obj());
+            *pixel = expand_color(match (object, layer) {
                 // An object is behind a layer of a smaller priority value.
                 (Some(object), Some((color, priority))) if object.priority > priority => color,
                 (Some(object), _) => object.color,

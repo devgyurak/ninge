@@ -18,6 +18,7 @@ mod kind;
 mod obj;
 mod spec;
 mod text;
+mod window;
 
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -33,6 +34,8 @@ use serde::{Deserialize, Serialize};
 pub(crate) use spec::EngineInputs;
 use spec::{EngineSpec, MAIN_SPEC, SUB_SPEC};
 pub use text::TextBg;
+pub use window::{LayerSet, WindowRect, Windows};
+use window::{WINDOW_BLOCK_BYTES as ENGINE_WINDOW_BYTES, WINDOW_OFFSET};
 
 /// DISPCNT of engine A, at `0400_0000h` (`display-mode-vram.md`, "Registers").
 pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;
@@ -65,6 +68,13 @@ pub const MOSAIC_ADDR: u32 = DISPCNT_A_ADDR + MOSAIC_OFFSET;
 pub const MOSAIC_B_ADDR: u32 = MOSAIC_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block.
 pub const MOSAIC_BYTES: u32 = ENGINE_MOSAIC_BYTES;
+/// WIN0H, at `0400_0040h`: WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT, 12 bytes from here
+/// (`windows.md`, "Registers").
+pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
+/// Engine B's window registers, at `0400_1040h`.
+pub const WINDOW_REGS_B_ADDR: u32 = WINDOW_REGS_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const WINDOW_REGS_BYTES: u32 = ENGINE_WINDOW_BYTES;
 /// The xRGB8888 value of a white pixel.
 pub const WHITE: u32 = 0x00FF_FFFF;
 /// The xRGB8888 value of a black pixel.
@@ -212,6 +222,13 @@ impl Gpu2d {
         self.engine(which).mosaic()
     }
 
+    /// The windows of engine `which`: the rectangles, which of them DISPCNT turns on and what each
+    /// region shows. A debugger's BG panel (#58) shows them.
+    pub fn windows(&self, which: EngineId) -> Windows {
+        let engine = self.engine(which);
+        engine.windows(which.spec().dispcnt(engine.dispcnt()))
+    }
+
     /// DISPCNT of engine A.
     pub fn dispcnt_a(&self) -> u32 {
         self.a.dispcnt()
@@ -284,7 +301,8 @@ impl Gpu2d {
     /// Draws line `y` (0-191) of engine A's picture into `out` (`SCREEN_WIDTH` pixels), given the
     /// bytes of banks A-D where the CPU sees them as LCDC VRAM and what the engine reads
     /// ([`EngineInputs`]). A line past the last visible one is not drawn.
-    // TODO(phase4): mode 1 completes (windows and blending), and mode 3
+    // TODO(hw-unverified): windows apply in display mode 1 only (`windows.md`, "Unverified").
+    // TODO(phase4): mode 1 completes (blending), and mode 3
     // draws the main-memory bitmap.
     // TODO(phase4): master brightness applies to the output of modes 1-3 (#34).
     // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored

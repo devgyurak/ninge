@@ -30,6 +30,7 @@ mod large;
 mod mosaic;
 mod obj;
 mod text;
+mod window;
 
 fn w8(m: &mut Machine, addr: u32, v: u8) {
     m.bus9().write8(addr, v);

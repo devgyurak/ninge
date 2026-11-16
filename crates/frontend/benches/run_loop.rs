@@ -29,7 +29,7 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("run_loop");
     group.bench_function("run_frame_smoke", |b| {
         b.iter(|| {
-            machine.run_frame();
+            machine.run_frame(ninge_core::Input::new());
             black_box(machine.frame_count())
         });
     });

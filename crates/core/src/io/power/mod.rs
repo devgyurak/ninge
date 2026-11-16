@@ -5,7 +5,7 @@
 //! wait-for-interrupt instead. The register itself holds nothing: a write whose mode is "halt"
 //! leaves a request that the machine turns into the ARM7's halted state after the access.
 
-use crate::io::device::{Device, Effect, Width};
+use crate::io::device::{Checked, Cx, Device, Effect, Width};
 use serde::{Deserialize, Serialize};
 
 /// POSTFLG, then HALTCNT, at `0400_0300h` (ARM7). The device's register space starts at POSTFLG.
@@ -43,18 +43,20 @@ impl Power {
     }
 }
 
+impl Checked for Power {}
+
 impl Device<false> for Power {
     /// HALTCNT reads 0.
     // TODO(hw-unverified): GBATEK lists HALTCNT as readable; it reads 0 here, and POSTFLG (offset
     // 0) is not modeled: it reads 0 and drops writes (`interrupts.md`, "Unverified").
-    fn peek(&self, _offset: u32, _width: Width, _now: u64) -> u32 {
+    fn peek(&self, _offset: u32, _width: Width, _cx: Cx<'_>) -> u32 {
         0
     }
 
     /// Each byte of the write goes to the register at its own offset; only HALTCNT does anything,
     /// and only mode 2 (halt). The GBA-mode and sleep modes do nothing.
     // TODO(phase5): mode 3 (sleep) powers down most of the hardware.
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         let halting = (0..width.bytes()).any(|i| {
             let byte = (value >> (8 * i)) & 0xFF;
             offset.wrapping_add(i) == HALTCNT_OFFSET

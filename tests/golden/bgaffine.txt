@@ -1,0 +1,2 @@
+# Golden frames for testroms/bgaffine. Format and review flow: tests/golden/README.md.
+frames=4 top=1c7e15d4684e5f65 bottom=696ad99f7d9d2903

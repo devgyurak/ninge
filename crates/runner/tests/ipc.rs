@@ -49,8 +49,8 @@ fn boot() -> Machine {
     let rom = load_rom_file(&testrom_path("ipc")).expect("ipc ROM is built");
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("ipc ROM has a valid header");
-    machine.run_frame();
-    machine.run_frame();
+    machine.run_frame(ninge_core::Input::new());
+    machine.run_frame(ninge_core::Input::new());
     machine
 }
 
@@ -419,12 +419,12 @@ fn given_ipc_rom_when_saved_after_one_frame_and_continued_then_it_equals_an_unin
     let rom = load_rom_file(&testrom_path("ipc")).expect("ipc ROM is built");
     let mut first = Machine::new();
     first.load_rom(rom.clone()).expect("valid header");
-    first.run_frame();
+    first.run_frame(ninge_core::Input::new());
     let bytes = first.save_state();
     let mut resumed = Machine::new();
     resumed.load_rom(rom).expect("valid header");
     let result = resumed.load_state(&bytes);
-    resumed.run_frame();
+    resumed.run_frame(ninge_core::Input::new());
     assert_eq!(
         (result, resumed.save_state() == boot().save_state()),
         (Ok(()), true)

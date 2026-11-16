@@ -77,10 +77,19 @@ heap. Order is **(timestamp, priority of the kind)**: two events with the same t
 a fixed order that depends only on what they are, never on when they were scheduled. The order
 is:
 
-1. `LineStart`
-2. `HBlankStart`
-3. `TimerOverflow`, ARM9 timers 0-3, then ARM7 timers 0-3
-4. `DmaStart`, ARM9 channels 0-3, then ARM7 channels 0-3
+1. Line start
+2. HBlank start
+3. Timer overflow, ARM9 timers 0-3, then ARM7 timers 0-3
+4. DMA start, ARM9 channels 0-3, then ARM7 channels 0-3
+
+The timer and DMA entries are not kinds of their own in the model: each is one event slot of a
+registered device. Events of one time sort by the device's place in the registry, whose groups
+come first (devices both CPUs see, then the ARM9's own, then the ARM7's own, then the per-CPU
+copies: the interrupt controllers, the timers, DMA, the keypad), then the ARM9's copy before the
+ARM7's, then the lower slot. So a device registered later does not necessarily sort after the
+timers and DMA: an ARM7-only device would sort before them. The reasoning below (transfers go
+last) holds because DMA is the last device with event slots, and a test pins that; a device with
+events registered after DMA must revisit the order and this note.
 
 Why this order: the order in which the events raise their IF bits changes nothing, because IF
 is only read between rounds. A tie matters only where one event's effect is seen by another,
@@ -102,13 +111,13 @@ other events due at the same time wait for the next round too. That round is zer
 and fires them in the same order, so nothing observable changes. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Four kinds exist so far, `LineStart` (every 4,260 master cycles), `HBlankStart` (once per
-line, 3,212 master cycles after it; see `display-timing.md`), `TimerOverflow` (one per
-started, clock-driven timer of either CPU, so at most eight; see `timers.md`) and `DmaStart` (one
+Four events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
+line, 3,212 master cycles after it; see `display-timing.md`), the timer overflow (one per
+started, clock-driven timer of either CPU, so at most eight; see `timers.md`) and the DMA start (one
 per channel whose transfer is waiting to run, at most eight; see `dma.md`). A pending event of
 a kind can be cancelled, which a timer write uses to replace its overflow: the bus view holds the
 scheduler, so the write schedules at once, never before the end of the writing instruction
-(`timers.md`, "Model"). Each `LineStart` of a visible line draws that line (`bg-text.md`, "Lines"); the one that begins
+(`timers.md`, "Model"). Each line start of a visible line draws that line (`bg-text.md`, "Lines"); the one that begins
 line 192 presents the finished frame, and the one that begins line 0 counts the frame, which ends
 `run_frame`: frames stay 1,120,380 master cycles apart. Each reschedules from its own time, so nothing drifts.
 
@@ -170,13 +179,13 @@ the frame.
 The queue is not saved. It is derived from the device state and `now`, like the page tables,
 and a load rebuilds it, so no check has to prove that the queue and the devices agree:
 
-- `LineStart` and `HBlankStart` sit on a fixed grid, at `k * LINE_CYCLES` and
+- The line start and the HBlank start sit on a fixed grid, at `k * LINE_CYCLES` and
   `k * LINE_CYCLES + HBLANK_START_CYCLES`, because each reschedules from its own time starting
   at time 0. Between rounds no line event is due at `now`, so the next of each is the first
   grid point strictly after `now`.
-- Every started, clock-driven timer gets a `TimerOverflow` at the later of the overflow time
+- Every started, clock-driven timer gets a timer overflow event at the later of the overflow time
   its own counter gives and `now` (`timers.md`, "Model").
-- Every channel with a start waiting gets a `DmaStart` at `now`: a waiting start is due at once
+- Every channel with a start waiting gets a DMA start event at `now`: a waiting start is due at once
   and the queue never holds an event before the master clock (`dma.md`, "Model").
 
 Every event the queue can hold between rounds is covered, except the known gap under "Edge cases": the event a handler scheduled during

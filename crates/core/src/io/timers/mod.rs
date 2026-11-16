@@ -9,12 +9,14 @@
 //! scheduler or an interrupt controller, so a write or an overflow hands back an [`Effect`]: the
 //! requests it would raise and the mask of timers whose overflow event must be replaced. `Io`
 //! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]); that
-//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_kind`,
-//! `slot_due` and `slot_fire`).
+//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_due` and
+//! `slot_fire`).
 
-use crate::io::device::{Device, Effect, Fired, Width, read_bytes, write_bytes};
+use crate::io::device::{
+    Checked, Cx, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes,
+};
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
-use crate::scheduler::{EventKind, SLICE};
+use crate::scheduler::SLICE;
 use serde::{Deserialize, Serialize};
 
 /// TM0CNT_L, at `0400_0100h` (`timers.md`, "Registers"). Timer *n* is `4n` bytes above it.
@@ -163,15 +165,6 @@ impl<const ARM9: bool> Timers<ARM9> {
         )
     }
 
-    /// The event that carries timer `index`'s overflow.
-    pub(crate) fn event_kind(index: usize) -> EventKind {
-        EventKind::TimerOverflow {
-            arm9: ARM9,
-            // The index is below 4 wherever it comes from a timer.
-            index: index as u8,
-        }
-    }
-
     /// Timer `index` overflows at master time `time`: it reloads, the timers it feeds tick, and
     /// the requests to raise come back, filled for this set's CPU (`timers.md`, "Counting" and
     /// "Count-up").
@@ -290,7 +283,7 @@ impl<const ARM9: bool> Timers<ARM9> {
     ///
     /// Returns the mask of timers whose overflow event no longer matches: the timer itself when
     /// the write started, stopped or retimed it, nothing otherwise.
-    fn write_control(&mut self, index: usize, value: u8, now: u64) -> u8 {
+    fn write_control(&mut self, index: usize, value: u8, now: u64) -> SlotMask {
         let was_running = self.timers.get(index).is_some_and(Timer::running);
         let settled = self.counter(index, now);
         let Some(timer) = self.timers.get_mut(index) else {
@@ -338,22 +331,26 @@ impl<const ARM9: bool> Timers<ARM9> {
     }
 }
 
+impl<const ARM9: bool> Checked for Timers<ARM9> {
+    fn well_formed(&self, now: u64) -> bool {
+        self.is_well_formed(now)
+    }
+}
+
 /// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
 /// split into them, and a read has no side effect.
 impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
-    fn peek(&self, offset: u32, width: Width, now: u64) -> u32 {
-        read_bytes(offset, width, |at| self.read_byte(at, now))
+    fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte(at, cx.now))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
-            self.write_byte(at, byte, now)
+            self.write_byte(at, byte, cx.now)
         })
     }
 
-    fn slot_kind(&self, slot: u8) -> Option<EventKind> {
-        (usize::from(slot) < TIMER_COUNT).then(|| Self::event_kind(usize::from(slot)))
-    }
+    const SLOTS: u8 = TIMER_COUNT as u8;
 
     fn slot_due(&self, slot: u8) -> Option<u64> {
         self.overflow_time(usize::from(slot))
@@ -369,7 +366,7 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
         let index = usize::from(slot);
         let mut effect = self.settle_timer(index, now);
         // A slot past the last timer (a hand-made event) has no bit to set.
-        effect.reschedule |= 1_u8.checked_shl(u32::from(slot)).unwrap_or(0);
+        effect.reschedule |= 1_u32.checked_shl(u32::from(slot)).unwrap_or(0);
         Fired {
             effect,
             transfer: None,

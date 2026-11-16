@@ -1,0 +1,2 @@
+# Golden frames for testroms/bgengb. Format and review flow: tests/golden/README.md.
+frames=4 top=37bb6fb31ef02325 bottom=0ec6a555bd2ea60f

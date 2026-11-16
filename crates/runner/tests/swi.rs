@@ -28,7 +28,7 @@ fn boot() -> Machine {
     let rom = load_rom_file(&testrom_path("swi")).expect("swi ROM is built");
     let mut machine = Machine::new();
     machine.load_rom(rom).expect("swi ROM has a valid header");
-    (0..12).for_each(|_| machine.run_frame());
+    (0..12).for_each(|_| machine.run_frame(ninge_core::Input::new()));
     machine
 }
 

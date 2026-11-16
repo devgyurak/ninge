@@ -10,7 +10,7 @@
 //! are generic over which CPU asks. That is the "seen by both CPUs" class of `AGENTS.md` §4
 //! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use crate::io::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use serde::{Deserialize, Serialize};
 
@@ -246,14 +246,20 @@ impl Timing {
     }
 }
 
+impl Checked for Timing {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.is_well_formed()
+    }
+}
+
 /// One instance serves both CPUs ("seen by both CPUs", `AGENTS.md` §4). Its registers are bytes;
 /// a wider access is split into them.
 impl<const ARM9: bool> Device<ARM9> for Timing {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+    fn peek(&self, offset: u32, width: Width, _cx: Cx<'_>) -> u32 {
         read_bytes(offset, width, |at| self.read_byte::<ARM9>(at))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
             self.write_byte::<ARM9>(at, byte);
             Effect::default()

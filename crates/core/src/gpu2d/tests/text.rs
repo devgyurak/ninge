@@ -175,7 +175,7 @@ fn given_a_scroll_written_with_bits_above_8_when_decoded_then_only_the_low_9_bit
     let mut m = Machine::new();
     w16(&mut m, BG0HOFS, 0xFFFF);
     w16(&mut m, BG0HOFS + 2, 0xFE12);
-    let layer = m.inspect().gpu2d().text_bg(0);
+    let layer = m.inspect().gpu2d().text_bg(EngineId::A, 0);
     assert_eq!((layer.hofs, layer.vofs), (0x1FF, 0x012));
 }
 
@@ -184,7 +184,7 @@ fn given_a_scroll_with_a_byte_written_when_decoded_then_the_other_byte_is_kept()
     let mut m = Machine::new();
     w16(&mut m, BG0HOFS, 0x01FF);
     w8(&mut m, BG0HOFS, 0x01);
-    assert_eq!(m.inspect().gpu2d().text_bg(0).hofs, 0x101);
+    assert_eq!(m.inspect().gpu2d().text_bg(EngineId::A, 0).hofs, 0x101);
 }
 
 /// Scrolls layer n to (10 + n, 20 + n) and returns what each layer decodes to.
@@ -197,8 +197,8 @@ fn scrolled_layers() -> Vec<(u16, u16)> {
     (0..4)
         .map(|n| {
             (
-                m.inspect().gpu2d().text_bg(n).hofs,
-                m.inspect().gpu2d().text_bg(n).vofs,
+                m.inspect().gpu2d().text_bg(EngineId::A, n).hofs,
+                m.inspect().gpu2d().text_bg(EngineId::A, n).vofs,
             )
         })
         .collect()
@@ -231,7 +231,7 @@ fn given_bg_registers_written_when_decoded_then_the_layer_state_follows_the_note
         bgcnt_addr(1),
         2 | (5 << 2) | 0x80 | (7 << 8) | (3 << 14),
     );
-    let layer = m.inspect().gpu2d().text_bg(1);
+    let layer = m.inspect().gpu2d().text_bg(EngineId::A, 1);
     assert_eq!(
         (
             layer.priority,
@@ -252,8 +252,8 @@ fn given_each_screen_size_when_decoded_then_the_layer_is_the_size_the_note_lists
         .map(|size| {
             w16(&mut m, BG0CNT, size << 14);
             (
-                m.inspect().gpu2d().text_bg(0).width,
-                m.inspect().gpu2d().text_bg(0).height,
+                m.inspect().gpu2d().text_bg(EngineId::A, 0).width,
+                m.inspect().gpu2d().text_bg(EngineId::A, 0).height,
             )
         })
         .collect();
@@ -270,7 +270,8 @@ fn given_no_layer_on_in_mode_1_when_drawn_then_every_pixel_is_the_backdrop() {
     assert_eq!(
         (
             not_equal_to(&m, Screen::Top, GREEN),
-            not_equal_to(&m, Screen::Bottom, BLACK)
+            // Engine B is in display mode 0: white.
+            not_equal_to(&m, Screen::Bottom, WHITE)
         ),
         (0, 0)
     );
@@ -760,22 +761,6 @@ fn given_bg_mode_0_when_each_layer_is_enabled_then_all_four_text_layers_draw() {
 }
 
 #[test]
-fn given_bg_modes_1_to_5_when_the_affine_and_extended_layers_are_enabled_then_they_draw_nothing() {
-    // Phase 3 draws text layers only (`TODO(phase4)` for the rest).
-    let cases = [
-        (1, 3, false),
-        (2, 2, false),
-        (2, 3, false),
-        (3, 3, false),
-        (4, 2, false),
-        (4, 3, false),
-        (5, 2, false),
-        (5, 3, false),
-    ];
-    assert_eq!(kind_failures(&cases), vec![]);
-}
-
-#[test]
 fn given_bg_modes_1_to_5_when_the_text_layers_are_enabled_then_they_draw() {
     let cases = [
         (1, 0, true),
@@ -872,7 +857,8 @@ fn given_layers_on_the_bottom_screen_when_powcnt1_bit_15_is_clear_then_the_pictu
     m.render_frame();
     assert_eq!(
         (pixel(&m, Screen::Bottom, 0, 0), top(&m, 0, 0)),
-        (RED, BLACK)
+        // Engine B, display off, is on the upper screen: white.
+        (RED, WHITE)
     );
 }
 
@@ -899,8 +885,8 @@ fn spinning_scene() -> Machine {
 #[test]
 fn given_a_scene_in_memory_when_frames_run_then_the_presented_frame_is_the_whole_picture() {
     let mut m = spinning_scene();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (
             top(&m, 0, 0),
@@ -918,9 +904,9 @@ fn given_a_scroll_changed_after_a_frame_when_the_next_runs_then_line_0_keeps_the
     // Line 0 of a frame is drawn at the start of that line, which ends the frame before it; the
     // change comes after, so it shows from line 1 (`bg-text.md`, "Lines").
     let mut m = spinning_scene();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     w16(&mut m, BG0HOFS, 8);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (top(&m, 0, 0), top(&m, 0, 1), top(&m, 0, 7)),
         (RED, GREEN, GREEN)
@@ -930,8 +916,8 @@ fn given_a_scroll_changed_after_a_frame_when_the_next_runs_then_line_0_keeps_the
 #[test]
 fn given_a_frame_in_progress_when_the_presented_frame_is_read_then_it_is_the_last_complete_one() {
     let mut m = spinning_scene();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     w16(&mut m, BG0HOFS, 8);
     // Part of the next frame: lines are drawn, but the presented frame holds the finished one.
     run_to_line(&mut m, 100);
@@ -942,15 +928,15 @@ fn given_a_frame_in_progress_when_the_presented_frame_is_read_then_it_is_the_las
 /// one; both then run to the end of the frame. Returns whether both screens are equal.
 fn raster_save_matches() -> (Result<(), crate::savestate::SavestateError>, bool, bool) {
     let mut m = spinning_scene();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     run_to_line(&mut m, 50);
     w16(&mut m, BG0HOFS, 8);
     run_to_line(&mut m, 100);
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");
     let result = loaded.load_state(&m.save_state());
-    m.run_frame();
-    loaded.run_frame();
+    m.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
     (
         result,
         loaded.frame(Screen::Top) == m.frame(Screen::Top),
@@ -967,8 +953,8 @@ fn given_a_machine_saved_after_a_mid_frame_register_change_when_loaded_and_run_t
 #[test]
 fn given_a_machine_saved_mid_frame_when_loaded_then_the_last_finished_frame_is_still_shown() {
     let mut m = spinning_scene();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     run_to_line(&mut m, 100);
     let mut loaded = Machine::new();
     loaded.load_rom(m.rom().to_vec()).expect("same image");
@@ -988,4 +974,37 @@ fn given_a_machine_with_a_rom_when_it_boots_then_line_0_is_drawn_from_the_power_
     m.load_rom(image.build()).expect("synthetic image");
     m.present_frame();
     assert_eq!((top(&m, 0, 0), top(&m, 0, 1)), (WHITE, BLACK));
+}
+
+/// Engine A's first pixel with all text data in bank `bank` (A = 0 .. I = 8) mapped by `control`:
+/// an 8-bits-per-pixel tile of palette entry 1 (red) at character block 1 and one map cell at
+/// screen block 1 of the BG window (`docs/hw/vram-banks.md`, "Where each bank goes").
+fn first_pixel_from_bank(bank: u32, control: u8) -> u32 {
+    let mut m = Machine::new();
+    text_setup(&mut m, 0);
+    w8(&mut m, VRAMCNT_A, 0);
+    w8(&mut m, VRAMCNT_A + bank + u32::from(bank > 6), control);
+    solid8(&mut m, BG_VRAM + 0x4000, 1, 1);
+    cell(&mut m, SB1, 0, 0, 1);
+    w16(&mut m, BG0CNT, SB1_8BPP | (1 << 2));
+    w32(&mut m, DISPCNT_A_ADDR, dispcnt(0, 1));
+    m.render_frame();
+    pixel(&m, Screen::Top, 0, 0)
+}
+
+#[test]
+fn given_text_data_in_bank_e_with_mst_1_when_rendered_then_the_layer_draws_it() {
+    assert_eq!(first_pixel_from_bank(4, 0x81), RED);
+}
+
+#[test]
+fn given_bank_f_at_ofs_0_when_the_tile_data_lies_past_its_16_kib_then_the_backdrop_shows() {
+    // F covers the first 16 KiB of the window. The map cell at +0x800 is inside it, the tile data
+    // at +0x4000 is not, so the tile reads as transparent and the backdrop (black) shows.
+    assert_eq!(first_pixel_from_bank(5, 0x81), BLACK);
+}
+
+#[test]
+fn given_text_data_in_bank_b_with_mst_1_when_bank_a_is_off_then_the_layer_draws_it() {
+    assert_eq!(first_pixel_from_bank(1, 0x81), RED);
 }

@@ -11,13 +11,18 @@
 //! Breakpoint and trace hooks (plan §4.1) are not here yet: the debugger is a parallel track, and
 //! they join this module with its stepping and trace panels (#56, #60).
 
-use crate::bus::TcmConfig;
+use crate::bus::{BANK_COUNT, TcmConfig};
 use crate::cpu::Cpu;
+use crate::input::Input;
 use crate::machine::Machine;
 
-pub use crate::bus::{VramBankState, WramShare, WramState};
-pub use crate::gpu2d::{Gpu2d, TextBg};
+pub use crate::bus::{ExtPaletteBanks, VramBankState, VramMapping, WramShare, WramState};
+pub use crate::gpu2d::{
+    AffineBg, AffineFormat, BrightnessMode, EffectMode, Effects, EngineId, Gpu2d, LayerSet,
+    MasterBrightness, Mosaic, OBJ_COUNT, ObjAttrs, Targets, TextBg, WindowRect, Windows,
+};
 pub use crate::hle::SwiRecord;
+pub use crate::io::DeviceId;
 pub use crate::io::divsqrt::DivSqrt;
 pub use crate::io::dma::Dma;
 pub use crate::io::ipc::Ipc;
@@ -26,7 +31,7 @@ pub use crate::io::keypad::Keypad;
 pub use crate::io::power::Power;
 pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
-pub use crate::scheduler::{Event, EventKind, Scheduler};
+pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
 
 /// A read-only view of one [`Machine`], from [`Machine::inspect`]. It borrows the machine, so the
 /// machine cannot run while a view of it is alive.
@@ -110,6 +115,20 @@ impl<'a> Inspect<'a> {
         self.machine.io.gpu2d()
     }
 
+    /// OAM entry `index` (0-127) of engine `which`, decoded (`obj.md`, "The object table"); an
+    /// index past 127 is taken modulo 128.
+    // The debugger's OAM view (#58) shows it.
+    pub fn obj(&self, which: EngineId, index: usize) -> ObjAttrs {
+        ObjAttrs::decode(self.machine.memory.oam_of(which), index)
+    }
+
+    /// The input the keypad registers read: what `Machine::run_frame` was given, as latched when
+    /// the last frame began.
+    // The debugger's IO register panel will show it with the keypad registers.
+    pub fn input(&self) -> Input {
+        self.machine.io.input()
+    }
+
     /// The ARM9's interrupt controller (IME, IE, IF).
     // The debugger's CPU panel (#56) shows it beside the ARM9's registers.
     pub fn irq9(&self) -> &'a InterruptController<true> {
@@ -185,6 +204,19 @@ impl<'a> Inspect<'a> {
     // The debugger's VRAM bank map (#58) will show it.
     pub fn vram_a(&self) -> VramBankState {
         self.machine.memory.vram_a()
+    }
+
+    /// All nine VRAMCNT registers as decoded, bank A first.
+    // The debugger's VRAM bank map (#58) shows them with the mapping each one means.
+    pub fn vram_banks(&self) -> [VramBankState; BANK_COUNT] {
+        self.machine.memory.vram_banks()
+    }
+
+    /// Which bank backs each extended-palette slot of engine `which` (`extended-palettes.md`, "Which
+    /// bank backs a slot"), from the VRAMCNT registers as they are now.
+    // The debugger's VRAM bank map (#58) shows it beside the banks.
+    pub fn ext_palette_banks(&self, which: EngineId) -> ExtPaletteBanks {
+        self.machine.memory.ext_palette_banks(which == EngineId::B)
     }
 
     /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.

@@ -3,11 +3,11 @@
 //! scheduler's view of the machine (run a CPU to a time, dispatch a due event); the handlers below
 //! it are the line, HBlank and DMA starts those events lead to (`docs/hw/scheduler.md`).
 
-use super::{Machine, SCREEN_HEIGHT};
+use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
 use crate::bus::{Arm7View, Arm9View, TcmConfig};
 use crate::io::dma::Trigger;
-use crate::io::timing::FIRST_VBLANK_LINE;
-use crate::scheduler::{Event, EventKind, LINE_CYCLES, Participants, Scheduler};
+use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
+use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
 
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
@@ -17,44 +17,65 @@ impl Participants for Machine {
     fn run_arm9_until(&mut self, target: u64) {
         // An instruction can queue an event before `target` (a timer write, #109); stop at it so
         // it sees every earlier instruction and none after (`scheduler.md`, "Interleaving").
-        // See #118. `next_time` is a heap peek: O(1), no allocation.
-        while self.scheduler.now() < target
-            && self
-                .scheduler
-                .next_time()
-                .is_none_or(|time| self.scheduler.now() < time)
+        // See #118. `next_event_time` is a heap peek: O(1), no allocation.
+        //
+        // One view serves the whole batch; only a CP15 write that moves a TCM mapping
+        // refreshes it, and it takes effect from the next instruction
+        // (`docs/hw/arm9-memory-map.md`).
+        let mut tcm_key = self.arm9.cp15().tcm_key();
+        let mut view = Arm9View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            TcmConfig::from_cp15(self.arm9.cp15()),
+        );
+        while view.clock() < target
+            && view
+                .next_event_time()
+                .is_none_or(|time| view.clock() < time)
         {
             // A halted ARM9 runs nothing, so its clock skips in one step to `target` or to an event
             // queued before it (by the instruction that halted it, say a timer write), whichever is
             // earlier: the event fires on time and the wake is tested after it
             // (`docs/hw/scheduler.md`, "Interleaving").
-            if self.arm9.halted() && !self.io.irq9().wakes() {
-                let stop = self
-                    .scheduler
-                    .next_time()
+            if self.arm9.halted() && !view.io().irq9().wakes() {
+                let stop = view
+                    .next_event_time()
                     .map_or(target, |time| time.min(target));
-                self.scheduler.advance(stop - self.scheduler.now());
+                view.advance(stop - view.clock());
                 break;
             }
-            self.step_arm9_instruction();
+            arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
+            let key = self.arm9.cp15().tcm_key();
+            if key != tcm_key {
+                tcm_key = key;
+                view.set_tcm(TcmConfig::from_cp15(self.arm9.cp15()));
+            }
         }
     }
 
     fn run_arm7_until(&mut self, target: u64) {
-        while self.arm7_clock < target {
-            if self.arm7.halted() && !self.io.irq7().wakes() {
-                self.arm7_clock = target;
+        let mut view = Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            self.arm7_clock,
+        );
+        while view.clock() < target {
+            if self.arm7.halted() && !view.io().irq7().wakes() {
+                view.advance(target - view.clock());
                 break;
             }
-            self.step_arm7_instruction();
+            arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
         }
+        self.arm7_clock = view.clock();
     }
 
     fn dispatch(&mut self, event: Event) {
         match event.kind {
-            EventKind::LineStart => self.line_started(event.time),
-            EventKind::HBlankStart => self.hblank_started(event.time),
-            EventKind::TimerOverflow { .. } | EventKind::DmaStart { .. } => {
+            EventKind::Line(LineEvent::Start) => self.line_started(event.time),
+            EventKind::Line(LineEvent::HBlank) => self.hblank_started(event.time),
+            EventKind::Slot { .. } => {
                 if let Some(transfer) = self.io.fire(&mut self.scheduler, event.kind) {
                     self.run_dma(transfer);
                 }
@@ -75,7 +96,6 @@ impl Machine {
     // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
     // revisit with the Phase 8 timing work.
     fn run_dma(&mut self, transfer: crate::io::dma::Transfer) {
-        let now = self.scheduler.now();
         let end = if transfer.arm9 {
             let mut view = Arm9View::new(
                 &mut self.memory,
@@ -84,12 +104,10 @@ impl Machine {
                 // TODO(hw-unverified): DMA sees the address behind a TCM window, not a hole
                 // (`docs/hw/dma.md`, "Unverified").
                 TcmConfig::NONE,
-                now,
-                // A DMA unit's write is not an instruction, so its floor is `now`: an event it
-                // queues waits for the next round and fires at `now`, which is where a load
-                // rebuilds it (`dma.md`, "Model").
-                now,
             );
+            // A DMA unit's write is not an instruction, so the view's floor stays at `now`: an
+            // event it queues waits for the next round and fires at `now`, which is where a load
+            // rebuilds it (`dma.md`, "Model").
             transfer.run(&mut view)
         } else {
             let mut view = Arm7View::new(
@@ -97,7 +115,6 @@ impl Machine {
                 &mut self.io,
                 &mut self.scheduler,
                 self.arm7_clock,
-                now,
             );
             transfer.run(&mut view)
         };
@@ -123,8 +140,12 @@ impl Machine {
         if self.io.timing().vcount() == FIRST_VBLANK_LINE {
             self.io
                 .trigger_dma(&mut self.scheduler, Trigger::VBlank, time);
+            // The affine layers' reference points come from their registers again
+            // (`docs/hw/bg-modes.md`, "Affine layers").
+            self.io.gpu2d_mut().vblank_started();
         }
         let line = usize::from(self.io.timing().vcount());
+        self.start_display_dma(line, time);
         // The last visible line is drawn: the frame is whole and becomes the one callers read.
         if line == SCREEN_HEIGHT {
             self.present_frame();
@@ -135,8 +156,32 @@ impl Machine {
             self.frame_count = self.frame_count.wrapping_add(1);
         }
         // From the event's own time, not `now`, so a line's length never drifts.
-        self.scheduler
-            .schedule(time.saturating_add(LINE_CYCLES), EventKind::LineStart);
+        self.scheduler.schedule(
+            time.saturating_add(LINE_CYCLES),
+            EventKind::Line(LineEvent::Start),
+        );
+    }
+
+    /// The ARM9 DMA starts a line begins: the start of display at line 0, and the main-memory
+    /// display's requests for the next visible line, raised from the last line of the previous
+    /// frame so line 0 finds its pixels (`docs/hw/display-capture.md`, "ARM9 DMA start modes 3 and
+    /// 4"). The line itself is drawn right after, from what the FIFO holds now.
+    // TODO(hw-unverified): the start of display fires once per frame at line 0, and the line's
+    // requests are all raised at the start of the line before it (`display-capture.md`,
+    // "Unverified").
+    fn start_display_dma(&mut self, line: usize, time: u64) {
+        if line == 0 {
+            self.io
+                .trigger_dma(&mut self.scheduler, Trigger::StartOfDisplay, time);
+        }
+        let frame_start = line == usize::from(LINES) - 1;
+        if frame_start || line + 1 < SCREEN_HEIGHT {
+            self.io.trigger_dma(
+                &mut self.scheduler,
+                Trigger::MainMemory { frame_start },
+                time,
+            );
+        }
     }
 
     /// HBlank begins at `time` in the current line (`docs/hw/display-timing.md`); the one place
@@ -150,7 +195,9 @@ impl Machine {
             self.io
                 .trigger_dma(&mut self.scheduler, Trigger::HBlank, time);
         }
-        self.scheduler
-            .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
+        self.scheduler.schedule(
+            time.saturating_add(LINE_CYCLES),
+            EventKind::Line(LineEvent::HBlank),
+        );
     }
 }

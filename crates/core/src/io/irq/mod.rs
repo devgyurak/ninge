@@ -5,7 +5,7 @@
 //! "an independent copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two
 //! instances of `InterruptController<const ARM9: bool>`.
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// IME, at `0400_0208h` (`interrupts.md`, "Registers").
@@ -214,14 +214,20 @@ impl<const ARM9: bool> InterruptController<ARM9> {
     }
 }
 
+impl<const ARM9: bool> Checked for InterruptController<ARM9> {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.is_well_formed()
+    }
+}
+
 /// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
 /// split into them.
 impl<const ARM9: bool> Device<ARM9> for InterruptController<ARM9> {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+    fn peek(&self, offset: u32, width: Width, _cx: Cx<'_>) -> u32 {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
             self.write_byte(at, byte);
             Effect::default()

@@ -1,0 +1,2 @@
+# Golden frames for testroms/bgmosaic. Format and review flow: tests/golden/README.md.
+frames=4 top=dee4199363151252 bottom=c4563cc9c34685cd

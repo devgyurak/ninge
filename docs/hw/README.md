@@ -48,6 +48,12 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Display timing: lines, VBlank, HBlank, DISPSTAT and VCOUNT](display-timing.md)
 - [Engine A display mode 2 (VRAM display) and the screen swap](display-mode-vram.md)
 - [Engine A text backgrounds](bg-text.md)
+- [Background modes, affine layers and mosaic (both engines)](bg-modes.md)
+- [Sprites (OBJ): OAM, tile, affine and bitmap objects, priority, mosaic, line limit](obj.md)
+- [Extended palettes (BG and OBJ, both engines)](extended-palettes.md)
+- [Windows: WIN0, WIN1, the OBJ window and the outside region (both engines)](windows.md)
+- [Colour special effects and master brightness (both engines)](blending.md)
+- [Display capture and the main-memory display (engine A)](display-capture.md)
 
 **Boot and BIOS**
 

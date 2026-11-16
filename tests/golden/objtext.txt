@@ -1,0 +1,2 @@
+# Golden frames for testroms/objtext. Format and review flow: tests/golden/README.md.
+frames=3 top=8eb51209a7717622 bottom=cb963d69ee851d35

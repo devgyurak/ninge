@@ -4,7 +4,7 @@
 //! enable write retires, VBlank at line 192, HBlank in lines 0-191, channels 0 to 3 in order;
 //! "Transferring": through the owning CPU's bus with the TCM off; "Fill"; "The end of a
 //! transfer": IF bit 8 + n; "Edge cases": a register or an IPC FIFO as source or destination;
-//! "Model": one `DmaStart` event per channel, atomic transfer, an ARM7 start fires at the end of
+//! "Model": one DMA-start event per channel, atomic transfer, an ARM7 start fires at the end of
 //! the round), `docs/hw/display-timing.md` (line 192 begins at `192 * LINE_CYCLES`; "Hooks for
 //! later features"), `docs/hw/scheduler.md` ("Cost per instruction": ARM9 1 master cycle;
 //! "Interleaving"; "Savestate checks"), `docs/hw/ipc.md` ("Sending", "Error", "Disabled FIFO")
@@ -16,19 +16,20 @@
 
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::DeviceId;
 use crate::io::dma::Dma;
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFOSEND_ADDR};
 use crate::machine::*;
 use crate::scheduler::{LINE_CYCLES, run_round};
 
-const SRC: u32 = 0x0220_0000;
-const DST: u32 = 0x0230_0000;
+pub(super) const SRC: u32 = 0x0220_0000;
+pub(super) const DST: u32 = 0x0230_0000;
 
-const ENABLE: u32 = 1 << 31;
+pub(super) const ENABLE: u32 = 1 << 31;
 const IRQ: u32 = 1 << 30;
-const WORD: u32 = 1 << 26;
-const REPEAT: u32 = 1 << 25;
-const DEST_FIXED: u32 = 2 << 21;
+pub(super) const WORD: u32 = 1 << 26;
+pub(super) const REPEAT: u32 = 1 << 25;
+pub(super) const DEST_FIXED: u32 = 2 << 21;
 const DEST_RELOAD: u32 = 3 << 21;
 const SOURCE_FIXED: u32 = 2 << 23;
 /// ARM9 start timings: VBlank is 1, HBlank is 2 (bits 27-29).
@@ -73,7 +74,7 @@ fn rom_with(arm9: &[u32], arm7: &[u32]) -> Vec<u8> {
     image.build()
 }
 
-fn machine() -> Machine {
+pub(super) fn machine() -> Machine {
     let mut m = Machine::new();
     m.load_rom(rom_with(&SPIN, &SPIN)).expect("synthetic image");
     m
@@ -91,21 +92,21 @@ fn machine_with_dtcm() -> Machine {
     m
 }
 
-fn poke_words(m: &mut Machine, addr: u32, values: &[u32]) {
+pub(super) fn poke_words(m: &mut Machine, addr: u32, values: &[u32]) {
     values
         .iter()
         .enumerate()
         .for_each(|(i, &v)| m.bus9().write32(addr + 4 * i as u32, v));
 }
 
-fn poke_halfwords(m: &mut Machine, addr: u32, values: &[u16]) {
+pub(super) fn poke_halfwords(m: &mut Machine, addr: u32, values: &[u16]) {
     values
         .iter()
         .enumerate()
         .for_each(|(i, &v)| m.bus9().write16(addr + 2 * i as u32, v));
 }
 
-fn peek_words(m: &Machine, addr: u32, count: u32) -> Vec<u32> {
+pub(super) fn peek_words(m: &Machine, addr: u32, count: u32) -> Vec<u32> {
     (0..count)
         .map(|i| m.inspect().arm9_peek32(addr + 4 * i))
         .collect()
@@ -118,7 +119,7 @@ fn peek_halfwords(m: &Machine, addr: u32, count: u32) -> Vec<u16> {
 }
 
 /// Writes ARM9 channel `ch`'s three registers as a program would, at the current master time.
-fn set9(m: &mut Machine, ch: u32, source: u32, destination: u32, control: u32) {
+pub(super) fn set9(m: &mut Machine, ch: u32, source: u32, destination: u32, control: u32) {
     m.bus9().write32(sad_addr(ch), source);
     m.bus9().write32(dad_addr(ch), destination);
     m.bus9().write32(cnt_addr(ch), control);
@@ -137,7 +138,7 @@ fn rounds(m: &mut Machine, count: u32) {
 
 /// Whole rounds until the machine is in `frame` at the start of `line`: the round that ends right
 /// after that line's start event.
-fn run_until(m: &mut Machine, frame: u64, line: u16) {
+pub(super) fn run_until(m: &mut Machine, frame: u64, line: u16) {
     (0..200_000).for_each(|_| {
         if m.frame_count() != frame || m.inspect().vcount() != line {
             run_round(m);
@@ -145,8 +146,8 @@ fn run_until(m: &mut Machine, frame: u64, line: u16) {
     });
 }
 
-fn run_frames(m: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| m.run_frame());
+pub(super) fn run_frames(m: &mut Machine, frames: u32) {
+    (0..frames).for_each(|_| m.run_frame(crate::Input::new()));
 }
 
 /// The pending DMA start events as `(time, arm9, channel)`, in firing order.
@@ -156,14 +157,18 @@ fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
         .pending()
         .iter()
         .filter_map(|event| match event.kind {
-            EventKind::DmaStart { arm9, channel } => Some((event.time, arm9, channel)),
+            EventKind::Slot {
+                device: DeviceId::Dma,
+                arm9,
+                slot: channel,
+            } => Some((event.time, arm9, channel)),
             _ => None,
         })
         .collect()
 }
 
 /// DMAnCNT's enable bit as the ARM9 reads it, for channel `n`.
-fn busy9(m: &Machine, n: u32) -> u32 {
+pub(super) fn busy9(m: &Machine, n: u32) -> u32 {
     m.inspect().arm9_peek32(cnt_addr(n)) >> 31
 }
 

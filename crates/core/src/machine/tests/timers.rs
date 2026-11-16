@@ -12,6 +12,7 @@
 
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::DeviceId;
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::machine::*;
 use crate::savestate::SavestateError;
@@ -57,10 +58,18 @@ const fn control_addr(index: u32) -> u32 {
 }
 
 fn kind9(index: u8) -> EventKind {
-    EventKind::TimerOverflow { arm9: true, index }
+    EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9: true,
+        slot: index,
+    }
 }
 fn kind7(index: u8) -> EventKind {
-    EventKind::TimerOverflow { arm9: false, index }
+    EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9: false,
+        slot: index,
+    }
 }
 
 fn rom_with(arm9: &[u32], arm7: &[u32]) -> Vec<u8> {
@@ -89,7 +98,7 @@ fn step(m: &mut Machine, steps: u64) {
 }
 
 fn run_frames(m: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| m.run_frame());
+    (0..frames).for_each(|_| m.run_frame(crate::Input::new()));
 }
 
 /// Writes timer `index` of the ARM9 (reload, then control) at the current time.
@@ -114,7 +123,15 @@ fn timer_events(m: &Machine) -> Vec<(u64, EventKind)> {
     m.scheduler
         .pending()
         .iter()
-        .filter(|event| matches!(event.kind, EventKind::TimerOverflow { .. }))
+        .filter(|event| {
+            matches!(
+                event.kind,
+                EventKind::Slot {
+                    device: DeviceId::Timers,
+                    ..
+                }
+            )
+        })
         .map(|event| (event.time, event.kind))
         .collect()
 }
@@ -438,7 +455,7 @@ fn given_a_timer_started_by_an_arm7_rom_store_when_the_store_has_run_then_the_ev
 #[test]
 fn given_a_timer_overflowing_at_the_same_time_as_a_line_start_when_both_fire_then_the_line_start_fires_first()
  {
-    // Reload 0xF7AE is 2130 ticks to overflow: 2130 * 2 = 4260 = one line, the first LineStart.
+    // Reload 0xF7AE is 2130 ticks to overflow: 2130 * 2 = 4260 = one line, the first line start.
     let mut m = machine();
     set9(&mut m, 0, 0xF7AE, START);
     step(&mut m, LINE_CYCLES);
@@ -451,7 +468,7 @@ fn given_a_timer_overflowing_at_the_same_time_as_a_line_start_when_both_fire_the
         .filter(|event| event.time == 2 * LINE_CYCLES)
         .map(|event| event.kind)
         .collect();
-    assert_eq!(at_8520, vec![EventKind::LineStart, kind9(0)]);
+    assert_eq!(at_8520, vec![EventKind::Line(LineEvent::Start), kind9(0)]);
 }
 
 #[test]

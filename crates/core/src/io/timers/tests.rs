@@ -10,6 +10,7 @@
 //! `c` master cycles per tick first overflows at `T + (0x10000 - R) * c`.
 
 use super::*;
+use crate::io::device::cx_at;
 
 type Arm9Timers = Timers<true>;
 
@@ -37,17 +38,17 @@ fn write_byte<const ARM9: bool>(
     value: u8,
     now: u64,
 ) -> Effect {
-    timers.write(offset, Width::Byte, u32::from(value), now)
+    timers.write(offset, Width::Byte, u32::from(value), cx_at(now))
 }
 
 /// A byte read at `offset`.
 fn read_byte(timers: &Arm9Timers, offset: u32, now: u64) -> u8 {
-    timers.peek(offset, Width::Byte, now) as u8
+    timers.peek(offset, Width::Byte, cx_at(now)) as u8
 }
 
 /// A halfword write: bytes in ascending address order, as the bus splits it. Returns the mask of
 /// timers whose overflow event the write made stale.
-fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> u8 {
+fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> SlotMask {
     let low = write_byte(timers, offset, value as u8, now);
     let high = write_byte(timers, offset + 1, (value >> 8) as u8, now);
     low.reschedule | high.reschedule
@@ -55,7 +56,7 @@ fn write16(timers: &mut Arm9Timers, offset: u32, value: u16, now: u64) -> u8 {
 
 /// A word write: four bytes in ascending address order (`timers.md`, "Writing a 32-bit word").
 /// Returns the mask of timers whose overflow event the write made stale.
-fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> u8 {
+fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> SlotMask {
     value
         .to_le_bytes()
         .iter()
@@ -66,7 +67,7 @@ fn write32(timers: &mut Arm9Timers, offset: u32, value: u32, now: u64) -> u8 {
 }
 
 /// Writes timer `index`'s reload, then its control, at `now`. Returns the reschedule mask.
-fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) -> u8 {
+fn start(timers: &mut Arm9Timers, index: u32, reload: u16, control: u16, now: u64) -> SlotMask {
     write16(timers, reload_offset(index), reload, now)
         | write16(timers, control_offset(index), control, now)
 }
@@ -144,30 +145,8 @@ fn given_reload_0_when_started_with_each_prescaler_then_overflow_is_65536_ticks_
 }
 
 #[test]
-fn given_a_started_timer_when_asked_for_an_event_then_it_has_one_and_it_is_an_overflow_of_that_timer()
- {
-    let timers = timer0(0xFFF0, START, 0);
-    assert_eq!(
-        (timers.has_event(0), Arm9Timers::event_kind(0)),
-        (
-            true,
-            EventKind::TimerOverflow {
-                arm9: true,
-                index: 0
-            }
-        )
-    );
-}
-
-#[test]
-fn given_the_arm7_timers_when_asked_for_the_event_kind_then_it_belongs_to_the_arm7() {
-    assert_eq!(
-        Timers::<false>::event_kind(3),
-        EventKind::TimerOverflow {
-            arm9: false,
-            index: 3
-        }
-    );
+fn given_a_started_timer_when_asked_for_an_event_then_it_has_one() {
+    assert!(timer0(0xFFF0, START, 0).has_event(0));
 }
 
 // ------------------------------------------------------------------------- reload and start

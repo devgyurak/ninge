@@ -3,14 +3,14 @@
 //! caller ([`Effect`], [`Fired`]), the [`Device`] trait and the byte-register helpers.
 //!
 //! A device whose registers own scheduler events (the timers, the DMA channels) names them through
-//! the same interface: a slot is one event of the device, [`Device::slot_kind`] gives its
-//! [`EventKind`], [`Device::slot_due`] the time it is next due and [`Device::slot_fire`] what
-//! happens when it fires. `Io` replaces the events of the slots an [`Effect`] names and fires them
-//! without knowing which device it is.
+//! the same interface: a slot is one event of the device, `Io` builds its
+//! [`EventKind::Slot`] from the device's [`DeviceId`], [`Device::slot_due`] the time it is next
+//! due and [`Device::slot_fire`] what happens when it fires. `Io` replaces the events of the
+//! slots an [`Effect`] names and fires them without knowing which device it is.
 
+use crate::input::Input;
 use crate::io::dma::Transfer;
 use crate::io::irq::Requests;
-use crate::scheduler::EventKind;
 
 /// The width of one bus access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +50,10 @@ impl Width {
     }
 }
 
+/// A set of one device's event slots, bit n for slot n. 32 bits: the SPU will want 16 slots, and
+/// a `u8` was already the cap for two devices.
+pub(crate) type SlotMask = u32;
+
 /// What a register access asks of its caller: the IF bits to raise, and which of the device's
 /// event slots must be replaced. Every device returns this one type, so the caller handles an
 /// access the same way whatever it reached.
@@ -59,7 +63,7 @@ pub(crate) struct Effect {
     pub(crate) requests: Requests,
     /// Bit n: the device's event slot n changed and its scheduler event must be replaced. The
     /// four timers are slots 0-3 of their device, and so are the four DMA channels.
-    pub(crate) reschedule: u8,
+    pub(crate) reschedule: SlotMask,
 }
 
 impl Effect {
@@ -80,28 +84,53 @@ impl Effect {
     }
 }
 
+/// What an access carries besides its address: the master time of the access and the host's data.
+///
+/// `host` is the [`Input`] `Io` latched as the frame began: stored once, in `Io`, and handed to
+/// whichever device an access reaches. This is the path a device takes host data in: the keypad
+/// reads its buttons here, and the touch controller (#44) and the RTC will read the touch point and
+/// the host's time here too, with no copy of their own and no latch call. `Copy`, and built
+/// per access on the I/O slow path only.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cx<'a> {
+    /// Master time of the access, as the CPU's own clock has it.
+    pub(crate) now: u64,
+    /// The host's data, as latched when the frame began.
+    pub(crate) host: &'a Input,
+}
+
+/// The context of an access at master time `now` with no host input held, for device tests.
+#[cfg(test)]
+pub(crate) fn cx_at(now: u64) -> Cx<'static> {
+    const NOTHING_HELD: Input = Input::new();
+    Cx {
+        now,
+        host: &NOTHING_HELD,
+    }
+}
+
 /// A register device. `offset` is into the device's own register space ([`Port::base`] is
-/// offset 0) and `now` is the master time of the access. `ARM9` is the CPU asking: a device that
+/// offset 0) and `cx` is the access's time and the host's data. `ARM9` is the CPU asking: a device that
 /// serves one CPU (or two copies of one) is implemented for that CPU's value alone
 /// (`AGENTS.md` §4, "Per-CPU devices").
 pub(crate) trait Device<const ARM9: bool> {
     /// What a read would return, with no side effect: the debugger's and the fetch's view.
-    fn peek(&self, offset: u32, width: Width, now: u64) -> u32;
+    fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32;
 
     /// A CPU's read. A register that a read changes (a FIFO that pops) overrides this; the
     /// others read as they peek.
-    fn read(&mut self, offset: u32, width: Width, now: u64) -> (u32, Effect) {
-        (self.peek(offset, width, now), Effect::default())
+    fn read(&mut self, offset: u32, width: Width, cx: Cx<'_>) -> (u32, Effect) {
+        (self.peek(offset, width, cx), Effect::default())
     }
 
     /// A CPU's write of `width` at `offset`.
-    fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect;
+    fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect;
 
-    /// The scheduler event that carries event slot `slot`, or `None` when the device has no such
-    /// slot (a device with no events has none).
-    fn slot_kind(&self, _slot: u8) -> Option<EventKind> {
-        None
-    }
+    /// How many event slots the device has, at most [`SlotMask::BITS`]; 0 for a device with no
+    /// events. The scheduler's queue capacity is the sum of these over the registered devices
+    /// ([`crate::io::EVENT_SLOTS`]).
+    const SLOTS: u8 = 0;
+    // A device cannot declare more slots than a mask holds; `Io` checks it at compile time.
 
     /// The master time slot `slot`'s event is next due, or `None` when it has none. `Io` never
     /// queues it before the earliest time the access allows ([`At::floor`]), so a time already
@@ -114,6 +143,15 @@ pub(crate) trait Device<const ARM9: bool> {
     /// [`Fired`], the slot's own event included: `Io` does not assume it is replaced.
     fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {
         Fired::default()
+    }
+}
+
+/// Whether a device holds only values that exist, for the check a savestate load runs. The
+/// default is yes: a device whose registers take every bit pattern has nothing to check.
+pub(crate) trait Checked {
+    /// Whether the state is one the device can reach, at master time `now`.
+    fn well_formed(&self, _now: u64) -> bool {
+        true
     }
 }
 

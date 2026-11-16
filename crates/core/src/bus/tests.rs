@@ -8,6 +8,7 @@
 use super::bench::Bench;
 use super::*;
 use crate::cpu::{Bus, Tcm};
+use crate::io::DeviceId;
 use crate::io::irq::Requests;
 
 const RAM: u32 = 0x0200_0000;
@@ -17,6 +18,8 @@ const VRAM_A: u32 = 0x0680_0000;
 const VRAM_A_END: u32 = 0x0681_FFFF;
 const PALETTE: u32 = 0x0500_0000;
 const PALETTE_SIZE: u32 = 0x800;
+const OAM: u32 = 0x0700_0000;
+const OAM_SIZE: u32 = 0x800;
 const BG_A: u32 = 0x0600_0000;
 const BG_SLOT: u32 = 0x2_0000;
 const ENABLE_MST0: u8 = 0x80;
@@ -425,36 +428,40 @@ fn vramcnt_decode_failures(expected: &[(u8, VramBankState)]) -> Vec<(u8, VramBan
         .collect()
 }
 
-fn state(enabled: bool, mst: u8, offset: u8) -> VramBankState {
+fn state(enabled: bool, mst: u8, offset: u8, mapping: VramMapping) -> VramBankState {
     VramBankState {
         enabled,
         mst,
         offset,
+        mapping,
     }
 }
+
+const OFF: VramMapping = VramMapping::Disabled;
+const LCDC: VramMapping = VramMapping::Lcdc;
 
 #[test]
 fn given_vramcnt_a_values_when_written_then_enable_mst_and_offset_decode_from_bits_7_0_1_and_3_4() {
     let table = [
-        (0x00, state(false, 0, 0)),
-        (0x80, state(true, 0, 0)),
-        (0x81, state(true, 1, 0)),
-        (0x83, state(true, 3, 0)),
-        (0x88, state(true, 0, 1)),
-        (0x93, state(true, 3, 2)),
-        (0x9B, state(true, 3, 3)),
-        (0x03, state(false, 3, 0)),
+        (0x00, state(false, 0, 0, OFF)),
+        (0x80, state(true, 0, 0, LCDC)),
+        (0x81, state(true, 1, 0, VramMapping::BgA { offset: 0 })),
+        (0x83, state(true, 3, 0, VramMapping::Texture { slot: 0 })),
+        (0x88, state(true, 0, 1, LCDC)),
+        (0x93, state(true, 3, 2, VramMapping::Texture { slot: 2 })),
+        (0x9B, state(true, 3, 3, VramMapping::Texture { slot: 3 })),
+        (0x03, state(false, 3, 0, OFF)),
         // Bit 2 is not used by bank A and is dropped.
-        (0x84, state(true, 0, 0)),
-        (0xFF, state(true, 3, 3)),
-        (0x64, state(false, 0, 0)),
+        (0x84, state(true, 0, 0, LCDC)),
+        (0xFF, state(true, 3, 3, VramMapping::Texture { slot: 3 })),
+        (0x64, state(false, 0, 0, OFF)),
     ];
     assert_eq!(vramcnt_decode_failures(&table), vec![]);
 }
 
 #[test]
 fn given_power_on_memory_when_vram_a_is_decoded_then_it_is_disabled() {
-    assert_eq!(Bench::new().vram_a(), state(false, 0, 0));
+    assert_eq!(Bench::new().vram_a(), state(false, 0, 0, OFF));
 }
 
 #[test]
@@ -472,21 +479,21 @@ fn given_vramcnt_a_enabled_when_a_halfword_with_a_zero_low_byte_is_written_there
  {
     let mut m = with_vram();
     m.arm9(plain()).write16(VRAMCNT_A, 0xFF00);
-    assert_eq!(m.vram_a(), state(false, 0, 0));
+    assert_eq!(m.vram_a(), state(false, 0, 0, OFF));
 }
 
 #[test]
 fn given_a_word_written_at_vramcnt_a_when_decoded_then_only_the_byte_at_that_address_counts() {
     let mut m = Bench::new();
     m.arm9(plain()).write32(VRAMCNT_A, 0xFFFF_FF80);
-    assert_eq!(m.vram_a(), state(true, 0, 0));
+    assert_eq!(m.vram_a(), state(true, 0, 0, LCDC));
 }
 
 #[test]
 fn given_vramcnt_a_enabled_when_the_next_byte_is_written_then_bank_a_is_unchanged() {
     let mut m = with_vram();
     m.arm9(plain()).write8(VRAMCNT_A + 1, 0x00);
-    assert_eq!(m.vram_a(), state(true, 0, 0));
+    assert_eq!(m.vram_a(), state(true, 0, 0, LCDC));
 }
 
 #[test]
@@ -608,10 +615,10 @@ fn given_power_on_memory_when_regions_are_looked_up_then_only_main_ram_is_mapped
 fn given_vramcnt_a_enabled_when_regions_are_looked_up_then_exactly_the_128_kib_window_is_vram_a() {
     let table = [
         (0x067F_FFFF, Region::Unmapped),
-        (VRAM_A, Region::VramA),
-        (VRAM_A + 0x3FFF, Region::VramA),
-        (VRAM_A + 0x4000, Region::VramA),
-        (VRAM_A_END, Region::VramA),
+        (VRAM_A, Region::Vram),
+        (VRAM_A + 0x3FFF, Region::Vram),
+        (VRAM_A + 0x4000, Region::Vram),
+        (VRAM_A_END, Region::Vram),
         (0x0682_0000, Region::Unmapped),
         (RAM, Region::MainRam),
     ];
@@ -769,6 +776,138 @@ fn given_vramcnt_a_changed_when_the_palette_is_looked_up_then_it_is_still_palett
     assert_eq!(region_failures(&m, &table), vec![]);
 }
 
+// ------------------------------------------------------ OAM (#31)
+//
+// Expected values come from `docs/hw/obj.md` ("Registers and memory"), never from running the
+// code. A test that pins a line of its "Unverified" section says so in its name.
+
+#[test]
+fn given_oam_when_words_and_halfwords_are_stored_then_they_read_back_little_endian() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(OAM, X);
+    v.write16(OAM + 4, 0xBEEF);
+    assert_eq!(
+        (
+            v.read32(OAM),
+            v.read16(OAM),
+            v.read16(OAM + 2),
+            v.read8(OAM),
+            v.read8(OAM + 3),
+            v.read16(OAM + 4)
+        ),
+        (X, 0x3344, 0x1122, 0x44, 0x11, 0xBEEF)
+    );
+}
+
+#[test]
+fn given_oam_when_a_byte_is_stored_then_oam_is_unchanged() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(OAM + 8, X);
+    v.write8(OAM + 8, 0xFF);
+    v.write8(OAM + 0x7FF, 0xFF);
+    assert_eq!((v.read32(OAM + 8), v.read8(OAM + 0x7FF)), (X, 0));
+}
+
+#[test]
+fn given_power_on_memory_when_oam_is_read_then_it_is_zero_as_the_note_models_unverified() {
+    // TODO(hw-unverified): obj.md "Unverified", the power-on contents.
+    let m = Bench::new();
+    assert_eq!(
+        (m.read32(&plain(), OAM), m.read32(&plain(), OAM + 0x7FC)),
+        (0, 0)
+    );
+}
+
+/// Stores `value` at `write_at`, and returns the addresses of `read_at` that do not read it.
+fn oam_mirror_misses(write_at: u32, value: u32, read_at: &[u32]) -> Vec<u32> {
+    let mut m = Bench::new();
+    m.write32(&plain(), write_at, value);
+    read_at
+        .iter()
+        .copied()
+        .filter(|&at| m.read32(&plain(), at) != value)
+        .collect()
+}
+
+#[test]
+fn given_a_word_in_oam_when_read_through_the_2_kib_mirrors_then_every_repeat_holds_it() {
+    // TODO(hw-unverified): obj.md "Unverified", the mirror through the 16 MiB block.
+    let at = OAM + 0x10;
+    let repeats = [
+        at + OAM_SIZE,
+        at + 2 * OAM_SIZE,
+        at + 0x4000,
+        at + 0x10_0000,
+        0x07FF_F810,
+    ];
+    assert_eq!(oam_mirror_misses(at, X, &repeats), Vec::<u32>::new());
+}
+
+#[test]
+fn given_a_word_stored_through_an_oam_mirror_when_read_at_the_first_repeat_then_it_is_there() {
+    assert_eq!(
+        oam_mirror_misses(0x07FF_F7FC, Y, &[OAM + 0x7FC]),
+        Vec::<u32>::new()
+    );
+}
+
+#[test]
+fn given_a_word_stored_at_the_end_of_the_oam_block_when_the_next_block_is_read_then_it_is_unmapped()
+{
+    // The first address after the 16 MiB block is the GBA slot, which is unmapped.
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(0x07FF_FFFC, X);
+    v.write32(0x0800_0000, Y);
+    assert_eq!(
+        (
+            v.read32(0x07FF_FFFC),
+            v.read32(OAM + 0x7FC),
+            v.read32(0x0800_0000)
+        ),
+        (X, X, 0)
+    );
+}
+
+#[test]
+fn given_engine_bs_half_of_oam_when_a_word_is_stored_then_engine_as_half_is_unchanged() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(OAM, X);
+    v.write32(OAM + 0x400, Y);
+    assert_eq!((v.read32(OAM), v.read32(OAM + 0x400)), (X, Y));
+}
+
+#[test]
+fn given_oam_when_the_arm7_stores_and_reads_then_nothing_is_there_for_it() {
+    // TODO(hw-unverified): obj.md "Unverified", the ARM7 reads 0 and drops writes.
+    let mut m = Bench::new();
+    m.write32_arm7(0, OAM, X);
+    assert_eq!(
+        (
+            m.read32_arm7(0, OAM),
+            m.read32(&plain(), OAM),
+            m.region7(OAM)
+        ),
+        (0, 0, Region::Unmapped)
+    );
+}
+
+#[test]
+fn given_vramcnt_a_changed_when_oam_is_looked_up_then_it_is_still_oam() {
+    let mut m = with_vram();
+    m.arm9(plain()).write8(VRAMCNT_A, 0x00);
+    let table = [
+        (0x06FF_FFFF, Region::Unmapped),
+        (OAM, Region::Oam),
+        (0x07FF_FFFF, Region::Oam),
+        (0x0800_0000, Region::Unmapped),
+    ];
+    assert_eq!(region_failures(&m, &table), vec![]);
+}
+
 // ------------------------------------------------------ VRAM bank A as engine A BG (#28)
 //
 // Expected values come from `docs/hw/vram-banks.md` ("Behavior", "Engine A BG VRAM (MST 1)",
@@ -787,10 +926,10 @@ fn given_bank_a_with_mst_1_and_offset_0_when_regions_are_looked_up_then_exactly_
  {
     let table = [
         (0x05FF_FFFF, Region::Palette),
-        (BG_A, Region::VramA),
-        (BG_A + 0x3FFF, Region::VramA),
-        (BG_A + 0x4000, Region::VramA),
-        (BG_A + BG_SLOT - 1, Region::VramA),
+        (BG_A, Region::Vram),
+        (BG_A + 0x3FFF, Region::Vram),
+        (BG_A + 0x4000, Region::Vram),
+        (BG_A + BG_SLOT - 1, Region::Vram),
         (BG_A + BG_SLOT, Region::Unmapped),
         (VRAM_A, Region::Unmapped),
     ];
@@ -804,9 +943,9 @@ fn bg_slot_failures() -> Vec<u8> {
             let m = with_bg_vram(ofs);
             let base = BG_A + u32::from(ofs) * BG_SLOT;
             let inside =
-                m.region(base) == Region::VramA && m.region(base + BG_SLOT - 1) == Region::VramA;
-            let outside = m.region(base.wrapping_sub(1)) != Region::VramA
-                && m.region(base + BG_SLOT) != Region::VramA;
+                m.region(base) == Region::Vram && m.region(base + BG_SLOT - 1) == Region::Vram;
+            let outside = m.region(base.wrapping_sub(1)) != Region::Vram
+                && m.region(base + BG_SLOT) != Region::Vram;
             !(inside && outside)
         })
         .collect()
@@ -925,13 +1064,12 @@ fn given_bank_a_with_mst_1_when_the_arm7_reads_the_bg_window_then_it_is_not_ther
 
 // ---------------------------------------------------------------- unmapped
 
-const UNMAPPED: [u32; 7] = [
+const UNMAPPED: [u32; 6] = [
     0x0000_0000,
     // An I/O port no register occupies; 0x0400_0000 is DISPCNT since #20.
     0x0400_0090,
-    // The engine A BG window while no bank is mapped there; the palette RAM is always mapped.
+    // The engine A BG window while no bank is mapped there; the palette RAM and OAM are always mapped.
     0x0600_0000,
-    0x0700_0000,
     0x0800_0000,
     0xFFFF_0000,
     0xFFFF_FFFC,
@@ -1367,8 +1505,8 @@ fn given_wramcnt_set_by_the_arm9_when_the_arm7_writes_wramstat_then_the_mode_is_
 }
 
 #[test]
-fn given_mode_1_when_a_byte_is_written_at_0400_0246_then_it_is_discarded_and_the_mode_stays() {
-    // 0400_0246h is VRAMCNT_G, a Phase 4 register (#35); the write is dropped here.
+fn given_mode_1_when_a_byte_is_written_at_0400_0246_then_it_reaches_vramcnt_g_and_the_mode_stays() {
+    // 0400_0246h is VRAMCNT_G, not WRAMCNT: the write enables bank G's register only.
     let mut m = in_mode(1);
     m.write8(&plain(), 0x0400_0246, 3);
     assert_eq!((m.read8(&plain(), WRAMCNT), m.vram_a().enabled), (1, false));
@@ -1376,7 +1514,7 @@ fn given_mode_1_when_a_byte_is_written_at_0400_0246_then_it_is_discarded_and_the
 
 #[test]
 fn given_a_halfword_write_at_0400_0246_when_the_high_byte_is_2_then_wramcnt_becomes_2() {
-    // Low byte 03h is VRAMCNT_G (discarded), high byte 02h is WRAMCNT.
+    // Low byte 03h is VRAMCNT_G, high byte 02h is WRAMCNT.
     let mut m = Bench::new();
     m.write16(&plain(), 0x0400_0246, 0x0203);
     assert_eq!((m.read8(&plain(), WRAMCNT), m.wramcnt().mode), (2, 2));
@@ -1411,7 +1549,7 @@ fn given_vramcnt_a_enabled_when_wramcnt_is_written_then_the_vram_bank_is_unchang
     m.write8(&plain(), 0x0400_0240, 0x80);
     let before = m.vram_a();
     set_mode(&mut m, 3);
-    assert_eq!((m.vram_a(), m.region(0x0680_0000)), (before, Region::VramA));
+    assert_eq!((m.vram_a(), m.region(0x0680_0000)), (before, Region::Vram));
 }
 
 #[test]
@@ -1929,7 +2067,11 @@ const START: u16 = 0x80;
 const RELOAD_16_TICKS: u16 = 0xFFF0;
 
 fn timer_event_times(m: &Bench, arm9: bool, index: u8) -> Vec<u64> {
-    let kind = crate::scheduler::EventKind::TimerOverflow { arm9, index };
+    let kind = crate::scheduler::EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9,
+        slot: index,
+    };
     m.scheduler
         .pending()
         .iter()
@@ -2022,14 +2164,8 @@ const FAR_FLOOR: u64 = 5000;
 /// whose floor is `FAR_FLOOR`. Unfloored, the event is at 32 (16 ticks of 2 cycles).
 fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
     let mut m = Bench::new();
-    let mut v = Arm9View::new(
-        &mut m.memory,
-        &mut m.io,
-        &mut m.scheduler,
-        plain(),
-        0,
-        FAR_FLOOR,
-    );
+    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, plain());
+    v.begin_step(0, FAR_FLOOR);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
     timer_event_times(&m, true, 0)
@@ -2038,7 +2174,8 @@ fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
 /// The same through the ARM7's view.
 fn arm7_event_after_start_with_far_floor() -> Vec<u64> {
     let mut m = Bench::new();
-    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0, FAR_FLOOR);
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0);
+    v.begin_step(0, FAR_FLOOR);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
     timer_event_times(&m, false, 0)
@@ -2054,6 +2191,51 @@ fn given_an_arm9_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_t
 fn given_an_arm7_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_the_event_is_at_the_floor()
  {
     assert_eq!(arm7_event_after_start_with_far_floor(), vec![FAR_FLOOR]);
+}
+
+/// The overflow event times of ARM9 timer 0 after START through a view built with no
+/// `begin_step`, while the master clock is at `FAR_FLOOR`.
+fn arm9_event_after_start_on_a_fresh_view() -> Vec<u64> {
+    let mut m = Bench::new();
+    m.scheduler.advance(FAR_FLOOR);
+    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, plain());
+    v.write16(TM0CNT_L, RELOAD_16_TICKS);
+    v.write16(TM0CNT_H, START);
+    timer_event_times(&m, true, 0)
+}
+
+/// The same through the ARM7's view, whose own clock is 0 behind the master clock.
+fn arm7_event_after_start_on_a_fresh_view() -> Vec<u64> {
+    let mut m = Bench::new();
+    m.scheduler.advance(FAR_FLOOR);
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0);
+    v.write16(TM0CNT_L, RELOAD_16_TICKS);
+    v.write16(TM0CNT_H, START);
+    timer_event_times(&m, false, 0)
+}
+
+#[test]
+fn given_a_fresh_arm9_view_when_a_timer_starts_then_now_and_floor_are_the_master_clock() {
+    // 16 ticks of 2 cycles after `now`, which is the master clock; the floor adds nothing.
+    assert_eq!(
+        arm9_event_after_start_on_a_fresh_view(),
+        vec![FAR_FLOOR + 32]
+    );
+}
+
+#[test]
+fn given_a_fresh_arm7_view_behind_the_master_clock_when_a_timer_starts_then_the_floor_is_the_master_clock()
+ {
+    assert_eq!(arm7_event_after_start_on_a_fresh_view(), vec![FAR_FLOOR]);
+}
+
+#[test]
+fn given_an_arm7_view_when_advanced_then_its_clock_moves_and_the_master_clock_stays() {
+    let mut m = Bench::new();
+    m.scheduler.advance(10);
+    let mut v = m.arm7(4);
+    v.advance(3);
+    assert_eq!((v.clock(), v.master_clock()), (7, 10));
 }
 
 // ------------------------------------------------------------------------------ the BIOS area
@@ -2104,4 +2286,167 @@ fn given_the_bios_area_when_fetched_then_a_synthetic_zero_word_is_read() {
         ),
         (0, 0)
     );
+}
+
+// ---------------------------------------------------------------- VRAM banks A-I (LCDC mode)
+
+/// VRAMCNT address and LCDC start of each bank, A to I (`vram-banks.md`, "The banks").
+const LCDC_BANKS: [(u32, u32); 9] = [
+    (0x0400_0240, 0x0680_0000),
+    (0x0400_0241, 0x0682_0000),
+    (0x0400_0242, 0x0684_0000),
+    (0x0400_0243, 0x0686_0000),
+    (0x0400_0244, 0x0688_0000),
+    (0x0400_0245, 0x0689_0000),
+    (0x0400_0246, 0x0689_4000),
+    (0x0400_0248, 0x0689_8000),
+    (0x0400_0249, 0x068A_0000),
+];
+
+/// Banks whose marker word, written at the first address of their window, does not read back
+/// there once every bank is enabled (each marker differs, so a bank mapped over another would show).
+fn marker_failures() -> Vec<usize> {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    LCDC_BANKS
+        .iter()
+        .for_each(|&(reg, _)| v.write8(reg, ENABLE_MST0));
+    LCDC_BANKS
+        .iter()
+        .enumerate()
+        .for_each(|(i, &(_, start))| v.write32(start, 0xB000_0000 + i as u32));
+    LCDC_BANKS
+        .iter()
+        .enumerate()
+        .filter(|&(i, &(_, start))| v.read32(start) != 0xB000_0000 + i as u32)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn given_all_nine_banks_enabled_when_a_marker_is_stored_in_each_window_then_each_reads_back_its_own()
+ {
+    assert_eq!(marker_failures(), Vec::<usize>::new());
+}
+
+#[test]
+fn given_bank_g_enabled_when_a_byte_is_stored_in_its_window_then_it_is_ignored() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write8(0x0400_0246, ENABLE_MST0);
+    v.write32(0x0689_4000, X);
+    v.write8(0x0689_4000, 0xFF);
+    assert_eq!(v.read32(0x0689_4000), X);
+}
+
+#[test]
+fn given_a_word_written_at_0400_0248_when_decoded_then_banks_h_and_i_are_enabled() {
+    let mut m = Bench::new();
+    m.write32(&plain(), 0x0400_0248, 0xFFFF_8383_u32);
+    let banks = m.vram_banks();
+    assert_eq!(
+        (banks[7], banks[8]),
+        (
+            state(true, 3, 0, VramMapping::Unmapped),
+            state(true, 3, 0, VramMapping::ObjExtPaletteB)
+        )
+    );
+}
+
+#[test]
+fn given_a_halfword_written_at_0400_0246_when_decoded_then_bank_g_and_wramcnt_take_their_own_byte()
+{
+    let mut m = Bench::new();
+    m.write16(&plain(), 0x0400_0246, 0x0281);
+    assert_eq!(
+        (m.vram_banks()[6], m.read8(&plain(), WRAMCNT)),
+        (state(true, 1, 0, VramMapping::BgA { offset: 0 }), 2)
+    );
+}
+
+#[test]
+fn given_vramcnt_registers_written_when_read_at_each_width_then_they_read_zero() {
+    let mut m = Bench::new();
+    let mut v = m.arm9(plain());
+    v.write32(0x0400_0240, 0x8080_8080);
+    v.write16(0x0400_0248, 0x8080);
+    assert_eq!(
+        (
+            v.read32(0x0400_0240),
+            v.read16(0x0400_0248),
+            v.read8(0x0400_0249)
+        ),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn given_bank_e_written_with_ofs_bits_when_decoded_then_the_offset_reads_zero() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0244, 0x80 | 0x18 | 1);
+    assert_eq!(
+        m.vram_banks()[4],
+        state(true, 1, 0, VramMapping::BgA { offset: 0 })
+    );
+}
+
+// ---------------------------------------------------------------- the ARM7's VRAM (banks C, D)
+
+#[test]
+fn given_c_and_d_set_to_mst_2_by_the_arm9_when_the_arm7_reads_vramstat_then_both_bits_are_set() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write8(&plain(), 0x0400_0243, 0x8A);
+    assert_eq!(
+        (m.read8_arm7(0, 0x0400_0240), m.read16_arm7(0, 0x0400_0240)),
+        (3, 0x0003)
+    );
+}
+
+#[test]
+fn given_vramcnt_c_changed_when_the_arm7_reads_vramstat_again_then_it_follows_at_once() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    let on = m.read8_arm7(0, 0x0400_0240);
+    m.write8(&plain(), 0x0400_0242, 0x80);
+    assert_eq!((on, m.read8_arm7(0, 0x0400_0240)), (1, 0));
+}
+
+#[test]
+fn given_the_arm7_writes_vramstat_through_its_view_when_read_then_it_is_unchanged() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write8_arm7(0, 0x0400_0240, 0xFF);
+    assert_eq!(m.read8_arm7(0, 0x0400_0240), 1);
+}
+
+#[test]
+fn given_bank_c_in_the_arm7_mapping_when_the_arm7_stores_a_byte_through_its_view_then_it_lands() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write32_arm7(0, 0x0600_0000, 0x1122_3344);
+    m.write8_arm7(0, 0x0600_0001, 0xEE);
+    assert_eq!(m.read32_arm7(0, 0x0600_0000), 0x1122_EE44);
+}
+
+#[test]
+fn given_bank_c_in_the_arm7_mapping_when_the_arm9_looks_for_it_then_every_address_is_empty() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0242, 0x82);
+    m.write32_arm7(0, 0x0600_0000, 0xCAFE_F00D);
+    assert_eq!(
+        (
+            m.read32(&plain(), 0x0600_0000),
+            m.read32(&plain(), 0x0684_0000),
+            m.read32(&plain(), 0x0620_0000)
+        ),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn given_the_arm7_without_vram_banks_when_it_reads_the_vram_block_then_it_reads_zero() {
+    let mut m = Bench::new();
+    m.write8(&plain(), 0x0400_0240, 0x80);
+    assert_eq!(m.read32_arm7(0, 0x0680_0000), 0);
 }

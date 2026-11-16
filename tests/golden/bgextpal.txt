@@ -1,0 +1,2 @@
+# Golden frames for testroms/bgextpal. Format and review flow: tests/golden/README.md.
+frames=6 top=e372b6b9b78d3785 bottom=a0888bbd34ee77a5

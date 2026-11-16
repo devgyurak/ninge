@@ -1,0 +1,2 @@
+# Golden frames for testroms/objextpal. Format and review flow: tests/golden/README.md.
+frames=6 top=42a207477a87d8e5 bottom=c3cf3258f2f6b482

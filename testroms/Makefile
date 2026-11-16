@@ -14,7 +14,7 @@ BLOCKSDS := $(WONDERFUL)/thirdparty/blocksds/core
 CC := $(GCC_BIN)/arm-none-eabi-gcc
 CROMS := console
 
-ROMS := smoke boot memmap vramdisp bgtext sched wramcnt irq disptime ipc timers dma swi keypad divsqrt
+ROMS := smoke boot memmap vramdisp vrambanks bgtext bgengb bgaffine bgext bglarge bgmosaic bgextpal objtext objprio objaffine objbmp objmosaic objlimit objextpal win objwin blend mbright capture capblend mmdisp sched wramcnt irq disptime ipc timers dma swi keypad divsqrt
 OUT := build
 
 # Per-ROM load and entry addresses: ARM9_RAM_<rom>, ARM9_ENTRY_<rom>, ARM7_RAM_<rom> and
@@ -23,7 +23,28 @@ ARM9_RAM_boot := 0x02000000
 ARM9_ENTRY_boot := 0x02000100
 ARM9_ENTRY_memmap := 0x02000100
 ARM9_ENTRY_vramdisp := 0x02000100
+ARM9_ENTRY_vrambanks := 0x02000100
 ARM9_ENTRY_bgtext := 0x02000100
+ARM9_ENTRY_bgengb := 0x02000100
+ARM9_ENTRY_bgaffine := 0x02000100
+ARM9_ENTRY_bgext := 0x02000100
+ARM9_ENTRY_bglarge := 0x02000100
+ARM9_ENTRY_bgmosaic := 0x02000100
+ARM9_ENTRY_bgextpal := 0x02000100
+ARM9_ENTRY_objtext := 0x02000100
+ARM9_ENTRY_objprio := 0x02000100
+ARM9_ENTRY_objaffine := 0x02000100
+ARM9_ENTRY_objbmp := 0x02000100
+ARM9_ENTRY_objmosaic := 0x02000100
+ARM9_ENTRY_objlimit := 0x02000100
+ARM9_ENTRY_objextpal := 0x02000100
+ARM9_ENTRY_win := 0x02000100
+ARM9_ENTRY_objwin := 0x02000100
+ARM9_ENTRY_blend := 0x02000100
+ARM9_ENTRY_mbright := 0x02000100
+ARM9_ENTRY_capture := 0x02000100
+ARM9_ENTRY_capblend := 0x02000100
+ARM9_ENTRY_mmdisp := 0x02000100
 ARM9_RAM_DEFAULT := 0x02000000
 ARM7_RAM_DEFAULT := 0x02380000
 

@@ -9,15 +9,17 @@
 //! FNV-1a 64 of the ROM (LE u64), `28..` the machine.
 
 use super::*;
-use crate::bus::{Region, VramBankState};
+use crate::bus::{Region, VramBankState, VramMapping};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::DeviceId;
 use crate::io::irq::Requests;
-use crate::{Machine, Screen};
+use crate::scheduler::LineEvent;
+use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 4_671_928;
-const PINNED_HASH: u64 = 0x9c99485e4419cad3;
+const PINNED_LEN: usize = 5_215_001;
+const PINNED_HASH: u64 = 0x9d01afb8aaaa9976;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -50,8 +52,26 @@ const PINNED_HASH: u64 = 0x9c99485e4419cad3;
 /// (mode, numerator, denominator, quotient, remainder, flag, end time) and four for the square
 /// root, each a one-byte varint or bool while zero, so both lengths grew by 11 and both hashes
 /// moved.
-const PINNED_BOOTED_LEN: usize = 4_966_931;
-const PINNED_BOOTED_HASH: u64 = 0x311f984b18fa9281;
+/// Version 19 (#35) replaced bank A's 128 KiB buffer and one VRAMCNT byte with all nine banks in one
+/// 656 KiB buffer and nine VRAMCNT bytes: both lengths grew by the same amount and both hashes moved.
+/// Version 20 (#30) added engine B's registers (13 bytes, all zero at power on), and the booted machine
+/// now draws engine B's screen white instead of black, which costs three more bytes in each of its
+/// 2 x 49,152 lower-screen pixels. Version 21 (#30) added the affine layers' registers and internal
+/// reference points: 2 engines x 2 layers x 8 bytes while they are zero. Version 22 (#30) added both
+/// engines' MOSAIC: one byte each while it is zero. Version 23 (#31) added the OAM: 2048 bytes
+/// behind a two-byte length, so both lengths grew by 2050 and both hashes moved. Version 24 (#33)
+/// added both engines' window registers: 2 x (2 + 2 + 1 + 1) one-byte varints while they are zero,
+/// so both lengths grew by 12 and both hashes moved.
+/// Version 25 (#34) added both engines' BLDCNT, BLDALPHA and BLDY: 2 x 3 one-byte varints while they
+/// are zero, so both lengths grew by 6 and both hashes moved.
+/// Version 26 (#34) added both engines' MASTER_BRIGHT: 2 one-byte varints while they are zero, so both
+/// lengths grew by 2 and both hashes moved.
+/// Version 31 (#186) dropped the input waiting for the next frame, which `run_frame` now takes: a
+/// default `Input` is three one-byte fields, so both lengths shrank by 3 and both hashes moved.
+/// Version 32 (#186) moved the latched input out of both keypads (3 bytes each) into one copy in `Io`
+/// (3 bytes), so both lengths shrank by 3 again and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 5_804_916;
+const PINNED_BOOTED_HASH: u64 = 0x99cf12a568f77be2;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -135,7 +155,7 @@ fn booted(rom: &[u8], frames: u32) -> Machine {
 
 /// Runs `frames` frames.
 fn run_frames(machine: &mut Machine, frames: u32) {
-    (0..frames).for_each(|_| machine.run_frame());
+    (0..frames).for_each(|_| machine.run_frame(crate::Input::new()));
 }
 
 /// `bytes` with `patch` written at `at`, growing the buffer if it is too short, so a stub that
@@ -184,7 +204,7 @@ fn given_a_machine_with_a_rom_when_saved_then_the_header_holds_magic_version_and
     let header = bytes[..HEADER_LEN.min(bytes.len())].to_vec();
     let expected = [
         b"NINGESTA".as_slice(),
-        &18u32.to_le_bytes(),
+        &FORMAT_VERSION.to_le_bytes(),
         &(rom.len() as u64).to_le_bytes(),
         &reference_fnv1a64(&rom).to_le_bytes(),
     ]
@@ -225,7 +245,21 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 10,
-            expected: 18
+            expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
+fn given_a_version_22_state_from_before_oam_when_loaded_then_it_is_refused_with_both_versions() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &22u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 22,
+            expected: FORMAT_VERSION
         })
     );
 }
@@ -236,9 +270,11 @@ fn given_a_version_mismatch_when_displayed_then_the_message_names_both_versions(
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &10u32.to_le_bytes());
     let message = booted(&rom, 0)
         .load_state(&bytes)
-        .expect_err("version 10 is not version 18")
+        .expect_err("version 10 is not the current version")
         .to_string();
-    assert!(message.contains("version 10") && message.contains("version 18"));
+    assert!(
+        message.contains("version 10") && message.contains(&format!("version {FORMAT_VERSION}"))
+    );
 }
 
 #[test]
@@ -511,7 +547,8 @@ fn given_a_state_with_vram_a_mapped_when_loaded_onto_an_unmapped_machine_then_th
             VramBankState {
                 enabled: true,
                 mst: 0,
-                offset: 0
+                offset: 0,
+                mapping: VramMapping::Lcdc
             }
         )
     );
@@ -534,6 +571,67 @@ fn given_a_state_with_vram_a_unmapped_when_loaded_onto_a_mapped_machine_then_the
         ),
         (Ok(()), 0x80, 0, false)
     );
+}
+
+// ------------------------------------------------------------------------------------ input
+
+/// A different input for each of the frames a run takes: the log a replay is built from.
+fn input_for(frame: u32) -> Input {
+    Input {
+        buttons: Buttons::from_bits_truncate(0x0111_u16.rotate_left(frame)),
+        touch: None,
+        hinge_closed: frame % 2 == 1,
+    }
+}
+
+/// `machine` after one frame per `frames`, each run with its own input.
+fn run_with_inputs(machine: &mut Machine, frames: std::ops::Range<u32>) {
+    frames.for_each(|frame| {
+        machine.run_frame(input_for(frame));
+    });
+}
+
+#[test]
+fn given_the_same_rom_and_input_log_when_run_twice_then_the_savestate_bytes_are_identical() {
+    let (mut first, mut second) = (booted(&counter_rom(), 0), booted(&counter_rom(), 0));
+    run_with_inputs(&mut first, 0..4);
+    run_with_inputs(&mut second, 0..4);
+    assert_eq!(first.save_state(), second.save_state());
+}
+
+#[test]
+fn given_different_input_logs_when_run_then_the_savestate_bytes_differ() {
+    let (mut first, mut second) = (booted(&counter_rom(), 0), booted(&counter_rom(), 0));
+    run_with_inputs(&mut first, 0..4);
+    run_with_inputs(&mut second, 1..5);
+    assert_ne!(first.save_state(), second.save_state());
+}
+
+#[test]
+fn given_a_state_saved_with_input_when_loaded_and_continued_then_it_equals_an_uninterrupted_run() {
+    let mut straight = booted(&counter_rom(), 0);
+    run_with_inputs(&mut straight, 0..4);
+    let mut first_half = booted(&counter_rom(), 0);
+    run_with_inputs(&mut first_half, 0..2);
+    let bytes = first_half.save_state();
+    let mut resumed = booted(&counter_rom(), 0);
+    resumed
+        .load_state(&bytes)
+        .expect("a state this build saved");
+    run_with_inputs(&mut resumed, 2..4);
+    assert_eq!(resumed.save_state(), straight.save_state());
+}
+
+#[test]
+fn given_a_state_saved_after_a_frame_with_a_held_key_when_loaded_then_the_latched_input_is_kept() {
+    let held = Input::new().with_buttons(Buttons::A | Buttons::START);
+    let mut saver = booted(&counter_rom(), 0);
+    saver.run_frame(held);
+    let mut target = booted(&counter_rom(), 0);
+    target
+        .load_state(&saver.save_state())
+        .expect("a state this build saved");
+    assert_eq!(target.inspect().input(), held);
 }
 
 // ------------------------------------------------------------------------------ FNV-1a vectors
@@ -598,7 +696,8 @@ fn given_a_state_whose_register_bank_disagrees_with_its_cpsr_mode_when_loaded_th
 
 /// The format version that adds the ARM7, its clock and the scheduler (`scheduler.md`).
 #[test]
-fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_18_is_expected() {
+fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_the_current_version_is_expected()
+ {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &2u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -606,14 +705,15 @@ fn given_a_state_saved_by_version_2_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 2,
-            expected: 18
+            expected: FORMAT_VERSION
         })
     );
 }
 
 /// The format version that adds WRAMCNT and the 32 KiB of shared WRAM (`wramcnt.md`).
 #[test]
-fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_18_is_expected() {
+fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_the_current_version_is_expected()
+ {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &3u32.to_le_bytes());
     let result = booted(&rom, 0).load_state(&bytes);
@@ -621,15 +721,15 @@ fn given_a_state_saved_by_version_3_when_loaded_then_it_is_refused_and_version_1
         result,
         Err(SavestateError::VersionMismatch {
             found: 3,
-            expected: 18
+            expected: FORMAT_VERSION
         })
     );
 }
 
 #[test]
-fn given_a_saved_state_when_its_version_field_is_read_then_it_is_18() {
+fn given_a_saved_state_when_its_version_field_is_read_then_it_is_the_current_format_version() {
     let bytes = booted(&counter_rom(), 0).save_state();
-    assert_eq!(bytes[8..12], 18u32.to_le_bytes());
+    assert_eq!(bytes[8..12], FORMAT_VERSION.to_le_bytes());
 }
 
 /// Steps the ARM9 `count` times.
@@ -711,11 +811,11 @@ fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
     machine.arm7_clock = now;
     machine
         .scheduler
-        .schedule(now, crate::scheduler::EventKind::HBlankStart);
+        .schedule(now, crate::scheduler::EventKind::Line(LineEvent::HBlank));
     events.iter().for_each(|&time| {
         machine
             .scheduler
-            .schedule(time, crate::scheduler::EventKind::LineStart)
+            .schedule(time, crate::scheduler::EventKind::Line(LineEvent::Start))
     });
     machine
 }
@@ -1180,7 +1280,11 @@ const DMA0DAD: u32 = 0x0400_00B4;
 const DMA0CNT: u32 = 0x0400_00B8;
 
 fn dma_kind(arm9: bool, channel: u8) -> crate::scheduler::EventKind {
-    crate::scheduler::EventKind::DmaStart { arm9, channel }
+    crate::scheduler::EventKind::Slot {
+        device: DeviceId::Dma,
+        arm9,
+        slot: channel,
+    }
 }
 
 /// A booted machine one frame in, with an Immediate start queued on ARM9 channel 0.
@@ -1233,6 +1337,7 @@ struct ChannelBytes {
     destination_now: u32,
     count_now: u32,
     pending: bool,
+    frame_wait: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -1250,6 +1355,7 @@ const fn idle_channel() -> ChannelBytes {
         destination_now: 0,
         count_now: 0,
         pending: false,
+        frame_wait: false,
     }
 }
 
@@ -1426,4 +1532,38 @@ fn given_a_state_with_a_dma_channel_pending_but_disabled_when_loaded_then_it_is_
         )),
         Err(SavestateError::Corrupt)
     );
+}
+
+// ------------------------------------------------------------------------------------- OAM (#31)
+
+/// A booted machine whose OAM holds a halfword in each engine's half.
+fn with_oam(frames: u32) -> Machine {
+    let mut machine = booted(&counter_rom(), frames);
+    machine.bus9().write16(0x0700_0006, 0x1234);
+    machine.bus9().write16(0x0700_0400, 0xABCD);
+    machine
+}
+
+fn oam_words(machine: &Machine) -> (u16, u16) {
+    let oam = machine.memory.oam();
+    (
+        u16::from_le_bytes([oam[6], oam[7]]),
+        u16::from_le_bytes([oam[0x400], oam[0x401]]),
+    )
+}
+
+#[test]
+fn given_oam_with_halfwords_in_both_halves_when_saved_and_loaded_then_both_come_back() {
+    let saved = with_oam(1);
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&saved.save_state());
+    assert_eq!((result, oam_words(&target)), (Ok(()), (0x1234, 0xABCD)));
+}
+
+#[test]
+fn given_oam_when_loaded_and_saved_again_then_the_bytes_are_identical() {
+    let first = with_oam(1).save_state();
+    let mut target = booted(&counter_rom(), 0);
+    let result = target.load_state(&first);
+    assert_eq!((result, target.save_state() == first), (Ok(()), true));
 }

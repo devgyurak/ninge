@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
+use crate::io::DeviceId;
+
 /// ARM9 cycles per line: 355 dots x 6 bus cycles x 2 (`display-timing.md`, "Frame layout").
 pub const LINE_CYCLES: u64 = 355 * 6 * 2;
 /// ARM9 cycles from the start of a line to its HBlank: 1,606 bus cycles x 2
@@ -22,51 +24,60 @@ pub const FRAME_CYCLES: u64 = 263 * LINE_CYCLES;
 /// "Interleaving"). A model choice, not a hardware fact.
 // TODO(hw-unverified): see `scheduler.md`, "Unverified". Decided in #102.
 pub const SLICE: u64 = 64;
-/// Events the queue holds without growing: a line start, an HBlank start, eight timers and eight
-/// DMA starts. Reserved up front so scheduling on the hot path does not allocate.
-const EVENT_CAPACITY: usize = 24;
+/// Events the queue holds without growing: the line events and every event slot the
+/// devices register ([`crate::io::EVENT_SLOTS`]: the timers and the DMA starts of both CPUs).
+/// Reserved up front so scheduling on the hot path does not allocate.
+const EVENT_CAPACITY: usize = LineEvent::ALL.len() + crate::io::EVENT_SLOTS;
 
 /// The latest time the clock or an event may hold, about 2,180 years of emulated time. A
 /// savestate beyond it is refused, so line starts never reach the saturation point of `u64`.
 pub const MAX_TIME: u64 = 1 << 62;
 
+/// The machine's own events: the two a line has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineEvent {
+    /// A line begins: VCOUNT advances and the next line start is scheduled. The start of line 0
+    /// ends the frame, which draws the screens (`display-timing.md`).
+    Start,
+    /// HBlank begins in the current line and the next one is scheduled.
+    HBlank,
+}
+
+impl LineEvent {
+    /// Every line event, for sizing the queue.
+    pub const ALL: [LineEvent; 2] = [LineEvent::Start, LineEvent::HBlank];
+}
+
 /// What an event does when it fires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
-    /// A line begins: VCOUNT advances and the next line start is scheduled. The start of line 0
-    /// ends the frame, which draws the screens (`display-timing.md`).
-    LineStart,
-    /// HBlank begins in the current line and the next one is scheduled.
-    HBlankStart,
-    /// A timer overflows: it reloads, the IRQ is requested, the timer it feeds ticks and the next
-    /// overflow is scheduled (`timers.md`, "Model"). The two CPUs have four timers each.
-    TimerOverflow {
-        /// Whether it is the ARM9's timer; the ARM7's otherwise.
+    /// One of the machine's own events.
+    Line(LineEvent),
+    /// One event slot of a registered device (`Device::SLOTS`): a timer's overflow, a DMA
+    /// channel's start. The device says what it does when it fires, so adding a device with
+    /// events adds no variant here (`timers.md`, "Model"; `dma.md`, "Model").
+    Slot {
+        /// The device the slot belongs to.
+        device: DeviceId,
+        /// Whether it is the ARM9's copy of the device; the ARM7's otherwise.
         arm9: bool,
-        /// Which timer, 0-3.
-        index: u8,
-    },
-    /// A DMA channel's transfer starts: the data moves and the channel repeats or ends
-    /// (`dma.md`, "Model"). The two CPUs have four channels each.
-    DmaStart {
-        /// Whether it is the ARM9's channel; the ARM7's otherwise.
-        arm9: bool,
-        /// Which channel, 0-3.
-        channel: u8,
+        /// Which of the device's slots, from 0.
+        slot: u8,
     },
 }
 
 impl EventKind {
     /// Where the kind sorts among events at the same time (`scheduler.md`, "Events"): line start,
-    /// HBlank start, timers, then DMA starts, the ARM9's before the ARM7's, lower index first.
-    /// Explicit, not derived: `bool` sorts `false` first, which would put the ARM7 ahead.
+    /// HBlank start, then device slots by registration order of the device, the ARM9's copy before
+    /// the ARM7's, lower slot first. The registry fixes the device order: timers before DMA.
+    /// Explicit, not derived: `bool` sorts `false` first, so `arm9` is negated on purpose or the
+    /// ARM7 would go ahead.
     // TODO(hw-unverified): the order is a model choice (`scheduler.md`, "Unverified").
-    fn priority(self) -> (u8, u8, u8) {
+    fn priority(self) -> (u8, u8, u8, u8) {
         match self {
-            Self::LineStart => (0, 0, 0),
-            Self::HBlankStart => (1, 0, 0),
-            Self::TimerOverflow { arm9, index } => (2, u8::from(!arm9), index),
-            Self::DmaStart { arm9, channel } => (3, u8::from(!arm9), channel),
+            Self::Line(LineEvent::Start) => (0, 0, 0, 0),
+            Self::Line(LineEvent::HBlank) => (0, 1, 0, 0),
+            Self::Slot { device, arm9, slot } => (1, device as u8, u8::from(!arm9), slot),
         }
     }
 }

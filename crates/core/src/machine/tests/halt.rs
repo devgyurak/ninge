@@ -638,7 +638,7 @@ fn given_the_same_wait_run_twice_when_saved_then_the_bytes_are_identical() {
 #[test]
 fn given_a_halted_arm9_when_a_frame_runs_then_the_frame_completes_and_the_cpu_stays_halted() {
     let mut m = machine_with(&[WFI_C0_4, MOV_R1, SPIN], &[SPIN]);
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!((m.frame_count(), m.inspect().arm9().halted()), (1, true));
 }
 
@@ -646,7 +646,7 @@ fn given_a_halted_arm9_when_a_frame_runs_then_the_frame_completes_and_the_cpu_st
 fn given_a_halted_arm7_when_a_frame_runs_then_the_frame_completes_and_the_arm7_clock_is_not_behind()
 {
     let mut m = machine_with(&[SPIN], &haltcnt_program(0x80));
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (
             m.frame_count(),

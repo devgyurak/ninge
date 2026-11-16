@@ -9,6 +9,7 @@
 //! ROM's source lists. It is never read back from the emulator: the code below shares nothing
 //! with `ninge-core`.
 
+use ninge_core::debug::EngineId;
 use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
 use ninge_runner::{load_rom_file, testrom_path};
@@ -23,7 +24,7 @@ fn boot_frames() -> Machine {
     machine
         .load_rom(rom)
         .expect("bgtext ROM has a valid header");
-    (0..FRAMES).for_each(|_| machine.run_frame());
+    (0..FRAMES).for_each(|_| machine.run_frame(ninge_core::Input::new()));
     machine
 }
 
@@ -262,7 +263,8 @@ fn given_bgtext_rom_when_4_frames_run_then_every_pixel_of_the_upper_screen_is_th
 
 #[test]
 fn given_bgtext_rom_when_4_frames_run_then_the_lower_screen_is_black() {
-    // Engine B is a black placeholder in Phase 3 (`display-mode-vram.md`).
+    // The ROM writes POWCNT1 = 0x8003: engine B is powered off, so its screen is black
+    // (`bg-modes.md`, "Engine B").
     let machine = boot_frames();
     assert!(
         machine
@@ -303,7 +305,7 @@ type LayerState = (u8, u32, u32, bool, u16, u16, u16, u16);
 fn layer_states(machine: &Machine) -> Vec<LayerState> {
     (0..4)
         .map(|n| {
-            let l = machine.inspect().gpu2d().text_bg(n);
+            let l = machine.inspect().gpu2d().text_bg(EngineId::A, n);
             let hofs = if n == 3 { 0 } else { l.hofs };
             (
                 l.priority,

@@ -60,7 +60,7 @@ their own contents (the "first" half is bytes 0-16383 of the 32 KiB, the "second
 
 - A write to `0400_0246h` and `0400_0247h` together (halfword) or the four registers at
   `0400_0244h` (word) is split into bytes; the byte for WRAMCNT sets the mode. Byte `0400_0246h`
-  (VRAMCNT_G) belongs to Phase 4 (#35); a write to it is discarded here.
+  is VRAMCNT_G (`vram-banks.md`).
 - Bits 2-7 of a WRAMCNT write are dropped, so the register reads back as 0-3.
 - The ARM7 writing `0400_0247h` changes nothing: WRAMCNT is an ARM9 register and is not on the
   ARM7 I/O map.

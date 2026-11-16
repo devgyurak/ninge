@@ -71,6 +71,17 @@ jobs:
         with:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny
 
+      # Without a cache every run downloads the crates and builds the dependencies, at
+      # opt-level 1, three times (clippy, the coverage build, doc tests): about a minute and a
+      # half per job. The cache holds ~/.cargo and target/; our own crates are always rebuilt.
+      # It is keyed by Cargo.lock and the toolchain, and only develop saves it, so pull requests
+      # restore develop's cache without filling the repository's cache quota with their own.
+      - name: Cache cargo dependencies
+        if: hashFiles('Cargo.toml') != ''
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+
       # Built test ROMs are never committed (AGENTS.md §3.1); the testroms job builds them.
       # macOS cannot run Docker: it verifies the artifact in place. Ubuntu keeps the artifact
       # outside testroms/build/ so verify.sh rebuilds from source and compares the two.

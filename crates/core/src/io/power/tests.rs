@@ -3,10 +3,11 @@
 //! "Halt"), never from running the code.
 
 use super::*;
+use crate::io::device::cx_at;
 
 fn written(offset: u32, width: Width, value: u32) -> Power {
     let mut power = Power::new();
-    power.write(offset, width, value, 0);
+    power.write(offset, width, value, cx_at(0));
     power
 }
 
@@ -52,5 +53,5 @@ fn given_a_pending_request_when_taken_then_it_is_given_once() {
 #[test]
 fn given_haltcnt_when_read_then_it_reads_zero() {
     let power = written(1, Width::Byte, 0x80);
-    assert_eq!(power.peek(1, Width::Byte, 0), 0);
+    assert_eq!(power.peek(1, Width::Byte, cx_at(0)), 0);
 }

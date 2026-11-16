@@ -93,8 +93,8 @@ fn given_a_booted_machine_when_nothing_ran_then_the_pending_events_are_hblank_th
     assert_eq!(
         pending,
         vec![
-            (HBLANK_AT, EventKind::HBlankStart),
-            (LINE, EventKind::LineStart)
+            (HBLANK_AT, EventKind::Line(LineEvent::HBlank)),
+            (LINE, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -118,7 +118,7 @@ fn given_a_booted_machine_when_reading_vcount_one_cycle_before_each_line_start_t
 #[test]
 fn given_a_booted_machine_when_one_frame_runs_then_it_ends_at_the_frame_length_and_counts_once() {
     let mut m = machine();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (m.inspect().scheduler().now(), m.frame_count(), FRAME_CYCLES),
         (line_start(263), 1, 1_120_380)
@@ -129,7 +129,7 @@ fn given_a_booted_machine_when_one_frame_runs_then_it_ends_at_the_frame_length_a
 fn given_a_frame_run_when_listing_pending_then_line_1_events_follow_the_wrap_from_their_own_times()
 {
     let mut m = machine();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
     let pending: Vec<(u64, EventKind)> = m
         .inspect()
         .scheduler()
@@ -140,8 +140,8 @@ fn given_a_frame_run_when_listing_pending_then_line_1_events_follow_the_wrap_fro
     assert_eq!(
         pending,
         vec![
-            (FRAME_CYCLES + HBLANK_AT, EventKind::HBlankStart),
-            (FRAME_CYCLES + LINE, EventKind::LineStart)
+            (FRAME_CYCLES + HBLANK_AT, EventKind::Line(LineEvent::HBlank)),
+            (FRAME_CYCLES + LINE, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -161,8 +161,8 @@ fn given_the_last_line_when_the_frame_wraps_then_vcount_is_zero_and_the_screens_
 #[test]
 fn given_two_frames_when_run_then_the_second_frame_ends_at_twice_the_frame_length() {
     let mut m = machine();
-    m.run_frame();
-    m.run_frame();
+    m.run_frame(crate::Input::new());
+    m.run_frame(crate::Input::new());
     assert_eq!(
         (m.inspect().scheduler().now(), m.frame_count()),
         (2 * FRAME_CYCLES, 2)
@@ -525,8 +525,8 @@ fn given_a_save_mid_frame_when_loaded_then_vcount_and_dispstat_are_restored() {
 #[test]
 fn given_two_runs_of_the_same_frame_when_each_ends_then_the_savestate_bytes_match() {
     let (mut a, mut b) = (machine(), machine());
-    a.run_frame();
-    b.run_frame();
+    a.run_frame(crate::Input::new());
+    b.run_frame(crate::Input::new());
     assert_eq!(a.save_state(), b.save_state());
 }
 

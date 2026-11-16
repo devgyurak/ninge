@@ -11,6 +11,7 @@
 //! and CNT are at `12n`, `12n + 4` and `12n + 8`, and DMAnFILL is at `0x30 + 4n`.
 
 use super::*;
+use crate::io::device::cx_at;
 use std::collections::BTreeMap;
 
 const ENABLE: u32 = 1 << 31;
@@ -54,15 +55,15 @@ const MAIN: u32 = 0x0200_0000;
 const OTHER: u32 = 0x0300_0000;
 
 fn write32<const A: bool>(dma: &mut Dma<A>, offset: u32, value: u32) -> Effect {
-    dma.write(offset, Width::Word, value, 0)
+    dma.write(offset, Width::Word, value, cx_at(0))
 }
 
 fn write16<const A: bool>(dma: &mut Dma<A>, offset: u32, value: u16) -> Effect {
-    dma.write(offset, Width::Half, u32::from(value), 0)
+    dma.write(offset, Width::Half, u32::from(value), cx_at(0))
 }
 
 fn write8<const A: bool>(dma: &mut Dma<A>, offset: u32, value: u8) -> Effect {
-    dma.write(offset, Width::Byte, u32::from(value), 0)
+    dma.write(offset, Width::Byte, u32::from(value), cx_at(0))
 }
 
 /// Byte writes at `offset`, `offset + 1`, ... in that order.
@@ -73,7 +74,7 @@ fn write_bytes_in_turn<const A: bool>(dma: &mut Dma<A>, offset: u32, bytes: &[u8
 }
 
 fn read32<const A: bool>(dma: &Dma<A>, offset: u32) -> u32 {
-    dma.peek(offset, Width::Word, 0)
+    dma.peek(offset, Width::Word, cx_at(0))
 }
 
 /// Writes channel `ch`'s source, destination and control, in that order; returns the effect of
@@ -394,7 +395,7 @@ fn given_a_word_read_that_spans_two_channels_when_split_then_each_byte_comes_fro
     let mut dma = Arm9Dma::new();
     write32(&mut dma, cnt(0), 0x2ABB_CCDD);
     write32(&mut dma, sad(1), 0x1122_3344);
-    assert_eq!(dma.peek(10, Width::Word, 0), 0x3344_2ABB);
+    assert_eq!(dma.peek(10, Width::Word, cx_at(0)), 0x3344_2ABB);
 }
 
 #[test]
@@ -411,7 +412,7 @@ fn given_a_register_read_when_done_through_the_device_read_then_it_has_no_effect
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | 4);
     let before = dma.clone();
-    let (value, effect) = dma.read(cnt(0), Width::Word, 0);
+    let (value, effect) = dma.read(cnt(0), Width::Word, cx_at(0));
     assert_eq!(
         (value, effect, dma),
         (ENABLE | 4, Effect::default(), before)
@@ -432,7 +433,7 @@ fn given_an_immediate_channel_when_enable_is_written_then_a_start_is_queued_on_i
 
 /// The slots each of channels 0-3 reschedules when armed Immediate, as `(channel, got)` for the
 /// channels that do not reschedule exactly their own bit.
-fn wrong_slots<const A: bool>() -> Vec<(u32, u8)> {
+fn wrong_slots<const A: bool>() -> Vec<(u32, SlotMask)> {
     (0..4)
         .filter_map(|ch| {
             let mut dma = Dma::<A>::new();
@@ -611,7 +612,7 @@ fn given_a_channel_waiting_for_its_trigger_when_enable_is_cleared_then_the_trigg
 // ------------------------------------------------------------------------------ triggers
 
 /// The slot mask `trigger` marks on channel 0 armed with `control`.
-fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> u8 {
+fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> SlotMask {
     let mut dma = Dma::<A>::new();
     arm(&mut dma, 0, MAIN, OTHER, control);
     dma.trigger(trigger)
@@ -620,8 +621,8 @@ fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> u8 {
 /// `(timing, VBlank mask, HBlank mask)` for each timing value whose masks differ from `want`.
 fn trigger_failures<const A: bool>(
     shift: fn(u32) -> u32,
-    want: &[(u32, u8, u8)],
-) -> Vec<(u32, u8, u8)> {
+    want: &[(u32, SlotMask, SlotMask)],
+) -> Vec<(u32, SlotMask, SlotMask)> {
     want.iter()
         .filter_map(|&(timing, vblank, hblank)| {
             let control = ENABLE | shift(timing) | 4;
@@ -1249,36 +1250,9 @@ fn given_the_accessors_when_a_channel_is_armed_then_they_return_its_registers() 
 }
 
 #[test]
-fn given_each_slot_of_a_device_when_asked_for_its_event_then_it_is_that_cpus_dma_start() {
-    let arm9: Vec<Option<EventKind>> = (0..4).map(|s| Arm9Dma::new().slot_kind(s)).collect();
-    let arm7: Vec<Option<EventKind>> = (0..4).map(|s| Arm7Dma::new().slot_kind(s)).collect();
-    let kind = |arm9, channel| Some(EventKind::DmaStart { arm9, channel });
-    assert_eq!(
-        (arm9, arm7),
-        (
-            vec![kind(true, 0), kind(true, 1), kind(true, 2), kind(true, 3)],
-            vec![
-                kind(false, 0),
-                kind(false, 1),
-                kind(false, 2),
-                kind(false, 3)
-            ]
-        )
-    );
-}
-
-#[test]
-fn given_a_slot_past_the_fourth_when_asked_for_its_event_then_there_is_none() {
+fn given_a_slot_past_the_fourth_when_asked_for_a_due_time_then_there_is_none() {
     let dma = Arm9Dma::new();
-    assert_eq!(
-        (
-            dma.slot_kind(4),
-            dma.slot_kind(255),
-            dma.slot_due(4),
-            dma.slot_due(255)
-        ),
-        (None, None, None, None)
-    );
+    assert_eq!((dma.slot_due(4), dma.slot_due(255)), (None, None));
 }
 
 #[test]
@@ -1312,23 +1286,6 @@ fn given_a_waiting_start_when_its_slot_fires_then_the_transfer_comes_back_once()
 fn given_a_slot_with_no_start_when_it_fires_then_nothing_comes_back() {
     let mut dma = Arm7Dma::new();
     assert_eq!(dma.slot_fire(0, 0), Fired::default());
-}
-
-#[test]
-fn given_a_channel_when_its_event_kind_is_asked_then_it_names_the_cpu_and_channel() {
-    assert_eq!(
-        (Arm9Dma::event_kind(2), Arm7Dma::event_kind(3)),
-        (
-            EventKind::DmaStart {
-                arm9: true,
-                channel: 2
-            },
-            EventKind::DmaStart {
-                arm9: false,
-                channel: 3
-            }
-        )
-    );
 }
 
 // -------------------------------------------------------------------------- well-formed
@@ -1516,4 +1473,95 @@ fn given_a_transfer_that_re_arms_its_own_channel_with_the_irq_bit_when_it_finish
     write32(&mut dma, cnt(1), ENABLE | IRQ | 4);
     let effect = dma.finish(&t, END);
     assert_eq!(effect.requests.arm9, DMA0_IRQ << 1);
+}
+
+// ------------------------------------------------------- display starts (display-capture.md)
+
+#[test]
+fn given_start_timing_3_when_the_start_of_display_is_raised_then_the_channel_starts() {
+    assert_eq!(
+        trigger_mask::<true>(ENABLE | timing9(3) | 4, Trigger::StartOfDisplay),
+        1
+    );
+}
+
+#[test]
+fn given_start_timing_3_when_the_main_memory_display_is_raised_then_nothing_starts() {
+    let request = Trigger::MainMemory { frame_start: true };
+    assert_eq!(trigger_mask::<true>(ENABLE | timing9(3) | 4, request), 0);
+}
+
+#[test]
+fn given_start_timing_4_when_the_start_of_display_is_raised_then_nothing_starts() {
+    assert_eq!(
+        trigger_mask::<true>(ENABLE | timing9(4) | 4, Trigger::StartOfDisplay),
+        0
+    );
+}
+
+#[test]
+fn given_a_channel_enabled_during_the_frame_when_a_line_request_comes_then_it_waits_for_the_next_frame()
+ {
+    let request = Trigger::MainMemory { frame_start: false };
+    assert_eq!(trigger_mask::<true>(ENABLE | timing9(4) | 4, request), 0);
+}
+
+#[test]
+fn given_a_channel_enabled_during_the_frame_when_the_frame_starts_then_it_starts_and_stays_released()
+ {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(4) | 4);
+    let frame = dma.trigger(Trigger::MainMemory { frame_start: true });
+    let taken = dma.begin(0).is_some();
+    let line = dma.trigger(Trigger::MainMemory { frame_start: false });
+    assert_eq!((frame, taken, line), (1, true, 1));
+}
+
+#[test]
+fn given_a_channel_enabled_again_when_a_line_request_comes_then_it_waits_for_a_frame_start_again() {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(4) | 4);
+    dma.trigger(Trigger::MainMemory { frame_start: true });
+    write32(&mut dma, cnt(0), timing9(4) | 4);
+    write32(&mut dma, cnt(0), ENABLE | timing9(4) | 4);
+    assert_eq!(dma.trigger(Trigger::MainMemory { frame_start: false }), 0);
+}
+
+#[test]
+fn given_a_main_memory_start_with_count_4_when_taken_then_the_transfer_is_a_whole_line_of_128_words()
+ {
+    let transfer = started_by(
+        &mut Arm9Dma::new(),
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | REPEAT | timing9(4) | 4,
+        Trigger::MainMemory { frame_start: true },
+    );
+    assert_eq!(transfer.count, 128);
+}
+
+#[test]
+fn given_a_start_of_display_start_with_count_4_when_taken_then_the_transfer_is_4_words() {
+    let transfer = started_by(
+        &mut Arm9Dma::new(),
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | timing9(3) | 4,
+        Trigger::StartOfDisplay,
+    );
+    assert_eq!(transfer.count, 4);
+}
+
+#[test]
+fn given_arm7_start_timings_3_and_4_when_the_display_starts_are_raised_then_nothing_starts() {
+    let main = Trigger::MainMemory { frame_start: true };
+    assert_eq!(
+        (
+            trigger_mask::<false>(ENABLE | timing7(3) | 4, Trigger::StartOfDisplay),
+            trigger_mask::<false>(ENABLE | timing7(3) | 4, main)
+        ),
+        (0, 0)
+    );
 }

@@ -1,0 +1,2 @@
+# Golden frames for testroms/objmosaic. Format and review flow: tests/golden/README.md.
+frames=3 top=11ea82ad82815274 bottom=81e56e899883a845

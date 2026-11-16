@@ -5,7 +5,7 @@ I/O BG Control" and "LCD I/O BG Scrolling" (BGxCNT, BGxHOFS/VOFS); GBATEK "LCD V
 Format (BG Map)" and "LCD VRAM Character Data" (screen entries, tile layout); GBATEK "LCD Color
 Palettes" (colors, transparent color 0, backdrop).
 Used by: `crates/core/src/gpu2d/`   Phase: 3 (#28, engine A, standard palettes); engine B,
-sprites, extended palettes, mosaic, windows and blending are Phase 4
+sprites, extended palettes, windows and blending are Phase 4
 
 A text background is a grid of 8x8-pixel tiles. A map says which tile goes in each cell, the
 tile data says what each tile looks like, and the palette RAM (`palette-ram.md`) says what the
@@ -41,10 +41,10 @@ changes that byte alone.
 | 16-17 | display mode: 0 off (white), 1 graphics, 2 VRAM, 3 main memory; this note is mode 1 |
 | 24-26 | character base: tile data starts `N * 64 KiB` into BG VRAM |
 | 27-29 | screen base: maps start `N * 64 KiB` into BG VRAM |
-| 30 | BG extended palettes |
+| 30 | BG extended palettes (`extended-palettes.md`) |
 
-The other bits (OBJ, windows, OBJ mappings, OBJ extended palettes, VRAM block, 31) belong to
-Phase 4 and are stored and ignored.
+The other bits (windows, the VRAM block) belong to Phase 4 and are stored and ignored. The OBJ
+bits are `obj.md` and bit 31 is `extended-palettes.md`.
 
 ### BGxCNT bits
 
@@ -55,7 +55,7 @@ Phase 4 and are stored and ignored.
 | 6 | mosaic |
 | 7 | colors: 0 = 16 colors in 16 palettes (4 bits per pixel), 1 = 256 colors (8 bits per pixel) |
 | 8-12 | screen base block: the map starts `N * 2 KiB` past the DISPCNT screen base |
-| 13 | extended palette slot (BG0, BG1) / area overflow (affine); stored, not acted on |
+| 13 | extended palette slot (BG0, BG1, `extended-palettes.md`) / area overflow (affine) |
 | 14-15 | screen size (text): 0 = 256x256, 1 = 512x256, 2 = 256x512, 3 = 512x512 pixels |
 
 ### BGxHOFS / BGxVOFS
@@ -90,7 +90,8 @@ The BG mode says what each of the four layers is:
 | 5 | text (or 3D) | text | extended | extended |
 | 6 | 3D only | none | large bitmap | none |
 
-Phase 3 draws the text layers only. An affine, extended or large-bitmap layer, and a layer that
+Phase 3 draws the text layers only; `bg-modes.md` describes the other kinds, for both engines.
+An affine, extended or large-bitmap layer, and a layer that
 is none, draws nothing (`TODO(phase4)`). In mode 6 BG0 is the 3D engine's layer alone, so no layer
 draws there (`TODO(phase7)`). BG0 with DISPCNT bit 3 set is likewise the 3D engine's picture and
 draws nothing yet. A layer is drawn only when its DISPCNT bit 8 + n is set and the display mode is
@@ -155,17 +156,16 @@ the engine's per-line state).
   a read gives. — `Gpu2d::read_byte` — verify likewise.
 - **BGxCNT bit 13** is kept as written even for a text layer, where it matters only with
   extended palettes. — `Gpu2d::write_byte` — verify likewise.
-- **Reads past the mapped banks.** A base block that points beyond bank A's 128 KiB slot reads
-  0 (`vram-banks.md`, "Unverified"). — `BgVram::byte` — verify likewise.
+- **Reads past the mapped banks.** A base block that points where no bank sits in engine A's BG window reads
+  0 (`vram-banks.md`, "Unverified"). — `VramWindow::byte` — verify likewise.
 - **Mode 7** (not defined) draws no layer. — `text::layer_kind` — verify likewise.
 - **The sampling instant of a line** is its start; real hardware reads the registers while the
   line is being drawn. A write inside the visible part of a line is a half-line effect that this
   model rounds to the next line. — `Machine::render_line` — verify against a trace.
-- **Extended palettes** (DISPCNT bit 30) are not modeled: an 8 bits per pixel layer uses the
-  standard palette whatever the bit says (`TODO(phase4)`). — `text::pixel` — verify likewise.
+- **Extended palettes** (DISPCNT bit 30) are `extended-palettes.md`, with its own "Unverified".
 - **Forced blank** and **master brightness** do not change the picture (`display-mode-vram.md`,
   "Unverified"; `TODO(phase4)`).
-- **Mosaic** (BGxCNT bit 6) is stored and ignored (`TODO(phase4)`).
+- **Mosaic** (BGxCNT bit 6, MOSAIC) is `bg-modes.md`; its OBJ bits are `TODO(phase4)` (#31).
 
 ## Evidence
 

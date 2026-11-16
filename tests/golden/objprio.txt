@@ -1,0 +1,2 @@
+# Golden frames for testroms/objprio. Format and review flow: tests/golden/README.md.
+frames=3 top=1fb6b413b99535e5 bottom=039bf191ee0d6705

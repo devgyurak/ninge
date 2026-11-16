@@ -1,43 +1,123 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Graphics engine A's display registers and its picture: display off, the VRAM display
-//! (`docs/hw/display-mode-vram.md`) and the text backgrounds (`docs/hw/bg-text.md`).
+//! The two 2D graphics engines and their display stage: display off, the VRAM display
+//! (`docs/hw/display-mode-vram.md`), the text backgrounds (`docs/hw/bg-text.md`) and engine B
+//! (`docs/hw/bg-modes.md`).
 //!
-//! The picture is made one line at a time ([`Gpu2d::render_line_a`]), from the registers and
-//! memory as they are when the line is asked for. No allocation, formatting or collection
-//! happens while pixels are made.
+//! The picture is made one line at a time ([`Gpu2d::compose_line_a`], [`Gpu2d::select_line_a`], [`Gpu2d::render_line_b`]),
+//! from the registers and memory as they are when the line is asked for. No allocation, formatting
+//! or collection happens while pixels are made.
 //!
-//! Engine A is wired to the ARM9 alone, so `Gpu2d` is a plain type with no CPU const generic: the
-//! "seen by one CPU" class of `AGENTS.md` §4 ("Per-CPU devices").
+//! Both engines are wired to the ARM9 alone, so `Gpu2d` is a plain type with no CPU const generic:
+//! the "seen by one CPU" class of `AGENTS.md` §4 ("Per-CPU devices"). It owns two plain
+//! [`Engine`]s, one per register block, and what only engine A has lives here (the display modes 2
+//! and 3) or in [`EngineSpec`].
 
+mod affine;
+mod brightness;
+mod capture;
+mod effects;
+mod engine;
+mod fifo;
+mod kind;
+mod obj;
+mod spec;
 mod text;
+mod window;
 
-use crate::bus::BgVram;
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
+pub use affine::{AffineBg, AffineFormat};
+use brightness::{BRIGHT_BLOCK_BYTES as ENGINE_BRIGHT_BYTES, BRIGHT_OFFSET};
+pub use brightness::{BrightnessMode, MasterBrightness};
+pub use capture::Capture;
+pub(crate) use capture::CaptureLine;
+use capture::{CAPTURE_BYTES as CAPTURE_BLOCK_BYTES, CAPTURE_OFFSET};
+use effects::{BLD_BLOCK_BYTES as ENGINE_BLD_BYTES, BLD_OFFSET};
+pub use effects::{EffectMode, Effects, Targets};
+pub use engine::Mosaic;
+use engine::{
+    AFFINE_OFFSET, AFFINE_REGS_BYTES as ENGINE_AFFINE_REGS_BYTES,
+    BG_REGS_BYTES as ENGINE_BG_REGS_BYTES, BGCNT_OFFSET, Engine,
+    MOSAIC_BLOCK_BYTES as ENGINE_MOSAIC_BYTES, MOSAIC_OFFSET,
+};
+pub use fifo::DisplayFifo;
+use fifo::{FIFO_BYTES, FIFO_OFFSET};
+pub use obj::{OBJ_COUNT, ObjAttrs};
 use serde::{Deserialize, Serialize};
+pub(crate) use spec::EngineInputs;
+use spec::{EngineSpec, MAIN_SPEC, SUB_SPEC};
 pub use text::TextBg;
+pub use window::{LayerSet, WindowRect, Windows};
+use window::{WINDOW_BLOCK_BYTES as ENGINE_WINDOW_BYTES, WINDOW_OFFSET};
 
 /// DISPCNT of engine A, at `0400_0000h` (`display-mode-vram.md`, "Registers").
 pub const DISPCNT_A_ADDR: u32 = 0x0400_0000;
+/// Engine B's register block is engine A's plus this (`bg-modes.md`, "Registers").
+const ENGINE_B_OFFSET: u32 = 0x1000;
+/// DISPCNT of engine B, at `0400_1000h`.
+pub const DISPCNT_B_ADDR: u32 = DISPCNT_A_ADDR + ENGINE_B_OFFSET;
 /// POWCNT1, at `0400_0304h` (`display-mode-vram.md`, "Registers").
 pub const POWCNT1_ADDR: u32 = 0x0400_0304;
 /// POWCNT1's offset in the register space of [`Gpu2d`], which starts at DISPCNT.
 const POWCNT1_OFFSET: u32 = POWCNT1_ADDR - DISPCNT_A_ADDR;
 /// BG0CNT, at `0400_0008h`: BG0CNT-BG3CNT, then BG0HOFS, BG0VOFS, BG1HOFS, ... BG3VOFS
 /// (`bg-text.md`, "Registers"). They are one block of the map, 24 bytes from here.
-pub const BG_REGS_ADDR: u32 = 0x0400_0008;
+pub const BG_REGS_ADDR: u32 = DISPCNT_A_ADDR + BGCNT_OFFSET;
+/// Engine B's BG control block, at `0400_1008h`.
+pub const BG_REGS_B_ADDR: u32 = BG_REGS_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block: four BGxCNT (2 bytes) and four scroll pairs (4 bytes).
-pub const BG_REGS_BYTES: u32 = 24;
-/// The offsets, in the register space of [`Gpu2d`], of the BGxCNT run and of the scroll run.
-const BGCNT_OFFSET: u32 = BG_REGS_ADDR - DISPCNT_A_ADDR;
-const SCROLL_OFFSET: u32 = BGCNT_OFFSET + 8;
-const SCROLL_END: u32 = BGCNT_OFFSET + BG_REGS_BYTES;
-/// The scroll registers hold 9 bits (`bg-text.md`, "BGxHOFS / BGxVOFS").
-const SCROLL_MASK: u32 = 0x1FF;
-/// The xRGB8888 value of a white pixel.
-pub const WHITE: u32 = 0x00FF_FFFF;
-/// The xRGB8888 value of a black pixel.
-pub const BLACK: u32 = 0;
+pub const BG_REGS_BYTES: u32 = ENGINE_BG_REGS_BYTES;
+/// BG2PA, at `0400_0020h`: the transform registers of BG2 and BG3, 32 bytes from here
+/// (`bg-modes.md`, "Registers").
+pub const AFFINE_REGS_ADDR: u32 = DISPCNT_A_ADDR + AFFINE_OFFSET;
+/// Engine B's transform registers, at `0400_1020h`.
+pub const AFFINE_REGS_B_ADDR: u32 = AFFINE_REGS_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block: PA-PD, BGxX and BGxY of two layers.
+pub const AFFINE_REGS_BYTES: u32 = ENGINE_AFFINE_REGS_BYTES;
+/// MOSAIC, at `0400_004Ch`: a halfword in a 4-byte block of the address map (`bg-modes.md`,
+/// "Registers").
+pub const MOSAIC_ADDR: u32 = DISPCNT_A_ADDR + MOSAIC_OFFSET;
+/// Engine B's MOSAIC, at `0400_104Ch`.
+pub const MOSAIC_B_ADDR: u32 = MOSAIC_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const MOSAIC_BYTES: u32 = ENGINE_MOSAIC_BYTES;
+/// BLDCNT, at `0400_0050h`: BLDCNT, BLDALPHA and BLDY, in a block of 8 bytes of the address map
+/// (`blending.md`, "Registers").
+pub const BLD_REGS_ADDR: u32 = DISPCNT_A_ADDR + BLD_OFFSET;
+/// Engine B's BLDCNT, at `0400_1050h`.
+pub const BLD_REGS_B_ADDR: u32 = BLD_REGS_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const BLD_REGS_BYTES: u32 = ENGINE_BLD_BYTES;
+/// MASTER_BRIGHT of engine A, at `0400_006Ch`: a halfword in a 4-byte block of the address map
+/// (`blending.md`, "Registers").
+pub const MASTER_BRIGHT_ADDR: u32 = DISPCNT_A_ADDR + BRIGHT_OFFSET;
+/// Engine B's MASTER_BRIGHT, at `0400_106Ch`; POWCNT1 bit 9 does not gate it.
+pub const MASTER_BRIGHT_B_ADDR: u32 = MASTER_BRIGHT_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const MASTER_BRIGHT_BYTES: u32 = ENGINE_BRIGHT_BYTES;
+/// DISPCAPCNT of engine A, at `0400_0064h`: a word (`display-capture.md`, "Registers").
+pub const DISPCAPCNT_ADDR: u32 = DISPCNT_A_ADDR + CAPTURE_OFFSET;
+/// The bytes of that register.
+pub const DISPCAPCNT_BYTES: u32 = CAPTURE_BLOCK_BYTES;
+/// DISP_MMEM_FIFO of engine A, at `0400_0068h`: a word, the destination of the main-memory display
+/// DMA (`display-capture.md`, "Registers").
+pub const DISP_MMEM_FIFO_ADDR: u32 = DISPCNT_A_ADDR + FIFO_OFFSET;
+/// The bytes of that register.
+pub const DISP_MMEM_FIFO_BYTES: u32 = FIFO_BYTES;
+/// WIN0H, at `0400_0040h`: WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT, 12 bytes from here
+/// (`windows.md`, "Registers").
+pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
+/// Engine B's window registers, at `0400_1040h`.
+pub const WINDOW_REGS_B_ADDR: u32 = WINDOW_REGS_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const WINDOW_REGS_BYTES: u32 = ENGINE_WINDOW_BYTES;
+
+/// A white pixel as 15-bit colour; it expands to xRGB8888 `00FF_FFFFh`.
+const WHITE_COLOR: u16 = 0x7FFF;
+/// The colour bits of a halfword: bit 15 is not part of the colour.
+const COLOR_MASK_15: u16 = 0x7FFF;
+/// A black pixel as 15-bit colour; it expands to xRGB8888 zero.
+const BLACK_COLOR: u16 = 0;
 
 /// DISPCNT bits 16-17: the display mode.
 const DISPCNT_MODE_SHIFT: u32 = 16;
@@ -48,11 +128,13 @@ const MODE_OFF: u32 = 0;
 const MODE_GRAPHICS: u32 = 1;
 /// Display mode 2: the bitmap read from a VRAM block.
 const MODE_VRAM: u32 = 2;
+/// Display mode 3: the main-memory display, the line the FIFO delivered.
+const MODE_FIFO: u32 = 3;
 /// DISPCNT bits 18-19: the VRAM block mode 2 reads.
 const DISPCNT_BLOCK_SHIFT: u32 = 18;
 const DISPCNT_BLOCK_MASK: u32 = 0x3;
-/// The block number of bank A, the only block modeled in Phase 2.
-const BLOCK_A: u32 = 0;
+/// POWCNT1 bit 9: engine B (2D) power.
+const POWCNT1_ENGINE_B: u16 = 1 << 9;
 /// POWCNT1 bit 15: display swap. Set sends engine A to the upper screen.
 const POWCNT1_SWAP: u16 = 1 << 15;
 /// POWCNT1 after direct boot: LCD, both 2D engines and both 3D units on, engine A on top.
@@ -66,25 +148,55 @@ const CHANNEL_MASK: u16 = 0x1F;
 const GREEN_SHIFT: u32 = 5;
 const BLUE_SHIFT: u32 = 10;
 
-/// Engine A's display registers (`display-mode-vram.md`, "Registers").
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Gpu2d {
-    dispcnt_a: u32,
-    powcnt1: u16,
-    // BG0CNT-BG3CNT and the nine-bit scrolls of BG0-BG3 (`bg-text.md`, "Registers").
-    bgcnt: [u16; 4],
-    bghofs: [u16; 4],
-    bgvofs: [u16; 4],
+/// One of the two 2D engines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineId {
+    /// The main engine, registers at `0400_0000h`.
+    A,
+    /// The sub engine, registers at `0400_1000h`.
+    B,
 }
 
-/// A register of [`Gpu2d`] and which byte of it an offset falls on.
+impl EngineId {
+    /// What this engine lacks (`bg-modes.md`, "Engine B").
+    const fn spec(self) -> &'static EngineSpec {
+        match self {
+            Self::A => &MAIN_SPEC,
+            Self::B => &SUB_SPEC,
+        }
+    }
+}
+
+/// Both engines' registers and POWCNT1 (`display-mode-vram.md`, "Registers").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpu2d {
+    a: Engine,
+    b: Engine,
+    powcnt1: u16,
+    // DISPCAPCNT and the capture latch (engine A only).
+    capture: Capture,
+    // The main-memory display FIFO (engine A only).
+    fifo: DisplayFifo,
+}
+
+/// Where an offset in the register space of [`Gpu2d`] lands.
 #[derive(Clone, Copy)]
-enum Field {
-    Dispcnt,
-    Powcnt1,
-    BgCnt(usize),
-    BgHofs(usize),
-    BgVofs(usize),
+enum Route {
+    /// This byte of POWCNT1.
+    Powcnt1(u32),
+    /// This byte of DISPCAPCNT.
+    Capture(u32),
+    /// This offset in the register block of an engine.
+    Engine(EngineId, u32),
+}
+
+/// The ports POWCNT1 bit 9 gates are `1008h-105Fh` of the engine B block, i.e. offsets `8..60h`
+/// within it (`bg-modes.md`, "Engine B"): DISPCNT below them and registers above them, such as
+/// MASTER_BRIGHT at `106Ch`, are not gated.
+const GATED_PORTS_END: u32 = 0x60;
+
+fn is_gated_port(offset_in_block: u32) -> bool {
+    (BGCNT_OFFSET..GATED_PORTS_END).contains(&offset_in_block)
 }
 
 /// Widens a 5-bit channel to 8 bits by repeating its top bits. A host-side choice, not a
@@ -101,6 +213,17 @@ fn expand_color(halfword: u16) -> u32 {
         | expand_channel(halfword >> BLUE_SHIFT)
 }
 
+/// `line` as xRGB8888 into `out`, one host pixel for each 15-bit one, after the master brightness.
+pub(crate) fn expand_line(
+    line: &[u16; SCREEN_WIDTH],
+    brightness: MasterBrightness,
+    out: &mut [u32],
+) {
+    out.iter_mut().zip(line).for_each(|(pixel, &color)| {
+        *pixel = brightness.expand(color);
+    });
+}
+
 /// `reg` with its byte `index` replaced by `value`.
 fn with_byte(reg: u32, index: u32, value: u8) -> u32 {
     let shift = index * 8;
@@ -109,34 +232,114 @@ fn with_byte(reg: u32, index: u32, value: u8) -> u32 {
 
 impl Gpu2d {
     /// Registers in their power-on state.
-    // TODO(hw-unverified): DISPCNT starts at 0 and POWCNT1 at `820Fh`, neither stated by
-    // GBATEK (`display-mode-vram.md`, "Unverified"); BGxCNT and the scrolls start at 0 likewise
-    // (`bg-text.md`, "Unverified").
+    // TODO(hw-unverified): POWCNT1 starts at `820Fh`, not stated by GBATEK
+    // (`display-mode-vram.md`, "Unverified"); the engines' registers start at 0 likewise.
     pub fn new() -> Self {
         Self {
-            dispcnt_a: 0,
+            a: Engine::new(),
+            b: Engine::new(),
             powcnt1: POWCNT1_RESET,
-            bgcnt: [0; 4],
-            bghofs: [0; 4],
-            bgvofs: [0; 4],
+            // TODO(hw-unverified): DISPCAPCNT resets to 0 (`display-capture.md`, "Unverified").
+            capture: Capture::default(),
+            fifo: DisplayFifo::new(),
         }
     }
 
-    /// Layer `layer`'s registers decoded (`layer` is taken modulo 4). A debugger's BG panel (#58)
-    /// shows it.
-    pub fn text_bg(&self, layer: usize) -> TextBg {
-        let n = layer & 3;
-        TextBg::decode(
-            self.dispcnt_a,
-            self.bgcnt[n],
-            self.bghofs[n],
-            self.bgvofs[n],
-        )
+    fn engine(&self, which: EngineId) -> &Engine {
+        match which {
+            EngineId::A => &self.a,
+            EngineId::B => &self.b,
+        }
+    }
+
+    /// Layer `layer`'s registers decoded (`layer` is taken modulo 4) as engine `which` sees them. A
+    /// debugger's BG panel (#58) shows it.
+    pub fn text_bg(&self, which: EngineId, layer: usize) -> TextBg {
+        let engine = self.engine(which);
+        engine.text_bg(which.spec().dispcnt(engine.dispcnt()), layer)
+    }
+
+    /// Affine layer `layer` (2 or 3; others are taken modulo 2) as engine `which` sees it, with
+    /// its internal reference point. A debugger's BG panel (#58) shows it.
+    pub fn affine_bg(&self, which: EngineId, layer: usize) -> AffineBg {
+        self.engine(which).affine_bg(which.spec(), layer)
+    }
+
+    /// Visible line `y` is about to be made: both engines' windows move to it
+    /// (`windows.md`, "The vertical test").
+    pub(crate) fn begin_line(&mut self, y: usize) {
+        self.capture.begin_line(y);
+        self.a.begin_line(y);
+        self.b.begin_line(y);
+    }
+
+    /// A visible line has been drawn: both engines' affine reference points step down one line
+    /// (`bg-modes.md`, "When the picture is made").
+    pub(crate) fn end_line(&mut self) {
+        self.a.end_line();
+        self.b.end_line();
+    }
+
+    /// VBlank starts: both engines' affine reference points are loaded from their registers.
+    pub(crate) fn vblank_started(&mut self) {
+        self.capture.vblank_started();
+        self.a.vblank_started();
+        self.b.vblank_started();
+    }
+
+    /// The mosaic block sizes engine `which`'s MOSAIC holds. A debugger's BG panel (#58) shows them.
+    pub fn mosaic(&self, which: EngineId) -> Mosaic {
+        self.engine(which).mosaic()
+    }
+
+    /// The windows of engine `which`: the rectangles, which of them DISPCNT turns on and what each
+    /// region shows. A debugger's BG panel (#58) shows them.
+    pub fn windows(&self, which: EngineId) -> Windows {
+        let engine = self.engine(which);
+        engine.windows(which.spec().dispcnt(engine.dispcnt()))
+    }
+
+    /// The colour special effects engine `which` selects: the effect, its targets and the
+    /// coefficients. A debugger's BG panel (#58) shows them.
+    pub fn effects(&self, which: EngineId) -> Effects {
+        self.engine(which).effects()
+    }
+
+    /// The master brightness engine `which` selects: its mode and factor. A debugger's BG panel
+    /// (#58) shows it.
+    pub fn master_brightness(&self, which: EngineId) -> MasterBrightness {
+        self.engine(which).master_brightness()
+    }
+
+    /// DISPCAPCNT and the capture latch. A debugger's video panel (#58) shows them.
+    pub fn capture(&self) -> Capture {
+        self.capture
+    }
+
+    /// What the capture unit does on visible line `y`, or `None` when it does nothing there.
+    pub(crate) fn capture_line(&self, y: usize) -> Option<CaptureLine> {
+        self.capture.line(y, self.a.dispcnt())
+    }
+
+    /// The main-memory display FIFO. A debugger's video panel (#58) shows it.
+    pub fn fifo(&self) -> &DisplayFifo {
+        &self.fifo
+    }
+
+    /// The display takes the next line of the main-memory display out of the FIFO, at the start of a
+    /// visible line (`display-capture.md`, "The main-memory display").
+    pub(crate) fn take_fifo_line(&mut self) -> [u16; SCREEN_WIDTH] {
+        self.fifo.take_line()
     }
 
     /// DISPCNT of engine A.
     pub fn dispcnt_a(&self) -> u32 {
-        self.dispcnt_a
+        self.a.dispcnt()
+    }
+
+    /// DISPCNT of engine B.
+    pub fn dispcnt_b(&self) -> u32 {
+        self.b.dispcnt()
     }
 
     /// POWCNT1.
@@ -147,151 +350,198 @@ impl Gpu2d {
     /// Whether POWCNT1 bit 15 sends engine A to the upper screen.
     // TODO(hw-unverified): bits 0 (LCD enable) and 1 (engine A enable) have no effect on the
     // picture (`display-mode-vram.md`, "Unverified").
-    // TODO(phaseN): the other POWCNT1 bits arrive with their units (3D: phase 7, engine B:
-    // phase 4).
+    // TODO(phase7): the other POWCNT1 bits arrive with the 3D units.
     pub fn engine_a_on_top(&self) -> bool {
         self.powcnt1 & POWCNT1_SWAP != 0
     }
 
-    /// The register that holds `offset` and the byte of it that `offset` is.
-    fn locate(offset: u32) -> Option<(Field, u32)> {
+    /// Whether POWCNT1 bit 9 powers engine B (`bg-modes.md`, "Engine B").
+    pub fn engine_b_on(&self) -> bool {
+        self.powcnt1 & POWCNT1_ENGINE_B != 0
+    }
+
+    /// Where `offset` in the register space (which starts at DISPCNT of engine A) lands.
+    fn route(offset: u32) -> Route {
         let powcnt1_index = offset.wrapping_sub(POWCNT1_OFFSET);
-        if offset < 4 {
-            Some((Field::Dispcnt, offset))
-        } else if (BGCNT_OFFSET..SCROLL_OFFSET).contains(&offset) {
-            let at = offset - BGCNT_OFFSET;
-            Some((Field::BgCnt((at / 2) as usize), at % 2))
-        } else if (SCROLL_OFFSET..SCROLL_END).contains(&offset) {
-            // Each layer has HOFS in the first halfword of its four bytes and VOFS in the second.
-            let at = offset - SCROLL_OFFSET;
-            let layer = (at / 4) as usize;
-            Some(match at % 4 {
-                byte @ 0..=1 => (Field::BgHofs(layer), byte),
-                byte => (Field::BgVofs(layer), byte - 2),
-            })
-        } else if powcnt1_index < 2 {
-            Some((Field::Powcnt1, powcnt1_index))
+        let capture_index = offset.wrapping_sub(CAPTURE_OFFSET);
+        if powcnt1_index < 2 {
+            Route::Powcnt1(powcnt1_index)
+        } else if capture_index < CAPTURE_BLOCK_BYTES {
+            Route::Capture(capture_index)
+        } else if offset >= ENGINE_B_OFFSET {
+            Route::Engine(EngineId::B, offset - ENGINE_B_OFFSET)
         } else {
-            None
+            Route::Engine(EngineId::A, offset)
         }
     }
 
-    /// The byte at `offset` in the register space, which starts at DISPCNT; 0 where no register
-    /// is.
-    // TODO(hw-unverified): the scroll registers are write-only and read 0 (`bg-text.md`,
-    // "Unverified").
+    /// The byte at `offset` in the register space; 0 where no register is.
     fn read_byte(&self, offset: u32) -> u8 {
-        let Some((field, byte)) = Self::locate(offset) else {
-            return 0;
-        };
-        let value = match field {
-            Field::Dispcnt => self.dispcnt_a,
-            Field::Powcnt1 => u32::from(self.powcnt1),
-            Field::BgCnt(n) => u32::from(self.bgcnt[n & 3]),
-            Field::BgHofs(_) | Field::BgVofs(_) => 0,
-        };
-        (value >> (byte * 8)) as u8
+        match Self::route(offset) {
+            Route::Powcnt1(byte) => (self.powcnt1 >> (byte * 8)) as u8,
+            Route::Capture(byte) => self.capture.read_byte(byte),
+            Route::Engine(which, at) => self.engine(which).read_byte(at),
+        }
     }
 
-    /// Writes one byte of a register; an offset that is no register is not ours and is ignored.
+    /// Writes one byte of a register; an offset that is no register is not ours and is ignored,
+    /// and so is a write to engine B's ports `1008h-105Fh` while POWCNT1 bit 9 is clear: the ports
+    /// of a powered-off engine are read-only, and DISPCNT at `1000h` is not among them
+    /// (`bg-modes.md`, "Engine B").
     // TODO(hw-unverified): POWCNT1's undefined bits are kept as written
-    // (`display-mode-vram.md`, "Unverified"); BGxCNT bit 13 is kept as written
-    // (`bg-text.md`, "Unverified").
+    // (`display-mode-vram.md`, "Unverified"); the palette of a powered-off engine is not read as
+    // zero (`bg-modes.md`, "Unverified").
     fn write_byte(&mut self, offset: u32, value: u8) {
-        let Some((field, byte)) = Self::locate(offset) else {
-            return;
-        };
-        match field {
-            Field::Dispcnt => self.dispcnt_a = with_byte(self.dispcnt_a, byte, value),
-            Field::Powcnt1 => self.powcnt1 = with_byte(u32::from(self.powcnt1), byte, value) as u16,
-            Field::BgCnt(n) => {
-                self.bgcnt[n & 3] = with_byte(u32::from(self.bgcnt[n & 3]), byte, value) as u16;
+        match Self::route(offset) {
+            Route::Powcnt1(byte) => {
+                self.powcnt1 = with_byte(u32::from(self.powcnt1), byte, value) as u16;
             }
-            Field::BgHofs(n) => {
-                self.bghofs[n & 3] =
-                    (with_byte(u32::from(self.bghofs[n & 3]), byte, value) & SCROLL_MASK) as u16;
-            }
-            Field::BgVofs(n) => {
-                self.bgvofs[n & 3] =
-                    (with_byte(u32::from(self.bgvofs[n & 3]), byte, value) & SCROLL_MASK) as u16;
+            Route::Capture(byte) => self.capture.write_byte(byte, value),
+            Route::Engine(EngineId::A, at) => self.a.write_byte(at, value),
+            Route::Engine(EngineId::B, at) => {
+                if self.engine_b_on() || !is_gated_port(at) {
+                    self.b.write_byte(at, value);
+                }
             }
         }
     }
 
-    /// Draws line `y` (0-191) of engine A's picture into `out` (`SCREEN_WIDTH` pixels), given the
-    /// bytes of bank A when the CPU can see it as LCDC VRAM, engine A's BG VRAM, and the palette
-    /// RAM. A line past the last visible one is not drawn.
-    // TODO(phase4): mode 1 completes (OBJ, affine and extended layers, windows, blending, extended
-    // palettes, mosaic), mode 3 draws the main-memory bitmap, and blocks 1-3 (banks B-D) join
-    // mode 2 (#35).
-    // TODO(phase4): master brightness applies to the output of modes 1-3 (#34).
+    /// Whether engine A's display mode shows the layers (display mode 1), i.e. whether the
+    /// composed line is what the screen gets (`display-capture.md`, "Where the capture unit sits").
+    pub(crate) fn shows_layers_a(&self, inputs: &EngineInputs<'_>) -> bool {
+        let dispcnt = inputs.spec.dispcnt(self.a.dispcnt());
+        (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK == MODE_GRAPHICS
+    }
+
+    /// Composes line `y` (0-191) of engine A's graphics screen (BG and OBJ) into `line` in 15-bit
+    /// colour, whatever display mode the engine shows: this is what a capture reads as source A
+    /// (`display-capture.md`, "Where the capture unit sits"). A line past the last visible one is
+    /// not drawn.
+    // TODO(hw-unverified): windows apply to the composed layers in every display mode, since a
+    // capture reads them whatever the mode (`windows.md`, "Unverified").
+    // TODO(hw-unverified): source A is still the composed layers with display mode 0 or the screen
+    // forced blank (`display-capture.md`, "Unverified").
+    // TODO(phase7): the 3D layer joins BG0 here.
+    pub(crate) fn compose_line_a(
+        &self,
+        y: usize,
+        inputs: &EngineInputs<'_>,
+        line: &mut [u16; SCREEN_WIDTH],
+    ) {
+        line.fill(BLACK_COLOR);
+        if y < SCREEN_HEIGHT {
+            self.a.render_line(y, inputs, line);
+        }
+    }
+
+    /// Picks what engine A's screen shows for line `y` (0-191) into `line` in 15-bit colour, given
+    /// the bytes of banks A-D where the CPU sees them as LCDC VRAM, what the engine reads
+    /// ([`EngineInputs`]), the line [`Gpu2d::compose_line_a`] made (read in display mode 1 only) and
+    /// the line the main-memory display FIFO delivered (read in display mode 3 only), and returns
+    /// the master brightness to apply to it. A line past the last visible one is not drawn.
+    // TODO(hw-unverified): the master brightness applies to the white of display mode 0
+    // (`blending.md`, "Unverified").
     // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored
     // (`display-mode-vram.md`, "Unverified").
     // TODO(hw-unverified): a bank that is disabled or not in LCDC mode is drawn as zeros, i.e.
     // black (`display-mode-vram.md`, "Unverified").
-    pub(crate) fn render_line_a(
+    pub(crate) fn select_line_a(
         &self,
         y: usize,
-        bank_a: Option<&[u8]>,
-        vram: &BgVram<'_>,
-        palette: &[u8],
-        out: &mut [u32],
-    ) {
+        lcdc: [Option<&[u8]>; 4],
+        inputs: &EngineInputs<'_>,
+        composed: &[u16; SCREEN_WIDTH],
+        fifo: &[u16; SCREEN_WIDTH],
+        line: &mut [u16; SCREEN_WIDTH],
+    ) -> MasterBrightness {
         if y >= SCREEN_HEIGHT {
-            return;
+            return MasterBrightness::OFF;
         }
-        let mode = (self.dispcnt_a >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
-        let block = (self.dispcnt_a >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
+        let dispcnt = inputs.spec.dispcnt(self.a.dispcnt());
+        let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
+        let block = (dispcnt >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
+        // The line is made in 15-bit colour; the caller expands it for the host after the stages
+        // between the layers and the screen, which work on the colour the hardware has.
+        line.fill(BLACK_COLOR);
+        // The master brightness applies to every display mode (`blending.md`, "Master brightness").
+        let brightness = self.a.master_brightness();
         if mode == MODE_OFF {
-            out.fill(WHITE);
+            line.fill(WHITE_COLOR);
         } else if mode == MODE_GRAPHICS {
-            self.render_graphics_line(y, vram, palette, out);
-        } else if mode == MODE_VRAM && block == BLOCK_A {
-            out.fill(BLACK);
-            let row = bank_a
+            line.copy_from_slice(composed);
+        } else if mode == MODE_FIFO {
+            line.iter_mut().zip(fifo).for_each(|(pixel, &color)| {
+                *pixel = color & COLOR_MASK_15;
+            });
+        } else if mode == MODE_VRAM {
+            let row = lcdc
+                .get(block as usize)
+                .copied()
+                .flatten()
                 .and_then(|bank| bank.get(y * SCREEN_WIDTH * 2..(y + 1) * SCREEN_WIDTH * 2))
                 .unwrap_or(&[]);
             let (pairs, _) = row.as_chunks::<2>();
-            out.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
-                *pixel = expand_color(u16::from_le_bytes(bytes));
+            line.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
+                *pixel = u16::from_le_bytes(bytes);
             });
-        } else {
-            out.fill(BLACK);
         }
+        brightness
     }
 
-    /// Display mode 1, line `y`: each pixel is the front-most text layer that is not transparent
-    /// there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the layers together").
-    fn render_graphics_line(&self, y: usize, vram: &BgVram<'_>, palette: &[u8], out: &mut [u32]) {
-        let palette = palette.get(..text::BG_PALETTE_BYTES).unwrap_or(palette);
-        let layers: [TextBg; 4] = std::array::from_fn(|n| self.text_bg(n));
-        // The layer in front is the one with the lowest priority value, and among equals the lower
-        // number: sorting by (priority, number) puts the front-most first.
-        let mut order = [0usize, 1, 2, 3];
-        order.sort_unstable_by_key(|&n| (layers[n].priority, n));
-        let backdrop = expand_color(text::palette_color(palette, 0));
-        out.iter_mut().enumerate().for_each(|(x, pixel)| {
-            *pixel = order
-                .iter()
-                .filter(|&&n| text::is_drawn(self.dispcnt_a, n))
-                .find_map(|&n| text::pixel(&layers[n], vram, palette, x as u32, y as u32))
-                .map_or(backdrop, expand_color);
-        });
+    /// Draws line `y` of engine B's picture into `line` in 15-bit colour and returns the master
+    /// brightness to apply to it. Engine B has the display modes 0 (white)
+    /// and 1 (the layers) only; a powered-off engine is black (`bg-modes.md`, "Engine B").
+    // TODO(hw-unverified): what the screen of a powered-off engine shows (`bg-modes.md`,
+    // "Unverified"), and whether the master brightness applies to it, here and to the white of display
+    // mode 0 (`blending.md`, "Unverified").
+    pub(crate) fn render_line_b(
+        &self,
+        y: usize,
+        inputs: &EngineInputs<'_>,
+        line: &mut [u16; SCREEN_WIDTH],
+    ) -> MasterBrightness {
+        if y >= SCREEN_HEIGHT {
+            return MasterBrightness::OFF;
+        }
+        let dispcnt = inputs.spec.dispcnt(self.b.dispcnt());
+        let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
+        line.fill(BLACK_COLOR);
+        let mut brightness = self.b.master_brightness();
+        if !self.engine_b_on() {
+            line.fill(BLACK_COLOR);
+            brightness = MasterBrightness::OFF;
+        } else if mode == MODE_GRAPHICS {
+            self.b.render_line(y, inputs, line);
+        } else {
+            line.fill(WHITE_COLOR);
+        }
+        brightness
     }
 }
 
-/// Engine A is wired to the ARM9 alone (`AGENTS.md` §4, "Per-CPU devices"). Its registers are
-/// bytes; a wider access is split into them.
+/// Both engines are wired to the ARM9 alone (`AGENTS.md` §4, "Per-CPU devices"). Their registers
+/// are bytes; a wider access is split into them.
 impl Device<true> for Gpu2d {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+    fn peek(&self, offset: u32, width: Width, _cx: Cx<'_>) -> u32 {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
+        // DISP_MMEM_FIFO takes whole pixels, so its write is not split into bytes.
+        if (FIFO_OFFSET..FIFO_OFFSET + FIFO_BYTES).contains(&offset) {
+            self.fifo.write(width, value);
+            return Effect::default();
+        }
         write_bytes(offset, width, value, |at, byte| {
             self.write_byte(at, byte);
             Effect::default()
         })
+    }
+}
+
+impl Checked for Gpu2d {
+    fn well_formed(&self, _now: u64) -> bool {
+        self.capture.well_formed() && self.fifo.well_formed()
     }
 }
 

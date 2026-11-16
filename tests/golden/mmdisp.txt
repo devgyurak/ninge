@@ -1,0 +1,2 @@
+# Golden frames for testroms/mmdisp. Format and review flow: tests/golden/README.md.
+frames=24 top=4f2a055a6cb55325 bottom=37bb6fb31ef02325

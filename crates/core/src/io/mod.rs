@@ -14,6 +14,8 @@
 //! controllers. A device returns what it would raise in an `Effect`; it never reaches a
 //! controller itself (`AGENTS.md` §4, "Per-CPU devices").
 
+#[macro_use]
+mod registry;
 pub(crate) mod device;
 pub mod divsqrt;
 pub mod dma;
@@ -28,8 +30,9 @@ pub mod timers;
 pub mod timing;
 
 use crate::gpu2d::Gpu2d;
+use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
-use device::{Device, Effect, Fired, Width};
+use device::{Checked, Cx, Device, Effect, Fired, SlotMask, Width};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -40,53 +43,6 @@ use power::Power;
 use serde::{Deserialize, Serialize};
 use timers::Timers;
 use timing::Timing;
-
-/// `&$place` for `ref` and `&mut $place` for `mut`: lets [`device_call`] borrow a device either way.
-macro_rules! borrow {
-    (ref $place:expr) => {
-        &$place
-    };
-    (mut $place:expr) => {
-        &mut $place
-    };
-}
-
-/// The one place a [`Port`] meets its device for one CPU: calls `Device::<cpu>::$method` on the
-/// field `$io` keeps for `$port`, borrowing it as `$b` says (`ref` or `mut`), and evaluates to
-/// the call's result. `$arm9` is the const generic naming the CPU that asks. A port the CPU's
-/// `Io` does not own (engine A seen from the ARM7) is a bug in the
-/// caller: it asserts in a debug build and evaluates to `$absent`.
-///
-/// A macro and not a function because each arm calls a different concrete device type. It is
-/// still static dispatch: every arm is a monomorphized call, no `dyn` (`AGENTS.md` §2 rule 3).
-/// A new device adds its arms here once and every access path picks it up.
-macro_rules! device_call {
-    ($io:expr, $arm9:ident, $port:expr, $b:tt, $method:ident($($arg:expr),*), $absent:expr) => {
-        match $port {
-            Port::Gpu2d if $arm9 => Device::<true>::$method(borrow!($b $io.gpu2d) $(, $arg)*),
-            Port::Timing => Device::<$arm9>::$method(borrow!($b $io.timing) $(, $arg)*),
-            Port::Irq if $arm9 => Device::<true>::$method(borrow!($b $io.irq9) $(, $arg)*),
-            Port::Irq => Device::<false>::$method(borrow!($b $io.irq7) $(, $arg)*),
-            Port::Ipc | Port::IpcRecv => {
-                Device::<$arm9>::$method(borrow!($b $io.ipc) $(, $arg)*)
-            }
-            Port::Timers if $arm9 => Device::<true>::$method(borrow!($b $io.timers9) $(, $arg)*),
-            Port::Timers => Device::<false>::$method(borrow!($b $io.timers7) $(, $arg)*),
-            Port::Dma | Port::DmaFill if $arm9 => {
-                Device::<true>::$method(borrow!($b $io.dma9) $(, $arg)*)
-            }
-            Port::Dma | Port::DmaFill => Device::<false>::$method(borrow!($b $io.dma7) $(, $arg)*),
-            Port::DivSqrt if $arm9 => Device::<true>::$method(borrow!($b $io.divsqrt) $(, $arg)*),
-            Port::Keypad if $arm9 => Device::<true>::$method(borrow!($b $io.keypad9) $(, $arg)*),
-            Port::Keypad => Device::<false>::$method(borrow!($b $io.keypad7) $(, $arg)*),
-            Port::Power if !$arm9 => Device::<false>::$method(borrow!($b $io.power) $(, $arg)*),
-            Port::Gpu2d | Port::Power | Port::DivSqrt => {
-                debug_assert!(false, "port not reachable through Io");
-                $absent
-            }
-        }
-    };
-}
 
 /// When an access happens: the clock of the CPU making it, and the earliest time an event it
 /// schedules may fire.
@@ -99,131 +55,48 @@ pub(crate) struct At {
     pub(crate) floor: u64,
 }
 
-/// The register devices. Plain data; the machine owns one next to its `Memory`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Io {
-    // Engine A's display registers, reached through the I/O slow path.
-    gpu2d: Gpu2d,
-    // VCOUNT and each CPU's DISPSTAT (`display-timing.md`).
-    timing: Timing,
-    // Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
-    irq9: InterruptController<true>,
-    irq7: InterruptController<false>,
-    // IPCSYNC and the two IPC FIFOs (`ipc.md`).
-    ipc: Ipc,
-    // Each CPU's four timers: the same addresses, separate state (`timers.md`).
-    timers9: Timers<true>,
-    timers7: Timers<false>,
-    // Each CPU's four DMA channels: the same addresses, separate state (`dma.md`).
-    dma9: Dma<true>,
-    dma7: Dma<false>,
-    // The ARM9's divider and square-root unit (`divsqrt.md`).
-    divsqrt: DivSqrt,
-    // Each CPU's KEYINPUT and KEYCNT, and the ARM7's EXTKEYIN: the same addresses, separate
-    // KEYCNT (`keypad.md`).
-    keypad9: Keypad<true>,
-    keypad7: Keypad<false>,
-    // The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
-    power: Power,
+registry! {
+    $
+    shared {
+        /// VCOUNT and each CPU's DISPSTAT.
+        timing / timing_mut: Timing = Timing::new() => [Port::Timing],
+        /// IPCSYNC and the two IPC FIFOs (`ipc.md`), for the debugger.
+        ipc: Ipc = Ipc::new() => [Port::Ipc, Port::IpcRecv],
+    }
+    arm9 {
+        /// Both 2D engines' display registers and POWCNT1.
+        gpu2d / gpu2d_mut: Gpu2d = Gpu2d::new() => [Port::Gpu2d],
+        /// The ARM9's divider and square-root unit (`divsqrt.md`).
+        divsqrt: DivSqrt = DivSqrt::new() => [Port::DivSqrt],
+    }
+    arm7 {
+        /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
+        power / power_mut: Power = Power::new() => [Port::Power],
+    }
+    each {
+        /// Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
+        irq9 / irq7: InterruptController = InterruptController::new() => [Port::Irq],
+        /// Each CPU's four timers: the same addresses, separate state (`timers.md`).
+        timers9 / timers7: Timers = Timers::new() => [Port::Timers],
+        /// Each CPU's four DMA channels: the same addresses, separate state (`dma.md`).
+        dma9 / dma7: Dma = Dma::new() => [Port::Dma, Port::DmaFill],
+        /// Each CPU's KEYINPUT and KEYCNT, and the ARM7's EXTKEYIN (`keypad.md`).
+        keypad9 / keypad7: Keypad = Keypad::new() => [Port::Keypad],
+    }
 }
 
 impl Io {
-    /// The devices in their power-on state.
-    pub(crate) fn new() -> Self {
-        Self {
-            gpu2d: Gpu2d::new(),
-            timing: Timing::new(),
-            irq9: InterruptController::new(),
-            irq7: InterruptController::new(),
-            ipc: Ipc::new(),
-            timers9: Timers::new(),
-            timers7: Timers::new(),
-            dma9: Dma::new(),
-            dma7: Dma::new(),
-            divsqrt: DivSqrt::new(),
-            keypad9: Keypad::new(),
-            keypad7: Keypad::new(),
-            power: Power::new(),
-        }
+    /// Latches `input` as a frame begins (`keypad.md`, "Where the bits come from"). The one copy
+    /// of the host's data: every device reads it through the access's [`Cx`].
+    // TODO(phase5): a device that must react when the input changes (the keypad IRQ, the hinge
+    // IRQ) needs a change hook here; the keypad only reads it for now.
+    pub(crate) fn latch_input(&mut self, input: Input) {
+        self.input = input;
     }
 
-    /// Engine A's display registers.
-    // The debugger's IO register panel will show them (#58 shows the VRAM view).
-    pub(crate) fn gpu2d(&self) -> &Gpu2d {
-        &self.gpu2d
-    }
-
-    /// VCOUNT and each CPU's DISPSTAT.
-    pub(crate) fn timing(&self) -> &Timing {
-        &self.timing
-    }
-
-    pub(crate) fn timing_mut(&mut self) -> &mut Timing {
-        &mut self.timing
-    }
-
-    /// The ARM9's interrupt controller.
-    pub(crate) fn irq9(&self) -> &InterruptController<true> {
-        &self.irq9
-    }
-
-    /// The ARM7's interrupt controller.
-    pub(crate) fn irq7(&self) -> &InterruptController<false> {
-        &self.irq7
-    }
-
-    /// IPCSYNC and the two IPC FIFOs, for the debugger.
-    pub(crate) fn ipc(&self) -> &Ipc {
-        &self.ipc
-    }
-
-    /// The ARM9's timers.
-    pub(crate) fn timers9(&self) -> &Timers<true> {
-        &self.timers9
-    }
-
-    /// The ARM7's timers.
-    pub(crate) fn timers7(&self) -> &Timers<false> {
-        &self.timers7
-    }
-
-    /// The ARM9's DMA channels.
-    // The debugger's IO register panel (#56 CPU panel until one exists) shows each channel's
-    // registers and whether a start is waiting; the scheduler timeline (#59) shows the starts.
-    pub(crate) fn dma9(&self) -> &Dma<true> {
-        &self.dma9
-    }
-
-    /// The ARM7's DMA channels.
-    // The debugger's IO register panel shows them with the ARM9's.
-    pub(crate) fn dma7(&self) -> &Dma<false> {
-        &self.dma7
-    }
-
-    /// The ARM9's divider and square-root unit.
-    // The debugger's IO register panel will show them with the other devices'.
-    pub(crate) fn divsqrt(&self) -> &DivSqrt {
-        &self.divsqrt
-    }
-
-    /// The ARM9's keypad registers.
-    // The debugger's IO register panel will show them with the other devices'.
-    pub(crate) fn keypad9(&self) -> &Keypad<true> {
-        &self.keypad9
-    }
-
-    /// The ARM7's keypad registers.
-    pub(crate) fn keypad7(&self) -> &Keypad<false> {
-        &self.keypad7
-    }
-
-    /// The ARM7's HALTCNT.
-    pub(crate) fn power(&self) -> &Power {
-        &self.power
-    }
-
-    pub(crate) fn power_mut(&mut self) -> &mut Power {
-        &mut self.power
+    /// The input latched when the frame began, for the debugger.
+    pub(crate) fn input(&self) -> Input {
+        self.input
     }
 
     /// Raises the requests in the two masks on the matching controllers: IF latches them. The
@@ -243,7 +116,11 @@ impl Io {
         width: Width,
         now: u64,
     ) -> u32 {
-        device_call!(self, ARM9, port, ref, peek(offset, width, now), 0)
+        let cx = Cx {
+            now,
+            host: &self.input,
+        };
+        device_call!(self, ARM9, port, ref, peek(offset, width, cx), 0)
     }
 
     /// A CPU's read from `port`: what it returns, with the effect applied (IF bits raised, events
@@ -256,12 +133,16 @@ impl Io {
         offset: u32,
         width: Width,
     ) -> u32 {
+        let cx = Cx {
+            now: at.now,
+            host: &self.input,
+        };
         let (value, effect) = device_call!(
             self,
             ARM9,
             port,
             mut,
-            read(offset, width, at.now),
+            read(offset, width, cx),
             (0, Effect::default())
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
@@ -280,12 +161,16 @@ impl Io {
         width: Width,
         value: u32,
     ) {
+        let cx = Cx {
+            now: at.now,
+            host: &self.input,
+        };
         let effect = device_call!(
             self,
             ARM9,
             port,
             mut,
-            write(offset, width, value, at.now),
+            write(offset, width, value, cx),
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
@@ -316,43 +201,38 @@ impl Io {
         &self,
         scheduler: &mut Scheduler,
         port: Port,
-        mask: u8,
+        mask: SlotMask,
         floor: u64,
     ) {
-        (0..u8::BITS as u8)
+        let device = DeviceId::of(port);
+        (0..device.slots())
             .filter(|slot| mask & (1 << slot) != 0)
             .for_each(|slot| {
-                let kind = device_call!(self, ARM9, port, ref, slot_kind(slot), None);
-                if let Some(kind) = kind {
-                    scheduler.cancel(kind);
-                    let due = device_call!(self, ARM9, port, ref, slot_due(slot), None);
-                    if let Some(time) = due {
-                        scheduler.schedule(time.max(floor), kind);
-                    }
+                let kind = EventKind::Slot {
+                    device,
+                    arm9: ARM9,
+                    slot,
+                };
+                scheduler.cancel(kind);
+                let due = device_call!(self, ARM9, port, ref, slot_due(slot), None);
+                if let Some(time) = due {
+                    scheduler.schedule(time.max(floor), kind);
                 }
             });
-    }
-
-    /// Queues the event of every slot of every event device, as at `now`: the timers' overflows
-    /// and the waiting DMA starts of both CPUs. A load calls it on an empty queue to rebuild what
-    /// the savestate does not hold (`scheduler.md`, "Savestate checks").
-    pub(crate) fn schedule_all(&self, scheduler: &mut Scheduler, now: u64) {
-        self.schedule_slots::<true>(scheduler, Port::Timers, u8::MAX, now);
-        self.schedule_slots::<false>(scheduler, Port::Timers, u8::MAX, now);
-        self.schedule_slots::<true>(scheduler, Port::Dma, u8::MAX, now);
-        self.schedule_slots::<false>(scheduler, Port::Dma, u8::MAX, now);
     }
 
     /// A device's event fired: it does what the device says ([`Device::slot_fire`]), its IF bits
     /// are raised and its slots rescheduled from the master clock. A DMA start comes back as the
     /// transfer the machine must run. An event no device owns (a line or HBlank start) does
     /// nothing here.
+    ///
+    /// No device has an arm of its own: a DMA start needs no special event because its transfer
+    /// already comes back through the generic [`Fired::transfer`], and the machine runs it.
     pub(crate) fn fire(&mut self, scheduler: &mut Scheduler, kind: EventKind) -> Option<Transfer> {
-        let (arm9, port, slot) = match kind {
-            EventKind::TimerOverflow { arm9, index } => (arm9, Port::Timers, index),
-            EventKind::DmaStart { arm9, channel } => (arm9, Port::Dma, channel),
-            EventKind::LineStart | EventKind::HBlankStart => return None,
+        let EventKind::Slot { device, arm9, slot } = kind else {
+            return None;
         };
+        let port = device.first_port();
         // The one place the event's runtime CPU becomes the const generic.
         if arm9 {
             self.fire_slot::<true>(scheduler, port, slot)
@@ -401,20 +281,6 @@ impl Io {
             self.dma7.finish(transfer, end)
         };
         self.request_irq(effect.requests);
-    }
-
-    /// Whether the devices hold only values that exist. A savestate that decodes to anything
-    /// else is corrupt (`savestate`).
-    pub(crate) fn is_well_formed(&self, now: u64) -> bool {
-        self.irq9.is_well_formed()
-            && self.irq7.is_well_formed()
-            && self.ipc.is_well_formed()
-            && self.timing.is_well_formed()
-            && self.timers9.is_well_formed(now)
-            && self.timers7.is_well_formed(now)
-            && self.dma9.is_well_formed()
-            && self.dma7.is_well_formed()
-            && self.divsqrt.is_well_formed(now)
     }
 
     /// Replaces the IPC block, to build a corrupt state in a test.

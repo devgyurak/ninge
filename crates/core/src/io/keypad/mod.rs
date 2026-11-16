@@ -3,14 +3,14 @@
 //! `docs/hw/keypad.md`.
 //!
 //! An independent copy for each CPU (`AGENTS.md` §4, "Per-CPU devices"): each CPU has its own
-//! KEYCNT. This is the "nothing pressed" stub: no key is ever down, so the key registers read
-//! their released values and the keypad interrupt condition is never met.
-// TODO(phase5): real input (buttons, the pen, the hinge) and the keypad IRQ arrive with the
-// frontend's input handling (#44); until then nothing is pressed. The empty-mask AND
-// condition, the hinge IRQ and the pen bit's link to the touch controller come with it
+//! KEYCNT. The key registers read the buttons and the hinge of the latched [`Input`]
+//! (`Keypad::latch`); the keypad interrupt condition is never met.
+// TODO(phase5): the keypad IRQ, the pen bit's link to the touch controller and the hinge IRQ
+// arrive with the touch SPI (#44); the empty-mask AND condition comes with the IRQ
 // (`keypad.md`, "Unverified").
 
-use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
+use crate::input::Input;
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// KEYINPUT, at `0400_0130h`; the device's register space starts here. Both CPUs.
@@ -35,13 +35,20 @@ const KEYINPUT_RELEASED: u16 = 0x03FF;
 /// (`keypad.md`, "EXTKEYIN bits").
 // TODO(hw-unverified): the unknown bits and the debug button (`keypad.md`, "Unverified").
 const EXTKEYIN_RELEASED: u16 = 0x007F;
+/// X and Y sit at bits 10 and 11 of [`crate::input::Buttons`] and at bits 0 and 1 of EXTKEYIN.
+const EXT_BUTTON_SHIFT: u32 = 10;
+const EXT_BUTTON_MASK: u16 = 0b11;
+/// The hinge is bit 7 of EXTKEYIN (`keypad.md`, "EXTKEYIN bits").
+const EXT_HINGE_SHIFT: u32 = 7;
 /// The KEYCNT bits that are kept: the ten key selects, the IRQ enable (14) and the condition
 /// (15) (`keypad.md`, "KEYCNT bits").
 // TODO(hw-unverified): whether bits 10-13 are writable (`keypad.md`, "Unverified").
 const KEYCNT_MASK: u16 = 0xC3FF;
 
-/// One CPU's keypad registers. The only state is KEYCNT: the key bits are constants until input
-/// exists (Phase 5).
+/// One CPU's keypad registers: KEYCNT. The key bits read the host's input through the access's
+/// context (`device::Cx`), which `Io` latched as the frame began: no keypad keeps a copy.
+// TODO(phase5): the keypad IRQ and the hinge IRQ must react when the input changes, which needs a
+// change hook from `Io::latch_input`; nothing reacts for now (`keypad.md`, "What is still a stub").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Keypad<const ARM9: bool> {
     keycnt: u16,
@@ -59,13 +66,27 @@ impl<const ARM9: bool> Keypad<ARM9> {
         self.keycnt
     }
 
+    /// KEYINPUT: a held key reads 0 (`keypad.md`, "KEYINPUT bits").
+    fn keyinput(input: &Input) -> u16 {
+        KEYINPUT_RELEASED & !input.buttons.bits()
+    }
+
+    /// EXTKEYIN: X and Y read 0 while held, the hinge bit is 1 while closed; the pen and the
+    /// other bits keep their released values (`keypad.md`, "EXTKEYIN bits").
+    // TODO(phase5): the pen bit follows the touch controller (`keypad.md`, "What is still a stub").
+    fn extkeyin(input: &Input) -> u16 {
+        let held_xy = (input.buttons.bits() >> EXT_BUTTON_SHIFT) & EXT_BUTTON_MASK;
+        let hinge = u16::from(input.hinge_closed) << EXT_HINGE_SHIFT;
+        (EXTKEYIN_RELEASED & !held_xy) | hinge
+    }
+
     /// The byte of the register space at `offset`: a hole, and on the ARM9 EXTKEYIN, read 0.
-    fn byte(&self, offset: u32) -> u8 {
+    fn byte(&self, offset: u32, input: &Input) -> u8 {
         let keycnt = self.keycnt.to_le_bytes();
-        let released = KEYINPUT_RELEASED.to_le_bytes();
-        let ext = EXTKEYIN_RELEASED.to_le_bytes();
+        let keys = Self::keyinput(input).to_le_bytes();
+        let ext = Self::extkeyin(input).to_le_bytes();
         match offset {
-            0 | 1 => released[offset as usize],
+            0 | 1 => keys[offset as usize],
             KEYCNT_OFFSET | 3 => keycnt[(offset - KEYCNT_OFFSET) as usize],
             EXTKEYIN_OFFSET | 7 if !ARM9 => ext[(offset - EXTKEYIN_OFFSET) as usize],
             _ => 0,
@@ -73,14 +94,16 @@ impl<const ARM9: bool> Keypad<ARM9> {
     }
 }
 
+impl<const ARM9: bool> Checked for Keypad<ARM9> {}
+
 impl<const ARM9: bool> Device<ARM9> for Keypad<ARM9> {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
-        read_bytes(offset, width, |at| self.byte(at))
+    fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
+        read_bytes(offset, width, |at| self.byte(at, cx.host))
     }
 
     /// Each byte of the write goes to the register at its own offset; only KEYCNT keeps anything,
     /// and only its defined bits. KEYINPUT and EXTKEYIN are read-only.
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
             let shift = match at {
                 KEYCNT_OFFSET => Some(0),

@@ -6,12 +6,11 @@ Regions); GBATEK "DS Memory Control - Cache and TCM"; GBATEK "ARM CP15 Tightly C
 `arm-load-store.md`, "Alignment"); GBATEK "DS Memory Control - VRAM" (via `vram-banks.md`).
 Used by: `crates/core/src/bus/`   Phase: 2 (#18), ARM9 view only
 
-This note is the address decoding the ARM9 sees. The TCM registers are in `cp15.md`; VRAM bank A
-is in `vram-banks.md` and the palette RAM in `palette-ram.md`. The ARM7's view, shared WRAM and WRAMCNT are in `wramcnt.md` (#22); the other
-VRAM banks are Phase 4 (#35); the BIOS at `FFFF0000h` is `hle-swi.md` (#27). Until those land the
-regions below are simply unmapped.
+This note is the address decoding the ARM9 sees. The TCM registers are in `cp15.md`; the VRAM
+banks are in `vram-banks.md` and the palette RAM in `palette-ram.md`. The ARM7's view, shared WRAM and WRAMCNT are in `wramcnt.md` (#22);
+the BIOS at `FFFF0000h` is `hle-swi.md` (#27). Regions not listed below are simply unmapped.
 
-## Regions (ARM9, Phases 2-3)
+## Regions (ARM9, Phases 2-4)
 
 | Base | Size | What | Modeled |
 |---|---|---|---|
@@ -19,12 +18,14 @@ regions below are simply unmapped.
 | `0xxx_x000h` | 16 KiB physical | Data TCM, base from CP15 | mapped |
 | `0200_0000h` | 4 MiB | Main RAM, repeated through the 16 MiB block | mapped |
 | `0300_0000h` | 0, 16 or 32 KiB | Shared WRAM | mapped by WRAMCNT (`wramcnt.md`); empty when the ARM9 owns none |
-| `0400_0000h` | | I/O ports | only VRAMCNT_A; the rest reads 0 |
+| `0400_0000h` | | I/O ports | VRAMCNT_A-I and WRAMCNT; the rest reads 0 |
 | `0500_0000h` | 2 KiB | Palette RAM, repeated through the 16 MiB block | mapped, always (`palette-ram.md`, #28) |
-| `0700_0000h` | | OAM | unmapped, `TODO(phase4)` |
-| `0600_0000h`..`061F_FFFFh` | 128 KiB used | Engine A BG VRAM | bank A while enabled with MST 1, at `0600_0000h + OFS * 20000h` (`vram-banks.md`, #28) |
-| `0620_0000h`..`067F_FFFFh` | | engine B BG, OBJ VRAM windows | unmapped, `TODO(phase4)` (#35) |
-| `0680_0000h` | 128 KiB used | VRAM bank A as LCDC | mapped while bank A is enabled with MST = 0 |
+| `0700_0000h` | 2 KiB | OAM, repeated through the 16 MiB block | mapped, always (`obj.md`, #31) |
+| `0600_0000h` | up to 512 KiB | Engine A BG VRAM | the banks in that mapping (`vram-banks.md`, "Where each bank goes") |
+| `0620_0000h` | up to 128 KiB | Engine B BG VRAM | likewise |
+| `0640_0000h` | up to 256 KiB | Engine A OBJ VRAM | likewise |
+| `0660_0000h` | up to 128 KiB | Engine B OBJ VRAM | likewise |
+| `0680_0000h` | 656 KiB | VRAM banks A-I as LCDC | each bank while it is enabled with MST = 0 |
 | `0800_0000h`.. | | GBA slot | unmapped |
 | `FFFF_0000h` | 32 KiB | ARM9 BIOS | mapped, synthetic: reads zero, writes ignored (`hle-swi.md`, "The BIOS area") |
 
@@ -135,11 +136,11 @@ a read returns 0 and a write is ignored. Guest accesses never fault.
 - **Unmapped reads** return 0 and writes are ignored; GBATEK says "undefined" for memory and
   gives zero only for I/O ports. — `read_registers` in `bus/view.rs` — verify
   likewise. The `memmap` ROM records the I/O case (slot 32) only.
-- **Write-only registers read.** VRAMCNT_A is marked write-only; a read returns 0 here. —
+- **Write-only registers read.** The VRAMCNT registers are marked write-only; a read returns 0 here. —
   `read_registers` in `bus/view.rs` — verify likewise.
-- **Wider writes to a byte register.** VRAMCNT_A sits next to VRAMCNT_B; a halfword or word
-  write there is split into bytes, each byte goes to the register at its own address, and a
-  byte that lands on no register (VRAMCNT_B before it exists) is dropped. —
+- **Wider writes to a byte register.** The VRAMCNT registers sit next to each other; a halfword
+  or word write there is split into bytes, each byte goes to the register at its own address,
+  and a byte that lands on no register (`0400_024Ah` and up) is dropped. —
   `Access::write_registers` in `bus/view.rs` — verify likewise.
 - **A fetch from the DTCM region** reads the memory underneath; a fetch from a load-mode ITCM
   reads underneath. GBATEK does not describe the fetch path in either case. —

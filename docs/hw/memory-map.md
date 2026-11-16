@@ -12,6 +12,7 @@ Used by: `crates/core/src/bus/`   Phase: 0 (regions the smoke ROM loads into); #
 | Main memory | 0x0200_0000 | 4 MiB | ARM9 and ARM7 |
 | Shared WRAM | 0x0300_0000 | 0, 16 or 32 KiB | Allocated to ARM9 or ARM7 |
 | ARM7 WRAM | 0x0380_0000 | 64 KiB | ARM7 only |
+| ARM7 VRAM | 0x0600_0000 | 0-256 KiB | ARM7 only; VRAM banks C and D with MST 2 (`vram-banks.md`) |
 
 ## Behavior
 
@@ -27,8 +28,8 @@ memory, so neither depends on the WRAMCNT allocation. Nothing in Phase 0 impleme
 ## Edge cases
 
 The ARM9 view (main RAM mirroring, TCM placement and priority, unmapped addresses) is in
-`arm9-memory-map.md`; VRAM bank A as LCDC is in `vram-banks.md`. The shared WRAM split and the ARM7 view are in
-`wramcnt.md` (#22); the other VRAM banks are deferred (#35).
+`arm9-memory-map.md`; the VRAM banks, including the ARM7's mapping of C and D, are in `vram-banks.md`. The shared WRAM
+split and the ARM7 view are in `wramcnt.md` (#22).
 
 ## Unverified
 

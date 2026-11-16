@@ -9,7 +9,7 @@ use crate::source::Source;
 use crate::transfer::{NoShm, ShmSink, Transfer};
 use anyhow::anyhow;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ninge_core::{Machine, Screen};
+use ninge_core::{Input, Machine, Screen};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -138,7 +138,8 @@ impl<S: ShmSink> App<S> {
     pub fn graphics(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         if let Source::Machine(machine) = &mut self.source {
-            machine.run_frame();
+            // TODO(phase5): the key mapping will build the frame's input here; until then none is held.
+            machine.run_frame(Input::new());
         }
         if let Some(areas) = self.areas {
             let (top, bottom) = self.screens();

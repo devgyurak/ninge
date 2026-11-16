@@ -11,9 +11,12 @@ use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYN
 use crate::io::irq::{IE_ADDR, IF_ADDR, IME_ADDR, InterruptController, Requests};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::{DISPSTAT_ADDR, VCOUNT_ADDR};
+use crate::scheduler::LineEvent;
 
-/// The WRAMCNT, WRAMSTAT and VRAMCNT_G addresses, which `Memory` keeps private.
+/// The WRAMCNT, WRAMSTAT and VRAMCNT_G-I addresses, which `Memory` keeps private.
 const VRAMCNT_G: u32 = 0x0400_0246;
+const VRAMCNT_H: u32 = 0x0400_0248;
+const VRAMCNT_I: u32 = 0x0400_0249;
 const WRAMCNT: u32 = 0x0400_0247;
 const WRAMSTAT: u32 = 0x0400_0241;
 
@@ -112,6 +115,8 @@ fn given_each_arm9_register_address_when_decoded_then_the_expected_port_and_offs
         (VRAMCNT_A_ADDR, Some(Owner::Memory(0))),
         (VRAMCNT_G, Some(Owner::Memory(6))),
         (WRAMCNT, Some(Owner::Memory(7))),
+        (VRAMCNT_H, Some(Owner::Memory(8))),
+        (VRAMCNT_I, Some(Owner::Memory(9))),
     ];
     assert_eq!(decode_failures::<true>(&expected), vec![]);
 }
@@ -145,6 +150,7 @@ fn given_arm9_only_registers_when_the_arm7_decodes_them_then_no_port_owns_them()
         (POWCNT1_ADDR, None),
         (WRAMCNT, None),
         (VRAMCNT_G, None),
+        (VRAMCNT_H, None),
         (0x0400_00E0, None),
         (0x0400_00EF, None),
     ];
@@ -169,6 +175,43 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
 }
 
 #[test]
+fn given_engine_b_register_addresses_when_decoded_then_the_arm9_reaches_them_in_the_gpu_space_and_the_arm7_does_not()
+ {
+    // Engine B's block is engine A's 1000h on: DISPCNT at offset 1000h, BG0CNT at 1008h, the last
+    // scroll byte at 101Fh, the transform block at 1020h-103Fh (`bg-modes.md`, "Registers") and the
+    // window block at 1040h-104Bh (`windows.md`, "Registers"), MOSAIC at 104Ch and the effect block
+    // at 1050h-1057h (`blending.md`, "Registers"); the bytes between and after are holes.
+    let arm9 = [
+        (0x0400_1000, Some(Owner::Io(Port::Gpu2d, 0x1000))),
+        (0x0400_1003, Some(Owner::Io(Port::Gpu2d, 0x1003))),
+        (0x0400_1004, None),
+        (0x0400_1008, Some(Owner::Io(Port::Gpu2d, 0x1008))),
+        (0x0400_101F, Some(Owner::Io(Port::Gpu2d, 0x101F))),
+        (0x0400_1020, Some(Owner::Io(Port::Gpu2d, 0x1020))),
+        (0x0400_103F, Some(Owner::Io(Port::Gpu2d, 0x103F))),
+        (0x0400_1040, Some(Owner::Io(Port::Gpu2d, 0x1040))),
+        (0x0400_104B, Some(Owner::Io(Port::Gpu2d, 0x104B))),
+        (0x0400_104C, Some(Owner::Io(Port::Gpu2d, 0x104C))),
+        (0x0400_1050, Some(Owner::Io(Port::Gpu2d, 0x1050))),
+        (0x0400_1057, Some(Owner::Io(Port::Gpu2d, 0x1057))),
+        (0x0400_1058, None),
+    ];
+    let arm7 = [
+        (0x0400_1000, None),
+        (0x0400_1008, None),
+        (0x0400_1020, None),
+        (0x0400_1040, None),
+    ];
+    assert_eq!(
+        (
+            decode_failures::<true>(&arm9),
+            decode_failures::<false>(&arm7)
+        ),
+        (vec![], vec![])
+    );
+}
+
+#[test]
 fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it_in_the_gpu_space()
 {
     // BG0CNT at offset 8 of engine A's register space, BG3VOFS' last byte at offset 31.
@@ -177,14 +220,56 @@ fn given_the_bg_control_and_scroll_block_when_decoded_then_only_the_arm9_owns_it
         (0x0400_000F, Some(Owner::Io(Port::Gpu2d, 15))),
         (0x0400_0010, Some(Owner::Io(Port::Gpu2d, 16))),
         (0x0400_001F, Some(Owner::Io(Port::Gpu2d, 31))),
+        // BG2PA at offset 32 and BG3Y's last byte at 63.
+        (0x0400_0020, Some(Owner::Io(Port::Gpu2d, 32))),
+        (0x0400_003F, Some(Owner::Io(Port::Gpu2d, 63))),
+        // MOSAIC at offset 4Ch, in a 4-byte block.
+        (0x0400_004C, Some(Owner::Io(Port::Gpu2d, 0x4C))),
+        (0x0400_004F, Some(Owner::Io(Port::Gpu2d, 0x4F))),
+        // WIN0H at offset 40h and WINOUT's last byte at 4Bh.
+        (0x0400_0040, Some(Owner::Io(Port::Gpu2d, 0x40))),
+        (0x0400_004B, Some(Owner::Io(Port::Gpu2d, 0x4B))),
     ];
-    let arm7 = [(0x0400_0008, None), (0x0400_001F, None)];
+    let arm7 = [
+        (0x0400_0008, None),
+        (0x0400_001F, None),
+        (0x0400_0020, None),
+        (0x0400_0040, None),
+    ];
     assert_eq!(
         (
             decode_failures::<true>(&arm9),
             decode_failures::<false>(&arm7)
         ),
         (vec![], vec![])
+    );
+}
+
+#[test]
+fn given_the_effect_block_when_decoded_then_the_arm9_owns_it_in_the_gpu_space_and_the_arm7_does_not()
+ {
+    let arm9 = [
+        (0x0400_004F, Some(Owner::Io(Port::Gpu2d, 0x4F))),
+        (0x0400_0050, Some(Owner::Io(Port::Gpu2d, 0x50))),
+        (0x0400_0057, Some(Owner::Io(Port::Gpu2d, 0x57))),
+        (0x0400_0058, None),
+    ];
+    let arm7 = [(0x0400_0050, None), (0x0400_0054, None)];
+    let master_bright = [
+        (0x0400_006C, Some(Owner::Io(Port::Gpu2d, 0x6C))),
+        (0x0400_006F, Some(Owner::Io(Port::Gpu2d, 0x6F))),
+        (0x0400_106C, Some(Owner::Io(Port::Gpu2d, 0x106C))),
+        (0x0400_106F, Some(Owner::Io(Port::Gpu2d, 0x106F))),
+        (0x0400_0070, None),
+        (0x0400_1070, None),
+    ];
+    assert_eq!(
+        (
+            decode_failures::<true>(&arm9),
+            decode_failures::<false>(&arm7),
+            decode_failures::<true>(&master_bright)
+        ),
+        (vec![], vec![], vec![])
     );
 }
 
@@ -207,8 +292,13 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
         (IPCSYNC_ADDR - 1, None),
         (IPCFIFOSEND_ADDR + 4, None),
         (IPCFIFORECV_ADDR + 4, None),
-        // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`).
-        (0x0400_0020, None),
+        // Just above the BG control and scroll registers (`0400_0008h`-`0400_001Fh`) is the
+        // transform block, which ends at `0400_003Fh`, then the window block `0400_0040h`-`004Bh`
+        // and MOSAIC's `004Ch`-`004Fh`, then the effect block `0050h`-`0057h`.
+        (0x0400_0058, None),
+        // MASTER_BRIGHT's block is `006Ch`-`006Fh`; DISPCAPCNT and the display FIFO below it are not
+        // ours.
+        (0x0400_0070, None),
         (0x0000_0000, None),
     ];
     assert_eq!(
@@ -276,6 +366,72 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
 }
 
 #[test]
+fn given_slots_above_bit_7_when_effects_merged_then_the_high_bits_are_kept() {
+    let merged = Effect {
+        requests: Requests::default(),
+        reschedule: 1 << 9,
+    }
+    .merge(Effect {
+        requests: Requests::default(),
+        reschedule: 1 << 31,
+    });
+    assert_eq!(merged.reschedule, (1 << 9) | (1 << 31));
+}
+
+#[test]
+fn given_timers_and_dma_of_both_cpus_when_event_slots_counted_then_there_are_sixteen() {
+    assert_eq!(EVENT_SLOTS, 16);
+}
+
+/// The kinds queued after each CPU's timer 0 is started through `Io` (TM0CNT_H, START).
+fn kinds_after_both_cpus_start_timer_0() -> Vec<EventKind> {
+    const START: u32 = 1 << 7;
+    let mut io = Io::new();
+    let mut scheduler = Scheduler::new();
+    let at = At { now: 0, floor: 0 };
+    io.write::<true>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
+    io.write::<false>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
+    scheduler.pending().iter().map(|event| event.kind).collect()
+}
+
+#[test]
+fn given_both_cpus_starting_timer_0_when_written_through_io_then_each_queues_its_own_timer_slot() {
+    let timer = |arm9| EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9,
+        slot: 0,
+    };
+    assert_eq!(
+        kinds_after_both_cpus_start_timer_0(),
+        vec![timer(true), timer(false)]
+    );
+}
+
+#[test]
+fn given_the_timers_dma_and_keypad_when_their_slots_are_counted_then_it_is_4_4_0() {
+    assert_eq!(
+        (
+            DeviceId::Timers.slots(),
+            DeviceId::Dma.slots(),
+            DeviceId::Keypad.slots()
+        ),
+        (4, 4, 0)
+    );
+}
+
+#[test]
+fn given_the_ports_of_one_device_when_mapped_then_they_give_the_same_device_and_its_first_port() {
+    assert_eq!(
+        (
+            DeviceId::of(Port::Dma),
+            DeviceId::of(Port::DmaFill),
+            DeviceId::Dma.first_port()
+        ),
+        (DeviceId::Dma, DeviceId::Dma, Port::Dma)
+    );
+}
+
+#[test]
 fn given_power_on_devices_when_checked_then_they_are_well_formed() {
     assert!(Io::new().is_well_formed(0));
 }
@@ -293,8 +449,8 @@ fn given_line_and_hblank_events_when_fired_through_io_then_no_transfer_comes_bac
     let mut scheduler = Scheduler::new();
     assert_eq!(
         (
-            io.fire(&mut scheduler, EventKind::LineStart),
-            io.fire(&mut scheduler, EventKind::HBlankStart)
+            io.fire(&mut scheduler, EventKind::Line(LineEvent::Start)),
+            io.fire(&mut scheduler, EventKind::Line(LineEvent::HBlank))
         ),
         (None, None)
     );
@@ -306,7 +462,11 @@ fn given_dma_start_events_for_channels_with_no_start_waiting_when_fired_then_no_
     // A start that was cancelled leaves nothing to run (`dma.md`, "Enabling").
     let mut io = Io::new();
     let mut scheduler = Scheduler::new();
-    let kind = |arm9, channel| EventKind::DmaStart { arm9, channel };
+    let kind = |arm9, channel| EventKind::Slot {
+        device: DeviceId::Dma,
+        arm9,
+        slot: channel,
+    };
     assert_eq!(
         (
             io.fire(&mut scheduler, kind(true, 0)),
@@ -337,9 +497,10 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
         ENABLE | ARM9_VBLANK | 1,
     );
     io.trigger_dma(&mut scheduler, Trigger::VBlank, time);
-    let kind = EventKind::DmaStart {
+    let kind = EventKind::Slot {
+        device: DeviceId::Dma,
         arm9: true,
-        channel: 0,
+        slot: 0,
     };
     scheduler
         .pending()

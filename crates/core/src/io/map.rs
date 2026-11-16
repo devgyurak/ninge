@@ -4,7 +4,13 @@
 //! [`ARM7_PORTS`]. The map lives here and nowhere else; a test pins that no two entries overlap.
 
 use crate::bus::VRAMCNT_A_ADDR;
-use crate::gpu2d::{BG_REGS_ADDR, BG_REGS_BYTES, DISPCNT_A_ADDR, POWCNT1_ADDR};
+use crate::gpu2d::{
+    AFFINE_REGS_ADDR, AFFINE_REGS_B_ADDR, AFFINE_REGS_BYTES, BG_REGS_ADDR, BG_REGS_B_ADDR,
+    BG_REGS_BYTES, BLD_REGS_ADDR, BLD_REGS_B_ADDR, BLD_REGS_BYTES, DISP_MMEM_FIFO_ADDR,
+    DISP_MMEM_FIFO_BYTES, DISPCAPCNT_ADDR, DISPCAPCNT_BYTES, DISPCNT_A_ADDR, DISPCNT_B_ADDR,
+    MASTER_BRIGHT_ADDR, MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, MOSAIC_ADDR, MOSAIC_B_ADDR,
+    MOSAIC_BYTES, POWCNT1_ADDR, WINDOW_REGS_ADDR, WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES,
+};
 use crate::io::divsqrt::{BLOCK_BYTES as DIVSQRT_BYTES, DIVCNT_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
@@ -14,7 +20,7 @@ use crate::io::power::{BLOCK_BYTES as POWER_BYTES, POSTFLG_ADDR};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::DISPSTAT_ADDR;
 
-/// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..G,
+/// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..I,
 /// WRAMCNT, WRAMSTAT) stays in `Memory` because the page tables derive from it (#109), every
 /// other register belongs to a device behind a [`Port`]. [`decode`] says which, so no `Io` access
 /// ever sees an address `Memory` owns.
@@ -29,7 +35,7 @@ pub(crate) enum Owner {
 /// Which device holds a register. [`Port::base`] is where its register space starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Port {
-    /// DISPCNT, the BG control and scroll registers of engine A, and POWCNT1 (three table
+    /// DISPCNT, the BG control and scroll registers of both engines, and POWCNT1 (nine table
     /// entries, one device).
     Gpu2d,
     /// DISPSTAT and VCOUNT.
@@ -83,11 +89,25 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 13] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
     (BG_REGS_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
+    // BG2PA..BG3Y, the transform registers of the two affine layers.
+    (AFFINE_REGS_ADDR, AFFINE_REGS_BYTES, Some(Port::Gpu2d)),
+    // WIN0H..WINOUT, the window registers.
+    (WINDOW_REGS_ADDR, WINDOW_REGS_BYTES, Some(Port::Gpu2d)),
+    // MOSAIC, a halfword at the start of its block.
+    (MOSAIC_ADDR, MOSAIC_BYTES, Some(Port::Gpu2d)),
+    // BLDCNT, BLDALPHA and BLDY, the colour special effects.
+    (BLD_REGS_ADDR, BLD_REGS_BYTES, Some(Port::Gpu2d)),
+    // DISPCAPCNT, the display capture control register.
+    (DISPCAPCNT_ADDR, DISPCAPCNT_BYTES, Some(Port::Gpu2d)),
+    // DISP_MMEM_FIFO, the main-memory display FIFO.
+    (DISP_MMEM_FIFO_ADDR, DISP_MMEM_FIFO_BYTES, Some(Port::Gpu2d)),
+    // MASTER_BRIGHT, a halfword at the start of its block.
+    (MASTER_BRIGHT_ADDR, MASTER_BRIGHT_BYTES, Some(Port::Gpu2d)),
     // DMA0SAD..DMA3CNT, twelve bytes a channel, then the fill registers.
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (DMA0FILL_ADDR, FILL_BYTES, Some(Port::DmaFill)),
@@ -100,13 +120,22 @@ pub(crate) const ARM9_PORTS: [PortEntry; 13] = [
     (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
     // IME, a hole, IE and IF.
     (IME_ADDR, 16, Some(Port::Irq)),
-    // VRAMCNT_A..D and VRAMCNT_E, F, G and WRAMCNT.
-    (VRAMCNT_A_ADDR, 8, None),
+    // VRAMCNT_A..D, VRAMCNT_E, F, G, WRAMCNT, then VRAMCNT_H and I and two bytes no register
+    // holds (the block stays on the 4-byte grid).
+    (VRAMCNT_A_ADDR, 12, None),
     (POWCNT1_ADDR, 4, Some(Port::Gpu2d)),
+    // Engine B's block, the same layout 1000h on: DISPCNT, then the BG control and scroll registers.
+    (DISPCNT_B_ADDR, 4, Some(Port::Gpu2d)),
+    (BG_REGS_B_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
+    (AFFINE_REGS_B_ADDR, AFFINE_REGS_BYTES, Some(Port::Gpu2d)),
+    (WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES, Some(Port::Gpu2d)),
+    (MOSAIC_B_ADDR, MOSAIC_BYTES, Some(Port::Gpu2d)),
+    (BLD_REGS_B_ADDR, BLD_REGS_BYTES, Some(Port::Gpu2d)),
+    (MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, Some(Port::Gpu2d)),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
 ];
 
-/// What the ARM7 sees: the same blocks, without engine A, and WRAMSTAT in place of the ARM9's
+/// What the ARM7 sees: the same blocks, without the 2D engines, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
 pub(crate) const ARM7_PORTS: [PortEntry; 9] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),

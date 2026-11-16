@@ -73,8 +73,8 @@ pub(crate) fn boot(
     // (`direct-boot.md`, "CP15 state at entry").
     let tcm = TcmConfig::from_cp15(arm9.cp15());
     let floor9 = scheduler.now().saturating_add(ARM9_INSTRUCTION_COST);
-    let floor7 = scheduler.now();
-    let mut view = Arm9View::new(memory, io, scheduler, tcm, 0, floor9);
+    let mut view = Arm9View::new(memory, io, scheduler, tcm);
+    view.begin_step(0, floor9);
     if let Some(copy) = rom.get(..HEADER_LEN) {
         place(&mut view, HEADER_COPY_ADDRESS, copy);
     }
@@ -90,7 +90,7 @@ pub(crate) fn boot(
     view.write8(WRAMCNT_ADDR, WRAMCNT_ARM7_ALL);
     if let Some(bytes) = binary_bytes(rom, &header.arm7) {
         place7(
-            &mut Arm7View::new(memory, io, scheduler, 0, floor7),
+            &mut Arm7View::new(memory, io, scheduler, 0),
             header.arm7.ram_address,
             bytes,
         );
@@ -104,7 +104,8 @@ pub(crate) fn boot(
     regs.set(LINK_REGISTER, entry);
     regs.set_banked(Bank::Irq, STACK_REGISTER, SP_IRQ);
     regs.set_banked(Bank::Supervisor, STACK_REGISTER, SP_SUPERVISOR);
-    let mut view = Arm9View::new(memory, io, scheduler, tcm, 0, floor9);
+    let mut view = Arm9View::new(memory, io, scheduler, tcm);
+    view.begin_step(0, floor9);
     arm9.start_at(&mut view, entry);
 
     let entry7 = header.arm7.entry;
@@ -115,6 +116,6 @@ pub(crate) fn boot(
     regs7.set(LINK_REGISTER, entry7);
     regs7.set_banked(Bank::Irq, STACK_REGISTER, ARM7_SP_IRQ);
     regs7.set_banked(Bank::Supervisor, STACK_REGISTER, ARM7_SP_SUPERVISOR);
-    let mut view7 = Arm7View::new(memory, io, scheduler, 0, floor7);
+    let mut view7 = Arm7View::new(memory, io, scheduler, 0);
     arm7.start_at(&mut view7, entry7);
 }

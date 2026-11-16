@@ -2,6 +2,7 @@
 //! The keypad stub, from `docs/hw/keypad.md`.
 
 use super::*;
+use crate::input::Buttons;
 
 fn peek9(pad: &Keypad<true>, offset: u32, width: Width) -> u32 {
     Device::<true>::peek(pad, offset, width, 0)
@@ -74,4 +75,62 @@ fn given_a_keycnt_write_on_the_arm9_copy_when_the_arm7_copy_is_read_then_it_is_s
     let seven = Keypad::<false>::new();
     Device::<true>::write(&mut nine, KEYCNT_OFFSET, Width::Half, 0x4001, 0);
     assert_eq!((nine.keycnt(), seven.keycnt()), (0x4001, 0));
+}
+
+#[test]
+fn given_latched_keys_when_keyinput_is_read_then_each_held_key_reads_zero_on_both_cpus() {
+    let input = Input {
+        buttons: Buttons::RIGHT | Buttons::L,
+        ..Input::default()
+    };
+    let (mut nine, mut seven) = (Keypad::<true>::new(), Keypad::<false>::new());
+    nine.latch(input);
+    seven.latch(input);
+    // Right is bit 4 and L is bit 9: 0x03FF without them.
+    assert_eq!(
+        (peek9(&nine, 0, Width::Half), peek7(&seven, 0, Width::Half)),
+        (0x01EF, 0x01EF)
+    );
+}
+
+#[test]
+fn given_x_and_y_latched_when_the_arm7_reads_extkeyin_then_bits_0_and_1_are_clear() {
+    let mut pad = Keypad::<false>::new();
+    pad.latch(Input {
+        buttons: Buttons::X | Buttons::Y,
+        ..Input::default()
+    });
+    assert_eq!(peek7(&pad, EXTKEYIN_OFFSET, Width::Half), 0x007C);
+}
+
+#[test]
+fn given_a_closed_hinge_latched_when_the_arm7_reads_extkeyin_then_bit_7_is_set() {
+    let mut pad = Keypad::<false>::new();
+    pad.latch(Input {
+        hinge_closed: true,
+        ..Input::default()
+    });
+    assert_eq!(peek7(&pad, EXTKEYIN_OFFSET, Width::Half), 0x00FF);
+}
+
+#[test]
+fn given_x_latched_when_the_arm9_reads_the_extkeyin_offset_then_it_still_reads_zero() {
+    let mut pad = Keypad::<true>::new();
+    pad.latch(held(Buttons::X));
+    assert_eq!(peek9(&pad, EXTKEYIN_OFFSET, Width::Half), 0);
+}
+
+#[test]
+fn given_a_keycnt_when_input_is_latched_then_keycnt_is_unchanged() {
+    let mut pad = Keypad::<true>::new();
+    Device::<true>::write(&mut pad, KEYCNT_OFFSET, Width::Half, 0xC003, 0);
+    pad.latch(held(Buttons::A));
+    assert_eq!(peek9(&pad, KEYCNT_OFFSET, Width::Half), 0xC003);
+}
+
+fn held(buttons: Buttons) -> Input {
+    Input {
+        buttons,
+        ..Input::default()
+    }
 }

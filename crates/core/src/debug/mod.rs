@@ -13,6 +13,7 @@
 
 use crate::bus::{BANK_COUNT, TcmConfig};
 use crate::cpu::Cpu;
+use crate::input::Input;
 use crate::machine::Machine;
 
 pub use crate::bus::{ExtPaletteBanks, VramBankState, VramMapping, WramShare, WramState};
@@ -118,6 +119,13 @@ impl<'a> Inspect<'a> {
     // The debugger's OAM view (#58) shows it.
     pub fn obj(&self, which: EngineId, index: usize) -> ObjAttrs {
         ObjAttrs::decode(self.machine.memory.oam_of(which), index)
+    }
+
+    /// The input the keypad registers read: what `Machine::set_input` gave, as latched when the
+    /// last frame began.
+    // The debugger's IO register panel will show it with the keypad registers.
+    pub fn input(&self) -> Input {
+        self.machine.io.keypad9().input()
     }
 
     /// The ARM9's interrupt controller (IME, IE, IF).

@@ -3,13 +3,13 @@
 //! `docs/hw/keypad.md`.
 //!
 //! An independent copy for each CPU (`AGENTS.md` §4, "Per-CPU devices"): each CPU has its own
-//! KEYCNT. This is the "nothing pressed" stub: no key is ever down, so the key registers read
-//! their released values and the keypad interrupt condition is never met.
-// TODO(phase5): real input (buttons, the pen, the hinge) and the keypad IRQ arrive with the
-// frontend's input handling (#44); until then nothing is pressed. The empty-mask AND
-// condition, the hinge IRQ and the pen bit's link to the touch controller come with it
+//! KEYCNT. The key registers read the buttons and the hinge of the latched [`Input`]
+//! (`Keypad::latch`); the keypad interrupt condition is never met.
+// TODO(phase5): the keypad IRQ, the pen bit's link to the touch controller and the hinge IRQ
+// arrive with the touch SPI (#44); the empty-mask AND condition comes with the IRQ
 // (`keypad.md`, "Unverified").
 
+use crate::input::Input;
 use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
@@ -35,16 +35,21 @@ const KEYINPUT_RELEASED: u16 = 0x03FF;
 /// (`keypad.md`, "EXTKEYIN bits").
 // TODO(hw-unverified): the unknown bits and the debug button (`keypad.md`, "Unverified").
 const EXTKEYIN_RELEASED: u16 = 0x007F;
+/// X and Y sit at bits 10 and 11 of [`crate::input::Buttons`] and at bits 0 and 1 of EXTKEYIN.
+const EXT_BUTTON_SHIFT: u32 = 10;
+const EXT_BUTTON_MASK: u16 = 0b11;
+/// The hinge is bit 7 of EXTKEYIN (`keypad.md`, "EXTKEYIN bits").
+const EXT_HINGE_SHIFT: u32 = 7;
 /// The KEYCNT bits that are kept: the ten key selects, the IRQ enable (14) and the condition
 /// (15) (`keypad.md`, "KEYCNT bits").
 // TODO(hw-unverified): whether bits 10-13 are writable (`keypad.md`, "Unverified").
 const KEYCNT_MASK: u16 = 0xC3FF;
 
-/// One CPU's keypad registers. The only state is KEYCNT: the key bits are constants until input
-/// exists (Phase 5).
+/// One CPU's keypad registers: KEYCNT, and the input latched for the frame the key bits read.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Keypad<const ARM9: bool> {
     keycnt: u16,
+    input: Input,
 }
 
 impl<const ARM9: bool> Keypad<ARM9> {
@@ -59,13 +64,38 @@ impl<const ARM9: bool> Keypad<ARM9> {
         self.keycnt
     }
 
+    /// The input the key registers read: the host's, as latched when the frame began.
+    pub fn input(&self) -> Input {
+        self.input
+    }
+
+    /// Latches `input` for the registers (`keypad.md`, "Where the bits come from"); nothing else
+    /// changes, KEYCNT included.
+    pub(crate) fn latch(&mut self, input: Input) {
+        self.input = input;
+    }
+
+    /// KEYINPUT: a held key reads 0 (`keypad.md`, "KEYINPUT bits").
+    fn keyinput(&self) -> u16 {
+        KEYINPUT_RELEASED & !self.input.buttons.bits()
+    }
+
+    /// EXTKEYIN: X and Y read 0 while held, the hinge bit is 1 while closed; the pen and the
+    /// other bits keep their released values (`keypad.md`, "EXTKEYIN bits").
+    // TODO(phase5): the pen bit follows the touch controller (`keypad.md`, "What is still a stub").
+    fn extkeyin(&self) -> u16 {
+        let held_xy = (self.input.buttons.bits() >> EXT_BUTTON_SHIFT) & EXT_BUTTON_MASK;
+        let hinge = u16::from(self.input.hinge_closed) << EXT_HINGE_SHIFT;
+        (EXTKEYIN_RELEASED & !held_xy) | hinge
+    }
+
     /// The byte of the register space at `offset`: a hole, and on the ARM9 EXTKEYIN, read 0.
     fn byte(&self, offset: u32) -> u8 {
         let keycnt = self.keycnt.to_le_bytes();
-        let released = KEYINPUT_RELEASED.to_le_bytes();
-        let ext = EXTKEYIN_RELEASED.to_le_bytes();
+        let keys = self.keyinput().to_le_bytes();
+        let ext = self.extkeyin().to_le_bytes();
         match offset {
-            0 | 1 => released[offset as usize],
+            0 | 1 => keys[offset as usize],
             KEYCNT_OFFSET | 3 => keycnt[(offset - KEYCNT_OFFSET) as usize],
             EXTKEYIN_OFFSET | 7 if !ARM9 => ext[(offset - EXTKEYIN_OFFSET) as usize],
             _ => 0,

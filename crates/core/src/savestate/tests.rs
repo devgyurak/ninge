@@ -13,11 +13,11 @@ use crate::bus::{Region, VramBankState, VramMapping};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::irq::Requests;
-use crate::{Machine, Screen};
+use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_214_729;
-const PINNED_HASH: u64 = 0xeebbecdeaefe0911;
+const PINNED_LEN: usize = 5_214_738;
+const PINNED_HASH: u64 = 0x6aeb3fda09726cf4;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -64,8 +64,8 @@ const PINNED_HASH: u64 = 0xeebbecdeaefe0911;
 /// are zero, so both lengths grew by 6 and both hashes moved.
 /// Version 26 (#34) added both engines' MASTER_BRIGHT: 2 one-byte varints while they are zero, so both
 /// lengths grew by 2 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_644;
-const PINNED_BOOTED_HASH: u64 = 0x8a76f9a194fc8f9f;
+const PINNED_BOOTED_LEN: usize = 5_804_653;
+const PINNED_BOOTED_HASH: u64 = 0x2d1d0d9f8b7b6118;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -565,6 +565,58 @@ fn given_a_state_with_vram_a_unmapped_when_loaded_onto_a_mapped_machine_then_the
         ),
         (Ok(()), 0x80, 0, false)
     );
+}
+
+// ------------------------------------------------------------------------------------ input
+
+/// A different input for each of the frames a run takes: the log a replay is built from.
+fn input_for(frame: u32) -> Input {
+    Input {
+        buttons: Buttons::from_bits_truncate(0x0111_u16.rotate_left(frame)),
+        touch: None,
+        hinge_closed: frame % 2 == 1,
+    }
+}
+
+/// `machine` after one frame per `frames`, each with its input set first.
+fn run_with_inputs(machine: &mut Machine, frames: std::ops::Range<u32>) {
+    frames.for_each(|frame| {
+        machine.set_input(input_for(frame));
+        machine.run_frame();
+    });
+}
+
+#[test]
+fn given_the_same_rom_and_input_log_when_run_twice_then_the_savestate_bytes_are_identical() {
+    let (mut first, mut second) = (booted(&counter_rom(), 0), booted(&counter_rom(), 0));
+    run_with_inputs(&mut first, 0..4);
+    run_with_inputs(&mut second, 0..4);
+    assert_eq!(first.save_state(), second.save_state());
+}
+
+#[test]
+fn given_different_input_logs_when_run_then_the_savestate_bytes_differ() {
+    let (mut first, mut second) = (booted(&counter_rom(), 0), booted(&counter_rom(), 0));
+    run_with_inputs(&mut first, 0..4);
+    run_with_inputs(&mut second, 1..5);
+    assert_ne!(first.save_state(), second.save_state());
+}
+
+#[test]
+fn given_a_state_saved_with_input_when_loaded_and_continued_then_it_equals_an_uninterrupted_run() {
+    let mut straight = booted(&counter_rom(), 0);
+    run_with_inputs(&mut straight, 0..4);
+    let mut first_half = booted(&counter_rom(), 0);
+    run_with_inputs(&mut first_half, 0..2);
+    first_half.set_input(input_for(2));
+    let bytes = first_half.save_state();
+    let mut resumed = booted(&counter_rom(), 0);
+    resumed
+        .load_state(&bytes)
+        .expect("a state this build saved");
+    resumed.run_frame();
+    run_with_inputs(&mut resumed, 3..4);
+    assert_eq!(resumed.save_state(), straight.save_state());
 }
 
 // ------------------------------------------------------------------------------ FNV-1a vectors

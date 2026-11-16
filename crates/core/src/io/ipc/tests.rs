@@ -7,6 +7,7 @@
 //! functions that return what they observed; a test body only asserts.
 
 use super::*;
+use crate::io::device::cx_at;
 
 const ENABLE: u16 = 1 << 15;
 const SEND_IRQ_ENABLE: u16 = 1 << 2;
@@ -27,12 +28,12 @@ const CNT: u32 = CNT_OFFSET;
 
 /// A byte write at `offset` as CPU `ARM9`; returns the requests.
 fn write_byte<const ARM9: bool>(ipc: &mut Ipc, offset: u32, value: u8) -> Requests {
-    Device::<ARM9>::write(ipc, offset, Width::Byte, u32::from(value), 0).requests
+    Device::<ARM9>::write(ipc, offset, Width::Byte, u32::from(value), cx_at(0)).requests
 }
 
 /// A byte read at `offset` as CPU `ARM9`.
 fn read_byte<const ARM9: bool>(ipc: &Ipc, offset: u32) -> u8 {
-    Device::<ARM9>::peek(ipc, offset, Width::Byte, 0) as u8
+    Device::<ARM9>::peek(ipc, offset, Width::Byte, cx_at(0)) as u8
 }
 
 const NONE: Requests = Requests { arm9: 0, arm7: 0 };

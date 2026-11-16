@@ -6,7 +6,7 @@
 //! follows the duration, and it is a function of the time of the read, so the unit has no
 //! scheduler event (`divsqrt.md`, "Modeling choice").
 
-use crate::io::device::{Checked, Device, Effect, Width, read_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes};
 use crate::scheduler::SLICE;
 use serde::{Deserialize, Serialize};
 
@@ -227,8 +227,8 @@ impl Checked for DivSqrt {
 }
 
 impl Device<true> for DivSqrt {
-    fn peek(&self, offset: u32, width: Width, now: u64) -> u32 {
-        read_bytes(offset, width, |at| self.byte(at, now))
+    fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
+        read_bytes(offset, width, |at| self.byte(at, cx.now))
     }
 
     /// Each byte of the write goes to the register at its own offset. A write to DIVCNT,
@@ -240,7 +240,7 @@ impl Device<true> for DivSqrt {
     // TODO(hw-unverified): narrow accesses, and which bytes of a register start an operation; a
     // write to the unused upper half of a DIVCNT or SQRTCNT word starts nothing here
     // (`divsqrt.md`, "Unverified").
-    fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         let (mut divide_now, mut sqrt_now) = (false, false);
         (0..width.bytes()).for_each(|i| {
             let (at, byte) = (offset.wrapping_add(i), (value >> (8 * i)) as u8);
@@ -271,10 +271,10 @@ impl Device<true> for DivSqrt {
             }
         });
         if divide_now {
-            self.start_division(now);
+            self.start_division(cx.now);
         }
         if sqrt_now {
-            self.start_sqrt(now);
+            self.start_sqrt(cx.now);
         }
         Effect::default()
     }

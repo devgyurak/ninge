@@ -126,7 +126,7 @@ impl<'a> Inspect<'a> {
     /// the last frame began.
     // The debugger's IO register panel will show it with the keypad registers.
     pub fn input(&self) -> Input {
-        self.machine.io.keypad9().input()
+        self.machine.io.input()
     }
 
     /// The ARM9's interrupt controller (IME, IE, IF).

@@ -10,7 +10,7 @@
 // (`keypad.md`, "Unverified").
 
 use crate::input::Input;
-use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// KEYINPUT, at `0400_0130h`; the device's register space starts here. Both CPUs.
@@ -45,11 +45,13 @@ const EXT_HINGE_SHIFT: u32 = 7;
 // TODO(hw-unverified): whether bits 10-13 are writable (`keypad.md`, "Unverified").
 const KEYCNT_MASK: u16 = 0xC3FF;
 
-/// One CPU's keypad registers: KEYCNT, and the input latched for the frame the key bits read.
+/// One CPU's keypad registers: KEYCNT. The key bits read the host's input through the access's
+/// context (`device::Cx`), which `Io` latched as the frame began: no keypad keeps a copy.
+// TODO(phase5): the keypad IRQ and the hinge IRQ must react when the input changes, which needs a
+// change hook from `Io::latch_input`; nothing reacts for now (`keypad.md`, "What is still a stub").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Keypad<const ARM9: bool> {
     keycnt: u16,
-    input: Input,
 }
 
 impl<const ARM9: bool> Keypad<ARM9> {
@@ -64,36 +66,25 @@ impl<const ARM9: bool> Keypad<ARM9> {
         self.keycnt
     }
 
-    /// The input the key registers read: the host's, as latched when the frame began.
-    pub fn input(&self) -> Input {
-        self.input
-    }
-
-    /// Latches `input` for the registers (`keypad.md`, "Where the bits come from"); nothing else
-    /// changes, KEYCNT included.
-    pub(crate) fn latch(&mut self, input: Input) {
-        self.input = input;
-    }
-
     /// KEYINPUT: a held key reads 0 (`keypad.md`, "KEYINPUT bits").
-    fn keyinput(&self) -> u16 {
-        KEYINPUT_RELEASED & !self.input.buttons.bits()
+    fn keyinput(input: &Input) -> u16 {
+        KEYINPUT_RELEASED & !input.buttons.bits()
     }
 
     /// EXTKEYIN: X and Y read 0 while held, the hinge bit is 1 while closed; the pen and the
     /// other bits keep their released values (`keypad.md`, "EXTKEYIN bits").
     // TODO(phase5): the pen bit follows the touch controller (`keypad.md`, "What is still a stub").
-    fn extkeyin(&self) -> u16 {
-        let held_xy = (self.input.buttons.bits() >> EXT_BUTTON_SHIFT) & EXT_BUTTON_MASK;
-        let hinge = u16::from(self.input.hinge_closed) << EXT_HINGE_SHIFT;
+    fn extkeyin(input: &Input) -> u16 {
+        let held_xy = (input.buttons.bits() >> EXT_BUTTON_SHIFT) & EXT_BUTTON_MASK;
+        let hinge = u16::from(input.hinge_closed) << EXT_HINGE_SHIFT;
         (EXTKEYIN_RELEASED & !held_xy) | hinge
     }
 
     /// The byte of the register space at `offset`: a hole, and on the ARM9 EXTKEYIN, read 0.
-    fn byte(&self, offset: u32) -> u8 {
+    fn byte(&self, offset: u32, input: &Input) -> u8 {
         let keycnt = self.keycnt.to_le_bytes();
-        let keys = self.keyinput().to_le_bytes();
-        let ext = self.extkeyin().to_le_bytes();
+        let keys = Self::keyinput(input).to_le_bytes();
+        let ext = Self::extkeyin(input).to_le_bytes();
         match offset {
             0 | 1 => keys[offset as usize],
             KEYCNT_OFFSET | 3 => keycnt[(offset - KEYCNT_OFFSET) as usize],
@@ -106,13 +97,13 @@ impl<const ARM9: bool> Keypad<ARM9> {
 impl<const ARM9: bool> Checked for Keypad<ARM9> {}
 
 impl<const ARM9: bool> Device<ARM9> for Keypad<ARM9> {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
-        read_bytes(offset, width, |at| self.byte(at))
+    fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
+        read_bytes(offset, width, |at| self.byte(at, cx.host))
     }
 
     /// Each byte of the write goes to the register at its own offset; only KEYCNT keeps anything,
     /// and only its defined bits. KEYINPUT and EXTKEYIN are read-only.
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
             let shift = match at {
                 KEYCNT_OFFSET => Some(0),

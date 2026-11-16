@@ -10,6 +10,7 @@
 //! `c` master cycles per tick first overflows at `T + (0x10000 - R) * c`.
 
 use super::*;
+use crate::io::device::cx_at;
 
 type Arm9Timers = Timers<true>;
 
@@ -37,12 +38,12 @@ fn write_byte<const ARM9: bool>(
     value: u8,
     now: u64,
 ) -> Effect {
-    timers.write(offset, Width::Byte, u32::from(value), now)
+    timers.write(offset, Width::Byte, u32::from(value), cx_at(now))
 }
 
 /// A byte read at `offset`.
 fn read_byte(timers: &Arm9Timers, offset: u32, now: u64) -> u8 {
-    timers.peek(offset, Width::Byte, now) as u8
+    timers.peek(offset, Width::Byte, cx_at(now)) as u8
 }
 
 /// A halfword write: bytes in ascending address order, as the bus splits it. Returns the mask of

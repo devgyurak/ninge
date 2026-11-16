@@ -12,7 +12,9 @@
 //! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_due` and
 //! `slot_fire`).
 
-use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
+use crate::io::device::{
+    Checked, Cx, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes,
+};
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::SLICE;
 use serde::{Deserialize, Serialize};
@@ -338,13 +340,13 @@ impl<const ARM9: bool> Checked for Timers<ARM9> {
 /// An independent copy for each CPU (`AGENTS.md` §4). Its registers are bytes; a wider access is
 /// split into them, and a read has no side effect.
 impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
-    fn peek(&self, offset: u32, width: Width, now: u64) -> u32 {
-        read_bytes(offset, width, |at| self.read_byte(at, now))
+    fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
+        read_bytes(offset, width, |at| self.read_byte(at, cx.now))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
-            self.write_byte(at, byte, now)
+            self.write_byte(at, byte, cx.now)
         })
     }
 

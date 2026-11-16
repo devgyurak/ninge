@@ -7,7 +7,7 @@
 //! reach a CPU's interrupt controller: what it would raise comes back as [`Requests`], and `Io`
 //! hands those to the two controllers.
 
-use crate::io::device::{Checked, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use crate::io::irq::{IPCSYNC_IRQ, RECV_NOT_EMPTY_IRQ, Requests, SEND_EMPTY_IRQ};
 use serde::{Deserialize, Serialize};
 
@@ -438,7 +438,7 @@ impl Checked for Ipc {
 /// are not bytes: IPCFIFOSEND sends on a word write alone, and IPCFIFORECV takes one word whatever
 /// the width. The rest (IPCSYNC, IPCFIFOCNT) split into bytes.
 impl<const ARM9: bool> Device<ARM9> for Ipc {
-    fn peek(&self, offset: u32, width: Width, _now: u64) -> u32 {
+    fn peek(&self, offset: u32, width: Width, _cx: Cx<'_>) -> u32 {
         match Self::recv_shift(offset) {
             Some(shift) => (self.peek_recv::<ARM9>() >> shift) & width.mask(),
             None => read_bytes(offset, width, |at| self.read_byte::<ARM9>(at)),
@@ -448,14 +448,14 @@ impl<const ARM9: bool> Device<ARM9> for Ipc {
     /// A read of IPCFIFORECV takes a word from the FIFO and the access sees the bytes at its own
     /// address.
     // TODO(hw-unverified): a byte or halfword read takes a whole word (`ipc.md`, "Unverified").
-    fn read(&mut self, offset: u32, width: Width, now: u64) -> (u32, Effect) {
+    fn read(&mut self, offset: u32, width: Width, cx: Cx<'_>) -> (u32, Effect) {
         match Self::recv_shift(offset) {
             Some(shift) => {
                 let (word, requests) = self.receive::<ARM9>();
                 ((word >> shift) & width.mask(), Effect::raising(requests))
             }
             None => (
-                Device::<ARM9>::peek(self, offset, width, now),
+                Device::<ARM9>::peek(self, offset, width, cx),
                 Effect::default(),
             ),
         }
@@ -463,7 +463,7 @@ impl<const ARM9: bool> Device<ARM9> for Ipc {
 
     /// IPCFIFOSEND takes the access as one word; it is not split into bytes.
     // TODO(hw-unverified): a byte or halfword write is ignored (`ipc.md`, "Unverified").
-    fn write(&mut self, offset: u32, width: Width, value: u32, _now: u64) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         if offset & !3 == SEND_OFFSET {
             return match width {
                 Width::Word => Effect::raising(self.send::<ARM9>(value)),

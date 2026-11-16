@@ -34,6 +34,24 @@ fn given_an_input_passed_to_run_frame_when_the_frame_runs_then_both_cpus_read_th
 }
 
 #[test]
+fn given_one_latched_input_when_each_cpu_reads_its_registers_then_both_read_that_input() {
+    let mut machine = Machine::new();
+    machine.run_frame(
+        Input::new()
+            .with_buttons(Buttons::A | Buttons::X)
+            .with_hinge_closed(true),
+    );
+    // The ARM9's KEYINPUT has A clear; the ARM7's EXTKEYIN has X clear and the hinge bit set.
+    assert_eq!(
+        (
+            machine.inspect().arm9_peek16(KEYINPUT),
+            machine.inspect().arm7_peek16(0, EXTKEYIN)
+        ),
+        (0x03FE, 0x00FE)
+    );
+}
+
+#[test]
 fn given_a_held_key_when_a_later_frame_gets_the_default_input_then_the_key_is_released() {
     let mut machine = Machine::new();
     machine.run_frame(held(Buttons::B));

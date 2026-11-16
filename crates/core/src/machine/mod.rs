@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The whole emulated machine: [`Machine`], the one struct that owns all emulator state.
 
-use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig, VramWindowKind};
+use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::Header;
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
-use crate::gpu2d::EngineInputs;
+use crate::gpu2d::EngineId;
 use crate::hle::BiosState;
 use crate::io::Io;
 use crate::scheduler::{EventKind, Scheduler};
@@ -14,10 +14,6 @@ use serde::{Deserialize, Serialize};
 pub const SCREEN_WIDTH: usize = 256;
 /// Height of each screen in pixels (`docs/hw/display.md`).
 pub const SCREEN_HEIGHT: usize = 192;
-/// Bytes of palette RAM one engine reads: its BG and OBJ tables (`docs/hw/palette-ram.md`).
-const PALETTE_HALF: usize = 1 << 10;
-/// Bytes of OAM one engine reads: 128 entries of 8 bytes (`docs/hw/obj.md`).
-pub(crate) const OAM_HALF: usize = 1 << 10;
 
 /// One of the two physical screens.
 ///
@@ -201,39 +197,12 @@ impl Machine {
             (&mut self.work_bottom, &mut self.work_top)
         };
         let line = y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH;
-        // The palette RAM is one half for each engine (`palette-ram.md`, "Layout").
-        let palette = self.memory.palette();
-        let (palette_a, palette_b) = palette
-            .split_at_checked(PALETTE_HALF)
-            .unwrap_or((palette, &[]));
-        // The extended palettes come from the banks VRAMCNT maps now.
-        // TODO(hw-unverified): their slots are read as the line starts, though the hardware reads
-        // them while it draws (`extended-palettes.md`, "Unverified").
-        // OAM is one half for each engine too (`obj.md`, "Registers and memory").
-        // TODO(hw-unverified): OAM is read at the start of the line, and a store during a visible
-        // line lands at once (`obj.md`, "Unverified").
-        let oam = self.memory.oam();
-        let (oam_a, oam_b) = oam.split_at_checked(OAM_HALF).unwrap_or((oam, &[]));
         if let Some(out) = engine_a.get_mut(line.clone()) {
-            let inputs = EngineInputs::main(
-                self.memory.vram_window(VramWindowKind::BgA),
-                self.memory.vram_window(VramWindowKind::ObjA),
-                palette_a,
-                self.memory.ext_bg_palette(false),
-                self.memory.ext_obj_palette(false),
-                oam_a,
-            );
+            let inputs = self.memory.engine_inputs(EngineId::A);
             gpu.render_line_a(y, self.memory.lcdc_banks(), &inputs, out);
         }
         if let Some(out) = engine_b.get_mut(line) {
-            let inputs = EngineInputs::sub(
-                self.memory.vram_window(VramWindowKind::BgB),
-                self.memory.vram_window(VramWindowKind::ObjB),
-                palette_b,
-                self.memory.ext_bg_palette(true),
-                self.memory.ext_obj_palette(true),
-                oam_b,
-            );
+            let inputs = self.memory.engine_inputs(EngineId::B);
             gpu.render_line_b(y, &inputs, out);
         }
         // The affine layers' reference points move down a line (`bg-modes.md`, "When the picture is

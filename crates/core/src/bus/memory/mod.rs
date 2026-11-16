@@ -17,6 +17,7 @@ pub use vram::{ExtPaletteBanks, VramMapping, VramWindow, VramWindowKind};
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
+use crate::gpu2d::{EngineId, EngineInputs};
 use crate::io::device::{Width, read_bytes};
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,11 @@ use serde::{Deserialize, Serialize};
 const PAGE_SHIFT: u32 = 14;
 const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
 const PAGE_MASK: u32 = (1 << PAGE_SHIFT) - 1;
+/// Bytes of palette RAM one engine reads: its BG and OBJ tables (`palette-ram.md`, "Layout").
+const PALETTE_HALF: usize = 1 << 10;
+/// Bytes of OAM one engine reads: 128 entries of 8 bytes (`obj.md`).
+const OAM_HALF: usize = 1 << 10;
+
 /// One entry per page of the 4 GiB address space.
 const PAGE_COUNT: usize = 1 << (32 - PAGE_SHIFT);
 
@@ -513,6 +519,52 @@ impl Memory {
     /// "Registers and memory"). The debugger's OAM view (#58) shows it.
     pub fn oam(&self) -> &[u8] {
         &self.oam
+    }
+
+    /// The 1 KiB of OAM engine `which` reads: 128 entries of 8 bytes (`obj.md`, "Registers and
+    /// memory"); A has the first half and B the second.
+    pub(crate) fn oam_of(&self, which: EngineId) -> &[u8] {
+        let (oam_a, oam_b) = self
+            .oam()
+            .split_at_checked(OAM_HALF)
+            .unwrap_or((self.oam(), &[]));
+        match which {
+            EngineId::A => oam_a,
+            EngineId::B => oam_b,
+        }
+    }
+
+    /// What engine `which` reads to draw a line: its windows of BG and OBJ VRAM, its half of the
+    /// palette RAM (`palette-ram.md`, "Layout"), the extended palettes the banks VRAMCNT maps
+    /// now and its half of OAM.
+    // TODO(hw-unverified): the extended-palette slots are read as the line starts, though the
+    // hardware reads them while it draws (`extended-palettes.md`, "Unverified").
+    // TODO(hw-unverified): OAM is read at the start of the line, and a store during a visible
+    // line lands at once (`obj.md`, "Unverified").
+    pub(crate) fn engine_inputs(&self, which: EngineId) -> EngineInputs<'_> {
+        let (palette_a, palette_b) = self
+            .palette()
+            .split_at_checked(PALETTE_HALF)
+            .unwrap_or((self.palette(), &[]));
+        let oam = self.oam_of(which);
+        match which {
+            EngineId::A => EngineInputs::main(
+                self.vram_window(VramWindowKind::BgA),
+                self.vram_window(VramWindowKind::ObjA),
+                palette_a,
+                self.ext_bg_palette(false),
+                self.ext_obj_palette(false),
+                oam,
+            ),
+            EngineId::B => EngineInputs::sub(
+                self.vram_window(VramWindowKind::BgB),
+                self.vram_window(VramWindowKind::ObjB),
+                palette_b,
+                self.ext_bg_palette(true),
+                self.ext_obj_palette(true),
+                oam,
+            ),
+        }
     }
 
     /// The region backing the page that holds `addr`, as the ARM9 sees it.

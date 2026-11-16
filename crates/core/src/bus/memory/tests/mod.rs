@@ -109,3 +109,37 @@ fn given_a_long_oam_when_checked_then_it_is_not_well_formed() {
 
 mod ext;
 mod vram;
+
+#[test]
+fn given_marked_palette_halves_when_engine_inputs_built_then_each_engine_gets_its_own_half() {
+    let mut memory = Memory::new();
+    memory.palette[0] = 0xA1;
+    memory.palette[PALETTE_HALF] = 0xB2;
+    let first_bytes = (
+        memory.engine_inputs(EngineId::A).palette.first().copied(),
+        memory.engine_inputs(EngineId::B).palette.first().copied(),
+    );
+    assert_eq!(first_bytes, (Some(0xA1), Some(0xB2)));
+}
+
+#[test]
+fn given_marked_oam_halves_when_engine_inputs_built_then_each_engine_gets_its_own_half() {
+    let mut memory = Memory::new();
+    memory.oam[0] = 0xA1;
+    memory.oam[OAM_HALF] = 0xB2;
+    let first_bytes = (
+        memory.engine_inputs(EngineId::A).oam.first().copied(),
+        memory.engine_inputs(EngineId::B).oam.first().copied(),
+    );
+    assert_eq!(first_bytes, (Some(0xA1), Some(0xB2)));
+}
+
+#[test]
+fn given_power_on_memory_when_oam_of_each_engine_then_halves_are_a_kilobyte_each() {
+    let memory = Memory::new();
+    let lengths = (
+        memory.oam_of(EngineId::A).len(),
+        memory.oam_of(EngineId::B).len(),
+    );
+    assert_eq!(lengths, (OAM_HALF, OAM_HALF));
+}

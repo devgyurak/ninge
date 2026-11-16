@@ -1,0 +1,2 @@
+# Golden frames for testroms/capture. Format and review flow: tests/golden/README.md.
+frames=14 top=459c25a30e582325 bottom=37bb6fb31ef02325

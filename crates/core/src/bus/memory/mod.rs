@@ -509,6 +509,18 @@ impl Memory {
         })
     }
 
+    /// The bytes of bank `block` (0-3 for A-D) for the capture unit to write, while the CPU sees
+    /// the bank as LCDC VRAM (enabled, MST 0); `None` for a bank in any other mapping
+    /// (`display-capture.md`, "Edge cases").
+    // TODO(hw-unverified): a capture into a bank that is not in LCDC mode writes nothing.
+    pub(crate) fn lcdc_bank_mut(&mut self, block: usize) -> Option<&mut [u8]> {
+        let start = *BANK_BASE.get(block)?;
+        let size = *BANK_SIZE.get(block)?;
+        (self.vram_bank(block).mapping == VramMapping::Lcdc)
+            .then(|| self.vram.get_mut(start..start + size))
+            .flatten()
+    }
+
     /// The 2 KiB of palette RAM: engine A's BG and OBJ tables, then engine B's (`palette-ram.md`,
     /// "Layout"). A debugger's palette panel (#57) shows it.
     pub fn palette(&self) -> &[u8] {

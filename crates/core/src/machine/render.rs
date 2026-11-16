@@ -5,15 +5,21 @@
 
 use super::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::bus::Memory;
-use crate::gpu2d::{EngineId, expand_line};
+use crate::gpu2d::{EngineId, Gpu2d, expand_line};
 
 /// The display capture stage: it sees engine A's composed graphics screen for the line, in the
-/// colour the hardware has and before the master brightness, and will write it to VRAM
-/// (`docs/hw/display-capture.md`, "Where the capture unit sits").
-///
-/// It takes the memory so it can store the line without another restructuring of `render_line`.
-// TODO(phase4): display capture (#36) fills this in.
-fn capture_tap(_memory: &mut Memory, _y: usize, _composed: &[u16; SCREEN_WIDTH]) {}
+/// colour the hardware has and before the master brightness, and stores it in the VRAM block
+/// DISPCAPCNT names (`docs/hw/display-capture.md`, "Where the capture unit sits"). A line the
+/// capture does not take (no capture is running, or its size has no such row) is left alone.
+fn capture_tap(memory: &mut Memory, gpu: &Gpu2d, y: usize, composed: &[u16; SCREEN_WIDTH]) {
+    let Some(capture) = gpu.capture_line(y) else {
+        return;
+    };
+    let pixels = capture.pixels(composed);
+    if let Some(bank) = memory.lcdc_bank_mut(capture.write_block()) {
+        capture.store(y, bank, &pixels);
+    }
+}
 
 impl Machine {
     /// Draws visible line `y` of both screens into the frame being drawn, from the registers and
@@ -38,7 +44,10 @@ impl Machine {
         let inputs_a = self.memory.engine_inputs(EngineId::A);
         // The layers are composed when the screen shows them; a capture reads them in every
         // display mode, so it will ask for them too (`display-capture.md`).
-        if gpu.shows_layers_a(&inputs_a) {
+        let capture_wants_a = gpu
+            .capture_line(y)
+            .is_some_and(|capture| capture.reads_source_a());
+        if gpu.shows_layers_a(&inputs_a) || capture_wants_a {
             gpu.compose_line_a(y, &inputs_a, &mut composed);
         }
         let brightness_a = gpu.select_line_a(
@@ -50,7 +59,7 @@ impl Machine {
         );
         let inputs_b = self.memory.engine_inputs(EngineId::B);
         let brightness_b = gpu.render_line_b(y, &inputs_b, &mut line_b);
-        capture_tap(&mut self.memory, y, &composed);
+        capture_tap(&mut self.memory, gpu, y, &composed);
         let (out_a, out_b) = if gpu.engine_a_on_top() {
             (&mut self.work_top, &mut self.work_bottom)
         } else {

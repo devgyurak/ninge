@@ -236,13 +236,13 @@ impl Machine {
     ///
     /// A machine with no booted program (no ROM, or a refused one) runs no CPU and draws
     /// nothing: the frame only advances the counter and leaves both screens black.
-    // TODO(hw-unverified): the per-frame instruction counts are a model (`docs/hw/scheduler.md`).
     ///
     /// `input` is this frame's input: the buttons held, the touch point and the hinge. It is
     /// latched into the keypad registers as the frame begins and read from there until the next
     /// one, so every frame's input is explicit and one `Input` per frame is a complete input
     /// log, which replays to the same frames and savestate bytes (`docs/hw/keypad.md`, "Where
     /// the bits come from"). A host with no input passes `Input::default()`.
+    // TODO(hw-unverified): the per-frame instruction counts are a model (`docs/hw/scheduler.md`).
     // TODO(hw-unverified): a button change reaches the registers at the frame boundary only
     // (`docs/hw/keypad.md`, "Unverified").
     pub fn run_frame(&mut self, input: Input) {

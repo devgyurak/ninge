@@ -64,11 +64,10 @@ A bit is **0 while the key is pressed** and 1 while it is released.
 The host gives the machine one `Input` for a frame: which of the twelve buttons are held (the ten
 KEYINPUT keys plus X and Y), where the touch panel is pressed (if it is), and whether the hinge
 is closed. It arrives with `Machine::run_frame(input)`, so every frame's input is explicit, and
-**it is latched as `run_frame` begins**, so every
-read of KEYINPUT and EXTKEYIN during that frame sees the same buttons whichever CPU reads them,
-and an input log of one `Input` per frame replays the same machine. A debugger single-step does
-not latch: it keeps the buttons of the last frame that ran. Both CPUs' keypads are latched
-together. The latched input is machine state (it is saved); no input waits for the next frame, as
+**it is latched as `run_frame` begins**: every read of KEYINPUT and EXTKEYIN during that frame
+sees the same buttons whichever CPU reads them, and an input log of one `Input` per frame replays
+the same machine. A debugger single-step does not latch: it keeps the buttons of the last frame
+that ran. Both CPUs' keypads are latched together. The latched input is machine state (it is saved); no input waits for the next frame, as
 `run_frame` takes it.
 
 A held button reads as 0 in its bit and a released one as 1. KEYINPUT bits 0-9 follow the ten

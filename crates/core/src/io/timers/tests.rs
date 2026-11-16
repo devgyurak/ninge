@@ -144,30 +144,8 @@ fn given_reload_0_when_started_with_each_prescaler_then_overflow_is_65536_ticks_
 }
 
 #[test]
-fn given_a_started_timer_when_asked_for_an_event_then_it_has_one_and_it_is_an_overflow_of_that_timer()
- {
-    let timers = timer0(0xFFF0, START, 0);
-    assert_eq!(
-        (timers.has_event(0), Arm9Timers::event_kind(0)),
-        (
-            true,
-            EventKind::TimerOverflow {
-                arm9: true,
-                index: 0
-            }
-        )
-    );
-}
-
-#[test]
-fn given_the_arm7_timers_when_asked_for_the_event_kind_then_it_belongs_to_the_arm7() {
-    assert_eq!(
-        Timers::<false>::event_kind(3),
-        EventKind::TimerOverflow {
-            arm9: false,
-            index: 3
-        }
-    );
+fn given_a_started_timer_when_asked_for_an_event_then_it_has_one() {
+    assert!(timer0(0xFFF0, START, 0).has_event(0));
 }
 
 // ------------------------------------------------------------------------- reload and start

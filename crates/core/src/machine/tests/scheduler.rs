@@ -269,8 +269,8 @@ fn given_a_booted_machine_when_nothing_ran_then_hblank_and_the_next_line_start_a
     assert_eq!(
         pending,
         vec![
-            (HBLANK_START_CYCLES, EventKind::HBlankStart),
-            (LINE_CYCLES, EventKind::LineStart)
+            (HBLANK_START_CYCLES, EventKind::Line(LineEvent::HBlank)),
+            (LINE_CYCLES, EventKind::Line(LineEvent::Start))
         ]
     );
 }
@@ -289,8 +289,14 @@ fn given_one_frame_run_when_listing_pending_then_the_next_line_events_follow_the
     assert_eq!(
         pending,
         vec![
-            (FRAME_CYCLES + HBLANK_START_CYCLES, EventKind::HBlankStart),
-            (FRAME_CYCLES + LINE_CYCLES, EventKind::LineStart)
+            (
+                FRAME_CYCLES + HBLANK_START_CYCLES,
+                EventKind::Line(LineEvent::HBlank)
+            ),
+            (
+                FRAME_CYCLES + LINE_CYCLES,
+                EventKind::Line(LineEvent::Start)
+            )
         ]
     );
 }
@@ -612,7 +618,7 @@ fn frames_counted_at_the_edge_of_time() -> u64 {
     machine.arm7_clock = machine.scheduler.now;
     machine
         .scheduler
-        .schedule(u64::MAX - FRAME_CYCLES, EventKind::LineStart);
+        .schedule(u64::MAX - FRAME_CYCLES, EventKind::Line(LineEvent::Start));
     machine.run_frame();
     machine.run_frame();
     machine.frame_count()

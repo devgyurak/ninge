@@ -12,7 +12,6 @@
 use crate::cpu::Bus;
 use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{DMA0_IRQ, Requests};
-use crate::scheduler::EventKind;
 use serde::{Deserialize, Serialize};
 
 /// DMA0SAD, at `0400_00B0h` (`dma.md`, "Registers"). Channel *n* is `12n` bytes above it.
@@ -142,7 +141,7 @@ struct Channel {
     source_now: u32,
     destination_now: u32,
     count_now: u32,
-    // A `DmaStart` event is queued for this channel. Enable stays set while it is true and
+    // A DMA-start event is queued for this channel. Enable stays set while it is true and
     // while the transfer runs, so a polling CPU waits (`dma.md`, "Enabling").
     pending: bool,
     // The channel's transfer is running (between `begin` and `finish`), and its own enable went
@@ -210,7 +209,7 @@ impl<const ARM9: bool> Dma<ARM9> {
         self.fill.get(index).copied().unwrap_or(0)
     }
 
-    /// Whether channel `index` has a start waiting to run: its `DmaStart` event is queued.
+    /// Whether channel `index` has a start waiting to run: its DMA-start event is queued.
     pub fn pending(&self, index: usize) -> bool {
         self.channels
             .get(index)
@@ -277,15 +276,6 @@ impl<const ARM9: bool> Dma<ARM9> {
             (3, true) => Start::Display,
             (4, true) => Start::MainMemory,
             _ => Start::Unimplemented,
-        }
-    }
-
-    /// The event that carries channel `index`'s start.
-    pub(crate) fn event_kind(index: usize) -> EventKind {
-        EventKind::DmaStart {
-            arm9: ARM9,
-            // The index is below 4 wherever it comes from a channel.
-            channel: index as u8,
         }
     }
 
@@ -543,10 +533,6 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
     }
 
     const SLOTS: u8 = CHANNEL_COUNT as u8;
-
-    fn slot_kind(&self, slot: u8) -> Option<EventKind> {
-        (usize::from(slot) < CHANNEL_COUNT).then(|| Self::event_kind(usize::from(slot)))
-    }
 
     /// A waiting start is due at once: the caller raises it to the time the start was raised.
     fn slot_due(&self, slot: u8) -> Option<u64> {

@@ -22,6 +22,7 @@ pub use crate::gpu2d::{
     MasterBrightness, Mosaic, OBJ_COUNT, ObjAttrs, Targets, TextBg, WindowRect, Windows,
 };
 pub use crate::hle::SwiRecord;
+pub use crate::io::DeviceId;
 pub use crate::io::divsqrt::DivSqrt;
 pub use crate::io::dma::Dma;
 pub use crate::io::ipc::Ipc;
@@ -30,7 +31,7 @@ pub use crate::io::keypad::Keypad;
 pub use crate::io::power::Power;
 pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
-pub use crate::scheduler::{Event, EventKind, Scheduler};
+pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
 
 /// A read-only view of one [`Machine`], from [`Machine::inspect`]. It borrows the machine, so the
 /// machine cannot run while a view of it is alive.

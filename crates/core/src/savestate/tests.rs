@@ -12,7 +12,9 @@ use super::*;
 use crate::bus::{Region, VramBankState, VramMapping};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
+use crate::io::DeviceId;
 use crate::io::irq::Requests;
+use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
@@ -796,11 +798,11 @@ fn with_queue(rom: &[u8], now: u64, events: &[u64]) -> Machine {
     machine.arm7_clock = now;
     machine
         .scheduler
-        .schedule(now, crate::scheduler::EventKind::HBlankStart);
+        .schedule(now, crate::scheduler::EventKind::Line(LineEvent::HBlank));
     events.iter().for_each(|&time| {
         machine
             .scheduler
-            .schedule(time, crate::scheduler::EventKind::LineStart)
+            .schedule(time, crate::scheduler::EventKind::Line(LineEvent::Start))
     });
     machine
 }
@@ -1265,7 +1267,11 @@ const DMA0DAD: u32 = 0x0400_00B4;
 const DMA0CNT: u32 = 0x0400_00B8;
 
 fn dma_kind(arm9: bool, channel: u8) -> crate::scheduler::EventKind {
-    crate::scheduler::EventKind::DmaStart { arm9, channel }
+    crate::scheduler::EventKind::Slot {
+        device: DeviceId::Dma,
+        arm9,
+        slot: channel,
+    }
 }
 
 /// A booted machine one frame in, with an Immediate start queued on ARM9 channel 0.

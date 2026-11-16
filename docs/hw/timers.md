@@ -99,7 +99,7 @@ hardware behavior.
 - **Time comes from the reading CPU.** A read or write at an ARM9 instruction is at the master
   clock; at an ARM7 instruction it is at the ARM7 clock. The two differ by less than one ARM7
   instruction outside an ARM7 slice (`scheduler.md`, "Interleaving").
-- **Overflows are events.** One `TimerOverflow` event per running, non-count-up timer, at the
+- **Overflows are events.** One timer-overflow event per running, non-count-up timer, at the
   master time of its next overflow. Count-up timers have no event: the overflow that feeds them
   adds to them. A write to `TMnCNT_H` that starts, stops, or changes the prescaler or count-up
   mode replaces that timer's event, at the write itself: the bus view that carries the write holds

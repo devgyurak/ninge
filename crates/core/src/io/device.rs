@@ -3,14 +3,13 @@
 //! caller ([`Effect`], [`Fired`]), the [`Device`] trait and the byte-register helpers.
 //!
 //! A device whose registers own scheduler events (the timers, the DMA channels) names them through
-//! the same interface: a slot is one event of the device, [`Device::slot_kind`] gives its
-//! [`EventKind`], [`Device::slot_due`] the time it is next due and [`Device::slot_fire`] what
+//! the same interface: a slot is one event of the device, `Io` builds its
+//! [`EventKind::Slot`] from the device's [`DeviceId`], [`Device::slot_due`] the time it is next due and [`Device::slot_fire`] what
 //! happens when it fires. `Io` replaces the events of the slots an [`Effect`] names and fires them
 //! without knowing which device it is.
 
 use crate::io::dma::Transfer;
 use crate::io::irq::Requests;
-use crate::scheduler::EventKind;
 
 /// The width of one bus access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,12 +105,6 @@ pub(crate) trait Device<const ARM9: bool> {
     /// ([`crate::io::EVENT_SLOTS`]).
     const SLOTS: u8 = 0;
     // A device cannot declare more slots than a mask holds; `Io` checks it at compile time.
-
-    /// The scheduler event that carries event slot `slot`, or `None` when the device has no such
-    /// slot (a device with no events has none).
-    fn slot_kind(&self, _slot: u8) -> Option<EventKind> {
-        None
-    }
 
     /// The master time slot `slot`'s event is next due, or `None` when it has none. `Io` never
     /// queues it before the earliest time the access allows ([`At::floor`]), so a time already

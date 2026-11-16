@@ -169,7 +169,7 @@ When the last unit is written:
 These are choices so DMA fits the event scheduler (`scheduler.md`); none is claimed to be
 hardware behavior.
 
-- **One event per channel.** A start, whatever its timing, is a `DmaStart` event on the channel's
+- **One event per channel.** A start, whatever its timing, is a DMA-start event on the channel's
   slot, queued when the start is known: at the end of the enable write for Immediate, at the
   trigger's time for VBlank and HBlank. Events for channels triggered together are queued in
   channel order, so `(time, seq)` fires them 0 to 3.

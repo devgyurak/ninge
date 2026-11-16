@@ -2,8 +2,8 @@
 //! The device registry: [`registry!`] is the one table of the register devices. Each entry names
 //! a device once, in the group of the kind it is (`AGENTS.md` §4, "Per-CPU devices"), and the
 //! macro writes everything that follows from it: the field of `Io`, its power-on state, its
-//! getters, the savestate check and the port dispatch [`device_call!`] (static dispatch, no
-//! `dyn`, `AGENTS.md` §2 rule 3).
+//! getters, the savestate check, the port dispatch [`device_call!`] (static dispatch, no
+//! `dyn`, `AGENTS.md` §2 rule 3) and the [`DeviceId`] the scheduler names a device's events by.
 //!
 //! The dispatch `match` has no wildcard, so a [`Port`](super::map::Port) that no entry names
 //! fails to compile: registering a device cannot be forgotten halfway.
@@ -13,6 +13,9 @@
 //! - `arm9`: one instance only the ARM9 sees; the ARM7's access is a caller bug.
 //! - `arm7`: one instance only the ARM7 sees.
 //! - `each`: an independent copy per CPU, named `name9` and `name7`.
+//!
+//! A device's type name is its [`DeviceId`] variant, so the order of the entries is the order
+//! events of the same time and slot fall in (`scheduler.md`, "Events").
 //!
 //! The savestate lays the fields out in the order the groups and entries have here.
 
@@ -34,15 +37,15 @@ macro_rules! registry {
         $d:tt
         shared {$(
             $(#[$sm:meta])*
-            $sf:ident $(/ $sfm:ident)?: $st:ty = $si:expr => [$sp0:path $(, $sp:path)*]
+            $sf:ident $(/ $sfm:ident)?: $st:ident = $si:expr => [$sp0:path $(, $sp:path)*]
         ),* $(,)?}
         arm9 {$(
             $(#[$am:meta])*
-            $af:ident $(/ $afm:ident)?: $at:ty = $ai:expr => [$ap0:path $(, $ap:path)*]
+            $af:ident $(/ $afm:ident)?: $at:ident = $ai:expr => [$ap0:path $(, $ap:path)*]
         ),* $(,)?}
         arm7 {$(
             $(#[$bm:meta])*
-            $bf:ident $(/ $bfm:ident)?: $bt:ty = $bi:expr => [$bp0:path $(, $bp:path)*]
+            $bf:ident $(/ $bfm:ident)?: $bt:ident = $bi:expr => [$bp0:path $(, $bp:path)*]
         ),* $(,)?}
         each {$(
             $(#[$em:meta])*
@@ -69,6 +72,61 @@ macro_rules! registry {
             $( + <$bt as Device<false>>::SLOTS as usize )*
             $( + <$et<true> as Device<true>>::SLOTS as usize
                + <$et<false> as Device<false>>::SLOTS as usize )*;
+
+        /// Which registered device an event belongs to: one variant per registry entry, named
+        /// after its type, in registration order. A pair of per-CPU copies (`each`) shares one
+        /// variant; the event says which CPU's. The scheduler orders same-time events by it, so
+        /// the registration order is part of the model (`scheduler.md`, "Events").
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+        pub enum DeviceId {
+            $( #[doc = concat!("The `", stringify!($st), "` device.")] $st, )*
+            $( #[doc = concat!("The `", stringify!($at), "` device.")] $at, )*
+            $( #[doc = concat!("The `", stringify!($bt), "` device.")] $bt, )*
+            $( #[doc = concat!("The `", stringify!($et), "` device.")] $et, )*
+        }
+
+        impl DeviceId {
+            /// Every device, in registration order.
+            #[cfg(test)]
+            pub(crate) const ALL: &[DeviceId] = &[
+                $( Self::$st, )*
+                $( Self::$at, )*
+                $( Self::$bt, )*
+                $( Self::$et, )*
+            ];
+
+            /// The device behind `port`. No wildcard: a port no entry names fails to compile.
+            pub(crate) fn of(port: Port) -> Self {
+                match port {
+                    $( $sp0 $(| $sp)* => Self::$st, )*
+                    $( $ap0 $(| $ap)* => Self::$at, )*
+                    $( $bp0 $(| $bp)* => Self::$bt, )*
+                    $( $ep0 $(| $ep)* => Self::$et, )*
+                }
+            }
+
+            /// The first port of the entry: every port of one device reaches the same slots, so
+            /// the first one stands for it.
+            pub(crate) fn first_port(self) -> Port {
+                match self {
+                    $( Self::$st => $sp0, )*
+                    $( Self::$at => $ap0, )*
+                    $( Self::$bt => $bp0, )*
+                    $( Self::$et => $ep0, )*
+                }
+            }
+
+            /// How many event slots the device has ([`Device::SLOTS`]); the same for both CPUs'
+            /// copies of a per-CPU device.
+            pub(crate) fn slots(self) -> u8 {
+                match self {
+                    $( Self::$st => <$st as Device<true>>::SLOTS, )*
+                    $( Self::$at => <$at as Device<true>>::SLOTS, )*
+                    $( Self::$bt => <$bt as Device<false>>::SLOTS, )*
+                    $( Self::$et => <$et<true> as Device<true>>::SLOTS, )*
+                }
+            }
+        }
 
         // No device may declare more slots than a `SlotMask` has bits.
         const _: () = {

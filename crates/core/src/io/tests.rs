@@ -11,6 +11,7 @@ use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYN
 use crate::io::irq::{IE_ADDR, IF_ADDR, IME_ADDR, InterruptController, Requests};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::{DISPSTAT_ADDR, VCOUNT_ADDR};
+use crate::scheduler::LineEvent;
 
 /// The WRAMCNT, WRAMSTAT and VRAMCNT_G-I addresses, which `Memory` keeps private.
 const VRAMCNT_G: u32 = 0x0400_0246;
@@ -382,6 +383,54 @@ fn given_timers_and_dma_of_both_cpus_when_event_slots_counted_then_there_are_six
     assert_eq!(EVENT_SLOTS, 16);
 }
 
+/// The kinds queued after each CPU's timer 0 is started through `Io` (TM0CNT_H, START).
+fn kinds_after_both_cpus_start_timer_0() -> Vec<EventKind> {
+    const START: u32 = 1 << 7;
+    let mut io = Io::new();
+    let mut scheduler = Scheduler::new();
+    let at = At { now: 0, floor: 0 };
+    io.write::<true>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
+    io.write::<false>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
+    scheduler.pending().iter().map(|event| event.kind).collect()
+}
+
+#[test]
+fn given_both_cpus_starting_timer_0_when_written_through_io_then_each_queues_its_own_timer_slot() {
+    let timer = |arm9| EventKind::Slot {
+        device: DeviceId::Timers,
+        arm9,
+        slot: 0,
+    };
+    assert_eq!(
+        kinds_after_both_cpus_start_timer_0(),
+        vec![timer(true), timer(false)]
+    );
+}
+
+#[test]
+fn given_the_timers_dma_and_keypad_when_their_slots_are_counted_then_it_is_4_4_0() {
+    assert_eq!(
+        (
+            DeviceId::Timers.slots(),
+            DeviceId::Dma.slots(),
+            DeviceId::Keypad.slots()
+        ),
+        (4, 4, 0)
+    );
+}
+
+#[test]
+fn given_the_ports_of_one_device_when_mapped_then_they_give_the_same_device_and_its_first_port() {
+    assert_eq!(
+        (
+            DeviceId::of(Port::Dma),
+            DeviceId::of(Port::DmaFill),
+            DeviceId::Dma.first_port()
+        ),
+        (DeviceId::Dma, DeviceId::Dma, Port::Dma)
+    );
+}
+
 #[test]
 fn given_power_on_devices_when_checked_then_they_are_well_formed() {
     assert!(Io::new().is_well_formed(0));
@@ -400,8 +449,8 @@ fn given_line_and_hblank_events_when_fired_through_io_then_no_transfer_comes_bac
     let mut scheduler = Scheduler::new();
     assert_eq!(
         (
-            io.fire(&mut scheduler, EventKind::LineStart),
-            io.fire(&mut scheduler, EventKind::HBlankStart)
+            io.fire(&mut scheduler, EventKind::Line(LineEvent::Start)),
+            io.fire(&mut scheduler, EventKind::Line(LineEvent::HBlank))
         ),
         (None, None)
     );
@@ -413,7 +462,11 @@ fn given_dma_start_events_for_channels_with_no_start_waiting_when_fired_then_no_
     // A start that was cancelled leaves nothing to run (`dma.md`, "Enabling").
     let mut io = Io::new();
     let mut scheduler = Scheduler::new();
-    let kind = |arm9, channel| EventKind::DmaStart { arm9, channel };
+    let kind = |arm9, channel| EventKind::Slot {
+        device: DeviceId::Dma,
+        arm9,
+        slot: channel,
+    };
     assert_eq!(
         (
             io.fire(&mut scheduler, kind(true, 0)),
@@ -444,9 +497,10 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
         ENABLE | ARM9_VBLANK | 1,
     );
     io.trigger_dma(&mut scheduler, Trigger::VBlank, time);
-    let kind = EventKind::DmaStart {
+    let kind = EventKind::Slot {
+        device: DeviceId::Dma,
         arm9: true,
-        channel: 0,
+        slot: 0,
     };
     scheduler
         .pending()

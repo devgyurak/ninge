@@ -1249,36 +1249,9 @@ fn given_the_accessors_when_a_channel_is_armed_then_they_return_its_registers() 
 }
 
 #[test]
-fn given_each_slot_of_a_device_when_asked_for_its_event_then_it_is_that_cpus_dma_start() {
-    let arm9: Vec<Option<EventKind>> = (0..4).map(|s| Arm9Dma::new().slot_kind(s)).collect();
-    let arm7: Vec<Option<EventKind>> = (0..4).map(|s| Arm7Dma::new().slot_kind(s)).collect();
-    let kind = |arm9, channel| Some(EventKind::DmaStart { arm9, channel });
-    assert_eq!(
-        (arm9, arm7),
-        (
-            vec![kind(true, 0), kind(true, 1), kind(true, 2), kind(true, 3)],
-            vec![
-                kind(false, 0),
-                kind(false, 1),
-                kind(false, 2),
-                kind(false, 3)
-            ]
-        )
-    );
-}
-
-#[test]
-fn given_a_slot_past_the_fourth_when_asked_for_its_event_then_there_is_none() {
+fn given_a_slot_past_the_fourth_when_asked_for_a_due_time_then_there_is_none() {
     let dma = Arm9Dma::new();
-    assert_eq!(
-        (
-            dma.slot_kind(4),
-            dma.slot_kind(255),
-            dma.slot_due(4),
-            dma.slot_due(255)
-        ),
-        (None, None, None, None)
-    );
+    assert_eq!((dma.slot_due(4), dma.slot_due(255)), (None, None));
 }
 
 #[test]
@@ -1312,23 +1285,6 @@ fn given_a_waiting_start_when_its_slot_fires_then_the_transfer_comes_back_once()
 fn given_a_slot_with_no_start_when_it_fires_then_nothing_comes_back() {
     let mut dma = Arm7Dma::new();
     assert_eq!(dma.slot_fire(0, 0), Fired::default());
-}
-
-#[test]
-fn given_a_channel_when_its_event_kind_is_asked_then_it_names_the_cpu_and_channel() {
-    assert_eq!(
-        (Arm9Dma::event_kind(2), Arm7Dma::event_kind(3)),
-        (
-            EventKind::DmaStart {
-                arm9: true,
-                channel: 2
-            },
-            EventKind::DmaStart {
-                arm9: false,
-                channel: 3
-            }
-        )
-    );
 }
 
 // -------------------------------------------------------------------------- well-formed

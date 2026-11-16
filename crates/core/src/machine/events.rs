@@ -7,7 +7,7 @@ use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
 use crate::bus::{Arm7View, Arm9View, TcmConfig};
 use crate::io::dma::Trigger;
 use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
-use crate::scheduler::{Event, EventKind, LINE_CYCLES, Participants, Scheduler};
+use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
 
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
@@ -73,9 +73,9 @@ impl Participants for Machine {
 
     fn dispatch(&mut self, event: Event) {
         match event.kind {
-            EventKind::LineStart => self.line_started(event.time),
-            EventKind::HBlankStart => self.hblank_started(event.time),
-            EventKind::TimerOverflow { .. } | EventKind::DmaStart { .. } => {
+            EventKind::Line(LineEvent::Start) => self.line_started(event.time),
+            EventKind::Line(LineEvent::HBlank) => self.hblank_started(event.time),
+            EventKind::Slot { .. } => {
                 if let Some(transfer) = self.io.fire(&mut self.scheduler, event.kind) {
                     self.run_dma(transfer);
                 }
@@ -156,8 +156,10 @@ impl Machine {
             self.frame_count = self.frame_count.wrapping_add(1);
         }
         // From the event's own time, not `now`, so a line's length never drifts.
-        self.scheduler
-            .schedule(time.saturating_add(LINE_CYCLES), EventKind::LineStart);
+        self.scheduler.schedule(
+            time.saturating_add(LINE_CYCLES),
+            EventKind::Line(LineEvent::Start),
+        );
     }
 
     /// The ARM9 DMA starts a line begins: the start of display at line 0, and the main-memory
@@ -193,7 +195,9 @@ impl Machine {
             self.io
                 .trigger_dma(&mut self.scheduler, Trigger::HBlank, time);
         }
-        self.scheduler
-            .schedule(time.saturating_add(LINE_CYCLES), EventKind::HBlankStart);
+        self.scheduler.schedule(
+            time.saturating_add(LINE_CYCLES),
+            EventKind::Line(LineEvent::HBlank),
+        );
     }
 }

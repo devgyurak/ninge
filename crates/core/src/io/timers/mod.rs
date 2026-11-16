@@ -9,12 +9,12 @@
 //! scheduler or an interrupt controller, so a write or an overflow hands back an [`Effect`]: the
 //! requests it would raise and the mask of timers whose overflow event must be replaced. `Io`
 //! schedules them, asking each timer for its next overflow ([`Timers::overflow_time`]); that
-//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_kind`,
-//! `slot_due` and `slot_fire`).
+//! and the overflow itself are the timers' side of the event-slot interface (`Device::slot_due` and
+//! `slot_fire`).
 
 use crate::io::device::{Checked, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes};
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
-use crate::scheduler::{EventKind, SLICE};
+use crate::scheduler::SLICE;
 use serde::{Deserialize, Serialize};
 
 /// TM0CNT_L, at `0400_0100h` (`timers.md`, "Registers"). Timer *n* is `4n` bytes above it.
@@ -161,15 +161,6 @@ impl<const ARM9: bool> Timers<ARM9> {
                 .origin
                 .saturating_add(ticks.saturating_mul(timer.tick_cycles())),
         )
-    }
-
-    /// The event that carries timer `index`'s overflow.
-    pub(crate) fn event_kind(index: usize) -> EventKind {
-        EventKind::TimerOverflow {
-            arm9: ARM9,
-            // The index is below 4 wherever it comes from a timer.
-            index: index as u8,
-        }
     }
 
     /// Timer `index` overflows at master time `time`: it reloads, the timers it feeds tick, and
@@ -358,10 +349,6 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
     }
 
     const SLOTS: u8 = TIMER_COUNT as u8;
-
-    fn slot_kind(&self, slot: u8) -> Option<EventKind> {
-        (usize::from(slot) < TIMER_COUNT).then(|| Self::event_kind(usize::from(slot)))
-    }
 
     fn slot_due(&self, slot: u8) -> Option<u64> {
         self.overflow_time(usize::from(slot))

@@ -8,7 +8,7 @@ GBATEK "LCD I/O Mosaic Function" (MOSAIC); GBATEK "LCD I/O BG Rotation/Scaling" 
 GBATEK "LCD Color Palettes" (the OBJ palette, transparent colour 0); GBATEK "DS Memory Control -
 Memory Access" and "DS Memory Maps" (OAM location and the write widths).
 Used by: `crates/core/src/gpu2d/`, `crates/core/src/bus/memory/`   Phase: 4 (#31); the
-semi-transparent mode (#34), the OBJ window (#33, `windows.md`), capture (#36) and the OAM panel in the
+semi-transparent mode (#34, `blending.md`), the OBJ window (#33, `windows.md`), capture (#36) and the OAM panel in the
 debugger (#58) are other issues; the OBJ extended palettes are `extended-palettes.md` (#32)
 
 `bg-text.md` describes the picture of one line and `bg-modes.md` the layers behind the sprites.
@@ -71,7 +71,7 @@ three halfwords of its own:
 | 0-7 | Y, 0-255 |
 | 8 | 1 = affine object (rotation/scaling) |
 | 9 | affine object: 1 = double-size; plain object: 1 = **disabled**, not drawn |
-| 10-11 | mode: 0 normal, 1 semi-transparent (`TODO(phase4)`, #34), 2 OBJ window (`windows.md`), 3 bitmap object |
+| 10-11 | mode: 0 normal, 1 semi-transparent (`blending.md`), 2 OBJ window (`windows.md`), 3 bitmap object |
 | 12 | mosaic on for this object |
 | 13 | 0 = 16 colours of 16 palettes, 1 = 256 colours of one palette (not for a bitmap object, where it should be 0) |
 | 14-15 | shape: 0 square, 1 wide, 2 tall, 3 not allowed |
@@ -99,7 +99,7 @@ three halfwords of its own:
 |---|---|
 | 0-9 | tile number |
 | 10-11 | priority, 0 the highest |
-| 12-15 | palette number (16-colour objects); for a bitmap object these four bits are an alpha value (`TODO(phase4)`, #34) |
+| 12-15 | palette number (16-colour objects); for a bitmap object these four bits are an alpha value (`blending.md`, "Unverified"; drawn opaque) |
 
 ## Behavior
 
@@ -181,7 +181,7 @@ The identity is PA = PD = 100h and PB = PC = 0. PA-PD are read when the line is 
 
 Attr0 mode 3 makes a bitmap object. Its pixels are 15-bit direct colour in 16-bit words: bits 0-4
 red, 5-9 green, 10-14 blue, and **bit 15 set means opaque, clear means transparent**. There is no
-palette. Attr2 bits 12-15 hold an alpha value (`TODO(phase4)`, #34) and are not a palette number.
+palette. Attr2 bits 12-15 hold an alpha value (`TODO(hw-unverified)`, `blending.md`: no formula, drawn opaque) and are not a palette number.
 The object's size and its flip bits (plain) or affine group (affine) work as above; its picture is
 `W` by `H` pixels.
 
@@ -224,7 +224,7 @@ the best background pixel; otherwise the best background pixel; otherwise the ba
 DISPCNT bit 12 is set and the engine's display mode is the normal picture (mode 1,
 `display-mode-vram.md`); with bit 12 clear no object is drawn, whatever OAM holds. An object
 with mode 2 (OBJ window) draws no colour: its opaque pixels are the OBJ window mask instead
-(`windows.md`, "The OBJ window"); one with mode 1 is drawn as a normal object (`TODO(phase4)`, #34).
+(`windows.md`, "The OBJ window"); one with mode 1 is semi-transparent (`blending.md`).
 
 ### Mosaic
 
@@ -335,8 +335,9 @@ Each item gets `TODO(hw-unverified)` at its code site.
 - **The cost of an OBJ-window object** (mode 2): it costs its cycles like any other object, and
   the line limit can cut its mask. See `windows.md`, "Unverified". — `obj::draw_line` — verify
   likewise.
-- **Semi-transparent objects** are drawn as normal objects until #34; bitmap alpha is ignored
-  until #34.
+- **The alpha value of a bitmap object** (attr2 bits 12-15) is not applied: GBATEK gives no
+  formula, so the object is drawn opaque. See `blending.md`, "Unverified". —
+  `obj::bitmap_color` — verify by a test ROM on real hardware.
 
 ## Evidence
 

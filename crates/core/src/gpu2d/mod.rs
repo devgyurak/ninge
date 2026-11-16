@@ -13,6 +13,8 @@
 //! and 3) or in [`EngineSpec`].
 
 mod affine;
+mod brightness;
+mod effects;
 mod engine;
 mod kind;
 mod obj;
@@ -23,6 +25,10 @@ mod window;
 use crate::io::device::{Device, Effect, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
+use brightness::{BRIGHT_BLOCK_BYTES as ENGINE_BRIGHT_BYTES, BRIGHT_OFFSET};
+pub use brightness::{BrightnessMode, MasterBrightness};
+use effects::{BLD_BLOCK_BYTES as ENGINE_BLD_BYTES, BLD_OFFSET};
+pub use effects::{EffectMode, Effects, Targets};
 pub use engine::Mosaic;
 use engine::{
     AFFINE_OFFSET, AFFINE_REGS_BYTES as ENGINE_AFFINE_REGS_BYTES,
@@ -68,6 +74,20 @@ pub const MOSAIC_ADDR: u32 = DISPCNT_A_ADDR + MOSAIC_OFFSET;
 pub const MOSAIC_B_ADDR: u32 = MOSAIC_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block.
 pub const MOSAIC_BYTES: u32 = ENGINE_MOSAIC_BYTES;
+/// BLDCNT, at `0400_0050h`: BLDCNT, BLDALPHA and BLDY, in a block of 8 bytes of the address map
+/// (`blending.md`, "Registers").
+pub const BLD_REGS_ADDR: u32 = DISPCNT_A_ADDR + BLD_OFFSET;
+/// Engine B's BLDCNT, at `0400_1050h`.
+pub const BLD_REGS_B_ADDR: u32 = BLD_REGS_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const BLD_REGS_BYTES: u32 = ENGINE_BLD_BYTES;
+/// MASTER_BRIGHT of engine A, at `0400_006Ch`: a halfword in a 4-byte block of the address map
+/// (`blending.md`, "Registers").
+pub const MASTER_BRIGHT_ADDR: u32 = DISPCNT_A_ADDR + BRIGHT_OFFSET;
+/// Engine B's MASTER_BRIGHT, at `0400_106Ch`; POWCNT1 bit 9 does not gate it.
+pub const MASTER_BRIGHT_B_ADDR: u32 = MASTER_BRIGHT_ADDR + ENGINE_B_OFFSET;
+/// The bytes of that block.
+pub const MASTER_BRIGHT_BYTES: u32 = ENGINE_BRIGHT_BYTES;
 /// WIN0H, at `0400_0040h`: WIN0H, WIN1H, WIN0V, WIN1V, WININ and WINOUT, 12 bytes from here
 /// (`windows.md`, "Registers").
 pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
@@ -75,10 +95,11 @@ pub const WINDOW_REGS_ADDR: u32 = DISPCNT_A_ADDR + WINDOW_OFFSET;
 pub const WINDOW_REGS_B_ADDR: u32 = WINDOW_REGS_ADDR + ENGINE_B_OFFSET;
 /// The bytes of that block.
 pub const WINDOW_REGS_BYTES: u32 = ENGINE_WINDOW_BYTES;
-/// The xRGB8888 value of a white pixel.
-pub const WHITE: u32 = 0x00FF_FFFF;
-/// The xRGB8888 value of a black pixel.
-pub const BLACK: u32 = 0;
+
+/// A white pixel as 15-bit colour; it expands to xRGB8888 `00FF_FFFFh`.
+const WHITE_COLOR: u16 = 0x7FFF;
+/// A black pixel as 15-bit colour; it expands to xRGB8888 zero.
+const BLACK_COLOR: u16 = 0;
 
 /// DISPCNT bits 16-17: the display mode.
 const DISPCNT_MODE_SHIFT: u32 = 16;
@@ -166,6 +187,13 @@ fn expand_color(halfword: u16) -> u32 {
         | expand_channel(halfword >> BLUE_SHIFT)
 }
 
+/// `line` as xRGB8888 into `out`, one host pixel for each 15-bit one, after the master brightness.
+fn expand_line(line: &[u16; SCREEN_WIDTH], brightness: MasterBrightness, out: &mut [u32]) {
+    out.iter_mut().zip(line).for_each(|(pixel, &color)| {
+        *pixel = brightness.expand(color);
+    });
+}
+
 /// `reg` with its byte `index` replaced by `value`.
 fn with_byte(reg: u32, index: u32, value: u8) -> u32 {
     let shift = index * 8;
@@ -234,6 +262,18 @@ impl Gpu2d {
     pub fn windows(&self, which: EngineId) -> Windows {
         let engine = self.engine(which);
         engine.windows(which.spec().dispcnt(engine.dispcnt()))
+    }
+
+    /// The colour special effects engine `which` selects: the effect, its targets and the
+    /// coefficients. A debugger's BG panel (#58) shows them.
+    pub fn effects(&self, which: EngineId) -> Effects {
+        self.engine(which).effects()
+    }
+
+    /// The master brightness engine `which` selects: its mode and factor. A debugger's BG panel
+    /// (#58) shows it.
+    pub fn master_brightness(&self, which: EngineId) -> MasterBrightness {
+        self.engine(which).master_brightness()
     }
 
     /// DISPCNT of engine A.
@@ -309,9 +349,10 @@ impl Gpu2d {
     /// bytes of banks A-D where the CPU sees them as LCDC VRAM and what the engine reads
     /// ([`EngineInputs`]). A line past the last visible one is not drawn.
     // TODO(hw-unverified): windows apply in display mode 1 only (`windows.md`, "Unverified").
-    // TODO(phase4): mode 1 completes (blending), and mode 3
-    // draws the main-memory bitmap.
-    // TODO(phase4): master brightness applies to the output of modes 1-3 (#34).
+    // TODO(phase4): mode 3 draws the main-memory bitmap, and the master brightness applies to it
+    // too (`blending.md`, "Master brightness"); the placeholder black is left alone.
+    // TODO(hw-unverified): the master brightness applies to the white of display mode 0
+    // (`blending.md`, "Unverified").
     // TODO(hw-unverified): DISPCNT bit 7 (forced blank) is stored but ignored
     // (`display-mode-vram.md`, "Unverified").
     // TODO(hw-unverified): a bank that is disabled or not in LCDC mode is drawn as zeros, i.e.
@@ -329,12 +370,19 @@ impl Gpu2d {
         let dispcnt = inputs.spec.dispcnt(self.a.dispcnt());
         let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
         let block = (dispcnt >> DISPCNT_BLOCK_SHIFT) & DISPCNT_BLOCK_MASK;
+        // The line is made in 15-bit colour and expanded for the host at the end, so a stage
+        // between the layers and the screen works on the colour the hardware has.
+        let mut line = [BLACK_COLOR; SCREEN_WIDTH];
+        // Mode 3 is not drawn yet, so its placeholder is not brightened.
+        let brightness = match mode {
+            MODE_OFF | MODE_GRAPHICS | MODE_VRAM => self.a.master_brightness(),
+            _ => MasterBrightness::OFF,
+        };
         if mode == MODE_OFF {
-            out.fill(WHITE);
+            line.fill(WHITE_COLOR);
         } else if mode == MODE_GRAPHICS {
-            self.a.render_line(y, inputs, out);
+            self.a.render_line(y, inputs, &mut line);
         } else if mode == MODE_VRAM {
-            out.fill(BLACK);
             let row = lcdc
                 .get(block as usize)
                 .copied()
@@ -342,31 +390,35 @@ impl Gpu2d {
                 .and_then(|bank| bank.get(y * SCREEN_WIDTH * 2..(y + 1) * SCREEN_WIDTH * 2))
                 .unwrap_or(&[]);
             let (pairs, _) = row.as_chunks::<2>();
-            out.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
-                *pixel = expand_color(u16::from_le_bytes(bytes));
+            line.iter_mut().zip(pairs).for_each(|(pixel, &bytes)| {
+                *pixel = u16::from_le_bytes(bytes);
             });
-        } else {
-            out.fill(BLACK);
         }
+        expand_line(&line, brightness, out);
     }
 
     /// Draws line `y` of engine B's picture into `out`. Engine B has the display modes 0 (white)
     /// and 1 (the layers) only; a powered-off engine is black (`bg-modes.md`, "Engine B").
     // TODO(hw-unverified): what the screen of a powered-off engine shows (`bg-modes.md`,
-    // "Unverified").
+    // "Unverified"), and whether the master brightness applies to it, here and to the white of display
+    // mode 0 (`blending.md`, "Unverified").
     pub(crate) fn render_line_b(&self, y: usize, inputs: &EngineInputs<'_>, out: &mut [u32]) {
         if y >= SCREEN_HEIGHT {
             return;
         }
         let dispcnt = inputs.spec.dispcnt(self.b.dispcnt());
         let mode = (dispcnt >> DISPCNT_MODE_SHIFT) & DISPCNT_MODE_MASK;
+        let mut line = [BLACK_COLOR; SCREEN_WIDTH];
+        let mut brightness = self.b.master_brightness();
         if !self.engine_b_on() {
-            out.fill(BLACK);
+            line.fill(BLACK_COLOR);
+            brightness = MasterBrightness::OFF;
         } else if mode == MODE_GRAPHICS {
-            self.b.render_line(y, inputs, out);
+            self.b.render_line(y, inputs, &mut line);
         } else {
-            out.fill(WHITE);
+            line.fill(WHITE_COLOR);
         }
+        expand_line(&line, brightness, out);
     }
 }
 

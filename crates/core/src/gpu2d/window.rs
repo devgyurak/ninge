@@ -53,8 +53,8 @@ impl LayerSet {
         self.0 & GROUP_OBJ != 0
     }
 
-    /// Whether the colour special effect applies.
-    // TODO(phase4): the effect itself is #34; nothing reads this bit yet.
+    /// Whether the colour special effect applies (`blending.md`, "The effect bit of a window
+    /// region").
     pub const fn effect(self) -> bool {
         self.0 & GROUP_EFFECT != 0
     }

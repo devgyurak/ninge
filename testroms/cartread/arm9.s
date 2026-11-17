@@ -15,7 +15,8 @@
 @   1  DMA read: B7 at 8200h, 200h bytes, taken by DMA channel 0 (ARM9 start mode 5, source the
 @      data port fixed, length 1, 32-bit, repeat on: the recipe GBATEK gives); the 128 words must
 @      equal the blob's second 200h bytes.
-@   2  Chip ID: B8 returns a word that is neither FFFFFFFFh (no card) nor zero.
+@   2  Chip ID: B8 returns a word that is neither FFFFFFFFh (no card) nor zero, and equals the chip
+@      ID the boot left in main RAM (027FF800h and its firmware copy at 027FFC00h).
 @   3  Transfer-complete IRQ: with AUXSPICNT bit 14 set, a transfer ends with IF bit 19 set;
 @      with it clear, IF bit 19 stays clear. IF is polled: the interrupt is never taken.
 @      TODO(hw-unverified): the expectation is the model's: when busy clears and which CPU gets
@@ -24,7 +25,7 @@
 @ Record at 0x02008000, one word per slot (the expected values are in
 @ crates/runner/tests/cartread.rs):
 @   0  words of the polled read that differ from the blob     1  the same for the DMA read
-@   2  the chip ID word
+@   2  the chip ID word    5  the word at 027FF800h    6  the word at 027FFC00h
 @   3  IF bit 19 after a B8 transfer with the IRQ bit set     4  the same with the bit clear
 @   8..11  the band colours (halfwords 03E0h green, 001Fh red)
 @ Slot 30: progress (1 when done). Slot 31: sentinel, written last.
@@ -114,6 +115,12 @@ dma_wait:
     str r1, [r0]               @ acknowledge
     bl chip_id
     str r0, [r8, #8]
+    ldr r1, =0x027FF800
+    ldr r1, [r1]
+    str r1, [r8, #(5 * 4)]
+    ldr r1, =0x027FFC00
+    ldr r1, [r1]
+    str r1, [r8, #(6 * 4)]
     ldr r0, =IF
     ldr r1, [r0]
     and r1, r1, #(1 << 19)
@@ -151,6 +158,11 @@ dma_wait:
     cmpne r0, #0
     moveq r1, r6
     movne r1, r5
+    ldr r2, [r8, #(5 * 4)]     @ the chip ID boot left must be the same word, in both places
+    cmp r0, r2
+    ldreq r2, [r8, #(6 * 4)]
+    cmpeq r0, r2
+    movne r1, r6
     strh r1, [r8, #(10 * 4)]
     ldr r0, [r8, #12]
     ldr r2, [r8, #16]

@@ -55,7 +55,7 @@ fn words(machine: &Machine, addr: u32, count: u32) -> Vec<u32> {
 
 /// The record slots 0 to 4, the progress and the sentinel.
 fn record(machine: &Machine) -> Vec<u32> {
-    [0, 1, 2, 3, 4, 30, 31]
+    [0, 1, 2, 3, 4, 5, 6, 30, 31]
         .iter()
         .map(|&slot| word(machine, REC + 4 * slot))
         .collect()
@@ -109,13 +109,25 @@ fn given_the_cartread_rom_when_3_frames_run_then_the_record_shows_four_passes() 
     // TODO(hw-unverified): the chip ID word pins the model's manufacturer byte (C2h) and its size
     // rounding, and slot 3 pins IF bit 19 at the end of the transfer on the owner; both are listed
     // in `cart-protocol.md`, "Unverified", and are not hardware facts.
+    // Slots 5 and 6 are the chip ID boot left at 027FF800h and 027FFC00h (`direct-boot.md`, "The chip
+    // ID"), the same word `B8` answers.
     // Slots: polled mismatches 0, DMA mismatches 0, chip ID C2h (a 1 MiB chip: size byte 0,
     // manufacturer C2h, no flags), IF bit 19 set with the IRQ bit on and clear with it off,
     // progress 1, sentinel "CARD".
     let machine = boot(rom_image());
     assert_eq!(
         record(&machine),
-        vec![0, 0, 0x0000_00C2, 1 << 19, 0, 1, 0x4341_5244]
+        vec![
+            0,
+            0,
+            0x0000_00C2,
+            1 << 19,
+            0,
+            0x0000_00C2,
+            0x0000_00C2,
+            1,
+            0x4341_5244
+        ]
     );
 }
 

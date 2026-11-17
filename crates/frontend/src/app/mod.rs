@@ -1,5 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Application state, input mapping, and one frame of output.
+//!
+//! # One loop, for now
+//!
+//! The frontend runs on a single loop: [`frame_step`] and [`poll_timeout`] run the machine, draw
+//! and poll the terminal's input in turn, on one thread. AGENTS.md §2 rule 12 (and plan §4.3)
+//! describes three threads (emu, render, input), a triple-buffered frame hand-off and audio-based
+//! pacing; that is deferred, not dropped. Audio pacing (#47) is the first feature that needs the
+//! split, so the split is its own `REF:` issue, #218, the last of Phase 5 and ahead of #47, and
+//! the loop stays as it is until then. Nothing before #218 should add a thread.
+//!
+//! # For the input work (#44)
+//!
+//! Write input mapping as a pure function from a terminal event to an [`Action`] or to the host
+//! [`Input`], and keep the terminal poll a thin adapter around it, as [`map_event`] is. That holds
+//! whether the poll later runs on this loop or on an input thread.
 
 use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};

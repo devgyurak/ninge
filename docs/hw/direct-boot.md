@@ -66,6 +66,12 @@ CPSR = `0000_00DFh`. See "Unverified".
 
 Registers of the other banks (FIQ, Abort, Undefined) are not stated and stay at power-on zero.
 
+### The card slot
+
+Direct boot never runs the card's reset and key phases. It leaves the card in main data mode with
+the slot owned by the ARM9; the register values are in `cart-protocol.md`, "The card after direct
+boot", and are our choice.
+
 ### The pipeline
 
 The CPU starts like a branch to the entry address: it fetches the opcode at the entry address and

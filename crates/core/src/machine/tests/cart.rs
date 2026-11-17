@@ -497,3 +497,34 @@ fn given_a_direct_boot_when_b8_is_asked_then_it_returns_the_chip_id_boot_left_in
         .collect();
     assert_eq!(left, vec![answer; 4]);
 }
+
+/// The pending DMA start events as `(time, arm9, channel)`.
+fn dma_events(machine: &Machine) -> Vec<(u64, bool, u8)> {
+    machine
+        .inspect()
+        .scheduler()
+        .pending()
+        .iter()
+        .filter_map(|event| match event.kind {
+            EventKind::Slot {
+                device: DeviceId::Dma,
+                arm9,
+                slot,
+            } => Some((event.time, arm9, slot)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_word_already_waiting_when_a_card_channel_is_enabled_then_its_event_is_at_the_writes_floor()
+ {
+    // An instruction's event is never before its end (`dma.md`, "Model"): the write runs at the
+    // master clock and an ARM9 instruction costs one master cycle, so the start is one cycle on.
+    let mut machine = machine_with_data();
+    start9(&mut machine, 0x9000);
+    run_while(&mut machine, 20_000, |m| romctrl(m, true) & READY != 0);
+    let now = machine.inspect().scheduler().now();
+    arm9_card_channel(&mut machine, REPEAT, 1);
+    assert_eq!(dma_events(&machine), vec![(now + 1, true, 0)]);
+}

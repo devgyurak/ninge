@@ -50,7 +50,9 @@ const CAPACITY_UNIT: usize = 128 * 1024;
 fn chip_bytes(rom: &[u8]) -> usize {
     let n = rom.get(CAPACITY_OFFSET).copied().map_or(0, u32::from);
     let capacity = CAPACITY_UNIT << n.min(CAPACITY_SHIFT_MAX);
-    capacity.max(rom.len().next_power_of_two()).max(MIB)
+    capacity
+        .max(rom.len().checked_next_power_of_two().unwrap_or(usize::MAX))
+        .max(MIB)
 }
 
 /// The chip ID of the image `rom`, as the 32-bit data word: the first received byte in bits 0-7

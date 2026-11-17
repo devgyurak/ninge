@@ -28,7 +28,7 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not
 holding cartridge data is zero-filled. The values the BIOS and firmware leave in `027FF800h`-
 `027FF893h`, `027FFC00h`-`027FFC41h` and `027FFC80h`-`027FFCEFh` (the chip ID, the header CRC
-copies, the flags, the boot indicator, the user settings) are filled after the binaries; see "The
+copies, the flags, the boot indicator, the user settings) are filled with the header copy; see "The
 chip ID" and "Boot-time values in main RAM" (#39). The firmware boot-code fragments are not
 modeled. Binaries go through the bus views' `write8`, so they land only in main RAM.
 
@@ -92,8 +92,8 @@ view as every instruction fetch.
 ## Boot-time values in main RAM
 
 Sources: GBATEK "NDS BIOS RAM Usage"; GBATEK "DS Firmware User Settings"; GBATEK "DS Cartridge
-Header". Written by `crates/core/src/hle/direct_boot.rs` through the ARM9 view, after the
-binaries (#39). A row's source is **GBATEK** (a constant GBATEK states for cartridge boot time),
+Header". Written by `crates/core/src/hle/direct_boot.rs` through the ARM9 view, with the header
+copy and before the binaries (#39: no binary can reach this range). A row's source is **GBATEK** (a constant GBATEK states for cartridge boot time),
 **image** (computed from the loaded image or the synthetic firmware, `firmware.md`) or **zero**
 (left at zero). Widths are bytes. `TODO(hw-unverified)` sits at every GBATEK-constant row and every
 zero row that GBATEK gives a meaning to.

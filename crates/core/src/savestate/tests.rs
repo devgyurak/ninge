@@ -87,8 +87,11 @@ const PINNED_HASH: u64 = 0xa468016964a32e51;
 /// the wire is done and the interrupt's due time (four one-byte fields while idle), and the chip's
 /// own fields with its 256 KiB image behind a three-byte length, so both lengths grew by 262,156 and
 /// both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_067_106;
-const PINNED_BOOTED_HASH: u64 = 0x8c4d9692c1ec3205;
+/// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
+/// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
+/// being zero) and the version stayed.
+const PINNED_BOOTED_LEN: usize = 6_067_108;
+const PINNED_BOOTED_HASH: u64 = 0xd0a067ec7c3d50a1;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

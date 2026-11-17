@@ -8,6 +8,11 @@
 //! is a debugger call, not the hot path). The device types are re-exported here so a host can
 //! name what `Inspect` returns; their mutating methods are `pub(crate)`.
 //!
+//! **Unstable until 1.0.** The names and structure of the device types re-exported here may
+//! change in a minor release; only [`Inspect`] and the way to reach it ([`Machine::inspect`]) are
+//! meant to hold. The debugger panels (#56-#59) decide
+//! what stays.
+//!
 //! Breakpoint and trace hooks (plan §4.1) are not here yet: the debugger is a parallel track, and
 //! they join this module with its stepping and trace panels (#56, #60).
 

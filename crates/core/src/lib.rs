@@ -20,9 +20,9 @@
 //! device types it hands out), [`cpu`] (the interpreter, its registers and the disassemblers) and
 //! the rest of [`cart`] (the header's detail types [`cart::Binary`], [`cart::BinarySpec`],
 //! [`cart::Field`], [`cart::HEADER_LEN`] and [`cart::crc16`], and [`cart::SaveChip`]) are public
-//! so a debugger can name what it reads. Their type names and structure may change in a minor release. Of [`cpu`],
-//! the disassemblers and the types [`debug::Inspect`] returns are the part a debugger panel is
-//! expected to use; [`cpu::Bus`], [`cpu::Bank`] and the `test-support` setters exist for the
+//! so a debugger can name what it reads. Their type names and structure may change in a minor
+//! release. Of [`cpu`], the disassemblers and the types [`debug::Inspect`] returns are the part a
+//! debugger panel is expected to use; [`cpu::Bus`], [`cpu::Bank`] and the `test-support` setters exist for the
 //! runner's CPU-suite harness and are not for a host that drives a [`Machine`].
 
 mod bus;

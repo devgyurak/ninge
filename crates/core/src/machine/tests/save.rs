@@ -199,3 +199,13 @@ fn given_the_arm7_owns_the_slot_when_the_arm9_sends_a_byte_then_the_chip_is_not_
     byte(&mut m, READ, true);
     assert!(!m.io.cart().save().selected());
 }
+
+#[test]
+fn given_a_byte_on_the_wire_at_the_slowest_baud_when_the_state_is_saved_then_it_loads() {
+    let mut m = with_eeprom();
+    m.bus9().write16(AUXSPICNT, SPI_ON | 3);
+    m.bus9().write16(AUXSPIDATA, u16::from(RDSR));
+    let state = m.save_state();
+    let mut loaded = machine();
+    assert_eq!(loaded.load_state(&state), Ok(()));
+}

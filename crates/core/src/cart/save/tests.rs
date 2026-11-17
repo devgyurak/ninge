@@ -459,3 +459,17 @@ fn given_a_file_size_when_the_type_is_looked_up_then_only_a_chip_size_maps_and_8
 fn given_an_unknown_name_when_it_is_parsed_then_there_is_no_type() {
     assert_eq!(SaveType::from_name("flash-3m"), None);
 }
+
+#[test]
+fn given_an_open_session_when_checked_then_it_is_well_formed() {
+    let mut chip = blank(SaveType::Eeprom8K);
+    chip.transfer(READ, true);
+    assert!(chip.well_formed());
+}
+
+#[test]
+fn given_an_open_flash_session_when_checked_then_it_is_well_formed() {
+    let mut chip = blank(SaveType::Flash256K);
+    chip.transfer(PE, true);
+    assert!(chip.well_formed());
+}

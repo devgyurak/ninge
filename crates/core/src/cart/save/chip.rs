@@ -40,7 +40,9 @@ const FLASH_SECTOR: usize = 0x1_0000;
 /// What a session's command does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum Op {
-    /// A command the chip does not have: the rest of the session is ignored.
+    /// A command the chip does not have: the rest of the session is ignored. This includes WRSR on a
+    /// FLASH.
+    // TODO(hw-unverified): WRSR on a FLASH is ignored (`auxspi-saves.md`, "Unverified").
     #[default]
     Ignore,
     Wren,
@@ -50,7 +52,10 @@ enum Op {
     Rdid,
     Read,
     FastRead,
-    /// Overwrites bytes inside a page (the EEPROM and FRAM write, the FLASH page write).
+    /// Overwrites bytes inside a page (the EEPROM and FRAM write, the FLASH page write). With no data
+    /// byte it changes nothing.
+    // TODO(hw-unverified): a page write with no data byte erases nothing, and bytes after a page or
+    // sector erase address are ignored (`auxspi-saves.md`, "Unverified").
     Write,
     /// Clears bits inside a page (the FLASH page program).
     Program,
@@ -263,7 +268,13 @@ impl SaveChip {
 
     /// Whether the memory and the registers hold only values the chip can reach.
     pub(crate) fn well_formed(&self) -> bool {
-        self.memory.len() == self.kind.len() && self.wp <= STATUS_WP_MASK
+        self.memory.len() == self.kind.len()
+            && self.wp <= STATUS_WP_MASK
+            // An open session's operation is what its command means on this chip.
+            && self
+                .session
+                .as_ref()
+                .is_none_or(|s| (s.op, s.hi) == decode(self.kind, s.cmd))
     }
 
     /// One byte over the bus: `byte` goes in, the reply comes out. With `hold` clear the chip is
@@ -340,6 +351,8 @@ impl SaveChip {
             }
             // The fast read's dummy byte sits between the address and the data.
             Op::FastRead if index == n => IDLE,
+            // TODO(hw-unverified): the 512-byte EEPROM's read counter keeps going past its 256-byte
+            // half (`auxspi-saves.md`, "Unverified").
             Op::Read | Op::FastRead => {
                 let at = s.addr as usize & self.mask();
                 s.addr = (at as u32 + 1) & self.mask() as u32;

@@ -246,7 +246,8 @@ impl Machine {
 
     /// Counts the changes to the save memory. A host writes the save file when it differs from the
     /// value it saw at its last write. A savestate load raises it, since the memory may have changed
-    /// (`docs/hw/auxspi-saves.md`, "Save files").
+    /// (`docs/hw/auxspi-saves.md`, "Save files"). [`Machine::load_rom`] starts it again at 0, so a host
+    /// that resets the machine takes a new baseline after it fits the save.
     pub fn save_generation(&self) -> u64 {
         self.io.cart().save().generation()
     }

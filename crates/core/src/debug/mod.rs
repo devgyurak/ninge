@@ -23,6 +23,7 @@ pub use crate::gpu2d::{
 };
 pub use crate::hle::SwiRecord;
 pub use crate::io::DeviceId;
+pub use crate::io::cart::Cart;
 pub use crate::io::divsqrt::DivSqrt;
 pub use crate::io::dma::Dma;
 pub use crate::io::ipc::Ipc;
@@ -148,6 +149,14 @@ impl<'a> Inspect<'a> {
         self.machine.io.ipc()
     }
 
+    /// The cartridge slot: EXMEMCNT, AUXSPICNT, ROMCTRL, the command and the transfer in progress.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows ROMCTRL, AUXSPICNT,
+    // the current command, address and remaining bytes, and which CPU owns the slot; #57 adds the
+    // memory view that the data comes through.
+    pub fn cart(&self) -> &'a Cart {
+        self.machine.io.cart()
+    }
+
     /// The ARM9's four timers.
     // The debugger's IO register panel (#56 CPU panel until one exists) shows each timer's
     // counter, reload and control; the scheduler timeline (#59) shows their overflow events.
@@ -232,6 +241,7 @@ impl<'a> Inspect<'a> {
             &self.machine.memory,
             &self.machine.io,
             &TcmConfig::from_cp15(self.machine.arm9.cp15()),
+            &self.machine.rom,
             self.machine.scheduler.now(),
             addr,
         )
@@ -244,6 +254,7 @@ impl<'a> Inspect<'a> {
             &self.machine.memory,
             &self.machine.io,
             &TcmConfig::NONE,
+            &self.machine.rom,
             now,
             addr,
         )

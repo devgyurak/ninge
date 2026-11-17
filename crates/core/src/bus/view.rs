@@ -53,13 +53,14 @@ pub(crate) fn peek<const ARM9: bool, const N: usize>(
     memory: &Memory,
     io: &Io,
     tcm: &TcmConfig,
+    rom: &[u8],
     now: u64,
     addr: u32,
 ) -> [u8; N] {
     let addr = addr & !(N as u32 - 1);
     memory
         .load::<ARM9, N>(tcm, addr)
-        .unwrap_or_else(|| read_registers::<ARM9, N>(memory, io, now, addr))
+        .unwrap_or_else(|| read_registers::<ARM9, N>(memory, io, rom, now, addr))
 }
 
 /// The `N` bytes of a register access, as the one value a device takes.
@@ -83,13 +84,14 @@ fn unpack<const N: usize>(value: u32) -> [u8; N] {
 fn peek_owner<const ARM9: bool>(
     memory: &Memory,
     io: &Io,
+    rom: &[u8],
     now: u64,
     owner: Option<Owner>,
     width: Width,
 ) -> u32 {
     match owner {
         Some(Owner::Memory(offset)) => memory.read_control::<ARM9>(offset, width),
-        Some(Owner::Io(port, offset)) => io.peek::<ARM9>(port, offset, width, now),
+        Some(Owner::Io(port, offset)) => io.peek::<ARM9>(port, offset, width, now, rom),
         None => 0,
     }
 }
@@ -99,11 +101,19 @@ fn peek_owner<const ARM9: bool>(
 fn read_registers<const ARM9: bool, const N: usize>(
     memory: &Memory,
     io: &Io,
+    rom: &[u8],
     now: u64,
     addr: u32,
 ) -> [u8; N] {
     let owner = decode::<ARM9>(addr);
-    unpack(peek_owner::<ARM9>(memory, io, now, owner, Width::of::<N>()))
+    unpack(peek_owner::<ARM9>(
+        memory,
+        io,
+        rom,
+        now,
+        owner,
+        Width::of::<N>(),
+    ))
 }
 
 /// One CPU's access to the bus for a step: the logic both views share, generic over which CPU.
@@ -111,17 +121,20 @@ struct Access<'a, const ARM9: bool> {
     memory: &'a mut Memory,
     io: &'a mut Io,
     scheduler: &'a mut Scheduler,
+    rom: &'a [u8],
     tcm: TcmConfig,
     now: u64,
     floor: u64,
 }
 
-impl<const ARM9: bool> Access<'_, ARM9> {
+impl<'a, const ARM9: bool> Access<'a, ARM9> {
     fn fetch<const N: usize>(&mut self, addr: u32) -> [u8; N] {
         let addr = addr & !(N as u32 - 1);
         self.memory
             .fetch::<ARM9, N>(&self.tcm, addr)
-            .unwrap_or_else(|| read_registers::<ARM9, N>(self.memory, self.io, self.now, addr))
+            .unwrap_or_else(|| {
+                read_registers::<ARM9, N>(self.memory, self.io, self.rom, self.now, addr)
+            })
     }
 
     /// A data read as the CPU does it: a read of IPCFIFORECV takes a word out of the FIFO and can
@@ -150,7 +163,7 @@ impl<const ARM9: bool> Access<'_, ARM9> {
                 self.io
                     .read::<ARM9>(self.scheduler, at, port, offset, width)
             }
-            owner => peek_owner::<ARM9>(self.memory, self.io, self.now, owner, width),
+            owner => peek_owner::<ARM9>(self.memory, self.io, self.rom, self.now, owner, width),
         })
     }
 
@@ -181,10 +194,11 @@ impl<const ARM9: bool> Access<'_, ARM9> {
     /// clock itself (`dma.md`, "Model").
     // TODO(hw-unverified): an ARM7 event is floored at the master clock, which the ARM9 has
     // already carried to the round's stop (`scheduler.md`, "Unverified").
-    fn at(&self) -> At {
+    fn at(&self) -> At<'a> {
         At {
             now: self.now,
             floor: self.floor,
+            rom: self.rom,
         }
     }
 }
@@ -205,6 +219,7 @@ pub struct Arm9View<'a> {
     memory: &'a mut Memory,
     io: &'a mut Io,
     scheduler: &'a mut Scheduler,
+    rom: &'a [u8],
     tcm: TcmConfig,
     now: u64,
     floor: u64,
@@ -220,6 +235,7 @@ impl<'a> Arm9View<'a> {
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
+        rom: &'a [u8],
         tcm: TcmConfig,
     ) -> Self {
         let now = scheduler.now();
@@ -227,6 +243,7 @@ impl<'a> Arm9View<'a> {
             memory,
             io,
             scheduler,
+            rom,
             tcm,
             now,
             floor: now,
@@ -271,6 +288,7 @@ impl<'a> Arm9View<'a> {
             memory: self.memory,
             io: self.io,
             scheduler: self.scheduler,
+            rom: self.rom,
             tcm: self.tcm,
             now: self.now,
             floor: self.floor,
@@ -320,6 +338,7 @@ pub struct Arm7View<'a> {
     memory: &'a mut Memory,
     io: &'a mut Io,
     scheduler: &'a mut Scheduler,
+    rom: &'a [u8],
     clock: u64,
     now: u64,
     floor: u64,
@@ -333,6 +352,7 @@ impl<'a> Arm7View<'a> {
         memory: &'a mut Memory,
         io: &'a mut Io,
         scheduler: &'a mut Scheduler,
+        rom: &'a [u8],
         clock: u64,
     ) -> Self {
         let floor = scheduler.now();
@@ -340,6 +360,7 @@ impl<'a> Arm7View<'a> {
             memory,
             io,
             scheduler,
+            rom,
             clock,
             now: clock,
             floor,
@@ -383,6 +404,7 @@ impl<'a> Arm7View<'a> {
             memory: self.memory,
             io: self.io,
             scheduler: self.scheduler,
+            rom: self.rom,
             tcm: TcmConfig::NONE,
             now: self.now,
             floor: self.floor,

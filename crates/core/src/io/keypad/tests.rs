@@ -23,6 +23,7 @@ fn peek9_with(pad: &Keypad<true>, input: &Input, offset: u32, width: Width) -> u
         Cx {
             now: 0,
             host: input,
+            rom: &[],
         },
     )
 }
@@ -35,6 +36,7 @@ fn peek7_with(pad: &Keypad<false>, input: &Input, offset: u32, width: Width) -> 
         Cx {
             now: 0,
             host: input,
+            rom: &[],
         },
     )
 }

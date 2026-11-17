@@ -317,6 +317,7 @@ impl Machine {
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
+            &self.rom,
             TcmConfig::from_cp15(self.arm9.cp15()),
         );
         arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
@@ -330,6 +331,7 @@ impl Machine {
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
+            &self.rom,
             self.arm7_clock,
         );
         arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);

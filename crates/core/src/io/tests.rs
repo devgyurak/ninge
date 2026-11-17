@@ -278,7 +278,11 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
     // Just below and above IME/IE/IF (208-217), the timers (100-10F), IPCSYNC..SEND
     // (180-18B), the 2D registers and the cart-side neighbour of IPCFIFORECV.
     let expected = [
-        (0x0400_0207, None),
+        (0x0400_0203, None),
+        // The slot's registers (`01A0h`-`01AFh`), then the seed registers, which are not modeled.
+        (0x0400_019F, None),
+        (0x0400_01B0, None),
+        (0x0410_0014, None),
         (0x0400_0218, None),
         (0x0400_021B, None),
         (0x0400_0200, None),
@@ -388,7 +392,11 @@ fn kinds_after_both_cpus_start_timer_0() -> Vec<EventKind> {
     const START: u32 = 1 << 7;
     let mut io = Io::new();
     let mut scheduler = Scheduler::new();
-    let at = At { now: 0, floor: 0 };
+    let at = At {
+        now: 0,
+        floor: 0,
+        rom: &[],
+    };
     io.write::<true>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
     io.write::<false>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
     scheduler.pending().iter().map(|event| event.kind).collect()
@@ -487,6 +495,7 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
     let at = At {
         now,
         floor: now + 1,
+        rom: &[],
     };
     io.write::<true>(
         &mut scheduler,

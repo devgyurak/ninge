@@ -11,6 +11,9 @@ use crate::gpu2d::{
     MASTER_BRIGHT_ADDR, MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, MOSAIC_ADDR, MOSAIC_B_ADDR,
     MOSAIC_BYTES, POWCNT1_ADDR, WINDOW_REGS_ADDR, WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES,
 };
+use crate::io::cart::{
+    AUXSPICNT_ADDR, BLOCK_LEN as CART_BYTES, DATA_ADDR as CART_DATA_ADDR, EXMEMCNT_ADDR,
+};
 use crate::io::divsqrt::{BLOCK_BYTES as DIVSQRT_BYTES, DIVCNT_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
@@ -59,6 +62,14 @@ pub(crate) enum Port {
     DivSqrt,
     /// HALTCNT, ARM7 only.
     Power,
+    /// AUXSPICNT, AUXSPIDATA, ROMCTRL and the command registers of the cartridge slot.
+    Cart,
+    /// EXMEMCNT / EXMEMSTAT: its own entry, because it lives in a different block, but the same
+    /// device as [`Port::Cart`].
+    CartExmem,
+    /// The cartridge data port: its own entry, in a different block, the same device as
+    /// [`Port::Cart`].
+    CartData,
 }
 
 impl Port {
@@ -76,6 +87,7 @@ impl Port {
             Self::DivSqrt => DIVCNT_ADDR,
             Self::Keypad => KEYINPUT_ADDR,
             Self::Power => POSTFLG_ADDR,
+            Self::Cart | Self::CartExmem | Self::CartData => AUXSPICNT_ADDR,
         }
     }
 }
@@ -89,7 +101,7 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 30] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
@@ -133,11 +145,15 @@ pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
     (BLD_REGS_B_ADDR, BLD_REGS_BYTES, Some(Port::Gpu2d)),
     (MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, Some(Port::Gpu2d)),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
+    // AUXSPICNT, AUXSPIDATA, ROMCTRL and the command registers; EXMEMCNT; the data port.
+    (AUXSPICNT_ADDR, CART_BYTES, Some(Port::Cart)),
+    (EXMEMCNT_ADDR, 4, Some(Port::CartExmem)),
+    (CART_DATA_ADDR, 4, Some(Port::CartData)),
 ];
 
 /// What the ARM7 sees: the same blocks, without the 2D engines, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
-pub(crate) const ARM7_PORTS: [PortEntry; 9] = [
+pub(crate) const ARM7_PORTS: [PortEntry; 12] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
@@ -150,6 +166,9 @@ pub(crate) const ARM7_PORTS: [PortEntry; 9] = [
     // WRAMSTAT sits in the second byte.
     (VRAMCNT_A_ADDR, 4, None),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
+    (AUXSPICNT_ADDR, CART_BYTES, Some(Port::Cart)),
+    (EXMEMCNT_ADDR, 4, Some(Port::CartExmem)),
+    (CART_DATA_ADDR, 4, Some(Port::CartData)),
 ];
 
 /// The owner of `addr` for CPU `ARM9` and its offset there, or `None` when nothing holds it (it

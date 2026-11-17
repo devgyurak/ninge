@@ -6,6 +6,7 @@ use serde::de::value::{Error, MapDeserializer};
 
 mod arm9;
 mod bios;
+mod cart;
 mod dma;
 mod halt;
 mod input;

@@ -9,7 +9,7 @@
 //! slots an [`Effect`] names and fires them without knowing which device it is.
 
 use crate::input::Input;
-use crate::io::dma::{Transfer, Trigger};
+use crate::io::dma::Transfer;
 use crate::io::irq::Requests;
 
 /// The width of one bus access.
@@ -54,9 +54,52 @@ impl Width {
 /// a `u8` was already the cap for two devices.
 pub(crate) type SlotMask = u32;
 
-/// What a register access asks of its caller: the IF bits to raise, and which of the device's
-/// event slots must be replaced. Every device returns this one type, so the caller handles an
-/// access the same way whatever it reached.
+/// One thing a device tells the others: an edge or a level that another device waits for. A
+/// device raises it in its [`Effect`] and never names the device that listens; `Io` holds the one
+/// table that says who does (`Io::route`), so a device that sends a signal registers it once
+/// (`cart-protocol.md`, "DMA start").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Signal {
+    /// A word of the cartridge slot is ready for the ARM9.
+    CardWordArm9,
+    /// A word of the cartridge slot is ready for the ARM7.
+    CardWordArm7,
+}
+
+impl Signal {
+    /// Every signal, in the fixed order `Io` routes a set of them: the bit order of [`Signals`].
+    pub(crate) const ALL: [Self; 2] = [Self::CardWordArm9, Self::CardWordArm7];
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// A set of [`Signal`]s, one bit each: plain, `Copy` and allocation-free. It lives only inside an
+/// [`Effect`], never in a savestate, so it needs no serde and no format version.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Signals(u8);
+
+impl Signals {
+    /// The set holding only `signal`.
+    pub(crate) const fn of(signal: Signal) -> Self {
+        Self(signal.bit())
+    }
+
+    /// Whether `signal` is in the set.
+    pub(crate) const fn contains(self, signal: Signal) -> bool {
+        self.0 & signal.bit() != 0
+    }
+
+    /// Both sets in one.
+    pub(crate) const fn merge(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+/// What a register access asks of its caller: the IF bits to raise, which of the device's
+/// event slots must be replaced, and what it tells the other devices. Every device returns this
+/// one type, so the caller handles an access the same way whatever it reached.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Effect {
     /// The IF bits to raise.
@@ -64,6 +107,12 @@ pub(crate) struct Effect {
     /// Bit n: the device's event slot n changed and its scheduler event must be replaced. The
     /// four timers are slots 0-3 of their device, and so are the four DMA channels.
     pub(crate) reschedule: SlotMask,
+    /// What the device tells the others; `Io` routes it after the IF bits and the slots.
+    pub(crate) signals: Signals,
+    /// The access changed what a device waits for, so `Io` asks every device of the CPU that wrote
+    /// for its [`Device::levels`] and routes them: a DMA write may enable a channel whose start
+    /// condition already holds (`dma.md`, "Starting").
+    pub(crate) recheck_levels: bool,
 }
 
 impl Effect {
@@ -71,15 +120,17 @@ impl Effect {
     pub(crate) fn raising(requests: Requests) -> Self {
         Self {
             requests,
-            reschedule: 0,
+            ..Self::default()
         }
     }
 
-    /// Both effects in one: the requests and the slots to reschedule of each.
+    /// Both effects in one: the requests, the slots to reschedule and the signals of each.
     pub(crate) fn merge(self, other: Self) -> Self {
         Self {
             requests: self.requests.merge(other.requests),
             reschedule: self.reschedule | other.reschedule,
+            signals: self.signals.merge(other.signals),
+            recheck_levels: self.recheck_levels || other.recheck_levels,
         }
     }
 }
@@ -152,6 +203,14 @@ pub(crate) trait Device<const ARM9: bool> {
         None
     }
 
+    /// The signals the device holds as a level right now, for the CPU `ARM9` that just wrote a
+    /// register: a condition that stays true until something takes it, as a word waiting in the
+    /// cartridge slot. `Io` asks only when an [`Effect`] sets [`Effect::recheck_levels`]. A device
+    /// with no level has none.
+    fn levels(&self) -> Signals {
+        Signals::default()
+    }
+
     /// Slot `slot`'s event fired at master time `now`. Whatever it changes comes back in the
     /// [`Fired`], the slot's own event included: `Io` does not assume it is replaced.
     fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {
@@ -170,15 +229,14 @@ pub(crate) trait Checked {
 
 /// What a fired event asks of its caller: an [`Effect`], like a register access, and for DMA the
 /// transfer the machine must now move through the owning CPU's bus, which a device cannot reach.
+/// The transfer is not a [`Signal`]: it is a move of bytes over a bus the device does not own, so
+/// it comes back whole and the machine runs it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Fired {
-    /// The IF bits to raise and the slots to reschedule.
+    /// The IF bits to raise, the slots to reschedule and the signals to route.
     pub(crate) effect: Effect,
     /// A transfer to run, from a DMA start.
     pub(crate) transfer: Option<Transfer>,
-    /// A DMA start the event raises for the channels that wait for it: the cartridge slot's word
-    /// is ready (`cart-protocol.md`, "DMA start").
-    pub(crate) trigger: Option<Trigger>,
 }
 
 /// A read of `width` at `offset` built from a device that holds registers one byte at a time:

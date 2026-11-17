@@ -34,7 +34,7 @@ use crate::gpu2d::Gpu2d;
 use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
 use cart::Cart;
-use device::{Checked, Cx, Device, Effect, Fired, SlotMask, Width};
+use device::{Checked, Cx, Device, Effect, Fired, Signal, Signals, SlotMask, Width};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -184,17 +184,11 @@ impl Io {
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
-        // A request is a level: a channel set to start on the card slot that is enabled while a word
-        // already waits for its CPU takes it now (`dma.md`, "Starting"). A channel already queued
-        // is not queued twice.
-        // TODO(hw-unverified): the request is held while the word is ready (`dma.md`, "Unverified").
-        if port == Port::Dma && self.cart.word_waiting::<ARM9>() {
-            self.trigger_dma(scheduler, Trigger::CardWord { arm9: ARM9 }, at.floor);
-        }
     }
 
-    /// Hands an access's effect on: its IF bits to the controllers, and the event slots it names
-    /// to the scheduler.
+    /// Hands an access's effect on: its IF bits to the controllers, the event slots it names to
+    /// the scheduler, then its signals and the levels it asks to recheck to the devices that wait
+    /// for them, never earlier than `at.floor`.
     fn apply<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
@@ -206,6 +200,31 @@ impl Io {
         if effect.reschedule != 0 {
             self.schedule_slots::<ARM9>(scheduler, port, effect.reschedule, at.floor);
         }
+        self.route(scheduler, effect.signals, at.floor);
+        // A signal that is a level: the device that waits for it may have been enabled while it
+        // already holds, and takes it now. One already queued is not queued twice.
+        if effect.recheck_levels {
+            self.route(scheduler, self.levels::<ARM9>(), at.floor);
+        }
+    }
+
+    /// Delivers `signals` at master time `time`, one signal at a time in the order of
+    /// [`Signal::ALL`] so that the result does not depend on how they were collected. This is the
+    /// one table of who listens to what: a device raises a signal and never names its listener.
+    // TODO(hw-unverified): the ARM9's channels go before the ARM7's, and whether the other CPU's
+    // channels ever see a card request (`dma.md`, "Unverified"; `cart-protocol.md`, "Unverified").
+    fn route(&mut self, scheduler: &mut Scheduler, signals: Signals, time: u64) {
+        Signal::ALL
+            .into_iter()
+            .filter(|&signal| signals.contains(signal))
+            .for_each(|signal| {
+                // A word of the cartridge slot goes to the DMA of the CPU that owns it.
+                let (arm9, arm7) = match signal {
+                    Signal::CardWordArm9 => (Some(Trigger::CardWord { arm9: true }), None),
+                    Signal::CardWordArm7 => (None, Some(Trigger::CardWord { arm9: false })),
+                };
+                self.start_dma(scheduler, arm9, arm7, time);
+            });
     }
 
     /// Replaces the event of each slot of `port`'s device in `mask` (bit n = slot n) with one at
@@ -285,28 +304,31 @@ impl Io {
             port,
             fired.effect,
         );
-        if let Some(trigger) = fired.trigger {
-            self.trigger_dma(scheduler, trigger, now);
-        }
         fired.transfer
     }
 
     /// `trigger` happened at master time `time`: every channel of both CPUs that waits for it is
     /// queued to start, the ARM9's first, each in channel order. The event is never before the
-    /// master clock (`scheduler.md`, "Savestate checks").
-    // TODO(hw-unverified): the ARM9's channels go before the ARM7's (`dma.md`, "Unverified").
+    /// master clock (`scheduler.md`, "Savestate checks"). The line events (VBlank, HBlank, the
+    /// start of a frame, the main-memory display) call this directly: they come from the
+    /// scheduler's own line events, not from a device, so they are not a [`Signal`].
     pub(crate) fn trigger_dma(&mut self, scheduler: &mut Scheduler, trigger: Trigger, time: u64) {
+        self.start_dma(scheduler, Some(trigger), Some(trigger), time);
+    }
+
+    /// Queues the channels of each CPU that wait for its trigger, if it has one, the ARM9's first.
+    fn start_dma(
+        &mut self,
+        scheduler: &mut Scheduler,
+        arm9: Option<Trigger>,
+        arm7: Option<Trigger>,
+        time: u64,
+    ) {
         let floor = time.max(scheduler.now());
-        // A word of the cartridge slot goes to the CPU that owns it; every other trigger to both.
-        // TODO(hw-unverified): whether the other CPU's channels ever see a card request
-        // (`cart-protocol.md`, "Unverified").
-        let (arm9, arm7) = match trigger {
-            Trigger::CardWord { arm9: true } => (self.dma9.trigger(trigger), 0),
-            Trigger::CardWord { arm9: false } => (0, self.dma7.trigger(trigger)),
-            _ => (self.dma9.trigger(trigger), self.dma7.trigger(trigger)),
-        };
-        self.schedule_slots::<true>(scheduler, Port::Dma, arm9, floor);
-        self.schedule_slots::<false>(scheduler, Port::Dma, arm7, floor);
+        let queued9 = arm9.map_or(0, |trigger| self.dma9.trigger(trigger));
+        let queued7 = arm7.map_or(0, |trigger| self.dma7.trigger(trigger));
+        self.schedule_slots::<true>(scheduler, Port::Dma, queued9, floor);
+        self.schedule_slots::<false>(scheduler, Port::Dma, queued7, floor);
     }
 
     /// The transfer of a CPU's channel ended at `end`: the channel repeats or is disabled, and

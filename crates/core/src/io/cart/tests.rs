@@ -8,8 +8,7 @@ use super::{
     ROMCTRL_OFFSET, ROMCTRL_READY, ROMCTRL_RESB, block_bytes,
 };
 use crate::cart::protocol::chip_id;
-use crate::io::device::{Checked, Device, Effect, Fired, Width, cx_with_rom};
-use crate::io::dma::Trigger;
+use crate::io::device::{Checked, Device, Effect, Fired, Signal, Signals, Width, cx_with_rom};
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
 
 const RESB: u32 = ROMCTRL_RESB;
@@ -670,8 +669,8 @@ fn given_a_word_ready_when_the_event_fires_then_it_asks_for_the_owners_dma_chann
     let mut cart = Cart::new();
     start_read::<true>(&mut cart, 0x8000, 1);
     assert_eq!(
-        fire(&mut cart).trigger,
-        Some(Trigger::CardWord { arm9: true })
+        fire(&mut cart).effect.signals,
+        Signals::of(Signal::CardWordArm9)
     );
 }
 
@@ -681,8 +680,8 @@ fn given_the_arm7_owns_the_slot_when_a_word_is_ready_then_the_request_is_for_the
     write::<true>(&mut cart, EXMEMCNT_OFFSET, Width::Half, SLOT_TO_ARM7);
     start_read::<false>(&mut cart, 0x8000, 1);
     assert_eq!(
-        fire(&mut cart).trigger,
-        Some(Trigger::CardWord { arm9: false })
+        fire(&mut cart).effect.signals,
+        Signals::of(Signal::CardWordArm7)
     );
 }
 
@@ -690,7 +689,7 @@ fn given_the_arm7_owns_the_slot_when_a_word_is_ready_then_the_request_is_for_the
 fn given_a_block_of_size_0_when_its_event_fires_then_no_dma_request_is_made() {
     let mut cart = Cart::new();
     start_read::<true>(&mut cart, 0x8000, 0);
-    assert_eq!(fire(&mut cart).trigger, None);
+    assert_eq!(fire(&mut cart).effect.signals, Signals::default());
 }
 
 #[test]
@@ -739,6 +738,40 @@ fn given_no_word_ready_when_asked_who_it_waits_for_then_neither_cpu_has_one() {
         (cart.word_waiting::<true>(), cart.word_waiting::<false>()),
         (false, false)
     );
+}
+
+#[test]
+fn given_a_ready_word_when_the_levels_are_asked_then_only_the_owner_holds_its_card_word_signal() {
+    let cart = ready_read(0x9000, 1);
+    assert_eq!(
+        (
+            Device::<true>::levels(&cart),
+            Device::<false>::levels(&cart)
+        ),
+        (Signals::of(Signal::CardWordArm9), Signals::default())
+    );
+}
+
+#[test]
+fn given_the_arm7_owns_a_ready_word_when_the_levels_are_asked_then_the_arm7_holds_the_signal() {
+    let mut cart = Cart::new();
+    write::<true>(&mut cart, EXMEMCNT_OFFSET, Width::Half, SLOT_TO_ARM7);
+    start_read::<false>(&mut cart, 0x8000, 1);
+    fire(&mut cart);
+    assert_eq!(
+        (
+            Device::<true>::levels(&cart),
+            Device::<false>::levels(&cart)
+        ),
+        (Signals::default(), Signals::of(Signal::CardWordArm7))
+    );
+}
+
+#[test]
+fn given_no_word_ready_when_the_levels_are_asked_then_no_signal_is_held() {
+    let mut cart = Cart::new();
+    start_read::<true>(&mut cart, 0x9000, 1);
+    assert_eq!(Device::<true>::levels(&cart), Signals::default());
 }
 
 #[test]

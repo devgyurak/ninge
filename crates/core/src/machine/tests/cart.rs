@@ -437,6 +437,25 @@ fn given_a_word_already_waiting_when_an_arm9_card_channel_is_enabled_then_it_tak
     assert_eq!(peek_words(&machine, DST, 128), want);
 }
 
+#[test]
+fn given_a_word_waiting_for_the_arm9_when_the_arm7_enables_a_card_channel_then_no_start_is_queued()
+{
+    // The level is the writing CPU's own: a word waiting for the ARM9 is not the ARM7's request.
+    let mut machine = machine_with_data();
+    start9(&mut machine, 0x9000);
+    run_while(&mut machine, 20_000, |m| romctrl(m, true) & READY != 0);
+    let now = machine.arm7_clock;
+    set7(
+        &mut machine,
+        now,
+        0,
+        DATA,
+        DST,
+        ENABLE | WORD | SOURCE_FIXED | CARD7 | 1,
+    );
+    assert_eq!(dma_events(&machine), vec![]);
+}
+
 /// An ARM7 repeating card channel and an ARM7-started block read, run until `time`.
 fn arm7_dma_read_until(time: u64) -> Machine {
     let mut machine = machine_with_data();

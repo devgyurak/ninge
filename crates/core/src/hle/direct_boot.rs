@@ -131,6 +131,7 @@ pub(super) fn boot_values(
         half(0x027F_FC0A, secure_crc),
         half(0x027F_F80C, missing_or_bad),
         half(0x027F_FC0C, missing_or_bad),
+        // TODO(hw-unverified): the boot handler task number, GBATEK's cartridge-boot constant.
         half(0x027F_F810, 0xFFFF),
         half(0x027F_F850, NDS7_BIOS_CRC),
         half(0x027F_FC10, NDS7_BIOS_CRC),
@@ -139,6 +140,8 @@ pub(super) fn boot_values(
         word(0x027F_F864, u32::from(settings.is_none())),
         word(0x027F_F868, settings_address),
         half(0x027F_F874, le16(firmware, FIRMWARE_PART5_CRC)),
+        // TODO(hw-unverified): the two boot messages, the boot flags ("somewhat") and the boot
+        // indicator are GBATEK's cartridge-boot constants.
         word(0x027F_F880, 7),
         word(0x027F_F884, 6),
         word(0x027F_F890, 0xB000_2A22),
@@ -152,6 +155,7 @@ pub(super) fn boot_values(
 
 /// The ARM7 BIOS's CRC, which the BIOS leaves at `027FF850h` and the firmware copies to
 /// `027FFC10h` (`direct-boot.md`).
+// TODO(hw-unverified): GBATEK's constant for cartridge boot time, not checked on hardware.
 const NDS7_BIOS_CRC: u16 = 0x5835;
 
 /// The bytes of one binary in the image, or `None` when its range is not inside it.

@@ -95,8 +95,8 @@ Sources: GBATEK "NDS BIOS RAM Usage"; GBATEK "DS Firmware User Settings"; GBATEK
 Header". Written by `crates/core/src/hle/direct_boot.rs` through the ARM9 view, with the header
 copy and before the binaries (#39: no binary can reach this range). A row's source is **GBATEK** (a constant GBATEK states for cartridge boot time),
 **image** (computed from the loaded image or the synthetic firmware, `firmware.md`) or **zero**
-(left at zero). Widths are bytes. `TODO(hw-unverified)` sits at every GBATEK-constant row and every
-zero row that GBATEK gives a meaning to.
+(left at zero). Widths are bytes. `TODO(hw-unverified)` sits at each GBATEK-constant value in `boot_values` and in one block above
+the zero rows that GBATEK gives a meaning to.
 
 | Address | Width | Value | Source |
 |---|---|---|---|
@@ -113,7 +113,7 @@ zero row that GBATEK gives a meaning to.
 | `027FF818h`, `027FFC17h` | 1 | random byte | zero (determinism) |
 | `027FF850h`, `027FFC10h` | 2 | ARM7 BIOS CRC: `5835h` | GBATEK |
 | `027FF860h` | 4 | copy of the header's ARM7 RAM address (`038h`) | image |
-| `027FF864h` | 4 | firmware user settings bad: 0 | image |
+| `027FF864h` | 4 | firmware user settings bad: 0, or 1 when neither settings area has a valid CRC (then no copy is written) | image |
 | `027FF868h` | 4 | user settings flash address: `[020h] * 8` of the firmware header, `3FE00h` | image |
 | `027FF874h` | 2 | firmware part 5 CRC: our firmware header's `026h` | image |
 | `027FF876h` | 2 | firmware part 3/4 CRC: 0 (usually zero at cartridge boot) | GBATEK |

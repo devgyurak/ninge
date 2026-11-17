@@ -111,7 +111,8 @@ fn given_the_savechip_rom_when_3_frames_run_then_the_chip_holds_what_the_rom_wro
 }
 
 #[test]
-fn given_the_savechip_rom_when_3_frames_run_then_the_save_generation_has_moved() {
+fn given_the_savechip_rom_when_3_frames_run_then_the_save_generation_is_37_for_the_four_plus_thirty_three_changed_bytes()
+ {
     // Four bytes at 0040h, 32 page bytes from 0100h, and the 33rd, which changes the first again.
     assert_eq!(boot().save_generation(), 4 + 32 + 1);
 }

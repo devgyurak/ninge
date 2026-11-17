@@ -63,8 +63,8 @@ fn binary_bytes<'a>(rom: &'a [u8], spec: &BinarySpec) -> Option<&'a [u8]> {
 // the ARM9-then-ARM7 placement order, and no BIOS/firmware values in `027FF800h` and up besides the
 // chip IDs (`direct-boot.md`, "Unverified").
 // TODO(hw-unverified): the ARM7's CPSR at entry is chosen like the ARM9's (`direct-boot.md`).
-// TODO(phase5): the other BIOS/firmware values (the header CRC copy, the boot indicator at `027FFC40h`;
-// the user settings are #39) arrive with their phases.
+// TODO(#39): the user settings arrive with the synthetic firmware. The other BIOS/firmware values
+// (the header CRC copy, the boot indicator at `027FFC40h`) have no issue yet.
 pub(crate) fn boot(
     arm9: &mut Cpu<true>,
     arm7: &mut Cpu<false>,

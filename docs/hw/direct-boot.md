@@ -29,7 +29,7 @@ All other memory is zero: GBATEK's summary of memory at cartridge boot says ever
 holding cartridge data is zero-filled. The chip ID the BIOS leaves at `027FF800h` and the
 firmware's copies are filled (see "The chip ID"); the other values written into `027FF800h`-
 `027FFC41h`, the user settings and the firmware boot-code fragments are not modeled
-(`TODO(phase5)`). Binaries go through the bus views' `write8`, so
+(`TODO(#39)` for the user settings). Binaries go through the bus views' `write8`, so
 they land only in main RAM.
 
 ## ARM9 state at entry
@@ -131,7 +131,7 @@ the frame counter.
 - **The values the BIOS and firmware leave outside the header copy** (the header CRC copy, user
   settings, boot flags such as the boot indicator at `027FFC40h`, which GBATEK calls required for
   some games) are zero here; only the chip ID is filled (see "The chip ID"). — `boot` — verify
-  likewise; `TODO(phase5)` (user settings: #39).
+  likewise; `TODO(#39)` for the user settings; the others have no issue yet.
 - **The chip ID stands in for the real card's.** The BIOS leaves what the card answers; the model
   writes the ID computed from the image, the same function `B8` uses, so the two agree by
   construction (`cart-protocol.md`, "Unverified"). — `boot` — verify with a test ROM that compares

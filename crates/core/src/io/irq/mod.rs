@@ -40,6 +40,10 @@ pub const TIMER3_IRQ: u32 = 1 << 6;
 /// IF bits"; `dma.md`, "IF bits").
 pub const DMA0_IRQ: u32 = 1 << 8;
 
+/// IF bit 19: card slot transfer complete (`interrupts.md`, "IE and IF bits"; `cart-protocol.md`,
+/// "Interrupt").
+pub const CARD_TRANSFER_IRQ: u32 = 1 << 19;
+
 /// IF bit 16: IPC sync, from the other CPU's IPCSYNC bit 13 (`ipc.md`, "Behavior").
 pub const IPCSYNC_IRQ: u32 = 1 << 16;
 /// IF bit 17: IPC send FIFO empty (`ipc.md`, "Interrupts").

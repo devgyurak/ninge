@@ -27,6 +27,7 @@ impl Participants for Machine {
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
+            &self.rom,
             TcmConfig::from_cp15(self.arm9.cp15()),
         );
         while view.clock() < target
@@ -59,6 +60,7 @@ impl Participants for Machine {
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
+            &self.rom,
             self.arm7_clock,
         );
         while view.clock() < target {
@@ -101,6 +103,7 @@ impl Machine {
                 &mut self.memory,
                 &mut self.io,
                 &mut self.scheduler,
+                &self.rom,
                 // TODO(hw-unverified): DMA sees the address behind a TCM window, not a hole
                 // (`docs/hw/dma.md`, "Unverified").
                 TcmConfig::NONE,
@@ -114,6 +117,7 @@ impl Machine {
                 &mut self.memory,
                 &mut self.io,
                 &mut self.scheduler,
+                &self.rom,
                 self.arm7_clock,
             );
             transfer.run(&mut view)

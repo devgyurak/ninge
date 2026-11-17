@@ -29,7 +29,13 @@ impl Bench {
 
     /// The ARM9's view with `tcm`, at the master clock.
     pub(crate) fn arm9(&mut self, tcm: TcmConfig) -> Arm9View<'_> {
-        let mut view = Arm9View::new(&mut self.memory, &mut self.io, &mut self.scheduler, tcm);
+        let mut view = Arm9View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            &[],
+            tcm,
+        );
         let now = view.clock();
         view.begin_step(now, now.saturating_add(ARM9_INSTRUCTION_COST));
         view
@@ -37,15 +43,21 @@ impl Bench {
 
     /// The ARM7's view at its own clock `now`.
     pub(crate) fn arm7(&mut self, now: u64) -> Arm7View<'_> {
-        Arm7View::new(&mut self.memory, &mut self.io, &mut self.scheduler, now)
+        Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            &[],
+            now,
+        )
     }
 
     fn peek9<const N: usize>(&self, tcm: &TcmConfig, addr: u32) -> [u8; N] {
-        super::peek::<true, N>(&self.memory, &self.io, tcm, self.scheduler.now(), addr)
+        super::peek::<true, N>(&self.memory, &self.io, tcm, &[], self.scheduler.now(), addr)
     }
 
     fn peek7<const N: usize>(&self, now: u64, addr: u32) -> [u8; N] {
-        super::peek::<false, N>(&self.memory, &self.io, &TcmConfig::NONE, now, addr)
+        super::peek::<false, N>(&self.memory, &self.io, &TcmConfig::NONE, &[], now, addr)
     }
 
     pub(crate) fn read8(&self, tcm: &TcmConfig, addr: u32) -> u8 {

@@ -84,28 +84,41 @@ impl Effect {
     }
 }
 
-/// What an access carries besides its address: the master time of the access and the host's data.
+/// What an access carries besides its address: the master time of the access, the host's data and
+/// the cartridge ROM.
 ///
 /// `host` is the [`Input`] `Io` latched as the frame began: stored once, in `Io`, and handed to
 /// whichever device an access reaches. This is the path a device takes host data in: the keypad
 /// reads its buttons here, and the touch controller (#44) and the RTC will read the touch point and
-/// the host's time here too, with no copy of their own and no latch call. `Copy`, and built
-/// per access on the I/O slow path only.
+/// the host's time here too, with no copy of their own and no latch call. `rom` is the image the
+/// machine was loaded with, handed over the same way: the cartridge device reads it here and keeps
+/// no copy, so the savestate stays free of ROM bytes (`cart-protocol.md`, "Savestate"). `Copy`, and
+/// built per access on the I/O slow path only.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cx<'a> {
     /// Master time of the access, as the CPU's own clock has it.
     pub(crate) now: u64,
     /// The host's data, as latched when the frame began.
     pub(crate) host: &'a Input,
+    /// The cartridge image, empty before a ROM is loaded.
+    pub(crate) rom: &'a [u8],
 }
 
-/// The context of an access at master time `now` with no host input held, for device tests.
+/// The context of an access at master time `now` with no host input held and no ROM, for device
+/// tests.
 #[cfg(test)]
 pub(crate) fn cx_at(now: u64) -> Cx<'static> {
+    cx_with_rom(now, &[])
+}
+
+/// The context of an access at master time `now` with no host input held and `rom` loaded.
+#[cfg(test)]
+pub(crate) fn cx_with_rom(now: u64, rom: &[u8]) -> Cx<'_> {
     const NOTHING_HELD: Input = Input::new();
     Cx {
         now,
         host: &NOTHING_HELD,
+        rom,
     }
 }
 

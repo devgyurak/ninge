@@ -13,6 +13,8 @@ use crate::cpu::Bank;
 const RAM: u32 = 0x0200_0000;
 const RAM_END: u32 = 0x0240_0000;
 const HEADER_COPY: u32 = 0x027F_FE00;
+/// The chip ID the BIOS leaves, twice, and the firmware's copy of both (`direct-boot.md`).
+const CHIP_IDS: [u32; 4] = [0x027F_F800, 0x027F_F804, 0x027F_FC00, 0x027F_FC04];
 /// `add r0, r0, #1`.
 const ADD_R0_1: u32 = 0xE280_0001;
 /// `b` to the instruction before it (offset -12 from the branch plus pipeline 8 = -3 words).
@@ -171,6 +173,8 @@ fn given_valid_image_when_loading_then_all_other_main_ram_is_zero() {
         (RAM, 0x100),
         (0x0238_0000, 0x80),
         (HEADER_COPY & 0x023F_FFFF, HEADER_LEN as u32),
+        (CHIP_IDS[0] & 0x023F_FFFF, 8),
+        (CHIP_IDS[2] & 0x023F_FFFF, 8),
     ];
     assert_eq!(stray_nonzero_words(&machine, &allowed), Vec::<u32>::new());
 }
@@ -189,7 +193,12 @@ fn given_arm7_in_the_wram_range_when_loading_then_nothing_else_in_main_ram_chang
     image.arm7.ram_address = 0x037F_8000;
     image.arm7.entry = 0x037F_8000;
     let machine = booted(&image);
-    let allowed = [(RAM, 0x100), (HEADER_COPY & 0x023F_FFFF, HEADER_LEN as u32)];
+    let allowed = [
+        (RAM, 0x100),
+        (HEADER_COPY & 0x023F_FFFF, HEADER_LEN as u32),
+        (CHIP_IDS[0] & 0x023F_FFFF, 8),
+        (CHIP_IDS[2] & 0x023F_FFFF, 8),
+    ];
     assert_eq!(stray_nonzero_words(&machine, &allowed), Vec::<u32>::new());
 }
 
@@ -601,4 +610,28 @@ fn trap_table_failures() -> Vec<u32> {
 #[test]
 fn given_the_vector_addresses_plus_eight_when_looked_up_then_each_cpu_traps_only_in_its_own_bios() {
     assert_eq!(trap_table_failures(), Vec::<u32>::new());
+}
+
+/// The four words the BIOS and firmware leave the chip ID in, after booting a header whose device
+/// capacity byte (`014h`) is `n`.
+fn chip_id_words_for_capacity(n: u8) -> Vec<u32> {
+    let mut rom = Image::valid().build();
+    rom[0x14] = n;
+    let mut machine = Machine::new();
+    machine.load_rom(rom).expect("valid image");
+    CHIP_IDS
+        .iter()
+        .map(|&address| machine.inspect().arm9_peek32(address))
+        .collect()
+}
+
+#[test]
+fn given_a_16_mib_header_when_loading_then_the_chip_id_is_left_in_all_four_places() {
+    // `cart-protocol.md`, "The chip ID": capacity 128 KiB << 7 is 16 MiB, size byte 0Fh.
+    assert_eq!(chip_id_words_for_capacity(7), vec![0x0000_0FC2; 4]);
+}
+
+#[test]
+fn given_a_header_naming_a_128_mib_chip_when_loading_then_the_chip_id_carries_the_variant_bit() {
+    assert_eq!(chip_id_words_for_capacity(10), vec![0x8000_7FC2; 4]);
 }

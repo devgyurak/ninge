@@ -154,10 +154,14 @@ The chip ID is four bytes (GBATEK, "1st Get ROM Chip ID"):
 
 The model computes it from the ROM image, never from a dump:
 
-- **Size byte:** the image length is rounded up to a power of two of MiB, at least 1, and the byte
-  is that count minus one (GBATEK's known IDs: 8 MiB `07h`, 16 MiB `0Fh`, 32 MiB `1Fh`, 64 MiB
-  `3Fh`, 128 MiB `7Fh`). Images above 128 MiB use `7Fh`; the GBATEK encoding for bigger chips is
-  inconsistent in its own table.
+- **Chip size:** the larger of the header's device capacity (`014h`, `128 KiB << n`) and the image
+  length rounded up to a power of two, at least 1 MiB. The header keeps a trimmed image reporting
+  its real chip; the length keeps a header that names a smaller chip from hiding image data behind
+  the mirror. A guest `n` above 10 (128 MiB, the largest size byte) is treated as 10, so the shift
+  cannot overflow. The same chip size sets the mirror of `B7` addresses.
+- **Size byte:** the chip size in MiB minus one (GBATEK's known IDs: 8 MiB `07h`, 16 MiB `0Fh`,
+  32 MiB `1Fh`, 64 MiB `3Fh`, 128 MiB `7Fh`). Larger chips use `7Fh`; the GBATEK encoding for bigger
+  chips is inconsistent in its own table.
 - **Byte 3** is 0 (no infrared). **Byte 4** is 0, except bit 7, which is set when the chip is
   larger than 64 MiB (GBATEK: the variant 1 chips are "64MB or more"; the known 64 MiB parts
   differ, see "Unverified").
@@ -333,10 +337,12 @@ Each item is a choice the model makes where GBATEK is silent or unclear. Each ge
   Hardware behavior for partial reads is not stated.
 - **The data port with no word ready:** it reads the last word taken, zero before any; GBATEK does
   not say.
-- **The chip size comes from the image length,** not from the header's device capacity (`014h`), so
-  a trimmed image gets a smaller chip ID and mirror than its header names. Direct boot leaves the chip
-  IDs in main RAM at zero (`direct-boot.md`), which differs from what `B8` returns. Which source to
-  use, and whether direct boot writes the ID, is left to a Phase 5 follow-up.
+- **The chip size** is the larger of the header's device capacity and the image length rounded up,
+  at least 1 MiB; GBATEK names the capacity field but not how a card uses it. A chip below 1 MiB
+  (`n < 3`) reports size byte `00h` like a 1 MiB one. The size also sets the mirror.
+- **Direct boot writes the chip ID** (the `B8` answer) to the four places GBATEK lists in main RAM
+  (`direct-boot.md`, "The chip ID"); the BIOS writes the real card's answer, which the model's ID
+  stands in for.
 - **EXMEMCNT's port is four bytes,** so the card device also holds `0400_0206h`-`0207h`, which is a
   different register on the ARM7 (WIFIWAITCNT); split it when that register is modeled.
 - **Gaps and clock are read when a word is taken,** so a ROMCTRL write during a transfer changes the

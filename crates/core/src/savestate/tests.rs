@@ -73,10 +73,12 @@ const PINNED_HASH: u64 = 0x7fa83458a072fbc4;
 /// Version 33 (#37) added the cartridge slot's registers and transfer state: 20 bytes of one-byte
 /// varints, bytes and the 8 command bytes while they are zero (the booted pin also has RESB set,
 /// which is a varint of 5 bytes, so its length grew by 24), and both hashes moved.
+/// Direct boot now leaves the cartridge's chip ID in main RAM (#37): the booted state's content
+/// changed, not its layout, so only the booted hash moved and the version stayed.
 /// Version 34 (#37) added the transfer's total size and the time of the next word (two one-byte
 /// fields while idle), so both lengths grew by 2 and both hashes moved.
 const PINNED_BOOTED_LEN: usize = 5_804_942;
-const PINNED_BOOTED_HASH: u64 = 0xcb8fed88a063c3f2;
+const PINNED_BOOTED_HASH: u64 = 0x6bcb25ca4f61bd7a;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

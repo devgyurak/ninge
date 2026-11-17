@@ -66,6 +66,15 @@ CPSR = `0000_00DFh`. See "Unverified".
 
 Registers of the other banks (FIQ, Abort, Undefined) are not stated and stay at power-on zero.
 
+### The chip ID
+
+GBATEK's memory map at boot lists the cartridge chip ID at `027FF800h` and its second ID at
+`027FF804h`, and the firmware's copies of both at `027FFC00h` and `027FFC04h`. Direct boot writes the
+ID that `B8` returns (`cart-protocol.md`, "The chip ID") to all four, from the same function, so a
+game that compares what boot saved with what the card answers sees them equal. The real BIOS writes
+the answer of the real card; the model's ID is computed from the image and is partly our choice
+(`cart-protocol.md`, "Unverified").
+
 ### The card slot
 
 Direct boot never runs the card's reset and key phases. It leaves the card in main data mode with
@@ -118,8 +127,10 @@ the frame counter.
 - **Other register banks** (FIQ, Abort, Undefined) start at zero. — `boot` — verify likewise.
 - **The ARM9 and ARM7 placement order** when the two binaries overlap: the ARM9 binary is copied
   first, then the ARM7's. GBATEK says nothing. — `boot` — verify likewise.
-- **The values the BIOS and firmware leave outside the header copy** (chip IDs, user settings,
-  boot flags at `027FF800h` and up) are zero here. — `boot` — verify likewise; `TODO(phase3)`.
+- **The values the BIOS and firmware leave outside the header copy** (the header CRC copy, user
+  settings, boot flags such as the boot indicator at `027FFC40h`, which GBATEK calls required for
+  some games) are zero here; only the chip ID is filled (see "The chip ID"). — `boot` — verify
+  likewise; `TODO(phase5)` (user settings: #39).
 - **The per-frame instruction counts** are a model, not a timing claim; see `scheduler.md`,
   "Unverified".
 - **ARM7 CPSR at entry** is chosen like the ARM9's. — `boot` in `hle/direct_boot.rs` — verify

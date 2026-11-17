@@ -189,7 +189,7 @@ impl Io {
         // is not queued twice.
         // TODO(hw-unverified): the request is held while the word is ready (`dma.md`, "Unverified").
         if port == Port::Dma && self.cart.word_waiting::<ARM9>() {
-            self.trigger_dma(scheduler, Trigger::CardWord { arm9: ARM9 }, at.now);
+            self.trigger_dma(scheduler, Trigger::CardWord { arm9: ARM9 }, at.floor);
         }
     }
 

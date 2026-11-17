@@ -471,3 +471,29 @@ fn given_an_arm7_started_transfer_when_saved_and_loaded_then_the_queue_and_the_r
         (true, true)
     );
 }
+
+// --------------------------------------------------------------------- the chip ID
+
+/// The word a `B8` transfer returns, polled through the ARM9's bus.
+fn b8_word(machine: &mut Machine) -> u32 {
+    {
+        let mut bus = machine.bus9();
+        bus.write32(COMMAND, 0x0000_00B8);
+        bus.write32(COMMAND + 4, 0);
+        bus.write32(ROMCTRL, START | RESB | (7 << 24));
+    }
+    let bytes = poll(machine, true, 20_000);
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+#[test]
+fn given_a_direct_boot_when_b8_is_asked_then_it_returns_the_chip_id_boot_left_in_ram() {
+    // `direct-boot.md`, "The chip ID": the BIOS leaves what the card answers, in four places.
+    let mut machine = machine_with_data();
+    let answer = b8_word(&mut machine);
+    let left: Vec<u32> = [0x027F_F800, 0x027F_F804, 0x027F_FC00, 0x027F_FC04]
+        .iter()
+        .map(|&address| machine.inspect().arm9_peek32(address))
+        .collect();
+    assert_eq!(left, vec![answer; 4]);
+}

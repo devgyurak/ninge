@@ -24,8 +24,11 @@ fn pattern(i: usize) -> u8 {
     (i.wrapping_mul(31) ^ (i >> 8) ^ (i >> 13)) as u8
 }
 
+/// The image: the pattern, with the header's device capacity (`014h`) at 0 so the chip is 1 MiB.
 fn rom() -> Vec<u8> {
-    (0..ROM_LEN).map(pattern).collect()
+    let mut rom: Vec<u8> = (0..ROM_LEN).map(pattern).collect();
+    rom[0x14] = 0;
+    rom
 }
 
 fn write<const ARM9: bool>(cart: &mut Cart, offset: u32, width: Width, value: u32) -> Effect {
@@ -187,14 +190,14 @@ fn given_an_address_past_the_chip_when_drained_then_it_mirrors_into_the_chip() {
 fn given_the_chip_id_command_when_a_word_is_read_then_it_is_the_id_of_the_image_size() {
     let mut cart = Cart::new();
     start_command(&mut cart, 0xB8, 7);
-    assert_eq!(drain9(&mut cart), chip_id(ROM_LEN).to_le_bytes());
+    assert_eq!(drain9(&mut cart), chip_id(&rom()).to_le_bytes());
 }
 
 #[test]
 fn given_the_chip_id_command_with_a_long_block_when_drained_then_the_id_repeats() {
     let mut cart = Cart::new();
     start_command(&mut cart, 0xB8, 1);
-    let id = chip_id(ROM_LEN).to_le_bytes();
+    let id = chip_id(&rom()).to_le_bytes();
     assert_eq!(drain9(&mut cart), id.repeat(0x200 / 4));
 }
 

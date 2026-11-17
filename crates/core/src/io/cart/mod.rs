@@ -252,7 +252,7 @@ impl Cart {
                 let at = self.base.wrapping_add((self.pos + i as u32) % BLOCK_BYTES);
                 protocol::byte_at(rom, at)
             })),
-            CMD_CHIP_ID => protocol::chip_id(rom.len()),
+            CMD_CHIP_ID => protocol::chip_id(rom),
             _ => UNKNOWN_WORD,
         }
     }
@@ -349,7 +349,7 @@ impl Cart {
                 self.command[3],
                 self.command[4],
             ]);
-            let first = protocol::start_of(address, rom.len());
+            let first = protocol::start_of(address, rom);
             self.base = first - first % BLOCK_BYTES;
             self.pos = first % BLOCK_BYTES;
         } else {

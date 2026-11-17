@@ -9,10 +9,13 @@
 //! The device holds the protocol's state and nothing of the ROM: the image arrives with each
 //! access in the context (`device::Cx::rom`), and the bytes of a word are read from it when the
 //! word is taken, so a savestate carries no ROM.
-// TODO(#38): the SPI side of AUXSPICNT (baud rate, hold, busy) and AUXSPIDATA arrive with the
-// save chip; they are stored or read as zero here.
+//!
+//! The slot's SPI side is here too: AUXSPICNT's baud rate, hold and busy bits and AUXSPIDATA talk to
+//! the save chip (`cart::save`, note `docs/hw/auxspi-saves.md`), which the device owns. A byte takes
+//! a time that follows from the clock, so busy is computed from the access time, with no event.
 
 use crate::cart::protocol::{self, BLOCK_BYTES};
+use crate::cart::save::{SaveChip, SaveError, SaveType};
 use crate::io::device::{Checked, Cx, Device, Effect, Fired, Width, read_bytes, write_bytes};
 use crate::io::dma::Trigger;
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
@@ -41,6 +44,23 @@ const DATA_LAST: u32 = DATA_OFFSET + 3;
 const AUXSPICNT_MASK: u16 = 0xE043;
 /// AUXSPICNT bit 14: the transfer-ready IRQ.
 const AUXSPICNT_IRQ: u16 = 1 << 14;
+/// AUXSPICNT bits 0-1: the SPI baud rate, 4 MHz, 2 MHz, 1 MHz, 512 kHz.
+const AUXSPICNT_BAUD_MASK: u16 = 0b11;
+/// AUXSPICNT bit 6: keep the chip selected after the transfer.
+const AUXSPICNT_HOLD: u16 = 1 << 6;
+/// AUXSPICNT bit 7: an SPI byte is on the wire. Read-only, computed from the time.
+const AUXSPICNT_BUSY: u16 = 1 << 7;
+/// AUXSPICNT bit 13: slot mode, 1 = SPI backup.
+const AUXSPICNT_SPI_MODE: u16 = 1 << 13;
+/// AUXSPICNT bit 15: slot enable.
+const AUXSPICNT_ENABLE: u16 = 1 << 15;
+/// The byte offset of AUXSPIDATA's low byte, the one whose write starts a transfer.
+const AUXSPIDATA_OFFSET: u32 = 2;
+/// Master cycles of an SPI byte at baud 0: 8 bits of 8 bus clocks, two master cycles a bus clock;
+/// each baud step doubles it (`auxspi-saves.md`, "A transfer").
+// TODO(hw-unverified): the divisor behind "4 MHz" and the rest is the bus clock over 8, 16, 32, 64
+// (`auxspi-saves.md`, "Unverified").
+const SPI_BYTE_CYCLES: u64 = 128;
 
 /// ROMCTRL bit 15: apply the KEY2 seed. Write-only; reads 0.
 const ROMCTRL_SEED: u32 = 1 << 15;
@@ -112,6 +132,14 @@ pub struct Cart {
     exmem_shared: u16,
     /// AUXSPICNT, the kept bits.
     auxspicnt: u16,
+    /// The save chip on the SPI bus.
+    save: SaveChip,
+    /// The byte the last SPI transfer received: what AUXSPIDATA reads.
+    // TODO(hw-unverified): AUXSPIDATA's reset value and its read while busy (`auxspi-saves.md`,
+    // "Unverified").
+    spi_in: u8,
+    /// The master time the SPI byte on the wire is done; busy until then.
+    spi_done: u64,
     /// ROMCTRL without the status bits (23 and 31), which are read from the transfer state.
     romctrl: u32,
     /// The command registers, first command byte first.
@@ -160,9 +188,59 @@ impl Cart {
             | if self.busy { ROMCTRL_BUSY } else { 0 }
     }
 
-    /// AUXSPICNT as a CPU reads it.
+    /// AUXSPICNT as stored: without the busy bit, which depends on the time.
     pub fn auxspicnt(&self) -> u16 {
         self.auxspicnt
+    }
+
+    /// AUXSPICNT as a CPU reads it at master time `now`.
+    pub fn auxspicnt_at(&self, now: u64) -> u16 {
+        self.auxspicnt
+            | if self.spi_busy(now) {
+                AUXSPICNT_BUSY
+            } else {
+                0
+            }
+    }
+
+    /// Whether an SPI byte is still on the wire at master time `now`.
+    pub fn spi_busy(&self, now: u64) -> bool {
+        now < self.spi_done
+    }
+
+    /// The save chip, for the debugger.
+    pub fn save(&self) -> &SaveChip {
+        &self.save
+    }
+
+    /// Fits a chip of `kind` holding `data` (`Machine::insert_save`).
+    pub(crate) fn insert_save(&mut self, kind: SaveType, data: Vec<u8>) -> Result<(), SaveError> {
+        let generation = self.save.generation();
+        self.save = SaveChip::new(kind, data)?;
+        self.save.set_generation(generation);
+        self.spi_done = 0;
+        Ok(())
+    }
+
+    /// Sets the save memory's change counter (`Machine::load_state`).
+    pub(crate) fn set_save_generation(&mut self, generation: u64) {
+        self.save.set_generation(generation);
+    }
+
+    /// An SPI byte written at `now`: the chip answers at once, and the byte takes its time on the
+    /// wire. Nothing happens unless the slot is enabled in SPI mode, and a byte written while one is
+    /// still on the wire is dropped.
+    // TODO(hw-unverified): AUXSPIDATA written with the mode or the enable off, or while busy
+    // (`auxspi-saves.md`, "Unverified").
+    fn spi_write(&mut self, byte: u8, now: u64) {
+        let want = AUXSPICNT_SPI_MODE | AUXSPICNT_ENABLE;
+        if self.auxspicnt & want != want || self.spi_busy(now) {
+            return;
+        }
+        let hold = self.auxspicnt & AUXSPICNT_HOLD != 0;
+        self.spi_in = self.save.transfer(byte, hold);
+        let baud = u32::from(self.auxspicnt & AUXSPICNT_BAUD_MASK);
+        self.spi_done = now.saturating_add(SPI_BYTE_CYCLES << baud);
     }
 
     /// EXMEMCNT as the ARM9 reads it.
@@ -365,7 +443,7 @@ impl Cart {
     }
 
     /// The byte of the register space at `offset` for CPU `ARM9`.
-    fn byte<const ARM9: bool>(&self, offset: u32, rom: &[u8]) -> u8 {
+    fn byte<const ARM9: bool>(&self, offset: u32, cx: Cx<'_>) -> u8 {
         match offset {
             EXMEMCNT_OFFSET | EXMEMCNT_HIGH => {
                 self.exmem::<ARM9>().to_le_bytes()[(offset & 1) as usize]
@@ -373,10 +451,11 @@ impl Cart {
             // TODO(hw-unverified): the CPU that does not own the slot reads zero from its
             // registers and its writes are dropped (`cart-protocol.md`, "Ownership").
             _ if !self.owned_by::<ARM9>() => 0,
-            0 | 1 => self.auxspicnt.to_le_bytes()[offset as usize],
+            0 | 1 => self.auxspicnt_at(cx.now).to_le_bytes()[offset as usize],
+            AUXSPIDATA_OFFSET => self.spi_in,
             ROMCTRL_OFFSET..=7 => self.romctrl().to_le_bytes()[(offset - ROMCTRL_OFFSET) as usize],
             DATA_OFFSET..=DATA_LAST => {
-                self.word(rom).to_le_bytes()[(offset - DATA_OFFSET) as usize]
+                self.word(cx.rom).to_le_bytes()[(offset - DATA_OFFSET) as usize]
             }
             _ => 0,
         }
@@ -398,6 +477,10 @@ impl Cart {
             1 => {
                 self.auxspicnt =
                     (self.auxspicnt & 0x00FF) | (u16::from(byte) << 8 & AUXSPICNT_MASK);
+                Effect::default()
+            }
+            AUXSPIDATA_OFFSET => {
+                self.spi_write(byte, cx.now);
                 Effect::default()
             }
             ROMCTRL_OFFSET..=7 => self.write_romctrl_byte(offset - ROMCTRL_OFFSET, byte, cx),
@@ -426,7 +509,7 @@ impl Cart {
 }
 
 impl Checked for Cart {
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, now: u64) -> bool {
         self.pos < BLOCK_BYTES
             && self.base.is_multiple_of(BLOCK_BYTES)
             && self.left <= block_bytes(6)
@@ -438,6 +521,8 @@ impl Checked for Cart {
             && self.total.is_multiple_of(4)
             && (self.busy || self.left == 0)
             && self.left <= self.total
+            && self.save.well_formed()
+            && self.spi_done <= now.saturating_add(SPI_BYTE_CYCLES << AUXSPICNT_BAUD_MASK)
             && self.auxspicnt & !AUXSPICNT_MASK == 0
             && self.romctrl & !ROMCTRL_STORED == 0
             && self.exmem9 & !EXMEMCNT_OWN_MASK == 0
@@ -448,7 +533,7 @@ impl Checked for Cart {
 
 impl<const ARM9: bool> Device<ARM9> for Cart {
     fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
-        read_bytes(offset, width, |at| self.byte::<ARM9>(at, cx.rom))
+        read_bytes(offset, width, |at| self.byte::<ARM9>(at, cx))
     }
 
     /// A read that includes the data port's last byte takes the ready word.

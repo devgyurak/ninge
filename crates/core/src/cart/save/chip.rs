@@ -445,3 +445,13 @@ impl SaveChip {
         }
     }
 }
+
+#[cfg(test)]
+impl SaveChip {
+    /// Makes the open session's operation one its command does not mean, for the `well_formed` test.
+    pub(super) fn corrupt_session_op(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.op = Op::PageErase;
+        }
+    }
+}

@@ -209,3 +209,19 @@ fn given_a_byte_on_the_wire_at_the_slowest_baud_when_the_state_is_saved_then_it_
     let mut loaded = machine();
     assert_eq!(loaded.load_state(&state), Ok(()));
 }
+
+#[test]
+fn given_the_arm7_owns_the_slot_when_a_byte_is_on_the_wire_then_the_state_saved_then_loads() {
+    let mut m = with_eeprom();
+    m.bus9().write16(EXMEMCNT, SLOT_TO_ARM7);
+    let at = m.inspect().arm7_clock();
+    m.bus7(at).write16(AUXSPICNT, SPI_ON | 3);
+    m.bus7(at).write16(AUXSPIDATA, u16::from(RDSR));
+    let state = m.save_state();
+    let mut loaded = machine();
+    // The ARM7's byte really is on the wire (its busy bit is set), and the state still loads.
+    assert_eq!(
+        (loaded.load_state(&state), m.io.cart().spi_busy(at + 1)),
+        (Ok(()), true)
+    );
+}

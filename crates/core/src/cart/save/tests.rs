@@ -473,3 +473,12 @@ fn given_an_open_flash_session_when_checked_then_it_is_well_formed() {
     chip.transfer(PE, true);
     assert!(chip.well_formed());
 }
+
+#[test]
+fn given_a_session_whose_operation_does_not_fit_its_command_when_checked_then_it_is_not_well_formed()
+ {
+    let mut chip = blank(SaveType::Eeprom8K);
+    chip.transfer(READ, true);
+    chip.corrupt_session_op();
+    assert!(!chip.well_formed());
+}

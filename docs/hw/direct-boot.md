@@ -171,7 +171,7 @@ the frame counter.
   first, then the ARM7's. GBATEK says nothing. — `boot` — verify likewise.
 - **The values the BIOS and firmware leave outside the header copy** are written from GBATEK's
   constants and our own images (see "Boot-time values in main RAM", #39). The constants (the boot
-  handler task, the BIOS CRC, the boot messages, the boot flags, the boot indicator) are GBATEK's
+  handler task `FFFFh`, the BIOS CRC `5835h`, the boot messages, the boot flags, the boot indicator) are GBATEK's
   claims for cartridge boot time and are not checked on hardware; the secure-area-bad flag is 0
   because direct boot never checks the secure area; the fields that need a BIOS value (secure
   disable, SIO debug, RTC status, the random byte, the GBA-slot fields, the frame counter, the

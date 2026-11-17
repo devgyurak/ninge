@@ -34,6 +34,7 @@ pub use crate::io::ipc::Ipc;
 pub use crate::io::irq::InterruptController;
 pub use crate::io::keypad::Keypad;
 pub use crate::io::power::Power;
+pub use crate::io::spi::Spi;
 pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
 pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
@@ -159,6 +160,15 @@ impl<'a> Inspect<'a> {
     // memory view that the data comes through.
     pub fn cart(&self) -> &'a Cart {
         self.machine.io.cart()
+    }
+
+    /// The ARM7's SPI bus: SPICNT, the selected device, busy and the firmware chip's command,
+    /// address and status.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows SPICNT, the selected
+    // device, whether a unit is on the wire (`done_at`) and the firmware chip's command, address
+    // and status; #57's memory view shows the firmware image through it.
+    pub fn spi(&self) -> &'a Spi {
+        self.machine.io.spi()
     }
 
     /// The ARM9's four timers.

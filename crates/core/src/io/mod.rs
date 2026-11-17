@@ -25,6 +25,7 @@ pub mod irq;
 pub mod keypad;
 pub(crate) mod map;
 pub mod power;
+pub mod spi;
 #[cfg(test)]
 mod tests;
 pub mod timers;
@@ -43,6 +44,7 @@ use keypad::Keypad;
 use map::Port;
 use power::Power;
 use serde::{Deserialize, Serialize};
+use spi::Spi;
 use timers::Timers;
 use timing::Timing;
 
@@ -78,6 +80,8 @@ registry! {
     arm7 {
         /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
         power / power_mut: Power = Power::new() => [Port::Power],
+        /// The ARM7's SPI bus and the firmware chip on it (`spi.md`).
+        spi: Spi = Spi::new() => [Port::Spi],
     }
     each {
         /// Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
@@ -341,6 +345,12 @@ impl Io {
             self.dma7.finish(transfer, end)
         };
         self.request_irq(effect.requests);
+    }
+
+    /// Replaces the SPI bus, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn replace_spi_for_test(&mut self, spi: Spi) {
+        self.spi = spi;
     }
 
     /// Replaces the IPC block, to build a corrupt state in a test.

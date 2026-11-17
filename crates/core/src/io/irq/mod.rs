@@ -44,6 +44,10 @@ pub const DMA0_IRQ: u32 = 1 << 8;
 /// "Interrupt").
 pub const CARD_TRANSFER_IRQ: u32 = 1 << 19;
 
+/// IF bit 23: the SPI bus finished a unit, ARM7 only (`interrupts.md`, "IE and IF bits"; `spi.md`,
+/// "A transfer").
+pub const SPI_IRQ: u32 = 1 << 23;
+
 /// IF bit 16: IPC sync, from the other CPU's IPCSYNC bit 13 (`ipc.md`, "Behavior").
 pub const IPCSYNC_IRQ: u32 = 1 << 16;
 /// IF bit 17: IPC send FIFO empty (`ipc.md`, "Interrupts").

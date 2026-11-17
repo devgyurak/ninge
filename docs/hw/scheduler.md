@@ -81,10 +81,12 @@ is:
 2. HBlank start
 3. Card word ready (`cart-protocol.md`): the card slot is seen by both CPUs, so it sorts in the first
    registry group, before the per-CPU timers
-4. Timer overflow, ARM9 timers 0-3, then ARM7 timers 0-3
-5. DMA start, ARM9 channels 0-3, then ARM7 channels 0-3
+4. SPI bus unit done (`spi.md`): an ARM7-only device, so it sorts in the third registry group,
+   before the per-CPU timers
+5. Timer overflow, ARM9 timers 0-3, then ARM7 timers 0-3
+6. DMA start, ARM9 channels 0-3, then ARM7 channels 0-3
 
-The card, timer and DMA entries are not kinds of their own in the model: each is one event slot of a
+The card, SPI, timer and DMA entries are not kinds of their own in the model: each is one event slot of a
 registered device. Events of one time sort by the device's place in the registry, whose groups
 come first (devices both CPUs see, then the ARM9's own, then the ARM7's own, then the per-CPU
 copies: the interrupt controllers, the timers, DMA, the keypad), then the ARM9's copy before the
@@ -118,11 +120,12 @@ other events due at the same time wait for the next round too. That round is zer
 and fires them in the same order, so nothing observable changes. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Five events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
+Six events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
 line, 3,212 master cycles after it; see `display-timing.md`), the timer overflow (one per
 started, clock-driven timer of either CPU, so at most eight; see `timers.md`) and the DMA start (one
 per channel whose transfer is waiting to run, at most eight; see `dma.md`) and the card word (one,
-for the next word of a cartridge transfer; see `cart-protocol.md`). A pending event of
+for the next word of a cartridge transfer; see `cart-protocol.md`) and the SPI bus's completion interrupt (one, only
+for a unit that started with SPICNT bit 14 set; see `spi.md`). A pending event of
 a kind can be cancelled, which a timer write uses to replace its overflow: the bus view holds the
 scheduler, so the write schedules at once, never before the end of the writing instruction
 (`timers.md`, "Model"). Each line start of a visible line draws that line (`bg-text.md`, "Lines"); the one that begins

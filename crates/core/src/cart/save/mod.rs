@@ -12,7 +12,8 @@ pub use chip::SaveChip;
 
 use serde::{Deserialize, Serialize};
 
-/// The chip fitted to the cartridge. `None` is a card with no save memory: every read is `FFh`.
+/// The chip fitted to the cartridge. `None` is a card with no save memory: every read is `FFh`;
+/// `Auto` is a chip to be found out from its first commands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SaveType {
     /// No save chip.
@@ -38,10 +39,13 @@ pub enum SaveType {
     Fram8K,
     /// FRAM of 32 KiB (two address bytes, no page limit).
     Fram32K,
+    /// The chip is not known yet: the first session that writes decides it (`auxspi-saves.md`,
+    /// "Auto-detection"). Until then the chip is empty, and `data` has no bytes.
+    Auto,
 }
 
 /// Every type with its name and its size in bytes (`docs/hw/auxspi-saves.md`, "Chip type").
-const TYPES: [(SaveType, &str, usize); 11] = [
+const TYPES: [(SaveType, &str, usize); 12] = [
     (SaveType::None, "none", 0),
     (SaveType::Eeprom512, "eeprom-512", 512),
     (SaveType::Eeprom8K, "eeprom-8k", 8 * 1024),
@@ -53,6 +57,7 @@ const TYPES: [(SaveType, &str, usize); 11] = [
     (SaveType::Flash8M, "flash-8m", 8 * 1024 * 1024),
     (SaveType::Fram8K, "fram-8k", 8 * 1024),
     (SaveType::Fram32K, "fram-32k", 32 * 1024),
+    (SaveType::Auto, "auto", 0),
 ];
 
 impl SaveType {

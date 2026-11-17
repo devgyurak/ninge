@@ -37,6 +37,12 @@ const STATUS_EEPROM512_ONES: u8 = 0xF0;
 const FLASH_PAGE: usize = 256;
 const FLASH_SECTOR: usize = 0x1_0000;
 
+/// Bytes of a session the detector keeps to replay once it has decided. A longer session is replayed
+/// cut short.
+// TODO(hw-unverified): the detector's replay of a session past this length (`auxspi-saves.md`,
+// "Unverified").
+const RECORD_CAP: usize = 1024;
+
 /// What a session's command does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum Op {
@@ -81,6 +87,8 @@ struct Session {
     addr: u32,
     /// The byte a WRSR carries.
     value: u8,
+    /// While the chip is still `Auto`: the bytes after the command, up to [`RECORD_CAP`].
+    rec: Vec<u8>,
     /// The command got far enough to take effect when the session ends (it has its data byte, or
     /// for an erase its whole address).
     touched: bool,
@@ -129,6 +137,7 @@ fn decode(kind: SaveType, cmd: u8) -> (Op, bool) {
     match kind {
         SaveType::None => (Op::Ignore, false),
         _ if common != Op::Ignore => (common, false),
+        SaveType::Auto => (Op::Ignore, false),
         SaveType::Eeprom512 => match cmd {
             CMD_READ => (Op::Read, false),
             CMD_READ_HI => (Op::Read, true),
@@ -166,7 +175,7 @@ fn decode(kind: SaveType, cmd: u8) -> (Op, bool) {
 // TODO(hw-unverified): the 128K EEPROM's address width (`auxspi-saves.md`, "Unverified").
 fn address_bytes(kind: SaveType) -> u32 {
     match kind {
-        SaveType::None => 0,
+        SaveType::None | SaveType::Auto => 0,
         SaveType::Eeprom512 => 1,
         SaveType::Eeprom8K | SaveType::Eeprom64K | SaveType::Fram8K | SaveType::Fram32K => 2,
         _ => 3,
@@ -187,7 +196,7 @@ fn page_bytes(kind: SaveType) -> usize {
             FLASH_PAGE
         }
         SaveType::Fram8K | SaveType::Fram32K => kind.len(),
-        SaveType::None => 1,
+        SaveType::None | SaveType::Auto => 1,
     }
 }
 
@@ -237,6 +246,11 @@ impl SaveChip {
         self.generation = Generation(generation);
     }
 
+    /// Whether the chip's type is still unknown (`SaveType::Auto`).
+    pub fn detecting(&self) -> bool {
+        self.kind == SaveType::Auto
+    }
+
     /// Whether a session is open (the chip is selected).
     pub fn selected(&self) -> bool {
         self.session.is_some()
@@ -258,6 +272,10 @@ impl SaveChip {
         let wp = self.wp << STATUS_WP_SHIFT;
         match self.kind {
             SaveType::None => IDLE,
+            // Until the chip is known only the latch shows.
+            // TODO(hw-unverified): what a chip of unknown type answers (`auxspi-saves.md`,
+            // "Unverified").
+            SaveType::Auto => wel,
             SaveType::Eeprom512 => STATUS_EEPROM512_ONES | wel | wp,
             SaveType::Flash256K | SaveType::Flash512K | SaveType::Flash1M | SaveType::Flash8M => {
                 wel
@@ -274,7 +292,7 @@ impl SaveChip {
             && self
                 .session
                 .as_ref()
-                .is_none_or(|s| (s.op, s.hi) == decode(self.kind, s.cmd))
+                .is_none_or(|s| (s.op, s.hi) == decode(self.kind, s.cmd) && s.rec.len() <= RECORD_CAP)
     }
 
     /// One byte over the bus: `byte` goes in, the reply comes out. With `hold` clear the chip is
@@ -329,6 +347,9 @@ impl SaveChip {
         let index = s.got;
         s.got = s.got.saturating_add(1);
         let n = address_bytes(self.kind);
+        if self.kind == SaveType::Auto && s.op == Op::Ignore && s.rec.len() < RECORD_CAP {
+            s.rec.push(byte);
+        }
         match s.op {
             Op::Ignore | Op::Wren | Op::Wrdi | Op::Nothing => IDLE,
             Op::Rdsr => self.status(),
@@ -441,8 +462,41 @@ impl SaveChip {
                 }
                 self.wel = false;
             }
+            Op::Ignore if self.kind == SaveType::Auto => self.detect(&s),
             _ => {}
         }
+    }
+
+    /// A session ended on a chip of unknown type: if it tells the type, the chip becomes that type
+    /// with erased memory and the session is applied to it, so the first write is not lost.
+    fn detect(&mut self, s: &Session) {
+        let Some(kind) = classify(s.cmd, s.got) else {
+            return;
+        };
+        self.kind = kind;
+        self.memory = vec![0xFF; kind.len()];
+        self.generation = Generation(self.generation.0.wrapping_add(1));
+        let bytes = [&[s.cmd][..], &s.rec].concat();
+        let last = bytes.len() - 1;
+        bytes.iter().enumerate().for_each(|(i, &b)| {
+            self.transfer(b, i != last);
+        });
+    }
+}
+
+/// The type a first writing session shows: its command and `n`, the bytes it sent after the
+/// command. The table is in `auxspi-saves.md`, "Auto-detection". A page's worth of data bounds the
+/// address width, so the narrowest width that fits is chosen.
+// TODO(hw-unverified): all of it is the emulator's heuristic, and the class sizes are the larger
+// of each (`auxspi-saves.md`, "Unverified").
+fn classify(cmd: u8, n: u32) -> Option<SaveType> {
+    match (cmd, n) {
+        (CMD_PP_OR_WRITE | CMD_WRITE_HI, 2..=17) => Some(SaveType::Eeprom512),
+        (CMD_PP_OR_WRITE, 18..=130) => Some(SaveType::Eeprom64K),
+        (CMD_PP_OR_WRITE, 131..=259) | (CMD_WRITE_HI, 18..=259) => Some(SaveType::Flash1M),
+        (CMD_PP_OR_WRITE, 260..) => Some(SaveType::Fram32K),
+        (CMD_PAGE_ERASE | CMD_SECTOR_ERASE, 3) => Some(SaveType::Flash1M),
+        _ => None,
     }
 }
 
@@ -452,6 +506,13 @@ impl SaveChip {
     pub(super) fn corrupt_session_op(&mut self) {
         if let Some(session) = &mut self.session {
             session.op = Op::PageErase;
+        }
+    }
+
+    /// Puts more bytes in the detector's record than its cap allows, for the `well_formed` test.
+    pub(super) fn overfill_record(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.rec = vec![0; RECORD_CAP + 1];
         }
     }
 }

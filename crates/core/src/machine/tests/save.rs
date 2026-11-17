@@ -225,3 +225,66 @@ fn given_the_arm7_owns_the_slot_when_a_byte_is_on_the_wire_then_the_state_saved_
         (Ok(()), true)
     );
 }
+
+/// A booted machine with a chip of unknown type fitted and the slot switched to SPI.
+fn with_unknown_chip() -> Machine {
+    let mut m = machine();
+    m.insert_save(SaveType::Auto, Vec::new())
+        .expect("no image for an unknown chip");
+    m.bus9().write16(AUXSPICNT, SPI_ON);
+    m
+}
+
+/// The first half of a 32-byte write at 0x20: every byte but the last 8 of the session.
+fn start_write(m: &mut Machine) {
+    session(m, &[WREN]);
+    let bytes: Vec<u8> = [&[WRITE, 0x00, 0x20][..], &[7; 24]].concat();
+    bytes.iter().for_each(|&b| {
+        byte(m, b, true);
+    });
+}
+
+/// The rest of it: 8 more bytes, the last without hold.
+fn finish_write(m: &mut Machine) {
+    session(m, &[7; 8]);
+}
+
+#[test]
+fn given_an_unknown_chip_when_the_arm9_writes_a_page_then_the_type_is_decided_and_data_kept() {
+    let mut m = with_unknown_chip();
+    put(&mut m, 0x20, &[0x11; 32]);
+    assert_eq!(
+        (m.save_type(), m.save_data()[0x20..0x40].to_vec()),
+        (SaveType::Eeprom64K, vec![0x11; 32])
+    );
+}
+
+#[test]
+fn given_an_unknown_chip_when_nothing_was_written_then_the_host_has_no_data_and_no_change() {
+    let mut m = with_unknown_chip();
+    get(&mut m, 0, 4);
+    assert_eq!(
+        (m.save_type(), m.save_data().len(), m.save_generation()),
+        (SaveType::Auto, 0, 0)
+    );
+}
+
+#[test]
+fn given_a_detection_in_progress_when_saved_loaded_and_finished_then_it_matches_an_uninterrupted_run()
+ {
+    let mut run = with_unknown_chip();
+    start_write(&mut run);
+    let state = run.save_state();
+    let mut resumed = machine();
+    resumed.load_state(&state).expect("same ROM");
+    finish_write(&mut run);
+    finish_write(&mut resumed);
+    assert_eq!(
+        (
+            resumed.save_type(),
+            resumed.save_data().to_vec(),
+            resumed.save_state()
+        ),
+        (run.save_type(), run.save_data().to_vec(), run.save_state())
+    );
+}

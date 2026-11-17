@@ -19,7 +19,7 @@ use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
 const PINNED_LEN: usize = 5_215_031;
-const PINNED_HASH: u64 = 0x1c436f8df888a707;
+const PINNED_HASH: u64 = 0x9ce3c64ca64ea24a;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -80,8 +80,10 @@ const PINNED_HASH: u64 = 0x1c436f8df888a707;
 /// Version 35 (#38) added the save chip: its type, an empty memory, the idle session, three flags,
 /// the byte AUXSPIDATA reads and the time of the SPI byte in flight (eight one-byte fields with no
 /// chip fitted), so both lengths grew by 8 and both hashes moved.
+/// Version 36 (#38) added the bytes a chip of unknown type records of its open session; with no
+/// session open they take no space, so only the version in the header changed and both hashes moved.
 const PINNED_BOOTED_LEN: usize = 5_804_950;
-const PINNED_BOOTED_HASH: u64 = 0xfcd34d6afa5d707f;
+const PINNED_BOOTED_HASH: u64 = 0x735451d2f4933b68;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

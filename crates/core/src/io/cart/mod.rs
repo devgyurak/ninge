@@ -63,7 +63,7 @@ const EXMEMCNT_OWN_MASK: u8 = 0x7F;
 /// EXMEMCNT bits 7-15 that read back, one setting for both CPUs that only the ARM9 changes:
 /// bit 7, 11, 13, 14 and 15; bits 8-10 and 12 read zero (`cart-protocol.md`, "EXMEMCNT bits").
 // TODO(hw-unverified): EXMEMCNT's reset value and its bits 13-15 are only stored (`cart-protocol.md`,
-// "Unverified"). IREQ_MC (IF bit 20) is not modeled.
+// "Unverified").
 const EXMEMCNT_SHARED_MASK: u16 = 0xE880;
 
 /// The `B7` command: read data (`cart-protocol.md`, "Commands").
@@ -185,7 +185,8 @@ impl Cart {
         self.cmd
     }
 
-    /// The master time the next word is due, if one is on its way.
+    /// The master time the next word is due, if one is on its way: the model's time, which the
+    /// scheduler's event can trail when an ARM7 access queued it while the ARM7's clock lagged.
     pub fn next_word_due(&self) -> Option<u64> {
         self.due
     }
@@ -203,6 +204,12 @@ impl Cart {
     /// Whether the ARM9 owns the slot (EXMEMCNT bit 11 clear).
     pub fn owner_is_arm9(&self) -> bool {
         self.exmem_shared & EXMEMCNT_SLOT_ARM7 == 0
+    }
+
+    /// Whether a word is waiting for CPU `ARM9`: it owns the slot and the word is ready. The DMA
+    /// channels that start on the slot take it as a request (`cart-protocol.md`, "DMA start").
+    pub(crate) fn word_waiting<const ARM9: bool>(&self) -> bool {
+        self.ready && self.owned_by::<ARM9>()
     }
 
     fn owned_by<const ARM9: bool>(&self) -> bool {
@@ -234,6 +241,8 @@ impl Cart {
 
     /// The word the data port holds: the next word of the transfer when one is ready, else the
     /// last one taken.
+    // TODO(hw-unverified): with no word ready the data port reads the last word taken, zero before any
+    // (`cart-protocol.md`, "Unverified").
     fn word(&self, rom: &[u8]) -> u32 {
         if !self.ready {
             return self.last_word;
@@ -307,6 +316,7 @@ impl Cart {
     /// bit 14 asks for it.
     // TODO(hw-unverified): the IRQ goes to the CPU that owns the slot when the transfer ends
     // (`cart-protocol.md`, "Unverified").
+    // TODO(hw-unverified): IREQ_MC (IF bit 20) is not modeled (`cart-protocol.md`, "Unverified").
     fn finish(&mut self) -> Effect {
         self.busy = false;
         self.ready = false;
@@ -426,6 +436,7 @@ impl Checked for Cart {
             && (!self.busy || self.ready || self.due.is_some())
             && self.total <= block_bytes(6)
             && self.total.is_multiple_of(4)
+            && (self.busy || self.left == 0)
             && self.left <= self.total
             && self.auxspicnt & !AUXSPICNT_MASK == 0
             && self.romctrl & !ROMCTRL_STORED == 0
@@ -471,8 +482,8 @@ impl<const ARM9: bool> Device<ARM9> for Cart {
 
     /// The word is ready: the owner's DMA channels waiting for the slot get a request. A block of
     /// size 0 ends here instead.
-    // TODO(hw-unverified): the DMA request is raised once, when the word becomes ready, not held as
-    // a level for a channel enabled later (`dma.md`, "Unverified").
+    // TODO(hw-unverified): a channel enabled while a word waits takes it at once, as if the request
+    // were a level (`Io::write`; `dma.md`, "Unverified").
     // TODO(hw-unverified): the card's event sorts before the timers and DMA and is the ARM9's
     // whichever CPU queued it, our choice of tie order (`scheduler.md`, "Unverified").
     fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {

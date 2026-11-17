@@ -419,3 +419,55 @@ fn given_the_default_dma_machine_when_a_frame_runs_with_the_image_untouched_then
     run_frames(&mut idle, 1);
     assert_eq!(card_events(&idle), vec![]);
 }
+
+// ------------------------------------------------------------- late channel, ARM7 start
+
+#[test]
+fn given_a_word_already_waiting_when_an_arm9_card_channel_is_enabled_then_it_takes_the_block() {
+    // The word is ready before the channel exists; the request stays up until a channel takes it.
+    let mut machine = machine_with_data();
+    start9(&mut machine, 0x9000);
+    run_while(&mut machine, 20_000, |m| romctrl(m, true) & READY != 0);
+    arm9_card_channel(&mut machine, REPEAT, 1);
+    run_while(&mut machine, 20_000, |m| romctrl(m, true) & START == 0);
+    let want: Vec<u32> = expected(0x9000, 0x200)
+        .chunks(4)
+        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+        .collect();
+    assert_eq!(peek_words(&machine, DST, 128), want);
+}
+
+/// An ARM7 repeating card channel and an ARM7-started block read, run until `time`.
+fn arm7_dma_read_until(time: u64) -> Machine {
+    let mut machine = machine_with_data();
+    machine.bus9().write16(EXMEMCNT, SLOT_TO_ARM7);
+    set7(
+        &mut machine,
+        0,
+        0,
+        DATA,
+        DST,
+        ENABLE | WORD | SOURCE_FIXED | REPEAT | CARD7 | 1,
+    );
+    start7(&mut machine, 0x9400);
+    run_while(&mut machine, 20_000, |m| {
+        m.inspect().scheduler().now() >= time
+    });
+    machine
+}
+
+#[test]
+fn given_an_arm7_started_transfer_when_saved_and_loaded_then_the_queue_and_the_rest_match() {
+    let mut straight = arm7_dma_read_until(1_500);
+    let original = arm7_dma_read_until(1_500);
+    let mut resumed = Machine::new();
+    resumed.load_rom(original.rom().to_vec()).expect("image");
+    resumed.load_state(&original.save_state()).expect("loads");
+    let queue_matches = card_events(&resumed) == card_events(&original);
+    run_while(&mut straight, 20_000, |m| romctrl(m, false) & START == 0);
+    run_while(&mut resumed, 20_000, |m| romctrl(m, false) & START == 0);
+    assert_eq!(
+        (queue_matches, resumed.save_state() == straight.save_state()),
+        (true, true)
+    );
+}

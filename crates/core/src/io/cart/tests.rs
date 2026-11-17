@@ -716,3 +716,40 @@ fn given_a_transfer_with_its_event_pending_when_serialized_and_restored_then_the
     let restored: Cart = postcard::from_bytes(&bytes).expect("the bytes parse");
     assert_eq!(restored.next_word_due(), Some(1120));
 }
+
+// ----------------------------------------------------------------------------- waiting word
+
+#[test]
+fn given_a_ready_word_when_asked_who_it_waits_for_then_only_the_owner_has_one() {
+    let cart = ready_read(0x9000, 1);
+    assert_eq!(
+        (cart.word_waiting::<true>(), cart.word_waiting::<false>()),
+        (true, false)
+    );
+}
+
+#[test]
+fn given_no_word_ready_when_asked_who_it_waits_for_then_neither_cpu_has_one() {
+    let mut cart = Cart::new();
+    start_read::<true>(&mut cart, 0x9000, 1);
+    assert_eq!(
+        (cart.word_waiting::<true>(), cart.word_waiting::<false>()),
+        (false, false)
+    );
+}
+
+#[test]
+fn given_an_idle_slot_with_words_left_when_checked_then_it_is_not_well_formed() {
+    let mut cart = Cart::new();
+    cart.left = 4;
+    cart.total = 4;
+    assert!(!cart.well_formed(0));
+}
+
+#[test]
+fn given_no_word_ready_when_the_data_port_is_read_then_it_returns_the_last_word_taken() {
+    let mut cart = ready_read(0x9000, 1);
+    let (taken, _) = read::<true>(&mut cart, DATA_OFFSET, Width::Word);
+    let (idle, _) = read::<true>(&mut cart, DATA_OFFSET, Width::Word);
+    assert_eq!(idle, taken);
+}

@@ -184,6 +184,13 @@ impl Io {
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
+        // A request is a level: a channel set to start on the card slot that is enabled while a word
+        // already waits for its CPU takes it now (`dma.md`, "Starting"). A channel already queued
+        // is not queued twice.
+        // TODO(hw-unverified): the request is held while the word is ready (`dma.md`, "Unverified").
+        if port == Port::Dma && self.cart.word_waiting::<ARM9>() {
+            self.trigger_dma(scheduler, Trigger::CardWord { arm9: ARM9 }, at.now);
+        }
     }
 
     /// Hands an access's effect on: its IF bits to the controllers, and the event slots it names

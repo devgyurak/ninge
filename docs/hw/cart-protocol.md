@@ -2,7 +2,8 @@
 
 Sources: GBATEK "DS Cartridge Protocol"; GBATEK "DS Cartridge I/O Ports"; GBATEK "DS Memory
 Control - Cartridges and Main RAM" (EXMEMCNT); GBATEK "DS DMA Transfers"; GBATEK "DS Interrupts";
-GBATEK "DS Cartridge Header" (the fields that set the bus speed and the chip size).
+GBATEK "DS Cartridge Header" (ROM control fields `060h` and `064h`, which set the bus speed; the
+chip size is computed from the image length, not read from `014h`, see "Unverified").
 Used by: `crates/core/src/cart/`, `crates/core/src/io/`   Phase: 5 (#37)
 
 The cartridge slot ("slot 1") is a serial bus: the CPU sends an 8-byte command, then receives a
@@ -260,6 +261,9 @@ source = `0410_0010h` fixed, length 1, 32-bit units, repeat on. Each time a word
 The channel keeps its internal state between requests until its count is used up; then the end
 of the transfer rules of `dma.md` apply.
 
+A channel that is enabled while a word already waits takes it at once, as if the request stayed
+up while the word is ready (see "Unverified").
+
 Which channel goes first when several wait, and the other CPU's channels: see "Unverified".
 
 ### The card after direct boot
@@ -327,6 +331,16 @@ Each item is a choice the model makes where GBATEK is silent or unclear. Each ge
   GBATEK says only that the IRQ is on the transfer's end.
 - **Word taking:** the model takes a ready word on any data register read that includes byte 3.
   Hardware behavior for partial reads is not stated.
+- **The data port with no word ready:** it reads the last word taken, zero before any; GBATEK does
+  not say.
+- **The chip size comes from the image length,** not from the header's device capacity (`014h`), so
+  a trimmed image gets a smaller chip ID and mirror than its header names. Direct boot leaves the chip
+  IDs in main RAM at zero (`direct-boot.md`), which differs from what `B8` returns. Which source to
+  use, and whether direct boot writes the ID, is left to a Phase 5 follow-up.
+- **EXMEMCNT's port is four bytes,** so the card device also holds `0400_0206h`-`0207h`, which is a
+  different register on the ARM7 (WIFIWAITCNT); split it when that register is modeled.
+- **Gaps and clock are read when a word is taken,** so a ROMCTRL write during a transfer changes the
+  timing of the words still to come.
 - **Tie order and the event's CPU:** the card's event sorts before the timers and DMA and is queued
   as the ARM9's (`scheduler.md`, "Unverified"); neither is a hardware fact.
 - **A slow reader:** the model waits for the CPU before it prepares the next word; hardware may

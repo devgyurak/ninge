@@ -17,7 +17,8 @@
 //! # What is public but unstable until 1.0
 //!
 //! [`debug`] (the read-only [`Machine::inspect`] view, [`debug::Inspect`] included, and the
-//! device types it hands out), [`cpu`] (the interpreter, its registers and the disassemblers) and
+//! device types it hands out), [`spi`] (the synthetic firmware: [`spi::FirmwareSettings`] and
+//! [`spi::build`], which a host may later use to set the console's name and language), [`cpu`] (the interpreter, its registers and the disassemblers) and
 //! the rest of [`cart`] (the header's detail types [`cart::Binary`], [`cart::BinarySpec`],
 //! [`cart::Field`], [`cart::HEADER_LEN`] and [`cart::crc16`], and [`cart::SaveChip`]) are public
 //! so a debugger can name what it reads. Their type names and structure may change in a minor
@@ -36,6 +37,7 @@ mod io;
 mod machine;
 pub mod savestate;
 mod scheduler;
+pub mod spi;
 
 pub use input::{Buttons, Input, Touch};
 pub use machine::{Machine, RomError, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};

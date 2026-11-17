@@ -418,7 +418,7 @@ fn name_failures() -> Vec<SaveType> {
     CHIPS
         .iter()
         .map(|&(kind, _)| kind)
-        .chain([SaveType::None])
+        .chain([SaveType::None, SaveType::Auto])
         .filter(|kind| SaveType::from_name(kind.name()) != Some(*kind))
         .collect()
 }
@@ -480,5 +480,141 @@ fn given_a_session_whose_operation_does_not_fit_its_command_when_checked_then_it
     let mut chip = blank(SaveType::Eeprom8K);
     chip.transfer(READ, true);
     chip.corrupt_session_op();
+    assert!(!chip.well_formed());
+}
+
+// ------------------------------------------------------------------------------- detection
+
+/// An unknown chip that has been enabled, with `cmd` then `n` bytes sent as one session.
+fn first_session(cmd: u8, n: usize) -> SaveChip {
+    let mut chip = blank(SaveType::Auto);
+    wren(&mut chip);
+    send(&mut chip, &[&[cmd][..], &vec![0; n]].concat());
+    chip
+}
+
+/// The rows of the detection table whose result is not the one the note gives.
+fn detection_failures() -> Vec<(u8, usize)> {
+    let table = [
+        (WRITE, 1, SaveType::Auto),
+        (WRITE, 2, SaveType::Eeprom512),
+        (WRITE, 17, SaveType::Eeprom512),
+        (PW, 2, SaveType::Eeprom512),
+        (PW, 17, SaveType::Eeprom512),
+        (WRITE, 18, SaveType::Eeprom64K),
+        (WRITE, 130, SaveType::Eeprom64K),
+        (WRITE, 131, SaveType::Flash1M),
+        (WRITE, 259, SaveType::Flash1M),
+        (WRITE, 260, SaveType::Fram32K),
+        (PW, 18, SaveType::Flash1M),
+        (PW, 259, SaveType::Flash1M),
+        (PW, 260, SaveType::Auto),
+        (PE, 3, SaveType::Flash1M),
+        (SE, 3, SaveType::Flash1M),
+        (PE, 2, SaveType::Auto),
+        (READ, 5, SaveType::Auto),
+        (FAST, 300, SaveType::Auto),
+    ];
+    table
+        .iter()
+        .filter(|&&(cmd, n, expected)| first_session(cmd, n).kind() != expected)
+        .map(|&(cmd, n, _)| (cmd, n))
+        .collect()
+}
+
+#[test]
+fn given_an_unknown_chip_when_its_first_writing_session_is_seen_then_the_table_decides_the_type() {
+    assert_eq!(detection_failures(), Vec::<(u8, usize)>::new());
+}
+
+#[test]
+fn given_a_decided_class_when_the_chip_is_inspected_then_it_has_the_default_size() {
+    assert_eq!(
+        (
+            first_session(WRITE, 2).data().len(),
+            first_session(WRITE, 40).data().len(),
+            first_session(PW, 259).data().len(),
+            first_session(WRITE, 300).data().len()
+        ),
+        (512, 65536, 1 << 20, 32768)
+    );
+}
+
+#[test]
+fn given_an_unknown_chip_when_it_is_read_before_any_decision_then_every_byte_is_ff() {
+    let mut chip = blank(SaveType::Auto);
+    assert_eq!(read(&mut chip, 0, 2, 4), vec![0xFF; 4]);
+}
+
+#[test]
+fn given_an_unknown_chip_when_status_and_id_are_read_then_only_the_latch_shows() {
+    let mut chip = blank(SaveType::Auto);
+    wren(&mut chip);
+    assert_eq!((status(&mut chip), ids(&mut chip)), (0x02, vec![0xFF; 4]));
+}
+
+#[test]
+fn given_a_16_bit_write_when_it_decides_the_type_then_the_write_lands_in_the_new_chip() {
+    let mut chip = blank(SaveType::Auto);
+    let data: Vec<u8> = (1..=32).collect();
+    write(&mut chip, WRITE, 0x10, 2, &data);
+    assert_eq!(
+        (chip.kind(), read(&mut chip, 0x10, 2, 32)),
+        (SaveType::Eeprom64K, data)
+    );
+}
+
+#[test]
+fn given_a_flash_page_write_when_it_decides_the_type_then_the_write_lands_in_the_new_chip() {
+    let mut chip = blank(SaveType::Auto);
+    write(&mut chip, PW, 0x200, 3, &[0x42; 256]);
+    assert_eq!(
+        (chip.kind(), read(&mut chip, 0x1FF, 3, 3)),
+        (SaveType::Flash1M, vec![0xFF, 0x42, 0x42])
+    );
+}
+
+#[test]
+fn given_a_decided_chip_when_a_later_session_looks_like_another_type_then_the_type_stays() {
+    let mut chip = first_session(WRITE, 40);
+    write(&mut chip, PW, 0, 3, &[1, 2, 3]);
+    assert_eq!(chip.kind(), SaveType::Eeprom64K);
+}
+
+#[test]
+fn given_the_deciding_session_when_it_ends_then_the_generation_has_risen() {
+    assert!(first_session(WRITE, 40).generation() > 0);
+}
+
+#[test]
+fn given_an_unknown_chip_when_asked_then_it_says_it_is_still_detecting() {
+    assert_eq!(
+        (
+            blank(SaveType::Auto).detecting(),
+            first_session(WRITE, 40).detecting()
+        ),
+        (true, false)
+    );
+}
+
+#[test]
+fn given_a_session_longer_than_the_record_when_it_decides_then_the_chip_still_takes_the_type() {
+    assert_eq!(first_session(WRITE, 3000).kind(), SaveType::Fram32K);
+}
+
+#[test]
+fn given_a_long_unknown_session_when_checked_then_the_record_stays_within_its_cap_and_it_is_well_formed()
+ {
+    let mut chip = blank(SaveType::Auto);
+    send(&mut chip, &[&[WRITE][..], &vec![0; 3000]].concat());
+    chip.transfer(0, true);
+    assert!(chip.well_formed());
+}
+
+#[test]
+fn given_a_record_past_its_cap_when_checked_then_it_is_not_well_formed() {
+    let mut chip = blank(SaveType::Auto);
+    chip.transfer(WRITE, true);
+    chip.overfill_record();
     assert!(!chip.well_formed());
 }

@@ -279,7 +279,8 @@ one, whereas a smaller chip would mirror the program's data over itself):
 | FLASH | 1M, 1048576 bytes (RDID `20h 40h 14h`) |
 | FRAM | 32K, 32768 bytes |
 
-Once the type is decided, the writing session that decided it **is applied to the chip** (it is not
+The detector keeps the bytes of the session it is watching, up to 1024 after the command, so it
+can replay them. Once the type is decided, the writing session that decided it **is applied to the chip** (it is not
 lost), and the type stays for the rest of the run. A savestate keeps the decision.
 
 ### Deep power-down and the power-up lockout
@@ -356,3 +357,6 @@ hardware, or a trace against the reference emulator used as an oracle.
   wider write widths (only a write to the low byte starts a transfer; wider writes use the low
   8 bits). `io/cart/`.
 - **Details outside GBATEK**: WRSR on a FLASH is ignored; a page write with no data byte erases nothing; bytes after a page or sector erase address are ignored; a read on the 512-byte EEPROM keeps counting past its 256-byte half. `cart/save/`.
+- **A session past 1024 bytes** is replayed cut short when it decides the type, so the chip misses
+  the bytes after the first 1024. `cart/save/` (the detector's record).
+- **A chip of unknown type** answers RDSR with only the latch and RDID with `FFh` here. `cart/save/`.

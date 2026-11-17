@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests of `Io`, the address map and the device interface.
 
-use super::device::{Effect, Width, read_bytes, write_bytes};
+use super::device::{Effect, Signal, Signals, Width, read_bytes, write_bytes};
 use super::map::{ARM7_PORTS, ARM9_PORTS, Owner, Port, PortEntry, decode};
 use super::*;
 use crate::bus::VRAMCNT_A_ADDR;
@@ -355,16 +355,19 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
     let merged = Effect {
         requests: Requests { arm9: 1, arm7: 0 },
         reschedule: 0b01,
+        ..Effect::default()
     }
     .merge(Effect {
         requests: Requests { arm9: 2, arm7: 4 },
         reschedule: 0b10,
+        ..Effect::default()
     });
     assert_eq!(
         merged,
         Effect {
             requests: Requests { arm9: 3, arm7: 4 },
             reschedule: 0b11,
+            ..Effect::default()
         }
     );
 }
@@ -372,12 +375,12 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
 #[test]
 fn given_slots_above_bit_7_when_effects_merged_then_the_high_bits_are_kept() {
     let merged = Effect {
-        requests: Requests::default(),
         reschedule: 1 << 9,
+        ..Effect::default()
     }
     .merge(Effect {
-        requests: Requests::default(),
         reschedule: 1 << 31,
+        ..Effect::default()
     });
     assert_eq!(merged.reschedule, (1 << 9) | (1 << 31));
 }
@@ -518,6 +521,115 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
         .filter(|event| event.kind == kind)
         .map(|event| event.time)
         .collect()
+}
+
+#[test]
+fn given_two_effects_with_signals_and_a_recheck_when_merged_then_both_are_kept() {
+    let merged = Effect {
+        signals: Signals::of(Signal::CardWordArm9),
+        ..Effect::default()
+    }
+    .merge(Effect {
+        signals: Signals::of(Signal::CardWordArm7),
+        recheck_levels: true,
+        ..Effect::default()
+    });
+    assert_eq!(
+        (
+            merged.signals.contains(Signal::CardWordArm9),
+            merged.signals.contains(Signal::CardWordArm7),
+            merged.recheck_levels
+        ),
+        (true, true, true)
+    );
+}
+
+#[test]
+fn given_every_signal_when_the_routing_order_is_listed_then_none_is_missing() {
+    let all = Signal::ALL
+        .into_iter()
+        .fold(Signals::default(), |set, signal| {
+            set.merge(Signals::of(signal))
+        });
+    assert_eq!(
+        (
+            all.contains(Signal::CardWordArm9),
+            all.contains(Signal::CardWordArm7),
+            Signal::ALL.len()
+        ),
+        (true, true, 2)
+    );
+}
+
+/// The DMA start events queued, as `(arm9, channel)`, after both CPUs' channel 0 was set to start
+/// on the card slot and `signals` were routed.
+fn card_start_events(signals: Signals) -> Vec<(bool, u8)> {
+    const ENABLE: u32 = 1 << 31;
+    const ARM9_CARD: u32 = 5 << 27;
+    const ARM7_CARD: u32 = 2 << 28;
+    let mut io = Io::new();
+    let mut scheduler = Scheduler::new();
+    let at = At {
+        now: 0,
+        floor: 1,
+        rom: &[],
+    };
+    io.write::<true>(
+        &mut scheduler,
+        at,
+        Port::Dma,
+        8,
+        Width::Word,
+        ENABLE | ARM9_CARD | 1,
+    );
+    io.write::<false>(
+        &mut scheduler,
+        at,
+        Port::Dma,
+        8,
+        Width::Word,
+        ENABLE | ARM7_CARD | 1,
+    );
+    io.route(&mut scheduler, signals, 1);
+    scheduler
+        .pending()
+        .iter()
+        .filter_map(|event| match event.kind {
+            EventKind::Slot {
+                device: DeviceId::Dma,
+                arm9,
+                slot,
+            } => Some((arm9, slot)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_card_word_for_the_arm9_when_routed_then_only_the_arm9_channel_starts() {
+    assert_eq!(
+        card_start_events(Signals::of(Signal::CardWordArm9)),
+        vec![(true, 0)]
+    );
+}
+
+#[test]
+fn given_a_card_word_for_the_arm7_when_routed_then_only_the_arm7_channel_starts() {
+    assert_eq!(
+        card_start_events(Signals::of(Signal::CardWordArm7)),
+        vec![(false, 0)]
+    );
+}
+
+#[test]
+fn given_both_card_signals_when_routed_then_both_channels_start() {
+    let both = Signals::of(Signal::CardWordArm9).merge(Signals::of(Signal::CardWordArm7));
+    assert_eq!(card_start_events(both), vec![(true, 0), (false, 0)]);
+}
+
+#[test]
+fn given_no_signal_when_routed_then_no_channel_starts() {
+    assert_eq!(card_start_events(Signals::default()), vec![]);
 }
 
 #[test]

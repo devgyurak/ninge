@@ -496,8 +496,8 @@ impl<const ARM9: bool> Dma<ARM9> {
             return Effect::default();
         }
         let slot = Effect {
-            requests: Requests::default(),
             reschedule: 1 << index,
+            ..Effect::default()
         };
         match (old & CONTROL_ENABLE != 0, new & CONTROL_ENABLE != 0) {
             (false, true) => {
@@ -549,8 +549,16 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
+    /// A write to a channel's registers asks `Io` to recheck the levels: a channel set to start on
+    /// a condition that already holds takes it at once (`dma.md`, "Starting"). The fill registers
+    /// do not start anything.
+    // TODO(hw-unverified): the request is held while the word is ready (`dma.md`, "Unverified").
     fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
-        write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte))
+        let effect = write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte));
+        Effect {
+            recheck_levels: offset < CHANNELS_BYTES,
+            ..effect
+        }
     }
 
     const SLOTS: u8 = CHANNEL_COUNT as u8;
@@ -564,7 +572,6 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
         Fired {
             effect: Effect::default(),
             transfer: self.begin(usize::from(slot)),
-            trigger: None,
         }
     }
 }

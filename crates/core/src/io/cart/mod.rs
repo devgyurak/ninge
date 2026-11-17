@@ -16,8 +16,9 @@
 
 use crate::cart::protocol::{self, BLOCK_BYTES};
 use crate::cart::save::{SaveChip, SaveError, SaveType};
-use crate::io::device::{Checked, Cx, Device, Effect, Fired, Width, read_bytes, write_bytes};
-use crate::io::dma::Trigger;
+use crate::io::device::{
+    Checked, Cx, Device, Effect, Fired, Signal, Signals, Width, read_bytes, write_bytes,
+};
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
 use serde::{Deserialize, Serialize};
 
@@ -568,7 +569,7 @@ impl<const ARM9: bool> Device<ARM9> for Cart {
     /// The word is ready: the owner's DMA channels waiting for the slot get a request. A block of
     /// size 0 ends here instead.
     // TODO(hw-unverified): a channel enabled while a word waits takes it at once, as if the request
-    // were a level (`Io::write`; `dma.md`, "Unverified").
+    // were a level ([`Device::levels`]; `dma.md`, "Unverified").
     // TODO(hw-unverified): the card's event sorts before the timers and DMA and is the ARM9's
     // whichever CPU queued it, our choice of tie order (`scheduler.md`, "Unverified").
     fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {
@@ -583,11 +584,32 @@ impl<const ARM9: bool> Device<ARM9> for Cart {
         }
         self.ready = true;
         Fired {
-            trigger: Some(Trigger::CardWord {
-                arm9: self.owner_is_arm9(),
-            }),
+            effect: Effect {
+                signals: Signals::of(word_signal(self.owner_is_arm9())),
+                ..Effect::default()
+            },
             ..Fired::default()
         }
+    }
+
+    /// The word waiting for the CPU that owns the slot, as a level: a channel enabled later takes
+    /// it ([`Effect::recheck_levels`]).
+    fn levels(&self) -> Signals {
+        if self.word_waiting::<ARM9>() {
+            Signals::of(word_signal(ARM9))
+        } else {
+            Signals::default()
+        }
+    }
+}
+
+/// The signal for a word ready for the ARM9 or the ARM7: a word goes only to the CPU that owns the
+/// slot.
+fn word_signal(arm9: bool) -> Signal {
+    if arm9 {
+        Signal::CardWordArm9
+    } else {
+        Signal::CardWordArm7
     }
 }
 

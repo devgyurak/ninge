@@ -218,6 +218,16 @@ macro_rules! registry {
                     $( && Checked::well_formed(&self.$ef9, now) && Checked::well_formed(&self.$ef7, now) )*
             }
 
+            /// The signals every device the CPU `ARM9` reaches holds as a level, merged
+            /// ([`Device::levels`]). A device only the other CPU sees holds none for this one.
+            pub(crate) fn levels<const ARM9: bool>(&self) -> Signals {
+                Signals::default()
+                    $( .merge(Device::<ARM9>::levels(&self.$sf)) )*
+                    $( .merge(if ARM9 { Device::<true>::levels(&self.$af) } else { Signals::default() }) )*
+                    $( .merge(if ARM9 { Signals::default() } else { Device::<false>::levels(&self.$bf) }) )*
+                    $( .merge(if ARM9 { Device::<true>::levels(&self.$ef9) } else { Device::<false>::levels(&self.$ef7) }) )*
+            }
+
             /// Queues the event of every slot of every device, as at `now`. A load calls it on
             /// an empty queue to rebuild what the savestate does not hold (`scheduler.md`,
             /// "Savestate checks"). A device with no event slots queues nothing. Each entry is

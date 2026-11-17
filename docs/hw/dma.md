@@ -203,8 +203,8 @@ hardware behavior.
 - **Edge or level.** GBATEK calls ROMCTRL bit 23 "Ready/DRQ", which reads like a level that stays up
   while a word is ready. The model raises a request when a word becomes ready, and also when a
   channel set to start on the slot is enabled while a word already waits for its CPU, so the transfer
-  never stalls on the order of the two writes — `crates/core/src/io/mod.rs` (`Io::write`),
-  `crates/core/src/io/cart/mod.rs` — verify with a test ROM that enables the channel late.
+  never stalls on the order of the two writes — `crates/core/src/io/mod.rs` (`Io::apply`,
+  `Io::route`), `crates/core/src/io/cart/mod.rs` (`Cart::levels`) — verify with a test ROM that enables the channel late.
 - **Cost and CPU stall.** A real transfer takes cycles and holds the bus; the model takes none
   and stops no CPU — `crates/core/src/io/dma/mod.rs`, `crates/core/src/machine/mod.rs` — revisit with the
   Phase 8 timing work, verify with a cycle-count test ROM on hardware.

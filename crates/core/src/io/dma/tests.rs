@@ -118,10 +118,20 @@ fn started_by<const A: bool>(
     dma.begin(ch as usize).expect("the trigger queued a start")
 }
 
+/// The effect of a channel write that queues a start on channel `ch`: a write to the channel
+/// registers always asks for the levels to be rechecked ([`Effect::recheck_levels`]).
 fn slot_effect(ch: u32) -> Effect {
     Effect {
-        requests: Requests::default(),
         reschedule: 1 << ch,
+        ..rechecked()
+    }
+}
+
+/// The effect of a channel write that changes no schedule.
+fn rechecked() -> Effect {
+    Effect {
+        recheck_levels: true,
+        ..Effect::default()
     }
 }
 
@@ -459,7 +469,7 @@ fn given_a_channel_with_a_start_timing_when_enable_is_written_then_it_waits_with
     let effect = arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | 4);
     assert_eq!(
         (effect, dma.pending(0), read32(&dma, cnt(0)) >> 31),
-        (Effect::default(), false, 1)
+        (rechecked(), false, 1)
     );
 }
 
@@ -476,7 +486,7 @@ fn given_the_four_control_bytes_written_in_turn_when_the_top_byte_lands_then_onl
     let top = write8(&mut dma, cnt(2) + 3, 0x80);
     assert_eq!(
         (early, pending_before, top, dma.pending(2)),
-        ([Effect::default(); 3], false, slot_effect(2), true)
+        ([rechecked(); 3], false, slot_effect(2), true)
     );
 }
 
@@ -488,7 +498,7 @@ fn given_halfword_writes_to_a_control_register_when_the_high_half_sets_enable_th
     let high = write16(&mut dma, cnt(1) + 2, 0x8000);
     assert_eq!(
         (low, high, dma.pending(1)),
-        (Effect::default(), slot_effect(1), true)
+        (rechecked(), slot_effect(1), true)
     );
 }
 
@@ -497,7 +507,7 @@ fn given_a_queued_immediate_start_when_enable_is_written_again_as_1_then_nothing
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | 4);
     let again = write32(&mut dma, cnt(0), ENABLE | 9);
-    assert_eq!((again, dma.pending(0)), (Effect::default(), true));
+    assert_eq!((again, dma.pending(0)), (rechecked(), true));
 }
 
 #[test]
@@ -603,10 +613,7 @@ fn given_a_channel_waiting_for_its_trigger_when_enable_is_cleared_then_the_trigg
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | 4);
     let effect = write32(&mut dma, cnt(0), timing9(1) | 4);
-    assert_eq!(
-        (effect, dma.trigger(Trigger::VBlank)),
-        (Effect::default(), 0)
-    );
+    assert_eq!((effect, dma.trigger(Trigger::VBlank)), (rechecked(), 0));
 }
 
 // ------------------------------------------------------------------------------ triggers
@@ -1719,4 +1726,23 @@ fn given_a_card_channel_without_repeat_when_its_last_unit_finishes_then_it_is_di
     );
     dma.finish(&t, END);
     assert_eq!(dma.control(0) >> 31, 0);
+}
+
+#[test]
+fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_levels_to_be_rechecked()
+{
+    let mut dma = Dma::<true>::new();
+    assert_eq!(
+        (
+            write32(&mut dma, 0, 0x0200_0000).recheck_levels,
+            write32(&mut dma, cnt(1), 1).recheck_levels
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_a_write_to_a_fill_register_when_it_returns_then_it_does_not_ask_for_a_recheck() {
+    let mut dma = Dma::<true>::new();
+    assert!(!write32(&mut dma, fill(0), 0xDEAD_BEEF).recheck_levels);
 }

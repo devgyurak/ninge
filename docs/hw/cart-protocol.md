@@ -8,7 +8,7 @@ Used by: `crates/core/src/cart/`, `crates/core/src/io/`   Phase: 5 (#37)
 
 The cartridge slot ("slot 1") is a serial bus: the CPU sends an 8-byte command, then receives a
 stream of data bytes. This note covers reading the ROM. The save chip on the same connector is
-`TODO(#38)`; the key-based encryption that real boot code uses is out of scope here (see "Scope").
+`auxspi-saves.md`; the key-based encryption that real boot code uses is out of scope here (see "Scope").
 
 ## Scope
 
@@ -33,13 +33,13 @@ All of these are seen by both CPUs, but only the CPU that owns the slot reaches 
 |---|---|---|---|---|
 | 0x0400_0204 | EXMEMCNT (ARM9) / EXMEMSTAT (ARM7) | 16 | R/W (see below) | 0 |
 | 0x0400_01A0 | AUXSPICNT | 16 | R/W | 0 |
-| 0x0400_01A2 | AUXSPIDATA | 16 | R/W | `TODO(#38)` |
+| 0x0400_01A2 | AUXSPIDATA | 16 | R/W | 0 (the save chip's, `auxspi-saves.md`) |
 | 0x0400_01A4 | ROMCTRL | 32 | R/W | 0 (power-on; direct boot sets it, see "The card after direct boot") |
 | 0x0400_01A8 | Command out (8 bytes) | 64 | W | 0 |
 | 0x0410_0010 | Data in (4 bytes) | 32 | R | 0 |
 
 The encryption seed registers (`0400_01B0h`-`0400_01BAh`) belong to the encryption feature and
-are not modeled. AUXSPIDATA is the save chip's (#38).
+are not modeled. AUXSPIDATA is the save chip's (`auxspi-saves.md`).
 
 ### EXMEMCNT bits
 
@@ -65,10 +65,10 @@ ARM9's copy and the shared bits 7-15.
 
 | Bits | Meaning |
 |---|---|
-| 0-1 | SPI baud rate (`TODO(#38)`: stored, no effect) |
+| 0-1 | SPI baud rate (the save chip's bus, `auxspi-saves.md`) |
 | 2-5 | Not used, zero |
-| 6 | SPI hold chip select (`TODO(#38)`: stored, no effect) |
-| 7 | SPI busy (`TODO(#38)`: reads 0 until the save chip exists) |
+| 6 | SPI hold chip select (`auxspi-saves.md`) |
+| 7 | SPI busy (read-only; `auxspi-saves.md`) |
 | 8-12 | Not used, zero |
 | 13 | Slot mode: 0 = ROM (parallel), 1 = SPI backup (serial) |
 | 14 | Transfer-ready IRQ: 0 = off, 1 = on. For the ROM side only |
@@ -367,4 +367,4 @@ Each item is a choice the model makes where GBATEK is silent or unclear. Each ge
   channels ever see the request. The model uses channel order and the owner only.
 - **IRQ routing:** IF bit 19 goes to the slot owner only; GBATEK does not say which CPU gets it.
 - **Ownership change during a transfer** (see "Ownership").
-- **IREQ_MC (IF bit 20),** and the SPI side of AUXSPICNT, are not modeled (`TODO(#38)` for SPI).
+- **IREQ_MC (IF bit 20)** is not modeled. The SPI side of AUXSPICNT is `auxspi-saves.md`.

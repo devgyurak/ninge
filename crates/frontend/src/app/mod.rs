@@ -7,8 +7,8 @@
 //! and poll the terminal's input in turn, on one thread. AGENTS.md §2 rule 12 (and plan §4.3)
 //! describes three threads (emu, render, input), a triple-buffered frame hand-off and audio-based
 //! pacing; that is deferred, not dropped. Audio pacing (#47) is the first feature that needs the
-//! split, so the split is its own `REF:` issue, opened ahead of #47, and the loop stays as it is
-//! until then. Nothing before that issue should add a thread.
+//! split, so the split is its own `REF:` issue, #218, the last of Phase 5 and ahead of #47, and
+//! the loop stays as it is until then. Nothing before #218 should add a thread.
 //!
 //! # For the input work (#44)
 //!

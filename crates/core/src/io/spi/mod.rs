@@ -172,6 +172,8 @@ impl Spi {
         self.done_at = now.saturating_add(UNIT_CYCLES << baud);
         // An earlier interrupt whose event has not fired yet is raised now, so a new transfer
         // cannot drop it; the queue's event for slot 0 is replaced either way.
+        // TODO(hw-unverified): the late interrupt is raised here, not at the unit's end (`spi.md`,
+        // "Unverified").
         let late = self.irq_due.take();
         // TODO(hw-unverified): SPICNT bit 14 as it stands when the unit starts decides the interrupt
         // (`spi.md`, "Unverified").

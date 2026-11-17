@@ -134,6 +134,8 @@ hardware, or a trace against the reference emulator used as an oracle.
   `io/spi/`.
 - **16-bit mode:** the second byte sent is zero, the byte kept is the second one received, and the
   unit takes twice as long. GBATEK says only that every second byte appears. `io/spi/`.
+- **A late interrupt** (a unit's event has not fired when the next unit starts) is raised at that
+  write, not at the unit's end; real hardware raises it at the end. `io/spi/`.
 - **When the IRQ fires** if SPICNT bit 14 changes during a transfer: the bit as it was at the
   start decides. `io/spi/`.
 - **The bus enable bit:** a write with bit 15 clear is dropped. GBATEK does not say what the

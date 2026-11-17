@@ -3,7 +3,7 @@
 Sources: GBATEK "DS Cartridge Protocol"; GBATEK "DS Cartridge I/O Ports"; GBATEK "DS Memory
 Control - Cartridges and Main RAM" (EXMEMCNT); GBATEK "DS DMA Transfers"; GBATEK "DS Interrupts";
 GBATEK "DS Cartridge Header" (ROM control fields `060h` and `064h`, which set the bus speed; the
-chip size is computed from the image length, not read from `014h`, see "Unverified").
+device capacity `014h`, which with the image length sets the chip size, see "Unverified").
 Used by: `crates/core/src/cart/`, `crates/core/src/io/`   Phase: 5 (#37)
 
 The cartridge slot ("slot 1") is a serial bus: the CPU sends an 8-byte command, then receives a
@@ -337,6 +337,8 @@ Each item is a choice the model makes where GBATEK is silent or unclear. Each ge
   Hardware behavior for partial reads is not stated.
 - **The data port with no word ready:** it reads the last word taken, zero before any; GBATEK does
   not say.
+- **A header capacity above 10** (128 MiB) is treated as 10, so the shift cannot overflow; a guest
+  value past what GBATEK's table names is not described.
 - **The chip size** is the larger of the header's device capacity and the image length rounded up,
   at least 1 MiB; GBATEK names the capacity field but not how a card uses it. A chip below 1 MiB
   (`n < 3`) reports size byte `00h` like a 1 MiB one. The size also sets the mirror.

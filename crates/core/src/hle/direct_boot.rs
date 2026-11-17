@@ -84,7 +84,8 @@ pub(crate) fn boot(
     if let Some(copy) = rom.get(..HEADER_LEN) {
         place(&mut view, HEADER_COPY_ADDRESS, copy);
     }
-    // The chip ID is the one `B8` returns, from the same function, so the two cannot differ.
+    // TODO(hw-unverified): the BIOS leaves the real card's answer; the model's ID, from the same
+    // function `B8` uses, stands in for it (`direct-boot.md`, "Unverified").
     let chip_id = crate::cart::protocol::chip_id(rom);
     CHIP_ID_ADDRESSES
         .iter()

@@ -36,6 +36,7 @@ const UNUSED: u8 = 0xFF;
 const CAPACITY_OFFSET: usize = 0x14;
 /// The largest `n` the model shifts by: 128 KiB `<<` 10 is 128 MiB, the largest chip the size byte
 /// can name, so a larger guest value saturates there instead of overflowing the shift.
+// TODO(hw-unverified): a guest capacity above 10 is treated as 10 (`cart-protocol.md`, "Unverified").
 const CAPACITY_SHIFT_MAX: u32 = 10;
 /// The unit of the device capacity.
 const CAPACITY_UNIT: usize = 128 * 1024;

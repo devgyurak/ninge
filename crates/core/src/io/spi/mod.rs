@@ -89,8 +89,9 @@ impl Spi {
             data: 0,
             done_at: 0,
             irq_due: None,
-            firmware: SaveChip::new(SaveType::Flash256K, build(settings))
-                .unwrap_or_else(|_| SaveChip::blank(SaveType::Flash256K)),
+            firmware: SaveChip::new(SaveType::Flash256K, build(settings)).expect(
+                "the builder always makes a FIRMWARE_LEN image, the length of a 256K flash",
+            ),
         }
     }
 
@@ -104,6 +105,8 @@ impl Spi {
     }
 
     /// SPICNT as stored: without the busy bit, which depends on the time.
+    // TODO(hw-unverified): bits 2-6 and 12-13 read zero although the BIOS writes bits 12-13
+    // (`spi.md`, "Unverified").
     pub fn spicnt(&self) -> u16 {
         self.spicnt
     }
@@ -147,6 +150,8 @@ impl Spi {
         if self.spicnt & ENABLE == 0 || self.busy(now) {
             return Effect::default();
         }
+        // TODO(hw-unverified): a change of the device select inside a held session leaves the first
+        // device's session as it was and sends the byte to the new one (`spi.md`, "Unverified").
         let hold = self.spicnt & HOLD != 0;
         let wide = self.spicnt & WIDE != 0;
         self.data = if self.spicnt >> DEVICE_SHIFT & DEVICE_MASK == DEVICE_FIRMWARE {
@@ -168,6 +173,8 @@ impl Spi {
         // An earlier interrupt whose event has not fired yet is raised now, so a new transfer
         // cannot drop it; the queue's event for slot 0 is replaced either way.
         let late = self.irq_due.take();
+        // TODO(hw-unverified): SPICNT bit 14 as it stands when the unit starts decides the interrupt
+        // (`spi.md`, "Unverified").
         self.irq_due = (self.spicnt & IRQ != 0).then_some(self.done_at);
         Effect {
             requests: late.map_or_else(Requests::default, |_| Requests::for_cpu::<false>(SPI_IRQ)),
@@ -220,6 +227,8 @@ impl Checked for Spi {
 }
 
 impl Device<false> for Spi {
+    // TODO(hw-unverified): the ARM9 never reaches this device: its map has no entry here, so it reads
+    // 0 and drops writes (`io/map.rs`; `spi.md`, "Unverified").
     fn peek(&self, offset: u32, width: Width, cx: Cx<'_>) -> u32 {
         read_bytes(offset, width, |at| self.byte(at, cx.now))
     }

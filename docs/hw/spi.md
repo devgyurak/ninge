@@ -103,6 +103,9 @@ These are choices of the emulator. They do not describe a part.
   SPICNT bit 14 set. It fires at `done_at` and raises ARM7 IF bit 23. A transfer without the IRQ
   queues nothing. The event is not saved: a loaded state rebuilds it from `done_at` and the stored
   IRQ bit (the same approach as every other timed device, `scheduler.md`).
+- **A late interrupt.** If a unit's event has not fired yet when the next unit starts (the ARM7 can
+  run past the unit's end before the queue reaches it), the old interrupt is raised at that write
+  and its queued event is dropped, so a new transfer never loses it.
 - **The reply is known at once.** The device answers when the transfer starts; busy only delays
   when software sees it.
 

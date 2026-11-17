@@ -382,6 +382,28 @@ pub fn run_with_save(
     Ok((report, outcome))
 }
 
+/// Like [`run`], on a machine whose cartridge has a blank save chip of `kind` (every byte `FFh`),
+/// for the golden tests of a ROM that talks to its chip. The image is made here, never read from a
+/// file, so no save file takes part (`tests/golden/README.md`).
+pub fn run_with_blank_save(
+    rom: Vec<u8>,
+    frames: u64,
+    kind: SaveType,
+) -> Result<RunReport, RunnerError> {
+    let mut machine = Machine::new();
+    machine.load_rom(rom)?;
+    let (kind, data) = resolve_save(Some(kind), None)?;
+    machine.insert_save(kind, data)?;
+    for _ in 0..frames {
+        machine.run_frame(Input::new());
+    }
+    Ok(RunReport {
+        frames: machine.frame_count(),
+        top_hash: frame_hash(machine.frame(Screen::Top)),
+        bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
+    })
+}
+
 /// FNV-1a 64 over each pixel's little-endian bytes, in row order.
 ///
 /// Decided in #68; defined in `tests/golden/README.md` and used by [`golden`].

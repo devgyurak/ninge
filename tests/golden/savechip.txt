@@ -1,0 +1,3 @@
+# Golden frames for testroms/savechip, run with a blank 8 KiB EEPROM fitted. Format and review flow: tests/golden/README.md.
+# Top: engine B's black placeholder (same hash as vramdisp and cartread). Bottom: four 48-row bands, all green.
+frames=3 top=1a0564b2e8de2325 bottom=f4b3a251ac302325

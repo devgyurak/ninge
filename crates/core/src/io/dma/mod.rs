@@ -60,8 +60,10 @@ enum Start {
     Display,
     /// The ARM9's main-memory display, mode 4: the display FIFO's requests for a line.
     MainMemory,
+    /// The DS cartridge slot, ARM9 mode 5 and ARM7 mode 2: one unit for each word the card makes
+    /// ready (`cart-protocol.md`, "DMA start").
+    Card,
     /// A start timing no phase implements yet: the channel is enabled and busy but never starts.
-    // TODO(phase5): the DS cartridge slot start of both CPUs (#37).
     // TODO(phase7): the ARM9's geometry command FIFO start (#48).
     // The GBA slot and the ARM7's wireless start have no phase.
     Unimplemented,
@@ -82,6 +84,9 @@ pub(crate) enum Trigger {
     /// visible line but the last, each for the line after it (`display-capture.md`, "The
     /// main-memory display").
     MainMemory { frame_start: bool },
+    /// The cartridge slot has a word ready for the CPU that owns the slot (`arm9`): only that
+    /// CPU's channels see it (`cart-protocol.md`, "DMA start").
+    CardWord { arm9: bool },
 }
 
 impl Trigger {
@@ -91,6 +96,7 @@ impl Trigger {
             Self::HBlank => Start::HBlank,
             Self::StartOfDisplay => Start::Display,
             Self::MainMemory { .. } => Start::MainMemory,
+            Self::CardWord { .. } => Start::Card,
         }
     }
 }
@@ -277,6 +283,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             (2, true) => Start::HBlank,
             (3, true) => Start::Display,
             (4, true) => Start::MainMemory,
+            (5, true) | (2, false) => Start::Card,
             _ => Start::Unimplemented,
         }
     }
@@ -325,10 +332,12 @@ impl<const ARM9: bool> Dma<ARM9> {
         // one event: it stalls, it does not panic.
         // TODO(hw-unverified): without repeat the transfer is still 32 requests and raises one IRQ per
         // line (`display-capture.md`, "Unverified").
-        let count = if Self::start_of(channel.control) == Start::MainMemory {
-            channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS)
-        } else {
-            channel.count_now
+        // A cartridge start moves one unit for each word the card makes ready (`dma.md`, "Starting").
+        // TODO(hw-unverified): a count above 1 is paced one unit for each word (`dma.md`, "Unverified").
+        let count = match Self::start_of(channel.control) {
+            Start::MainMemory => channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS),
+            Start::Card => channel.count_now.min(1),
+            _ => channel.count_now,
         };
         // Addresses are aligned down to the unit (`dma.md`, "Transferring").
         let align = !(if word { 3 } else { 1 });
@@ -371,6 +380,16 @@ impl<const ARM9: bool> Dma<ARM9> {
         let rearmed = channel.rearmed;
         channel.running = false;
         channel.rearmed = false;
+        // TODO(hw-unverified): a cartridge count above 1 is paced one unit for each word
+        // (`dma.md`, "Unverified").
+        // A cartridge request moves one unit. With units left the channel keeps its place and
+        // waits for the next word; the last unit ends the transfer as any other does.
+        if !rearmed && Self::start_of(control) == Start::Card && channel.count_now > 1 {
+            channel.count_now -= 1;
+            channel.source_now = end.source;
+            channel.destination_now = end.destination;
+            return Effect::default();
+        }
         // TODO(hw-unverified): repeat is ignored for an Immediate start (`dma.md`, "Unverified").
         let repeats = control & CONTROL_REPEAT != 0
             && control & CONTROL_ENABLE != 0
@@ -545,6 +564,7 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
         Fired {
             effect: Effect::default(),
             transfer: self.begin(usize::from(slot)),
+            trigger: None,
         }
     }
 }

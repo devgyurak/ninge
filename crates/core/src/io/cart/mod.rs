@@ -13,7 +13,8 @@
 // save chip; they are stored or read as zero here.
 
 use crate::cart::protocol::{self, BLOCK_BYTES};
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, Fired, Width, read_bytes, write_bytes};
+use crate::io::dma::Trigger;
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +63,7 @@ const EXMEMCNT_OWN_MASK: u8 = 0x7F;
 /// EXMEMCNT bits 7-15 that read back, one setting for both CPUs that only the ARM9 changes:
 /// bit 7, 11, 13, 14 and 15; bits 8-10 and 12 read zero (`cart-protocol.md`, "EXMEMCNT bits").
 // TODO(hw-unverified): EXMEMCNT's reset value and its bits 13-15 are only stored (`cart-protocol.md`,
-// "Unverified"). IREQ_MC (IF bit 20) is not modeled.
+// "Unverified").
 const EXMEMCNT_SHARED_MASK: u16 = 0xE880;
 
 /// The `B7` command: read data (`cart-protocol.md`, "Commands").
@@ -73,6 +74,22 @@ const CMD_CHIP_ID: u8 = 0xB8;
 // TODO(hw-unverified): GBATEK describes an endless stream of encrypted zero bytes; with no
 // encryption to apply the model returns `FFFF_FFFFh` (`cart-protocol.md`, "Unverified").
 const UNKNOWN_WORD: u32 = 0xFFFF_FFFF;
+
+/// ROMCTRL bit 27: the transfer clock, 0 = 6.7 MHz and 1 = 4.2 MHz.
+const ROMCTRL_SLOW_CLOCK: u32 = 1 << 27;
+/// Master cycles of one card clock: the 33.51 MHz bus clock divided by 5 or 8, in master cycles
+/// that count at twice the bus clock (`cart-protocol.md`, "Timing").
+const FAST_CLOCK_CYCLES: u64 = 10;
+const SLOW_CLOCK_CYCLES: u64 = 16;
+/// Card clocks to send the 8-byte command, and for each 4-byte word (a byte a clock).
+const COMMAND_CLOCKS: u64 = 8;
+const WORD_CLOCKS: u64 = 4;
+/// ROMCTRL's gap 1 (bits 0-12) and gap 2 (bits 16-21), in card clocks.
+const GAP1_MASK: u32 = 0x1FFF;
+const GAP2_SHIFT: u32 = 16;
+const GAP2_MASK: u32 = 0x3F;
+/// Gap 2 follows each 200h bytes of data (`cart-protocol.md`, "Timing").
+const GAP2_EVERY: u32 = 0x200;
 
 /// A transfer's data block size in bytes, from ROMCTRL bits 24-26: 0 none, 1 to 6 `100h << n`,
 /// 7 four bytes (`cart-protocol.md`, "ROMCTRL bits").
@@ -105,8 +122,13 @@ pub struct Cart {
     base: u32,
     /// The next byte's offset inside that block; the data wraps there (`cart-protocol.md`).
     pos: u32,
+    /// Bytes of the transfer in all, from the block size when it started.
+    total: u32,
     /// Bytes of the transfer not yet taken.
     left: u32,
+    /// The master time the next word is ready (or, for a block of size 0, the transfer is done): the
+    /// time of the device's one event slot. `None` while nothing is on its way.
+    due: Option<u64>,
     /// A transfer is running (ROMCTRL bit 31).
     busy: bool,
     /// A word is ready to be taken (ROMCTRL bit 23).
@@ -158,6 +180,17 @@ impl Cart {
         self.command
     }
 
+    /// The command of the transfer running, or the last one run.
+    pub fn current_command(&self) -> u8 {
+        self.cmd
+    }
+
+    /// The master time the next word is due, if one is on its way: the model's time, which the
+    /// scheduler's event can trail when an ARM7 access queued it while the ARM7's clock lagged.
+    pub fn next_word_due(&self) -> Option<u64> {
+        self.due
+    }
+
     /// The ROM offset of the next byte the transfer hands out.
     pub fn address(&self) -> u32 {
         self.base.wrapping_add(self.pos)
@@ -171,6 +204,12 @@ impl Cart {
     /// Whether the ARM9 owns the slot (EXMEMCNT bit 11 clear).
     pub fn owner_is_arm9(&self) -> bool {
         self.exmem_shared & EXMEMCNT_SLOT_ARM7 == 0
+    }
+
+    /// Whether a word is waiting for CPU `ARM9`: it owns the slot and the word is ready. The DMA
+    /// channels that start on the slot take it as a request (`cart-protocol.md`, "DMA start").
+    pub(crate) fn word_waiting<const ARM9: bool>(&self) -> bool {
+        self.ready && self.owned_by::<ARM9>()
     }
 
     fn owned_by<const ARM9: bool>(&self) -> bool {
@@ -202,6 +241,8 @@ impl Cart {
 
     /// The word the data port holds: the next word of the transfer when one is ready, else the
     /// last one taken.
+    // TODO(hw-unverified): with no word ready the data port reads the last word taken, zero before any
+    // (`cart-protocol.md`, "Unverified").
     fn word(&self, rom: &[u8]) -> u32 {
         if !self.ready {
             return self.last_word;
@@ -211,7 +252,7 @@ impl Cart {
                 let at = self.base.wrapping_add((self.pos + i as u32) % BLOCK_BYTES);
                 protocol::byte_at(rom, at)
             })),
-            CMD_CHIP_ID => protocol::chip_id(rom.len()),
+            CMD_CHIP_ID => protocol::chip_id(rom),
             _ => UNKNOWN_WORD,
         }
     }
@@ -220,20 +261,62 @@ impl Cart {
     /// word ends the transfer.
     // TODO(hw-unverified): the transfer ends, and the IRQ is raised, when the last word is taken
     // (`cart-protocol.md`, "Unverified").
-    fn take(&mut self, rom: &[u8]) -> Effect {
+    // TODO(hw-unverified): the next word is scheduled when this one is taken, with gap 2 after each
+    // 200h bytes; the constants and the wait for a slow reader are in `cart-protocol.md`,
+    // "Unverified".
+    fn take(&mut self, rom: &[u8], now: u64) -> Effect {
         self.last_word = self.word(rom);
         self.left -= 4;
         self.pos = (self.pos + 4) % BLOCK_BYTES;
+        self.ready = false;
         if self.left == 0 {
             return self.finish();
         }
-        Effect::default()
+        // The next word comes a word's time after this one was taken, and the gap 2 of the whole
+        // 200h bytes later when this one completed them.
+        let taken = self.total - self.left;
+        let gap = if taken.is_multiple_of(GAP2_EVERY) {
+            self.gap2()
+        } else {
+            0
+        };
+        self.schedule(now, WORD_CLOCKS + gap)
+    }
+
+    /// The card clock in master cycles, as ROMCTRL bit 27 has it now.
+    fn clock_cycles(&self) -> u64 {
+        if self.romctrl & ROMCTRL_SLOW_CLOCK != 0 {
+            SLOW_CLOCK_CYCLES
+        } else {
+            FAST_CLOCK_CYCLES
+        }
+    }
+
+    /// ROMCTRL's gap 1 in card clocks.
+    fn gap1(&self) -> u64 {
+        u64::from(self.romctrl & GAP1_MASK)
+    }
+
+    /// ROMCTRL's gap 2 in card clocks.
+    fn gap2(&self) -> u64 {
+        u64::from((self.romctrl >> GAP2_SHIFT) & GAP2_MASK)
+    }
+
+    /// Queues the device's event `clocks` card clocks after `now`; the effect names the slot so `Io`
+    /// replaces the scheduler's event.
+    fn schedule(&mut self, now: u64, clocks: u64) -> Effect {
+        self.due = Some(now.saturating_add(clocks * self.clock_cycles()));
+        Effect {
+            reschedule: 1,
+            ..Effect::default()
+        }
     }
 
     /// The transfer is done: not busy, no word ready, and IF bit 19 on the owner when AUXSPICNT
     /// bit 14 asks for it.
     // TODO(hw-unverified): the IRQ goes to the CPU that owns the slot when the transfer ends
     // (`cart-protocol.md`, "Unverified").
+    // TODO(hw-unverified): IREQ_MC (IF bit 20) is not modeled (`cart-protocol.md`, "Unverified").
     fn finish(&mut self) -> Effect {
         self.busy = false;
         self.ready = false;
@@ -250,14 +333,15 @@ impl Cart {
     /// ready. A block size of 0 has no words and finishes at once.
     // TODO(hw-unverified): AUXSPICNT's enable bit and RESB do not gate a start, and the write
     // direction (ROMCTRL bit 30) is stored and ignored; a start while busy is ignored (`cart-protocol.md`, "Unverified").
-    // TODO(phase5): the first word is ready at once and each word follows the one before with no
-    // delay; the per-word timing of `cart-protocol.md`, "Timing", comes with the next PR of #37.
+    // TODO(hw-unverified): the timing constants (an 8-clock command, the gap placement, a byte a
+    // clock) are our reading of GBATEK (`cart-protocol.md`, "Timing", "Unverified").
     // TODO(hw-unverified): the transfer does not wait for a slow reader, and the owner at the end
     // of a transfer gets the IRQ even if the slot changed hands (`cart-protocol.md`, "Unverified").
-    fn start(&mut self, rom: &[u8]) -> Effect {
+    fn start(&mut self, rom: &[u8], now: u64) -> Effect {
         self.cmd = self.command[0];
         let size = (self.romctrl >> BLOCK_SIZE_SHIFT) & BLOCK_SIZE_MASK;
-        self.left = block_bytes(size);
+        self.total = block_bytes(size);
+        self.left = self.total;
         if self.cmd == CMD_READ {
             let address = u32::from_be_bytes([
                 self.command[1],
@@ -265,7 +349,7 @@ impl Cart {
                 self.command[3],
                 self.command[4],
             ]);
-            let first = protocol::start_of(address, rom.len());
+            let first = protocol::start_of(address, rom);
             self.base = first - first % BLOCK_BYTES;
             self.pos = first % BLOCK_BYTES;
         } else {
@@ -273,11 +357,11 @@ impl Cart {
             self.pos = 0;
         }
         self.busy = true;
-        self.ready = self.left > 0;
-        if self.left == 0 {
-            return self.finish();
-        }
-        Effect::default()
+        self.ready = false;
+        // The first word is ready after the command, the leading gap and one word's time; a block
+        // of size 0 has no word, so the transfer is done after the command and the gap.
+        let word = if self.left > 0 { WORD_CLOCKS } else { 0 };
+        self.schedule(now, COMMAND_CLOCKS + self.gap1() + word)
     }
 
     /// The byte of the register space at `offset` for CPU `ARM9`.
@@ -299,7 +383,7 @@ impl Cart {
     }
 
     /// A write of one byte at `offset` by CPU `ARM9`.
-    fn write_byte<const ARM9: bool>(&mut self, offset: u32, byte: u8, rom: &[u8]) -> Effect {
+    fn write_byte<const ARM9: bool>(&mut self, offset: u32, byte: u8, cx: Cx<'_>) -> Effect {
         match offset {
             EXMEMCNT_OFFSET | EXMEMCNT_HIGH => {
                 self.write_exmem::<ARM9>(offset & 1, byte);
@@ -316,7 +400,7 @@ impl Cart {
                     (self.auxspicnt & 0x00FF) | (u16::from(byte) << 8 & AUXSPICNT_MASK);
                 Effect::default()
             }
-            ROMCTRL_OFFSET..=7 => self.write_romctrl_byte(offset - ROMCTRL_OFFSET, byte, rom),
+            ROMCTRL_OFFSET..=7 => self.write_romctrl_byte(offset - ROMCTRL_OFFSET, byte, cx),
             COMMAND_OFFSET..=15 => {
                 self.command[(offset - COMMAND_OFFSET) as usize] = byte;
                 Effect::default()
@@ -327,7 +411,7 @@ impl Cart {
 
     /// A write of byte `index` (0-3) of ROMCTRL. Byte 3 carries the start bit, and RESB can be
     /// set but not cleared.
-    fn write_romctrl_byte(&mut self, index: u32, byte: u8, rom: &[u8]) -> Effect {
+    fn write_romctrl_byte(&mut self, index: u32, byte: u8, cx: Cx<'_>) -> Effect {
         let shift = 8 * index;
         let kept = self.romctrl & !(0xFF << shift);
         let mut next = kept | (u32::from(byte) << shift);
@@ -335,7 +419,7 @@ impl Cart {
         next |= self.romctrl & ROMCTRL_RESB;
         self.romctrl = next;
         if index == 3 && byte & 0x80 != 0 && !self.busy {
-            return self.start(rom);
+            return self.start(cx.rom, cx.now);
         }
         Effect::default()
     }
@@ -347,7 +431,13 @@ impl Checked for Cart {
             && self.base.is_multiple_of(BLOCK_BYTES)
             && self.left <= block_bytes(6)
             && self.left.is_multiple_of(4)
-            && (!self.ready || (self.busy && self.left > 0))
+            && (!self.ready || (self.busy && self.left > 0 && self.due.is_none()))
+            && (self.due.is_none() || (self.busy && !self.ready))
+            && (!self.busy || self.ready || self.due.is_some())
+            && self.total <= block_bytes(6)
+            && self.total.is_multiple_of(4)
+            && (self.busy || self.left == 0)
+            && self.left <= self.total
             && self.auxspicnt & !AUXSPICNT_MASK == 0
             && self.romctrl & !ROMCTRL_STORED == 0
             && self.exmem9 & !EXMEMCNT_OWN_MASK == 0
@@ -370,7 +460,7 @@ impl<const ARM9: bool> Device<ARM9> for Cart {
         let takes =
             in_port && offset + width.bytes() > DATA_LAST && self.ready && self.owned_by::<ARM9>();
         let effect = if takes {
-            self.take(cx.rom)
+            self.take(cx.rom, cx.now)
         } else {
             Effect::default()
         };
@@ -379,8 +469,40 @@ impl<const ARM9: bool> Device<ARM9> for Cart {
 
     fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
-            self.write_byte::<ARM9>(at, byte, cx.rom)
+            self.write_byte::<ARM9>(at, byte, cx)
         })
+    }
+
+    /// The one slot: the next word, or the end of a block of size 0.
+    const SLOTS: u8 = 1;
+
+    fn slot_due(&self, _slot: u8) -> Option<u64> {
+        self.due
+    }
+
+    /// The word is ready: the owner's DMA channels waiting for the slot get a request. A block of
+    /// size 0 ends here instead.
+    // TODO(hw-unverified): a channel enabled while a word waits takes it at once, as if the request
+    // were a level (`Io::write`; `dma.md`, "Unverified").
+    // TODO(hw-unverified): the card's event sorts before the timers and DMA and is the ARM9's
+    // whichever CPU queued it, our choice of tie order (`scheduler.md`, "Unverified").
+    fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {
+        if self.due.take().is_none() {
+            return Fired::default();
+        }
+        if self.left == 0 {
+            return Fired {
+                effect: self.finish(),
+                ..Fired::default()
+            };
+        }
+        self.ready = true;
+        Fired {
+            trigger: Some(Trigger::CardWord {
+                arm9: self.owner_is_arm9(),
+            }),
+            ..Fired::default()
+        }
     }
 }
 

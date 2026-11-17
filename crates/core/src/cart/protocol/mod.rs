@@ -32,23 +32,35 @@ pub(crate) const BLOCK_BYTES: u32 = 0x1000;
 // `FFh` between the image and the chip end (`cart-protocol.md`, "Unverified").
 const UNUSED: u8 = 0xFF;
 
-/// The chip size the model gives an image of `len` bytes: a power of two, at least 1 MiB.
-// TODO(hw-unverified): the rounding to a power of two is inferred from GBATEK's list of known IDs
-// (`cart-protocol.md`, "Unverified").
-fn chip_bytes(len: usize) -> usize {
-    len.max(MIB).next_power_of_two()
+/// The header byte that names the chip: the device capacity, `128 KiB << n` (`cart-header.md`).
+const CAPACITY_OFFSET: usize = 0x14;
+/// The largest `n` the model shifts by: 128 KiB `<<` 10 is 128 MiB, the largest chip the size byte
+/// can name, so a larger guest value saturates there instead of overflowing the shift.
+// TODO(hw-unverified): a guest capacity above 10 is treated as 10 (`cart-protocol.md`, "Unverified").
+const CAPACITY_SHIFT_MAX: u32 = 10;
+/// The unit of the device capacity.
+const CAPACITY_UNIT: usize = 128 * 1024;
+
+/// The chip size the model gives the image `rom`: the larger of the header's device capacity and
+/// the image length rounded up to a power of two, at least 1 MiB. The header keeps a trimmed
+/// image reporting its real chip; the length keeps a wrong header from hiding image data behind
+/// the mirror.
+// TODO(hw-unverified): taking the larger of the two, and the 1 MiB floor, are the model's choice;
+// GBATEK names the capacity field but not how a card uses it (`cart-protocol.md`, "Unverified").
+fn chip_bytes(rom: &[u8]) -> usize {
+    let n = rom.get(CAPACITY_OFFSET).copied().map_or(0, u32::from);
+    let capacity = CAPACITY_UNIT << n.min(CAPACITY_SHIFT_MAX);
+    capacity
+        .max(rom.len().checked_next_power_of_two().unwrap_or(usize::MAX))
+        .max(MIB)
 }
 
-/// The chip ID of an image of `len` bytes, as the 32-bit data word: the first received byte in
-/// bits 0-7 (`cart-protocol.md`, "The chip ID").
-pub(crate) fn chip_id(len: usize) -> u32 {
-    let mibs = chip_bytes(len) / MIB;
-    let size_byte = u8::try_from(mibs - 1).map_or(MAX_SIZE_BYTE, |n| n.min(MAX_SIZE_BYTE));
-    let flags = if chip_bytes(len) > VARIANT_ABOVE {
-        VARIANT_BIT
-    } else {
-        0
-    };
+/// The chip ID of the image `rom`, as the 32-bit data word: the first received byte in bits 0-7
+/// (`cart-protocol.md`, "The chip ID").
+pub(crate) fn chip_id(rom: &[u8]) -> u32 {
+    let chip = chip_bytes(rom);
+    let size_byte = u8::try_from(chip / MIB - 1).map_or(MAX_SIZE_BYTE, |n| n.min(MAX_SIZE_BYTE));
+    let flags = if chip > VARIANT_ABOVE { VARIANT_BIT } else { 0 };
     u32::from_le_bytes([MANUFACTURER, size_byte, 0, flags])
 }
 
@@ -56,8 +68,8 @@ pub(crate) fn chip_id(len: usize) -> u32 {
 /// Where a `B7` read of ROM offset `address` starts inside the chip: the address mirrors into the
 /// chip, then an offset below `8000h` is redirected to `8000h + (offset & 1FFh)`
 /// (`cart-protocol.md`, "Commands").
-pub(crate) fn start_of(address: u32, len: usize) -> u32 {
-    let in_chip = address & u32::try_from(chip_bytes(len) - 1).unwrap_or(u32::MAX);
+pub(crate) fn start_of(address: u32, rom: &[u8]) -> u32 {
+    let in_chip = address & u32::try_from(chip_bytes(rom) - 1).unwrap_or(u32::MAX);
     if in_chip < READABLE_FROM {
         READABLE_FROM + (in_chip & REDIRECT_MASK)
     } else {

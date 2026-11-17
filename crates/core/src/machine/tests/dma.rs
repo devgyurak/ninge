@@ -126,7 +126,7 @@ pub(super) fn set9(m: &mut Machine, ch: u32, source: u32, destination: u32, cont
 }
 
 /// The same for the ARM7, at its clock `at`.
-fn set7(m: &mut Machine, at: u64, ch: u32, source: u32, destination: u32, control: u32) {
+pub(super) fn set7(m: &mut Machine, at: u64, ch: u32, source: u32, destination: u32, control: u32) {
     m.bus7(at).write32(sad_addr(ch), source);
     m.bus7(at).write32(dad_addr(ch), destination);
     m.bus7(at).write32(cnt_addr(ch), control);
@@ -572,8 +572,10 @@ fn given_a_repeating_hblank_channel_with_destination_control_3_when_it_runs_then
 }
 
 #[test]
-fn given_an_arm7_channel_with_the_cartridge_start_when_a_frame_runs_then_it_never_starts() {
-    // The ARM7 has no HBlank start; timing 2 is the cartridge slot (`dma.md`, "Start timing").
+fn given_an_arm7_channel_with_the_cartridge_start_when_no_card_transfer_runs_then_it_never_starts()
+{
+    // The ARM7 has no HBlank start; timing 2 is the cartridge slot, which starts a unit for each word
+    // a card transfer makes ready (`dma.md`, "Start timing"); none runs here.
     let mut m = machine();
     poke_words(&mut m, SRC, &[5]);
     set7(&mut m, 0, 0, SRC, DST, ENABLE | WORD | ARM7_CART | 1);

@@ -370,6 +370,7 @@ impl<const ARM9: bool> Device<ARM9> for Timers<ARM9> {
         Fired {
             effect,
             transfer: None,
+            trigger: None,
         }
     }
 }

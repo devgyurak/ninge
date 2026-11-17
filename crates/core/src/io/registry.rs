@@ -119,6 +119,18 @@ macro_rules! registry {
                 }
             }
 
+            /// Whether both CPUs reach the one instance of the device. Its events do not belong to
+            /// a CPU, so they are all queued as the ARM9's: whichever CPU's access changes a slot
+            /// replaces the same event.
+            pub(crate) fn is_shared(self) -> bool {
+                match self {
+                    $( Self::$st => true, )*
+                    $( Self::$at => false, )*
+                    $( Self::$bt => false, )*
+                    $( Self::$et => false, )*
+                }
+            }
+
             /// How many event slots the device has ([`Device::SLOTS`]); the same for both CPUs'
             /// copies of a per-CPU device.
             pub(crate) fn slots(self) -> u8 {

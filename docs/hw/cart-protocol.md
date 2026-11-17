@@ -2,7 +2,8 @@
 
 Sources: GBATEK "DS Cartridge Protocol"; GBATEK "DS Cartridge I/O Ports"; GBATEK "DS Memory
 Control - Cartridges and Main RAM" (EXMEMCNT); GBATEK "DS DMA Transfers"; GBATEK "DS Interrupts";
-GBATEK "DS Cartridge Header" (the fields that set the bus speed and the chip size).
+GBATEK "DS Cartridge Header" (ROM control fields `060h` and `064h`, which set the bus speed; the
+device capacity `014h`, which with the image length sets the chip size, see "Unverified").
 Used by: `crates/core/src/cart/`, `crates/core/src/io/`   Phase: 5 (#37)
 
 The cartridge slot ("slot 1") is a serial bus: the CPU sends an 8-byte command, then receives a
@@ -153,10 +154,14 @@ The chip ID is four bytes (GBATEK, "1st Get ROM Chip ID"):
 
 The model computes it from the ROM image, never from a dump:
 
-- **Size byte:** the image length is rounded up to a power of two of MiB, at least 1, and the byte
-  is that count minus one (GBATEK's known IDs: 8 MiB `07h`, 16 MiB `0Fh`, 32 MiB `1Fh`, 64 MiB
-  `3Fh`, 128 MiB `7Fh`). Images above 128 MiB use `7Fh`; the GBATEK encoding for bigger chips is
-  inconsistent in its own table.
+- **Chip size:** the larger of the header's device capacity (`014h`, `128 KiB << n`) and the image
+  length rounded up to a power of two, at least 1 MiB. The header keeps a trimmed image reporting
+  its real chip; the length keeps a header that names a smaller chip from hiding image data behind
+  the mirror. A guest `n` above 10 (128 MiB, the largest size byte) is treated as 10, so the shift
+  cannot overflow. The same chip size sets the mirror of `B7` addresses.
+- **Size byte:** the chip size in MiB minus one (GBATEK's known IDs: 8 MiB `07h`, 16 MiB `0Fh`,
+  32 MiB `1Fh`, 64 MiB `3Fh`, 128 MiB `7Fh`). Larger chips use `7Fh`; the GBATEK encoding for bigger
+  chips is inconsistent in its own table.
 - **Byte 3** is 0 (no infrared). **Byte 4** is 0, except bit 7, which is set when the chip is
   larger than 64 MiB (GBATEK: the variant 1 chips are "64MB or more"; the known 64 MiB parts
   differ, see "Unverified").
@@ -260,6 +265,9 @@ source = `0410_0010h` fixed, length 1, 32-bit units, repeat on. Each time a word
 The channel keeps its internal state between requests until its count is used up; then the end
 of the transfer rules of `dma.md` apply.
 
+A channel that is enabled while a word already waits takes it at once, as if the request stayed
+up while the word is ready (see "Unverified").
+
 Which channel goes first when several wait, and the other CPU's channels: see "Unverified".
 
 ### The card after direct boot
@@ -291,8 +299,9 @@ that is "in flight" is rebuilt as an event on load (`scheduler.md`, "Savestate c
 - **The transfer waits for the CPU.** The next word is scheduled when the previous is taken,
   so a slow reader slows the transfer. Hardware may instead overrun; see "Unverified".
 - **Cart events sort before DMA events** at the same master time, so a DMA channel started by the
-  word that just became ready finds the word ready. This is our choice of tie order;
-  `scheduler.md` records it when the card's event lands (#37, timing PR).
+  word that just became ready finds the word ready. This is our choice of tie order, recorded in
+  `scheduler.md` ("Events"). The card's single event is queued as the ARM9's whichever CPU's
+  access queued it (both CPUs see the one device).
 - **Plain data.** See "Scope".
 
 ## Edge cases
@@ -326,6 +335,22 @@ Each item is a choice the model makes where GBATEK is silent or unclear. Each ge
   GBATEK says only that the IRQ is on the transfer's end.
 - **Word taking:** the model takes a ready word on any data register read that includes byte 3.
   Hardware behavior for partial reads is not stated.
+- **The data port with no word ready:** it reads the last word taken, zero before any; GBATEK does
+  not say.
+- **A header capacity above 10** (128 MiB) is treated as 10, so the shift cannot overflow; a guest
+  value past what GBATEK's table names is not described.
+- **The chip size** is the larger of the header's device capacity and the image length rounded up,
+  at least 1 MiB; GBATEK names the capacity field but not how a card uses it. A chip below 1 MiB
+  (`n < 3`) reports size byte `00h` like a 1 MiB one. The size also sets the mirror.
+- **Direct boot writes the chip ID** (the `B8` answer) to the four places GBATEK lists in main RAM
+  (`direct-boot.md`, "The chip ID"); the BIOS writes the real card's answer, which the model's ID
+  stands in for.
+- **EXMEMCNT's port is four bytes,** so the card device also holds `0400_0206h`-`0207h`, which is a
+  different register on the ARM7 (WIFIWAITCNT); split it when that register is modeled.
+- **Gaps and clock are read when a word is taken,** so a ROMCTRL write during a transfer changes the
+  timing of the words still to come.
+- **Tie order and the event's CPU:** the card's event sorts before the timers and DMA and is queued
+  as the ARM9's (`scheduler.md`, "Unverified"); neither is a hardware fact.
 - **A slow reader:** the model waits for the CPU before it prepares the next word; hardware may
   overrun or drop data.
 - **Start rules:** AUXSPICNT bit 15 (enable) and ROMCTRL RESB are stored but do not gate a

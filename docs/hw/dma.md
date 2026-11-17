@@ -114,6 +114,13 @@ that polls it waits for the transfer to finish.
   each visible line but the last, and in the last line of the frame, for the line after it; a channel
   enabled during a frame waits for the last line of that frame. See `display-capture.md`, "The
   main-memory display".
+- **Cartridge slot (ARM9 mode 5, ARM7 mode 2):** each word the card makes ready is one request, and
+  a request moves **one unit**. Only the CPU that owns the slot (EXMEMCNT bit 11) sees the request.
+  The channel stays enabled with its addresses moved between requests; its count is used up one unit
+  at a time, and the end of the transfer below applies when the last unit has moved. A channel
+  enabled while a word already waits takes it at once. GBATEK's recipe
+  (fixed source `0410_0010h`, length 1, 32-bit, repeat on) therefore takes one word for each
+  request and re-arms itself. `cart-protocol.md`, "DMA start".
 
 When several channels of one CPU start at the same time, channel 0 goes first, then 1, 2, 3. When
 both CPUs have channels waiting for the same trigger, the ARM9's go before the ARM7's (the tie
@@ -189,6 +196,15 @@ hardware behavior.
 
 ## Unverified
 
+- **A unit for each cartridge request.** GBATEK gives the recipe with length 1 and repeat on and does
+  not say what a longer count does. The model paces any count one unit for each word, which equals the
+  recipe's behavior for count 1 — `crates/core/src/io/dma/mod.rs` (`Dma::begin`, `Dma::finish`) —
+  verify with a test ROM that uses a count above 1 on hardware.
+- **Edge or level.** GBATEK calls ROMCTRL bit 23 "Ready/DRQ", which reads like a level that stays up
+  while a word is ready. The model raises a request when a word becomes ready, and also when a
+  channel set to start on the slot is enabled while a word already waits for its CPU, so the transfer
+  never stalls on the order of the two writes — `crates/core/src/io/mod.rs` (`Io::write`),
+  `crates/core/src/io/cart/mod.rs` — verify with a test ROM that enables the channel late.
 - **Cost and CPU stall.** A real transfer takes cycles and holds the bus; the model takes none
   and stops no CPU — `crates/core/src/io/dma/mod.rs`, `crates/core/src/machine/mod.rs` — revisit with the
   Phase 8 timing work, verify with a cycle-count test ROM on hardware.

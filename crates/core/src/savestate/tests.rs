@@ -18,8 +18,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_215_021;
-const PINNED_HASH: u64 = 0x4e50c7ddf9c88529;
+const PINNED_LEN: usize = 5_215_023;
+const PINNED_HASH: u64 = 0x7fa83458a072fbc4;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -73,8 +73,12 @@ const PINNED_HASH: u64 = 0x4e50c7ddf9c88529;
 /// Version 33 (#37) added the cartridge slot's registers and transfer state: 20 bytes of one-byte
 /// varints, bytes and the 8 command bytes while they are zero (the booted pin also has RESB set,
 /// which is a varint of 5 bytes, so its length grew by 24), and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_940;
-const PINNED_BOOTED_HASH: u64 = 0xd3e2a063e24c73a9;
+/// Direct boot now leaves the cartridge's chip ID in main RAM (#37): the booted state's content
+/// changed, not its layout, so only the booted hash moved and the version stayed.
+/// Version 34 (#37) added the transfer's total size and the time of the next word (two one-byte
+/// fields while idle), so both lengths grew by 2 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 5_804_942;
+const PINNED_BOOTED_HASH: u64 = 0x6bcb25ca4f61bd7a;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

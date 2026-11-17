@@ -47,6 +47,10 @@ fn place7(view: &mut Arm7View, address: u32, bytes: &[u8]) {
     });
 }
 
+/// Where the BIOS leaves the cartridge's chip ID (twice, from the first and second ID command) and
+/// the firmware's copy of both (`direct-boot.md`, "The chip ID").
+const CHIP_ID_ADDRESSES: [u32; 4] = [0x027F_F800, 0x027F_F804, 0x027F_FC00, 0x027F_FC04];
+
 /// The bytes of one binary in the image, or `None` when its range is not inside it.
 fn binary_bytes<'a>(rom: &'a [u8], spec: &BinarySpec) -> Option<&'a [u8]> {
     let start = spec.rom_offset as usize;
@@ -56,10 +60,11 @@ fn binary_bytes<'a>(rom: &'a [u8], spec: &BinarySpec) -> Option<&'a [u8]> {
 /// Places the binaries and sets the ARM9 up at its entry point. `header` has been validated by
 /// `cart::parse`, so every range it names is inside `rom` and main RAM.
 // TODO(hw-unverified): CPSR at entry, CP15 left at power-on, the other register banks at zero,
-// the ARM9-then-ARM7 placement order, and no BIOS/firmware values in `027FF800h` and up
-// (`direct-boot.md`, "Unverified").
+// the ARM9-then-ARM7 placement order, and no BIOS/firmware values in `027FF800h` and up besides the
+// chip IDs (`direct-boot.md`, "Unverified").
 // TODO(hw-unverified): the ARM7's CPSR at entry is chosen like the ARM9's (`direct-boot.md`).
-// TODO(phase3): the BIOS/firmware values arrive with their phases.
+// TODO(#39): the user settings arrive with the synthetic firmware. The other BIOS/firmware values
+// (the header CRC copy, the boot indicator at `027FFC40h`) have no issue yet.
 pub(crate) fn boot(
     arm9: &mut Cpu<true>,
     arm7: &mut Cpu<false>,
@@ -79,6 +84,12 @@ pub(crate) fn boot(
     if let Some(copy) = rom.get(..HEADER_LEN) {
         place(&mut view, HEADER_COPY_ADDRESS, copy);
     }
+    // TODO(hw-unverified): the BIOS leaves the real card's answer; the model's ID, from the same
+    // function `B8` uses, stands in for it (`direct-boot.md`, "Unverified").
+    let chip_id = crate::cart::protocol::chip_id(rom);
+    CHIP_ID_ADDRESSES
+        .iter()
+        .for_each(|&address| view.write32(address, chip_id));
     // TODO(hw-unverified): the ARM9 binary is placed before the ARM7's; GBATEK gives no order.
     if let Some(bytes) = binary_bytes(rom, &header.arm9) {
         place(&mut view, header.arm9.ram_address, bytes);

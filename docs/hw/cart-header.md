@@ -13,6 +13,7 @@ and logo checksums) are not parsed yet.
 
 | Offset | Name | Width | Meaning |
 |---|---|---|---|
+| 0x014 | Device capacity | 8 | Chip size is `128 KiB << n`; read by the cartridge protocol for the chip ID and the mirror (`cart-protocol.md`), not by direct boot. |
 | 0x020 | ARM9 ROM offset | 32 | Where the ARM9 binary starts in the image. |
 | 0x024 | ARM9 entry address | 32 | Address the ARM9 starts executing at. |
 | 0x028 | ARM9 RAM address | 32 | Address the ARM9 binary is copied to. |

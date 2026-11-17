@@ -298,3 +298,43 @@ fn given_default_app_when_asking_for_transfer_then_it_is_direct_with_no_reason()
     let app = App::new(size());
     assert_eq!(*app.transfer(), Transfer::Direct { reason: None });
 }
+
+// ------------------------------------------------------------------------------- save file
+
+fn app_with_saved_machine(name: &str) -> (App, std::path::PathBuf) {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testroms/build/smoke.nds"),
+    )
+    .expect("smoke ROM is built");
+    let mut machine = crate::source::boot(rom).expect("valid header");
+    machine
+        .insert_save(ninge_core::cart::SaveType::Eeprom512, vec![0x21; 512])
+        .expect("512 bytes fit");
+    let path = std::env::temp_dir().join(format!("ninge-app-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let save = SaveFile::new(path.clone(), &machine);
+    let app = App::new(size())
+        .with_source(Source::Machine(Box::new(machine)))
+        .with_save(Some(save));
+    (app, path)
+}
+
+/// `n` frames of the app.
+fn run_frames(app: &mut App, n: u32) {
+    (0..n).for_each(|_| {
+        app.graphics();
+    });
+}
+
+#[test]
+fn given_the_dummy_pattern_when_the_app_finishes_then_it_has_nothing_to_write() {
+    assert!(App::new(size()).finish().is_ok());
+}
+
+#[test]
+fn given_a_machine_whose_save_did_not_change_when_frames_run_and_the_app_finishes_then_no_file_is_written()
+ {
+    let (mut app, path) = app_with_saved_machine("unchanged.bin");
+    run_frames(&mut app, crate::savefile::QUIET_FRAMES + 5);
+    assert_eq!((app.finish().is_ok(), path.exists()), (true, false));
+}

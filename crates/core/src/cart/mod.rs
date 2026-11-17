@@ -9,7 +9,7 @@ pub mod save;
 
 pub(crate) use header::crc16_update;
 pub use header::{Binary, BinarySpec, Field, HEADER_LEN, Header, HeaderError, crc16, parse};
-pub use save::{SaveChip, SaveError, SaveType};
+pub use save::{SaveChip, SaveError, SaveType, resolve_save};
 
 #[cfg(test)]
 pub(crate) mod test_image;

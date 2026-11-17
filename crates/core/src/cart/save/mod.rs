@@ -90,6 +90,11 @@ impl SaveType {
             .map(|e| e.0)
     }
 
+    /// The names of every type, in the order of the table, for a host's help text.
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        TYPES.iter().map(|entry| entry.1)
+    }
+
     fn entry(self) -> &'static (SaveType, &'static str, usize) {
         // A `SaveType` is always one of the table's rows; the fallback is the `None` row.
         TYPES
@@ -112,6 +117,46 @@ pub enum SaveError {
         /// Bytes the image has.
         found: usize,
     },
+    /// No chip has a memory of this size, so the file cannot say which chip it belongs to.
+    #[error("a save file of {len} bytes matches no chip; name the chip with --save-type")]
+    UnknownSize {
+        /// Bytes the file has.
+        len: usize,
+    },
+}
+
+/// Settles the chip type and its image from what a host knows: the type the user asked for, if any,
+/// and the save file's bytes, if there is one. The order is the asked type, then the file's size,
+/// then detection (`docs/hw/auxspi-saves.md`, "Chip type"):
+///
+/// - a type asked for wins; a file of another size is refused, never cut or padded; with no file
+///   the memory is erased (`FFh`);
+/// - with no type (or `auto`), a file's size names the chip, and a size no chip has is refused;
+///   with no file the chip is left to detection (`SaveType::Auto`);
+/// - an empty file counts as no file.
+///
+/// Pure, so both hosts decide the same way; the host does the reading.
+pub fn resolve_save(
+    requested: Option<SaveType>,
+    file: Option<Vec<u8>>,
+) -> Result<(SaveType, Vec<u8>), SaveError> {
+    let file = file.filter(|bytes| !bytes.is_empty());
+    match (requested.filter(|&kind| kind != SaveType::Auto), file) {
+        (Some(kind), Some(bytes)) if bytes.len() != kind.len() => Err(SaveError::BadLength {
+            kind,
+            expected: kind.len(),
+            found: bytes.len(),
+        }),
+        (Some(kind), Some(bytes)) => Ok((kind, bytes)),
+        (Some(kind), None) => Ok((kind, vec![0xFF; kind.len()])),
+        (None, Some(bytes)) => {
+            let len = bytes.len();
+            SaveType::from_file_len(len)
+                .map(|kind| (kind, bytes))
+                .ok_or(SaveError::UnknownSize { len })
+        }
+        (None, None) => Ok((SaveType::Auto, Vec::new())),
+    }
 }
 
 #[cfg(test)]

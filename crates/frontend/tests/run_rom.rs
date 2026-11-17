@@ -6,6 +6,7 @@
 //! `crates/runner/tests/vramdisp.rs`).
 
 use ninge::app::App;
+use ninge::cli::Options;
 use ninge::kitty::rgb24;
 use ninge::layout::TermSize;
 use ninge::source::{Source, boot, load};
@@ -46,8 +47,11 @@ type Puts = Rc<RefCell<Vec<Vec<u8>>>>;
 
 fn app_with(size: TermSize) -> (App<Recorder>, Puts) {
     let puts = Puts::default();
-    let app = App::with_transfer(size, Recorder(Rc::clone(&puts)), Transfer::Shm)
-        .with_source(load(rom_path()).expect("vramdisp ROM is built"));
+    let app = App::with_transfer(size, Recorder(Rc::clone(&puts)), Transfer::Shm).with_source(
+        load(rom_path(), &Options::default())
+            .expect("vramdisp ROM is built")
+            .0,
+    );
     (app, puts)
 }
 

@@ -4,7 +4,7 @@
 //! All file IO lives here; ninge-core only ever sees bytes. Usage:
 //!
 //! ```text
-//! ninge-runner <rom> [--frames N]    # N defaults to 1
+//! ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE]    # N defaults to 1
 //! ninge-runner cpu-suite <dir>       # run the ARM7TDMI JSON suite files in <dir>
 //! ```
 //!
@@ -14,7 +14,12 @@
 //!
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error, 3 when
-//! the machine refuses the ROM (an invalid header).
+//! the machine refuses the ROM (an invalid header), 4 when the save file or type is refused.
+//!
+//! The save chip's file is read at the start when it exists and written at the end when the run
+//! changed it, as raw bytes. `--save` names the file (default: the ROM's path with the extension
+//! `.sav`); `--save-type` names the chip (`auto` by default: a file's size names it, else the chip
+//! is detected from its first commands). See `docs/hw/auxspi-saves.md`.
 //!
 //! `cpu-suite` prints one `<file>: <cases> cases, <failed> failed` line per `*.json.bin` file
 //! and a final `total:` line. Failing cases are expected until the CPU executes instructions
@@ -27,6 +32,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use ninge_core::cart::{SaveError, SaveType, resolve_save};
 use ninge_core::{Input, Machine, RomError, Screen};
 
 /// Why the runner could not do what was asked.
@@ -43,8 +49,17 @@ pub enum RunnerError {
     },
     /// A CPU suite file could not be read or decoded.
     Suite(cpu_suite::SuiteError),
+    /// A file could not be written.
+    Write {
+        /// The file that failed.
+        path: PathBuf,
+        /// The underlying IO error.
+        source: std::io::Error,
+    },
     /// The machine refused the ROM: its header is invalid.
     Rom(RomError),
+    /// The save file does not fit the save type, or no type has its size.
+    Save(SaveError),
 }
 
 impl fmt::Display for RunnerError {
@@ -53,7 +68,9 @@ impl fmt::Display for RunnerError {
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             Self::Suite(error) => write!(f, "{error}"),
+            Self::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             Self::Rom(error) => write!(f, "the ROM was refused: {error}"),
+            Self::Save(error) => write!(f, "the save was refused: {error}"),
         }
     }
 }
@@ -62,9 +79,10 @@ impl std::error::Error for RunnerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Usage(_) => None,
-            Self::Io { source, .. } => Some(source),
+            Self::Io { source, .. } | Self::Write { source, .. } => Some(source),
             Self::Suite(error) => Some(error),
             Self::Rom(error) => Some(error),
+            Self::Save(error) => Some(error),
         }
     }
 }
@@ -72,6 +90,12 @@ impl std::error::Error for RunnerError {
 impl From<RomError> for RunnerError {
     fn from(error: RomError) -> Self {
         Self::Rom(error)
+    }
+}
+
+impl From<SaveError> for RunnerError {
+    fn from(error: SaveError) -> Self {
+        Self::Save(error)
     }
 }
 
@@ -114,11 +138,13 @@ pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command
     }
 }
 
-/// Parsed command line: `<rom> [--frames N]`.
+/// Parsed command line: `<rom> [--frames N] [--save PATH] [--save-type TYPE]`.
 #[derive(Debug)]
 pub struct Args {
     rom: PathBuf,
     frames: u64,
+    save: Option<PathBuf>,
+    save_type: Option<SaveType>,
 }
 
 impl Args {
@@ -131,9 +157,20 @@ impl Args {
     pub fn frames(&self) -> u64 {
         self.frames
     }
+
+    /// The save file and chip the command line asks for.
+    pub fn save_setup(&self) -> SaveSetup {
+        SaveSetup {
+            path: self
+                .save
+                .clone()
+                .unwrap_or_else(|| default_save_path(&self.rom)),
+            kind: self.save_type,
+        }
+    }
 }
 
-const USAGE: &str = "usage: ninge-runner <rom> [--frames N]\n       ninge-runner cpu-suite <dir>";
+const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE]\n       ninge-runner cpu-suite <dir>";
 
 /// Parses the arguments after the program name.
 ///
@@ -149,21 +186,49 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Runn
             rom.to_string_lossy()
         )));
     }
-    let frames = match args.next() {
-        None => 1,
-        Some(flag) if flag == "--frames" => args
-            .next()
-            .and_then(|value| value.to_str().and_then(|text| text.parse().ok()))
-            .ok_or_else(|| RunnerError::Usage(format!("--frames needs a number\n{USAGE}")))?,
-        Some(other) => return Err(unexpected(&other)),
-    };
-    if let Some(extra) = args.next() {
-        return Err(unexpected(&extra));
+    let mut frames = None;
+    let mut save = None;
+    let mut save_type = None;
+    while let Some(flag) = args.next() {
+        let value = args.next();
+        let needs = |what: &str| RunnerError::Usage(format!("{what}\n{USAGE}"));
+        if flag == "--frames" && frames.is_none() {
+            frames = Some(
+                value
+                    .as_deref()
+                    .and_then(OsStr::to_str)
+                    .and_then(|text| text.parse().ok())
+                    .ok_or_else(|| needs("--frames needs a number"))?,
+            );
+        } else if flag == "--save" && save.is_none() {
+            save = Some(PathBuf::from(
+                value.ok_or_else(|| needs("--save needs a path"))?,
+            ));
+        } else if flag == "--save-type" && save_type.is_none() {
+            let text = value.ok_or_else(|| needs("--save-type needs a name"))?;
+            save_type = Some(
+                text.to_str()
+                    .and_then(SaveType::from_name)
+                    .ok_or_else(|| needs(&unknown_save_type(&text)))?,
+            );
+        } else {
+            return Err(unexpected(&flag));
+        }
     }
     Ok(Args {
         rom: PathBuf::from(rom),
-        frames,
+        frames: frames.unwrap_or(1),
+        save,
+        save_type,
     })
+}
+
+fn unknown_save_type(name: &OsStr) -> String {
+    format!(
+        "unknown save type {}; one of {}",
+        name.to_string_lossy(),
+        SaveType::names().collect::<Vec<_>>().join(", ")
+    )
 }
 
 fn unexpected(argument: &OsStr) -> RunnerError {
@@ -178,6 +243,49 @@ pub fn load_rom_file(path: &Path) -> Result<Vec<u8>, RunnerError> {
     std::fs::read(path).map_err(|source| RunnerError::Io {
         path: path.to_path_buf(),
         source,
+    })
+}
+
+/// Where the save chip's file is and which chip the user named, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveSetup {
+    /// The save file: read at the start when it exists, written at the end when the run changed it.
+    pub path: PathBuf,
+    /// The chip asked for with `--save-type`; `None` leaves it to the file's size and detection.
+    pub kind: Option<SaveType>,
+}
+
+/// The save file beside a ROM: its path with the extension `.sav`.
+pub fn default_save_path(rom: &Path) -> PathBuf {
+    rom.with_extension("sav")
+}
+
+/// Reads a save file; a file that is not there is `None`, not an error.
+pub fn read_save_file(path: &Path) -> Result<Option<Vec<u8>>, RunnerError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(RunnerError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// Writes a save file atomically: the bytes go to `<path>.tmp` and are renamed over `path`, so a
+/// crash leaves the old file or the new one, never half of one.
+pub fn write_save_file(path: &Path, bytes: &[u8]) -> Result<(), RunnerError> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    let written = std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, path));
+    written.map_err(|source| {
+        // Best effort: a failed write should not leave its temp file behind.
+        let _ = std::fs::remove_file(&temp);
+        RunnerError::Write {
+            path: path.to_path_buf(),
+            source,
+        }
     })
 }
 
@@ -211,6 +319,40 @@ pub fn run(rom: Vec<u8>, frames: u64) -> Result<RunReport, RunnerError> {
     for _ in 0..frames {
         machine.run_frame(Input::new());
     }
+    Ok(RunReport {
+        frames: machine.frame_count(),
+        top_hash: frame_hash(machine.frame(Screen::Top)),
+        bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
+    })
+}
+
+/// Writes the save memory to `path` when its generation is not `baseline`, the one the host saw at
+/// its last write; returns whether it wrote. A chip with no memory yet (`auto`, undecided) has
+/// nothing to write.
+pub fn flush_save(machine: &Machine, baseline: u64, path: &Path) -> Result<bool, RunnerError> {
+    let moved = machine.save_generation() != baseline && !machine.save_data().is_empty();
+    if moved {
+        write_save_file(path, machine.save_data())?;
+    }
+    Ok(moved)
+}
+
+/// Like [`run`], with the save chip: the file is read first when it exists and fitted by
+/// [`resolve_save`], and written after the last frame when the run changed the save memory.
+pub fn run_with_save(
+    rom: Vec<u8>,
+    frames: u64,
+    save: &SaveSetup,
+) -> Result<RunReport, RunnerError> {
+    let mut machine = Machine::new();
+    machine.load_rom(rom)?;
+    let (kind, data) = resolve_save(save.kind, read_save_file(&save.path)?)?;
+    machine.insert_save(kind, data)?;
+    let baseline = machine.save_generation();
+    for _ in 0..frames {
+        machine.run_frame(Input::new());
+    }
+    flush_save(&machine, baseline, &save.path)?;
     Ok(RunReport {
         frames: machine.frame_count(),
         top_hash: frame_hash(machine.frame(Screen::Top)),

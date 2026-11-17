@@ -172,3 +172,37 @@ fn given_a_file_of_junk_bytes_when_cli_runs_it_as_a_rom_then_stdout_is_empty() {
     let out = run_cli(&[dir.0.join("junk.nds")]);
     assert!(out.stdout.is_empty());
 }
+
+fn save_file(name: &str, len: usize) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("ninge-cli-{}-{name}", std::process::id()));
+    std::fs::write(&path, vec![0x5A; len]).expect("temp dir is writable");
+    path
+}
+
+#[test]
+fn given_a_save_file_of_no_chip_size_when_cli_runs_then_exit_code_is_4() {
+    let path = save_file("odd.bin", 1000);
+    let out = run_cli_on_smoke(&["--save", path.to_str().expect("utf-8 path")]);
+    assert_eq!(out.status.code(), Some(4));
+}
+
+#[test]
+fn given_a_save_file_and_a_matching_type_when_cli_runs_then_it_succeeds_and_keeps_the_file() {
+    let path = save_file("ok.bin", 8192);
+    let out = run_cli_on_smoke(&[
+        "--save",
+        path.to_str().expect("utf-8 path"),
+        "--save-type",
+        "fram-8k",
+    ]);
+    assert_eq!(
+        (out.status.code(), std::fs::read(&path).expect("kept")),
+        (Some(0), vec![0x5A; 8192])
+    );
+}
+
+#[test]
+fn given_an_unknown_save_type_when_cli_runs_then_exit_code_is_2() {
+    let out = run_cli_on_smoke(&["--save-type", "flash-3m"]);
+    assert_eq!(out.status.code(), Some(2));
+}

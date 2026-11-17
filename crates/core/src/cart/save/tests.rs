@@ -2,7 +2,7 @@
 //! The save chips, from `docs/hw/auxspi-saves.md`. Every chip is synthetic and starts erased
 //! (`FFh`); a scenario goes through helpers, and a test body only asserts.
 
-use super::{SaveChip, SaveError, SaveType};
+use super::{SaveChip, SaveError, SaveType, resolve_save};
 
 const WREN: u8 = 0x06;
 const WRDI: u8 = 0x04;
@@ -617,4 +617,84 @@ fn given_a_record_past_its_cap_when_checked_then_it_is_not_well_formed() {
     chip.transfer(WRITE, true);
     chip.overfill_record();
     assert!(!chip.well_formed());
+}
+
+// -------------------------------------------------------------------------- resolve_save
+
+#[test]
+fn given_a_save_file_and_no_type_when_resolved_then_the_size_names_the_chip() {
+    assert_eq!(
+        resolve_save(None, Some(vec![1; 512 * 1024])),
+        Ok((SaveType::Flash512K, vec![1; 512 * 1024]))
+    );
+}
+
+#[test]
+fn given_an_8k_file_and_no_type_when_resolved_then_it_is_an_eeprom() {
+    assert_eq!(
+        resolve_save(Some(SaveType::Auto), Some(vec![0; 8192])).map(|r| r.0),
+        Ok(SaveType::Eeprom8K)
+    );
+}
+
+#[test]
+fn given_a_file_of_no_chip_size_and_no_type_when_resolved_then_it_is_refused() {
+    assert_eq!(
+        resolve_save(None, Some(vec![0; 1000])),
+        Err(SaveError::UnknownSize { len: 1000 })
+    );
+}
+
+#[test]
+fn given_a_type_and_a_file_of_another_size_when_resolved_then_it_is_refused_not_resized() {
+    assert_eq!(
+        resolve_save(Some(SaveType::Fram32K), Some(vec![0; 8192])),
+        Err(SaveError::BadLength {
+            kind: SaveType::Fram32K,
+            expected: 32768,
+            found: 8192
+        })
+    );
+}
+
+#[test]
+fn given_a_type_that_differs_from_the_size_default_when_the_size_fits_then_the_type_wins() {
+    assert_eq!(
+        resolve_save(Some(SaveType::Fram8K), Some(vec![0; 8192])).map(|r| r.0),
+        Ok(SaveType::Fram8K)
+    );
+}
+
+#[test]
+fn given_a_type_and_no_file_when_resolved_then_the_memory_is_erased() {
+    assert_eq!(
+        resolve_save(Some(SaveType::Eeprom512), None),
+        Ok((SaveType::Eeprom512, vec![0xFF; 512]))
+    );
+}
+
+#[test]
+fn given_no_type_and_no_file_when_resolved_then_the_chip_is_left_to_detection() {
+    assert_eq!(resolve_save(None, None), Ok((SaveType::Auto, Vec::new())));
+}
+
+#[test]
+fn given_an_empty_file_when_resolved_then_it_counts_as_no_file() {
+    assert_eq!(
+        resolve_save(None, Some(Vec::new())),
+        Ok((SaveType::Auto, Vec::new()))
+    );
+}
+
+#[test]
+fn given_the_type_none_and_no_file_when_resolved_then_there_is_no_memory() {
+    assert_eq!(
+        resolve_save(Some(SaveType::None), None),
+        Ok((SaveType::None, Vec::new()))
+    );
+}
+
+#[test]
+fn given_the_type_list_when_collected_then_it_names_every_type_including_auto() {
+    assert_eq!(SaveType::names().collect::<Vec<_>>().len(), 12);
 }

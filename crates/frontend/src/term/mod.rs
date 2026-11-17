@@ -8,8 +8,9 @@
 use crate::app::{Action, App, frame_step, map_event, poll_timeout};
 use crate::kitty;
 use crate::layout::TermSize;
+use crate::savefile::SaveFile;
 use crate::source::Source;
-use crate::transfer::Transfer;
+use crate::transfer::{ShmSink, Transfer};
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event;
@@ -23,7 +24,6 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use {
     crate::shm::ShmWriter,
-    crate::transfer::ShmSink,
     rustix::event::{PollFd, PollFlags, Timespec, poll},
     rustix::io::Errno,
     std::os::fd::AsFd,
@@ -127,7 +127,7 @@ pub fn size() -> io::Result<TermSize> {
 }
 
 /// Runs the TUI until the user quits, showing frames from `source`.
-pub fn run(source: Source) -> anyhow::Result<()> {
+pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<()> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -139,11 +139,26 @@ pub fn run(source: Source) -> anyhow::Result<()> {
     let mut out = io::stdout();
     crossterm::execute!(out, EnterAlternateScreen, Hide)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let mut app = App::with_transfer(size()?, sink, transfer).with_source(source);
+    let mut app = App::with_transfer(size()?, sink, transfer)
+        .with_source(source)
+        .with_save(save);
     let mut gfx = io::stdout();
+    let looped = main_loop(&mut app, &mut terminal, &mut gfx);
+    // The save file is written last and even when the loop failed, so a game's save is not lost;
+    // a write failure shows once the terminal is restored.
+    let saved = app.finish().context("writing the save file");
+    looped.and(saved)
+}
+
+/// Draws and reads input until the user quits.
+fn main_loop(
+    app: &mut App<impl ShmSink>,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    gfx: &mut io::Stdout,
+) -> anyhow::Result<()> {
     while !app.should_quit() {
         let deadline = Instant::now() + FRAME_TIME;
-        frame_step(&mut app, &mut terminal, &mut gfx)?;
+        frame_step(app, terminal, gfx)?;
         // Poll at least once per frame, even after an overrun, so quit and resize are
         // always read. The cap keeps a flood of input (key repeat) from starving drawing.
         for _ in 0..MAX_EVENTS_PER_FRAME {

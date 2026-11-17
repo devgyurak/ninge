@@ -15,6 +15,7 @@ pub mod kitty;
 pub mod layout;
 pub mod pattern;
 pub mod placeholder;
+pub mod savefile;
 #[cfg(unix)]
 pub mod shm;
 pub mod source;

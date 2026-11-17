@@ -8,9 +8,12 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
 
-use crate::{RunReport, frame_hash, load_rom_file, run, testrom_path};
+use crate::{
+    RunReport, RunnerError, frame_hash, load_rom_file, run, run_with_blank_save, testrom_path,
+};
 
 /// The host's input for each frame of a run: entry `n` is set before the run's frame `n + 1`
 /// (counting from 1) and a frame past the end gets [`Input::default`] (nothing held, hinge open).
@@ -238,6 +241,26 @@ fn failure_message(rom: &str, frames: u64, path: &Path, error: &GoldenError) -> 
 /// for, or a mismatch. Every message carries the command that reproduces the run and the
 /// `tests/golden/README.md` pointer; the expected and actual lines appear only for a mismatch.
 pub fn assert_frame_hash(rom: &str, frames: u64) {
+    assert_golden(rom, frames, |bytes| run(bytes, frames));
+}
+
+/// [`assert_frame_hash`] for a ROM that talks to its save chip: the machine is given a blank chip
+/// of `kind` first ([`run_with_blank_save`]). The chip's image is synthesized, never a file.
+///
+/// # Panics
+///
+/// As [`assert_frame_hash`].
+pub fn assert_frame_hash_with_save(rom: &str, frames: u64, kind: SaveType) {
+    assert_golden(rom, frames, |bytes| {
+        run_with_blank_save(bytes, frames, kind)
+    });
+}
+
+fn assert_golden(
+    rom: &str,
+    frames: u64,
+    run_rom: impl FnOnce(Vec<u8>) -> Result<RunReport, RunnerError>,
+) {
     let path = golden_path(rom);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
         let error = GoldenError::Unreadable {
@@ -247,7 +270,7 @@ pub fn assert_frame_hash(rom: &str, frames: u64) {
     });
     let golden = parse_golden(&text)
         .unwrap_or_else(|error| panic!("{}", failure_message(rom, frames, &path, &error)));
-    let actual = run(load_rom(rom), frames).expect("the golden ROM has a valid header");
+    let actual = run_rom(load_rom(rom)).expect("the golden ROM has a valid header");
     if let Err(error) = check_frame_hash(&golden, &actual) {
         panic!("{}", failure_message(rom, frames, &path, &error));
     }

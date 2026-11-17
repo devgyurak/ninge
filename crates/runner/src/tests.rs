@@ -476,3 +476,39 @@ fn given_a_save_type_and_no_file_when_a_run_does_not_write_then_no_file_is_creat
     run_with_save(smoke_rom(), 1, &setup).expect("run");
     assert!(!path.exists());
 }
+
+#[test]
+fn given_a_save_outcome_when_displayed_then_it_names_the_chip_and_whether_the_file_was_written() {
+    let written = SaveOutcome {
+        kind: SaveType::Eeprom64K,
+        written: true,
+    };
+    let kept = SaveOutcome {
+        kind: SaveType::Auto,
+        written: false,
+    };
+    assert_eq!(
+        (written.to_string(), kept.to_string()),
+        (
+            "save chip eeprom-64k, file written".to_string(),
+            "save chip auto".to_string()
+        )
+    );
+}
+
+#[test]
+fn given_a_run_that_writes_nothing_when_it_ends_then_the_outcome_has_the_chip_and_no_write() {
+    let path = fresh_path("outcome.bin");
+    let setup = SaveSetup {
+        path,
+        kind: Some(SaveType::Eeprom8K),
+    };
+    let (_, outcome) = run_with_save(smoke_rom(), 1, &setup).expect("run");
+    assert_eq!(
+        outcome,
+        SaveOutcome {
+            kind: SaveType::Eeprom8K,
+            written: false
+        }
+    );
+}

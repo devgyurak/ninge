@@ -337,13 +337,30 @@ pub fn flush_save(machine: &Machine, baseline: u64, path: &Path) -> Result<bool,
     Ok(moved)
 }
 
+/// What the run did with the save chip, for the host to tell the user: a wrong guess by detection
+/// is visible this way (`docs/hw/auxspi-saves.md`, "Wrong detection and the way out").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveOutcome {
+    /// The chip at the end of the run; `Auto` when detection never decided.
+    pub kind: SaveType,
+    /// Whether the save file was written.
+    pub written: bool,
+}
+
+impl fmt::Display for SaveOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let written = if self.written { ", file written" } else { "" };
+        write!(f, "save chip {}{written}", self.kind.name())
+    }
+}
+
 /// Like [`run`], with the save chip: the file is read first when it exists and fitted by
 /// [`resolve_save`], and written after the last frame when the run changed the save memory.
 pub fn run_with_save(
     rom: Vec<u8>,
     frames: u64,
     save: &SaveSetup,
-) -> Result<RunReport, RunnerError> {
+) -> Result<(RunReport, SaveOutcome), RunnerError> {
     let mut machine = Machine::new();
     machine.load_rom(rom)?;
     let (kind, data) = resolve_save(save.kind, read_save_file(&save.path)?)?;
@@ -352,12 +369,17 @@ pub fn run_with_save(
     for _ in 0..frames {
         machine.run_frame(Input::new());
     }
-    flush_save(&machine, baseline, &save.path)?;
-    Ok(RunReport {
+    let written = flush_save(&machine, baseline, &save.path)?;
+    let report = RunReport {
         frames: machine.frame_count(),
         top_hash: frame_hash(machine.frame(Screen::Top)),
         bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
-    })
+    };
+    let outcome = SaveOutcome {
+        kind: machine.save_type(),
+        written,
+    };
+    Ok((report, outcome))
 }
 
 /// FNV-1a 64 over each pixel's little-endian bytes, in row order.

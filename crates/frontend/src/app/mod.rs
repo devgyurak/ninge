@@ -10,6 +10,7 @@ use crate::source::Source;
 use crate::transfer::{NoShm, ShmSink, Transfer};
 use anyhow::anyhow;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -111,6 +112,16 @@ impl<S: ShmSink> App<S> {
         match (&mut self.save, &self.source) {
             (Some(save), Source::Machine(machine)) => save.finish(machine),
             _ => Ok(()),
+        }
+    }
+
+    /// A line for the user once the program ends: the save chip and its file, `None` without one.
+    pub fn save_note(&self) -> Option<String> {
+        match (&self.save, &self.source) {
+            (Some(save), Source::Machine(machine)) if machine.save_type() != SaveType::None => {
+                Some(save.describe(machine))
+            }
+            _ => None,
         }
     }
 

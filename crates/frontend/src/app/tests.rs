@@ -338,3 +338,17 @@ fn given_a_machine_whose_save_did_not_change_when_frames_run_and_the_app_finishe
     run_frames(&mut app, crate::savefile::QUIET_FRAMES + 5);
     assert_eq!((app.finish().is_ok(), path.exists()), (true, false));
 }
+
+#[test]
+fn given_a_machine_with_a_save_when_the_note_is_asked_then_it_names_the_chip() {
+    let (app, path) = app_with_saved_machine("note.bin");
+    assert_eq!(
+        app.save_note(),
+        Some(format!("save chip eeprom-512, file {}", path.display()))
+    );
+}
+
+#[test]
+fn given_the_dummy_pattern_when_the_note_is_asked_then_there_is_none() {
+    assert_eq!(App::new(size()).save_note(), None);
+}

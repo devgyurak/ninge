@@ -196,3 +196,42 @@ fn given_a_save_file_when_its_path_is_asked_then_it_is_the_one_given() {
     let file = SaveFile::new(PathBuf::from("x.bin"), &machine);
     assert_eq!(file.path(), Path::new("x.bin"));
 }
+
+#[test]
+fn given_a_machine_when_described_then_the_chip_and_the_file_are_named() {
+    let machine = machine_with_changed_save();
+    let file = SaveFile::new(PathBuf::from("x.bin"), &machine);
+    assert_eq!(file.describe(&machine), "save chip eeprom-512, file x.bin");
+}
+
+#[test]
+fn given_an_undecided_chip_with_a_moved_counter_when_finishing_then_no_empty_file_is_written() {
+    let mut machine = Machine::new();
+    machine
+        .load_rom(std::fs::read(testrom()).expect("smoke ROM is built"))
+        .expect("valid header");
+    machine
+        .insert_save(SaveType::Auto, Vec::new())
+        .expect("auto");
+    let path = fresh("undecided.bin");
+    let mut file = SaveFile::new(path.clone(), &machine);
+    move_generation(&mut machine);
+    file.finish(&machine).expect("nothing to write");
+    assert!(!path.exists());
+}
+
+#[test]
+fn given_an_undecided_chip_with_a_moved_counter_when_frames_go_by_then_no_empty_file_is_written() {
+    let mut machine = Machine::new();
+    machine
+        .load_rom(std::fs::read(testrom()).expect("smoke ROM is built"))
+        .expect("valid header");
+    machine
+        .insert_save(SaveType::Auto, Vec::new())
+        .expect("auto");
+    let path = fresh("undecided-frames.bin");
+    let mut file = SaveFile::new(path.clone(), &machine);
+    move_generation(&mut machine);
+    frames(&mut file, &machine, QUIET_FRAMES + 2);
+    assert!(!path.exists());
+}

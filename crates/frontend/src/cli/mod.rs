@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-License-Identifier: Apache-2.0
 //! Command-line arguments: an optional ROM path and the save chip's options. Pure, so it is tested
 //! without a process.
 

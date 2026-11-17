@@ -98,13 +98,27 @@ impl SaveFile {
 
     /// Called at exit: writes whatever is not in the file yet.
     pub fn finish(&mut self, machine: &Machine) -> io::Result<()> {
-        if self.flusher.pending(machine.save_generation()) {
+        if self.flusher.pending(machine.save_generation()) && !machine.save_data().is_empty() {
             self.write(machine)?;
         }
         Ok(())
     }
 
+    /// What to tell the user once the program ends: the chip type (detection may have decided it) and
+    /// the file.
+    pub fn describe(&self, machine: &Machine) -> String {
+        format!(
+            "save chip {}, file {}",
+            machine.save_type().name(),
+            self.path.display()
+        )
+    }
+
     fn write(&mut self, machine: &Machine) -> io::Result<()> {
+        // A chip with no memory (none, or detection not decided) has no file to write.
+        if machine.save_data().is_empty() {
+            return Ok(());
+        }
         let generation = machine.save_generation();
         match write_atomic(&self.path, machine.save_data()) {
             Ok(()) => {

@@ -127,7 +127,7 @@ pub fn size() -> io::Result<TermSize> {
 }
 
 /// Runs the TUI until the user quits, showing frames from `source`.
-pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<()> {
+pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<String>> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -147,7 +147,7 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<()> {
     // The save file is written last and even when the loop failed, so a game's save is not lost;
     // a write failure shows once the terminal is restored.
     let saved = app.finish().context("writing the save file");
-    looped.and(saved)
+    looped.and(saved).map(|()| app.save_note())
 }
 
 /// Draws and reads input until the user quits.

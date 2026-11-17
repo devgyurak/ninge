@@ -19,5 +19,10 @@ fn main() -> ExitCode {
 fn start() -> Result<(), StartError> {
     let options = ninge::cli::parse_args(std::env::args_os().skip(1)).map_err(StartError::Usage)?;
     let (source, save) = start_source(&options)?;
-    ninge::term::run(source, save).map_err(|e| StartError::Run(format!("{e:#}")))
+    let note = ninge::term::run(source, save).map_err(|e| StartError::Run(format!("{e:#}")))?;
+    // After the terminal is restored, so a wrong detection is visible to the user.
+    if let Some(note) = note {
+        eprintln!("ninge: {note}");
+    }
+    Ok(())
 }

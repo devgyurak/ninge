@@ -3,6 +3,7 @@
 
 use std::process::ExitCode;
 
+use ninge_core::cart::SaveType;
 use ninge_runner::cpu_suite::report_dir;
 use ninge_runner::{Command, RunnerError, load_rom_file, parse_command, run_with_save};
 
@@ -23,7 +24,12 @@ fn execute() -> Result<String, RunnerError> {
     match parse_command(std::env::args_os().skip(1))? {
         Command::Run(args) => {
             let rom = load_rom_file(args.rom())?;
-            Ok(run_with_save(rom, args.frames(), &args.save_setup())?.to_string())
+            let (report, save) = run_with_save(rom, args.frames(), &args.save_setup())?;
+            // On stderr, so stdout stays the one report line.
+            if save.kind != SaveType::None {
+                eprintln!("ninge-runner: {save}");
+            }
+            Ok(report.to_string())
         }
         Command::CpuSuite(dir) => Ok(report_dir(&dir)?),
     }

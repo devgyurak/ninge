@@ -159,8 +159,8 @@ entrance and register directly (`gpu2d`).
     terminal's name, and a failed shm write switches to zlib for good.
 
 **Platforms** (decided): macOS is first-class (Apple Silicon is the target); Linux is
-guaranteed to pass CI; **Windows is planned**, not provided. Needing no Windows code path
-today, do not close the door: ninge-core is platform-independent by construction, and the
+guaranteed to pass CI; **Windows is planned**, not provided. No Windows code path is needed
+yet, but keep the door open: ninge-core is platform-independent by construction, and the
 frontend keeps OS-specific pieces (shared memory, raw terminal, paths) in a small module.
 
 `check_architecture.py` (edit hook and CI) enforces rules 1, 2, 3, 5, and 10 mechanically.

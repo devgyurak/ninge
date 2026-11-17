@@ -282,6 +282,22 @@ one, whereas a smaller chip would mirror the program's data over itself):
 Once the type is decided, the writing session that decided it **is applied to the chip** (it is not
 lost), and the type stays for the rest of the run. A savestate keeps the decision.
 
+### Deep power-down and the power-up lockout
+
+GBATEK says a FLASH in deep power-down ignores every instruction except the release, and that
+writes, programs and erases are rejected for the first 1 to 10 ms after power-up. The model does
+neither: DP and RDP are accepted and have no effect, and a write is never refused for being too
+early (time since power-up is not tracked). Both are the emulator's simplification.
+
+### Wrong detection and the way out
+
+A short first write to an 8K or 64K EEPROM or to a FLASH (17 bytes or fewer after the command) is
+decided as the 512-byte EEPROM; from then on a second address byte is stored as data and accesses
+land at the wrong address. The 512-byte file the host writes then names that type by its size on
+every later run, and `--save-type` of another size refuses it. The way out: delete the save file,
+or run once with `--save-type` of the right chip and a save file that does not exist yet. The
+hosts print the type that was decided, so a wrong guess is visible.
+
 ### Save files
 
 A save file is the chip's memory as raw bytes: the file's size is the chip's size, with no header.
@@ -320,8 +336,6 @@ hardware, or a trace against the reference emulator used as an oracle.
 - **RDID bytes after the third** read `FFh`. **A FLASH from another maker**: the model answers with
   the ST codes in the table; whether a program checks the ID, or expects another maker's, is not
   known. **The 8M part's ID** is from the Macronix entry in GBATEK's table. `cart/save/`.
-- **Deep power-down**: the commands are accepted and have no effect; the chip does not ignore
-  instructions while "down". `cart/save/`.
 - **Auto-detection**: all of it is the emulator's heuristic. It decides small writes as the
   smallest address that fits (a one-byte write to an 8K EEPROM looks like a 0.5K write), it cannot
   see a FRAM write of 131-259 bytes (it reads as FLASH), and it has none of GBATEK's two special
@@ -341,3 +355,5 @@ hardware, or a trace against the reference emulator used as an oracle.
 - **AUXSPIDATA's reset value** (0), its read while busy (the last received byte), and its byte and
   wider write widths (only a write to the low byte starts a transfer; wider writes use the low
   8 bits). `io/cart/`.
+
+- **Details outside GBATEK**: WRSR on a FLASH is ignored; a page write with no data byte erases nothing; bytes after a page or sector erase address are ignored; a read on the 512-byte EEPROM keeps counting past its 256-byte half. `cart/save/`.

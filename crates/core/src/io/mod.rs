@@ -211,8 +211,8 @@ impl Io {
     /// Delivers `signals` at master time `time`, one signal at a time in the order of
     /// [`Signal::ALL`] so that the result does not depend on how they were collected. This is the
     /// one table of who listens to what: a device raises a signal and never names its listener.
-    // TODO(hw-unverified): the ARM9's channels go before the ARM7's, and whether the other CPU's
-    // channels ever see a card request (`dma.md`, "Unverified"; `cart-protocol.md`, "Unverified").
+    // TODO(hw-unverified): whether the other CPU's channels ever see a card request
+    // (`cart-protocol.md`, "Unverified"). The channel order is in `start_dma`.
     fn route(&mut self, scheduler: &mut Scheduler, signals: Signals, time: u64) {
         Signal::ALL
             .into_iter()
@@ -317,6 +317,7 @@ impl Io {
     }
 
     /// Queues the channels of each CPU that wait for its trigger, if it has one, the ARM9's first.
+    // TODO(hw-unverified): the ARM9's channels go before the ARM7's (`dma.md`, "Unverified").
     fn start_dma(
         &mut self,
         scheduler: &mut Scheduler,

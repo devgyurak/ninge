@@ -544,6 +544,23 @@ fn given_two_effects_with_signals_and_a_recheck_when_merged_then_both_are_kept()
     );
 }
 
+#[test]
+fn given_every_signal_when_the_routing_order_is_listed_then_none_is_missing() {
+    let all = Signal::ALL
+        .into_iter()
+        .fold(Signals::default(), |set, signal| {
+            set.merge(Signals::of(signal))
+        });
+    assert_eq!(
+        (
+            all.contains(Signal::CardWordArm9),
+            all.contains(Signal::CardWordArm7),
+            Signal::ALL.len()
+        ),
+        (true, true, 2)
+    );
+}
+
 /// The DMA start events queued, as `(arm9, channel)`, after both CPUs' channel 0 was set to start
 /// on the card slot and `signals` were routed.
 fn card_start_events(signals: Signals) -> Vec<(bool, u8)> {

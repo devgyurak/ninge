@@ -5,10 +5,12 @@ use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
 use crate::placeholder::ScreenImage;
+use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::transfer::{NoShm, ShmSink, Transfer};
 use anyhow::anyhow;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -62,6 +64,7 @@ pub struct App<S = NoShm> {
     areas: Option<Areas>,
     frame_no: u64,
     source: Source,
+    save: Option<SaveFile>,
     quit: bool,
     transfer: Transfer,
     sink: S,
@@ -83,6 +86,7 @@ impl<S: ShmSink> App<S> {
             areas: compute(size),
             frame_no: 0,
             source: Source::Pattern,
+            save: None,
             quit: false,
             transfer,
             sink,
@@ -94,6 +98,31 @@ impl<S: ShmSink> App<S> {
     pub fn with_source(mut self, source: Source) -> Self {
         self.source = source;
         self
+    }
+
+    /// Writes the machine's save memory to `save` as it changes, and at exit ([`App::finish`]).
+    #[must_use]
+    pub fn with_save(mut self, save: Option<SaveFile>) -> Self {
+        self.save = save;
+        self
+    }
+
+    /// Called when the main loop ends: writes any save memory the file does not hold yet.
+    pub fn finish(&mut self) -> std::io::Result<()> {
+        match (&mut self.save, &self.source) {
+            (Some(save), Source::Machine(machine)) => save.finish(machine),
+            _ => Ok(()),
+        }
+    }
+
+    /// A line for the user once the program ends: the save chip and its file, `None` without one.
+    pub fn save_note(&self) -> Option<String> {
+        match (&self.save, &self.source) {
+            (Some(save), Source::Machine(machine)) if machine.save_type() != SaveType::None => {
+                Some(save.describe(machine))
+            }
+            _ => None,
+        }
     }
 
     /// The machine behind the screens, `None` while the dummy pattern is shown.
@@ -140,6 +169,9 @@ impl<S: ShmSink> App<S> {
         if let Source::Machine(machine) = &mut self.source {
             // TODO(phase5): the key mapping will build the frame's input here; until then none is held.
             machine.run_frame(Input::new());
+            if let Some(save) = &mut self.save {
+                save.after_frame(machine);
+            }
         }
         if let Some(areas) = self.areas {
             let (top, bottom) = self.screens();

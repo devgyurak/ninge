@@ -86,9 +86,14 @@ backlight bits of the language and flags field out of play.
 | `041h`-`043h` | 3 | RF bits per entry, entry count, unknown | `18h`, `0Ch`, `01h` |
 | `044h`-`0CDh` | | initial register and baseband values | `00h` |
 | `0CEh`-`161h` | | RF tables (type 2 layout) | `00h` |
-| `162h` | 1 | unknown | `19h` |
+| `162h` | 1 | unknown (per-console calibration on real units) | `19h`, inside GBATEK's "usually 19h..1Ch"; our choice |
 | `163h` | 1 | unused (inside the CRC) | `FFh` |
 | `164h`-`1FFh` | | unused (outside the CRC) | `FFh` |
+
+Which values are GBATEK's and which are ours: `config_length` (`0138h`), the enabled channels
+(`3FFEh`), the flags (`FFFFh`), the RF chip type (`02h`), the three RF fields (`18h`, `0Ch`, `01h`)
+and the unused `FFh` bytes are GBATEK's "usual" values for the original console; the version (`00h`),
+the zero tables, the MAC and `162h` are our choice.
 
 The CRC is CRC-16/MODBUS with an initial value of **zero** here, where the user settings use
 `FFFFh` (the code folds the one CRC function from zero for this block). Nothing models the radio,

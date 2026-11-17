@@ -756,3 +756,159 @@ fn given_no_word_ready_when_the_data_port_is_read_then_it_returns_the_last_word_
     let (idle, _) = read::<true>(&mut cart, DATA_OFFSET, Width::Word);
     assert_eq!(idle, taken);
 }
+
+// ------------------------------------------------------------------------------------ SPI side
+
+/// AUXSPICNT value: enabled, SPI mode, with `low` bits (baud, hold) on top.
+fn spi_cnt(low: u16) -> u32 {
+    u32::from(0xA000 | low)
+}
+
+/// A cart with a blank 8 KiB EEPROM fitted and AUXSPICNT set to `low` (see [`spi_cnt`]).
+fn spi_cart(low: u16) -> Cart {
+    let mut cart = Cart::new();
+    cart.insert_save(crate::cart::SaveType::Eeprom8K, vec![0xFF; 8192])
+        .expect("8 KiB fits");
+    write::<true>(&mut cart, 0, Width::Half, spi_cnt(low));
+    cart
+}
+
+fn spi_write_at<const ARM9: bool>(
+    cart: &mut Cart,
+    now: u64,
+    offset: u32,
+    width: Width,
+    value: u32,
+) {
+    Device::<ARM9>::write(cart, offset, width, value, cx_with_rom(now, &[]));
+}
+
+fn spi_peek_at<const ARM9: bool>(cart: &Cart, now: u64, offset: u32, width: Width) -> u32 {
+    Device::<ARM9>::peek(cart, offset, width, cx_with_rom(now, &[]))
+}
+
+const BUSY_BIT: u32 = 1 << 7;
+const SPI_DATA: u32 = 2;
+const SPI_START: u64 = 1000;
+
+/// The baud rates whose busy bit does not drop exactly `128 << baud` master cycles after a byte.
+fn busy_time_failures() -> Vec<u16> {
+    (0..4u16)
+        .filter(|&baud| {
+            let mut cart = spi_cart(baud);
+            spi_write_at::<true>(&mut cart, SPI_START, SPI_DATA, Width::Byte, 0x05);
+            let end = SPI_START + (128 << baud);
+            let before = spi_peek_at::<true>(&cart, end - 1, 0, Width::Half) & BUSY_BIT;
+            let at = spi_peek_at::<true>(&cart, end, 0, Width::Half) & BUSY_BIT;
+            (before, at) != (BUSY_BIT, 0)
+        })
+        .collect()
+}
+
+#[test]
+fn given_each_baud_rate_when_a_byte_is_written_then_busy_drops_after_its_byte_time() {
+    assert_eq!(busy_time_failures(), Vec::<u16>::new());
+}
+
+#[test]
+fn given_a_byte_written_when_auxspidata_is_read_then_it_holds_the_chips_reply() {
+    let mut cart = spi_cart(0x40);
+    spi_write_at::<true>(&mut cart, 0, SPI_DATA, Width::Byte, 0x05);
+    spi_write_at::<true>(&mut cart, 1000, SPI_DATA, Width::Byte, 0x00);
+    assert_eq!(
+        spi_peek_at::<true>(&cart, 2000, SPI_DATA, Width::Half),
+        0x00
+    );
+}
+
+#[test]
+fn given_a_byte_written_while_busy_when_the_first_ends_then_it_was_dropped() {
+    let mut cart = spi_cart(0);
+    spi_write_at::<true>(&mut cart, 0, SPI_DATA, Width::Byte, 0x06);
+    spi_write_at::<true>(&mut cart, 10, SPI_DATA, Width::Byte, 0x05);
+    assert!(!cart.save().selected());
+}
+
+#[test]
+fn given_hold_set_when_a_byte_is_written_then_the_chip_stays_selected_and_otherwise_it_is_not() {
+    let mut held = spi_cart(0x40);
+    spi_write_at::<true>(&mut held, 0, SPI_DATA, Width::Byte, 0x05);
+    let mut released = spi_cart(0);
+    spi_write_at::<true>(&mut released, 0, SPI_DATA, Width::Byte, 0x05);
+    assert_eq!(
+        (held.save().selected(), released.save().selected()),
+        (true, false)
+    );
+}
+
+#[test]
+fn given_the_slot_not_in_spi_mode_when_a_byte_is_written_then_nothing_happens() {
+    let mut cart = spi_cart(0);
+    spi_write_at::<true>(&mut cart, 0, 0, Width::Half, 0x8040);
+    spi_write_at::<true>(&mut cart, 10, SPI_DATA, Width::Byte, 0x05);
+    assert_eq!((cart.save().selected(), cart.spi_busy(11)), (false, false));
+}
+
+#[test]
+fn given_the_slot_not_enabled_when_a_byte_is_written_then_nothing_happens() {
+    let mut cart = spi_cart(0);
+    spi_write_at::<true>(&mut cart, 0, 0, Width::Half, 0x2040);
+    spi_write_at::<true>(&mut cart, 10, SPI_DATA, Width::Byte, 0x05);
+    assert_eq!((cart.save().selected(), cart.spi_busy(11)), (false, false));
+}
+
+#[test]
+fn given_a_halfword_write_to_auxspidata_when_read_back_then_only_the_low_byte_was_sent() {
+    let mut cart = spi_cart(0x40);
+    spi_write_at::<true>(&mut cart, 0, SPI_DATA, Width::Half, 0xAB05);
+    assert_eq!(cart.save().command(), Some(0x05));
+}
+
+#[test]
+fn given_a_byte_write_to_the_high_half_of_auxspidata_when_sent_then_no_transfer_starts() {
+    let mut cart = spi_cart(0x40);
+    spi_write_at::<true>(&mut cart, 0, SPI_DATA + 1, Width::Byte, 0x05);
+    assert_eq!((cart.save().selected(), cart.spi_busy(1)), (false, false));
+}
+
+#[test]
+fn given_a_word_write_to_auxspicnt_when_its_upper_half_is_data_then_the_transfer_uses_the_new_cnt()
+{
+    let mut cart = Cart::new();
+    cart.insert_save(crate::cart::SaveType::Eeprom8K, vec![0xFF; 8192])
+        .expect("8 KiB fits");
+    spi_write_at::<true>(&mut cart, 0, 0, Width::Word, spi_cnt(0x40) | 0x05 << 16);
+    assert_eq!(
+        (cart.save().command(), cart.save().selected()),
+        (Some(0x05), true)
+    );
+}
+
+#[test]
+fn given_auxspicnt_written_with_busy_set_when_read_then_the_busy_bit_comes_from_the_time_only() {
+    let mut cart = Cart::new();
+    write::<true>(&mut cart, 0, Width::Half, 0xFFFF);
+    assert_eq!(spi_peek_at::<true>(&cart, 0, 0, Width::Half) & BUSY_BIT, 0);
+}
+
+#[test]
+fn given_the_arm7_does_not_own_the_slot_when_it_sends_a_byte_then_it_reads_zero_and_nothing_starts()
+{
+    let mut cart = spi_cart(0x40);
+    spi_write_at::<false>(&mut cart, 0, SPI_DATA, Width::Byte, 0x05);
+    assert_eq!(
+        (
+            cart.save().selected(),
+            spi_peek_at::<false>(&cart, 10, 0, Width::Half),
+            spi_peek_at::<false>(&cart, 10, SPI_DATA, Width::Half)
+        ),
+        (false, 0, 0)
+    );
+}
+
+#[test]
+fn given_a_busy_time_far_in_the_future_when_the_state_is_checked_then_it_is_not_well_formed() {
+    let mut cart = spi_cart(0);
+    cart.spi_done = u64::MAX;
+    assert!(!cart.well_formed(0));
+}

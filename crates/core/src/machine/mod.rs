@@ -2,7 +2,7 @@
 //! The whole emulated machine: [`Machine`], the one struct that owns all emulator state.
 
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
-use crate::cart::Header;
+use crate::cart::{Header, SaveError, SaveType};
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
@@ -223,6 +223,33 @@ impl Machine {
     // The debugger's CPU panel (#56) will show it.
     pub fn header(&self) -> Option<&Header> {
         self.header.as_ref()
+    }
+
+    /// Fits the cartridge with a save chip of `kind` holding `data`, as a save file holds it.
+    ///
+    /// Call it after [`Machine::load_rom`], which resets the machine and with it the chip. An image
+    /// that is not as long as the chip's memory is refused and the chip stays as it was
+    /// (`docs/hw/auxspi-saves.md`, "Save files").
+    pub fn insert_save(&mut self, kind: SaveType, data: Vec<u8>) -> Result<(), SaveError> {
+        self.io.cart_mut().insert_save(kind, data)
+    }
+
+    /// The save chip's memory, as a save file holds it; empty with no chip.
+    pub fn save_data(&self) -> &[u8] {
+        self.io.cart().save().data()
+    }
+
+    /// The type of the fitted save chip.
+    pub fn save_type(&self) -> SaveType {
+        self.io.cart().save().kind()
+    }
+
+    /// Counts the changes to the save memory. A host writes the save file when it differs from the
+    /// value it saw at its last write. A savestate load raises it, since the memory may have changed
+    /// (`docs/hw/auxspi-saves.md`, "Save files"). [`Machine::load_rom`] starts it again at 0, so a host
+    /// that resets the machine takes a new baseline after it fits the save.
+    pub fn save_generation(&self) -> u64 {
+        self.io.cart().save().generation()
     }
 
     /// Returns the loaded ROM image; empty until [`Machine::load_rom`] is called.

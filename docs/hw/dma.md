@@ -67,7 +67,7 @@ ARM9 (bits 27-29):
 | 2 | HBlank start | 3 (#26) |
 | 3 | Start of display (line 0; how often is Unverified, `display-capture.md`) | 4 (#36) |
 | 4 | Main-memory display (`display-capture.md`) | 4 (#36) |
-| 5 | DS cartridge slot | `TODO(phase5)` (#37) |
+| 5 | DS cartridge slot: one unit per word the card makes ready (`cart-protocol.md`, "DMA start") | 5 (#37) |
 | 6 | GBA cartridge slot | no phase plans it |
 | 7 | Geometry command FIFO | `TODO(phase7)` (#48) |
 
@@ -77,7 +77,7 @@ ARM7 (bits 28-29):
 |---|---|---|
 | 0 | Immediately | 3 (#26) |
 | 1 | VBlank start | 3 (#26) |
-| 2 | DS cartridge slot | `TODO(phase5)` (#37) |
+| 2 | DS cartridge slot: one unit per word the card makes ready (`cart-protocol.md`, "DMA start") | 5 (#37) |
 | 3 | Channels 0 and 2: wireless interrupt; channels 1 and 3: GBA cartridge slot | no phase plans it |
 
 The ARM7 has no HBlank start. A channel set to a start timing that is not implemented is enabled

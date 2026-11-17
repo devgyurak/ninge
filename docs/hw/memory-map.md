@@ -14,6 +14,11 @@ Used by: `crates/core/src/bus/`   Phase: 0 (regions the smoke ROM loads into); #
 | ARM7 WRAM | 0x0380_0000 | 64 KiB | ARM7 only |
 | ARM7 VRAM | 0x0600_0000 | 0-256 KiB | ARM7 only; VRAM banks C and D with MST 2 (`vram-banks.md`) |
 
+## I/O registers of the card slot
+
+The card slot registers (`0400_01A0h`-`0400_01AFh`, EXMEMCNT at `0400_0204h`) and its data port
+(`0410_0010h`, next to IPCFIFORECV at `0410_0000h`) are described in `cart-protocol.md`.
+
 ## Behavior
 
 Programs commonly reach shared WRAM through a mirror at 0x037F_8000 on both CPUs; on the ARM7

@@ -58,6 +58,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 **Boot and BIOS**
 
 - [Cartridge header](cart-header.md)
+- [Cartridge protocol: reading the ROM (B7, B8, ROMCTRL, the data port, DMA, IRQ)](cart-protocol.md)
 - [Direct boot (ARM9)](direct-boot.md)
 - [HLE BIOS: the BIOS area, the vectors, SWI entry and the IRQ dispatcher](hle-swi.md)
 

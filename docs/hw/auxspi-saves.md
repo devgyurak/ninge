@@ -355,5 +355,4 @@ hardware, or a trace against the reference emulator used as an oracle.
 - **AUXSPIDATA's reset value** (0), its read while busy (the last received byte), and its byte and
   wider write widths (only a write to the low byte starts a transfer; wider writes use the low
   8 bits). `io/cart/`.
-
 - **Details outside GBATEK**: WRSR on a FLASH is ignored; a page write with no data byte erases nothing; bytes after a page or sector erase address are ignored; a read on the 512-byte EEPROM keeps counting past its 256-byte half. `cart/save/`.

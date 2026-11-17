@@ -9,7 +9,7 @@
 //! slots an [`Effect`] names and fires them without knowing which device it is.
 
 use crate::input::Input;
-use crate::io::dma::Transfer;
+use crate::io::dma::{Transfer, Trigger};
 use crate::io::irq::Requests;
 
 /// The width of one bus access.
@@ -176,6 +176,9 @@ pub(crate) struct Fired {
     pub(crate) effect: Effect,
     /// A transfer to run, from a DMA start.
     pub(crate) transfer: Option<Transfer>,
+    /// A DMA start the event raises for the channels that wait for it: the cartridge slot's word
+    /// is ready (`cart-protocol.md`, "DMA start").
+    pub(crate) trigger: Option<Trigger>,
 }
 
 /// A read of `width` at `offset` built from a device that holds registers one byte at a time:

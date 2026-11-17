@@ -66,7 +66,8 @@ registry! {
         timing / timing_mut: Timing = Timing::new() => [Port::Timing],
         /// IPCSYNC and the two IPC FIFOs (`ipc.md`), for the debugger.
         ipc: Ipc = Ipc::new() => [Port::Ipc, Port::IpcRecv],
-    cart / cart_mut: Cart = Cart::new() => [Port::Cart, Port::CartExmem, Port::CartData],
+        /// The cartridge slot's ROM interface (`cart-protocol.md`).
+        cart / cart_mut: Cart = Cart::new() => [Port::Cart, Port::CartExmem, Port::CartData],
     }
     arm9 {
         /// Both 2D engines' display registers and POWCNT1.
@@ -219,7 +220,7 @@ impl Io {
             .for_each(|slot| {
                 let kind = EventKind::Slot {
                     device,
-                    arm9: ARM9,
+                    arm9: ARM9 || device.is_shared(),
                     slot,
                 };
                 scheduler.cancel(kind);
@@ -277,6 +278,9 @@ impl Io {
             port,
             fired.effect,
         );
+        if let Some(trigger) = fired.trigger {
+            self.trigger_dma(scheduler, trigger, now);
+        }
         fired.transfer
     }
 
@@ -286,8 +290,14 @@ impl Io {
     // TODO(hw-unverified): the ARM9's channels go before the ARM7's (`dma.md`, "Unverified").
     pub(crate) fn trigger_dma(&mut self, scheduler: &mut Scheduler, trigger: Trigger, time: u64) {
         let floor = time.max(scheduler.now());
-        let arm9 = self.dma9.trigger(trigger);
-        let arm7 = self.dma7.trigger(trigger);
+        // A word of the cartridge slot goes to the CPU that owns it; every other trigger to both.
+        // TODO(hw-unverified): whether the other CPU's channels ever see a card request
+        // (`cart-protocol.md`, "Unverified").
+        let (arm9, arm7) = match trigger {
+            Trigger::CardWord { arm9: true } => (self.dma9.trigger(trigger), 0),
+            Trigger::CardWord { arm9: false } => (0, self.dma7.trigger(trigger)),
+            _ => (self.dma9.trigger(trigger), self.dma7.trigger(trigger)),
+        };
         self.schedule_slots::<true>(scheduler, Port::Dma, arm9, floor);
         self.schedule_slots::<false>(scheduler, Port::Dma, arm7, floor);
     }

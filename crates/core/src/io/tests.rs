@@ -383,8 +383,9 @@ fn given_slots_above_bit_7_when_effects_merged_then_the_high_bits_are_kept() {
 }
 
 #[test]
-fn given_timers_and_dma_of_both_cpus_when_event_slots_counted_then_there_are_sixteen() {
-    assert_eq!(EVENT_SLOTS, 16);
+fn given_timers_dma_and_the_card_when_event_slots_counted_then_there_are_seventeen() {
+    // Eight timers, eight DMA channels, and the one card slot both CPUs share.
+    assert_eq!(EVENT_SLOTS, 17);
 }
 
 /// The kinds queued after each CPU's timer 0 is started through `Io` (TM0CNT_H, START).

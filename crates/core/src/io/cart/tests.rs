@@ -8,7 +8,8 @@ use super::{
     ROMCTRL_OFFSET, ROMCTRL_READY, ROMCTRL_RESB, block_bytes,
 };
 use crate::cart::protocol::chip_id;
-use crate::io::device::{Checked, Device, Effect, Width, cx_with_rom};
+use crate::io::device::{Checked, Device, Effect, Fired, Width, cx_with_rom};
+use crate::io::dma::Trigger;
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
 
 const RESB: u32 = ROMCTRL_RESB;
@@ -80,13 +81,35 @@ fn drain<const ARM9: bool>(cart: &mut Cart, limit: usize) -> (Vec<u8>, Effect) {
     let mut effect = Effect::default();
     for _ in 0..limit {
         if romctrl::<ARM9>(cart) & ROMCTRL_READY == 0 {
-            break;
+            // The word's event: fire it at its time, if one is on its way.
+            let Some(due) = cart.next_word_due() else {
+                break;
+            };
+            let fired = Device::<ARM9>::slot_fire(cart, 0, due);
+            effect = fired.effect;
+            if romctrl::<ARM9>(cart) & ROMCTRL_READY == 0 {
+                break;
+            }
         }
         let (word, last) = read::<ARM9>(cart, DATA_OFFSET, Width::Word);
         bytes.extend(word.to_le_bytes());
         effect = last;
     }
     (bytes, effect)
+}
+
+/// Fires the device's event at its time, as the scheduler does; the fired result.
+fn fire(cart: &mut Cart) -> Fired {
+    let due = cart.next_word_due().expect("an event is on its way");
+    Device::<true>::slot_fire(cart, 0, due)
+}
+
+/// A started read of `size` as the ARM9 with its first word ready.
+fn ready_read(address: u32, size: u32) -> Cart {
+    let mut cart = Cart::new();
+    start_read::<true>(&mut cart, address, size);
+    fire(&mut cart);
+    cart
 }
 
 fn drain9(cart: &mut Cart) -> Vec<u8> {
@@ -183,9 +206,18 @@ fn given_an_unknown_command_when_drained_then_every_word_is_ffff_ffff() {
 }
 
 #[test]
-fn given_a_started_read_when_romctrl_is_read_then_busy_and_ready_are_set() {
+fn given_a_started_read_when_romctrl_is_read_then_busy_is_set_and_no_word_is_ready() {
     let mut cart = Cart::new();
     start_read::<true>(&mut cart, 0x8000, 1);
+    assert_eq!(
+        romctrl::<true>(&cart) & (ROMCTRL_BUSY | ROMCTRL_READY),
+        ROMCTRL_BUSY
+    );
+}
+
+#[test]
+fn given_a_started_read_when_its_event_fires_then_busy_and_ready_are_set() {
+    let cart = ready_read(0x8000, 1);
     assert_eq!(
         romctrl::<true>(&cart) & (ROMCTRL_BUSY | ROMCTRL_READY),
         ROMCTRL_BUSY | ROMCTRL_READY
@@ -201,9 +233,10 @@ fn given_a_drained_read_when_romctrl_is_read_then_busy_and_ready_are_clear() {
 }
 
 #[test]
-fn given_a_block_size_of_0_when_started_then_the_transfer_is_done_at_once() {
+fn given_a_block_size_of_0_when_its_event_fires_then_the_transfer_is_done() {
     let mut cart = Cart::new();
     start_read::<true>(&mut cart, 0x8000, 0);
+    fire(&mut cart);
     assert_eq!(romctrl::<true>(&cart) & (ROMCTRL_BUSY | ROMCTRL_READY), 0);
 }
 
@@ -227,8 +260,7 @@ fn given_a_ready_word_when_a_byte_below_the_top_one_is_read_then_the_word_is_not
 
 #[test]
 fn given_a_ready_word_when_the_top_byte_is_read_then_the_word_is_taken() {
-    let mut cart = Cart::new();
-    start_read::<true>(&mut cart, 0x8000, 1);
+    let mut cart = ready_read(0x8000, 1);
     read::<true>(&mut cart, DATA_OFFSET + 3, Width::Byte);
     assert_eq!(cart.remaining(), 0x200 - 4);
 }
@@ -399,10 +431,10 @@ fn given_a_transfer_with_words_left_when_a_word_is_taken_then_no_irq_is_raised()
 }
 
 #[test]
-fn given_the_irq_bit_set_when_a_block_of_size_0_starts_then_the_write_raises_if_bit_19() {
+fn given_the_irq_bit_set_when_a_block_of_size_0_ends_then_its_event_raises_if_bit_19() {
     let mut cart = with_irq();
-    let effect = start_read::<true>(&mut cart, 0x8000, 0);
-    assert_eq!(effect.requests.arm9, CARD_TRANSFER_IRQ);
+    start_read::<true>(&mut cart, 0x8000, 0);
+    assert_eq!(fire(&mut cart).effect.requests.arm9, CARD_TRANSFER_IRQ);
 }
 
 #[test]
@@ -432,8 +464,7 @@ fn given_a_write_of_the_other_romctrl_fields_when_read_then_they_read_back() {
 
 #[test]
 fn given_a_transfer_running_when_romctrl_is_written_again_with_start_then_it_does_not_restart() {
-    let mut cart = Cart::new();
-    start_read::<true>(&mut cart, 0x9000, 1);
+    let mut cart = ready_read(0x9000, 1);
     read::<true>(&mut cart, DATA_OFFSET, Width::Word);
     start_read::<true>(&mut cart, 0xA000, 1);
     assert_eq!((cart.address(), cart.remaining()), (0x9004, 0x200 - 4));
@@ -464,8 +495,7 @@ fn given_direct_boot_when_the_state_is_set_then_resb_is_released_and_the_arm9_ow
 
 #[test]
 fn given_a_transfer_in_flight_when_serialized_and_restored_then_the_rest_of_it_matches() {
-    let mut cart = Cart::new();
-    start_read::<true>(&mut cart, 0x9000, 1);
+    let mut cart = ready_read(0x9000, 1);
     read::<true>(&mut cart, DATA_OFFSET, Width::Word);
     let bytes = postcard::to_allocvec(&cart).expect("the slot serializes");
     let mut restored: Cart = postcard::from_bytes(&bytes).expect("the bytes parse");
@@ -482,8 +512,7 @@ fn given_states_the_slot_can_reach_when_checked_then_they_are_well_formed() {
 
 #[test]
 fn given_a_ready_word_with_nothing_left_when_checked_then_it_is_not_well_formed() {
-    let mut cart = Cart::new();
-    start_read::<true>(&mut cart, 0x8000, 7);
+    let mut cart = ready_read(0x8000, 7);
     cart.left = 0;
     assert!(!cart.well_formed(0));
 }
@@ -500,4 +529,190 @@ fn given_a_length_that_is_not_a_word_multiple_when_checked_then_it_is_not_well_f
     let mut cart = Cart::new();
     cart.left = 3;
     assert!(!cart.well_formed(0));
+}
+
+// ------------------------------------------------------------------------------------ timing
+
+const SLOW_CLOCK: u32 = 1 << 27;
+
+/// A write of `value` at `offset` as the ARM9 at master time `now`.
+fn write_at(cart: &mut Cart, now: u64, offset: u32, value: u32) -> Effect {
+    Device::<true>::write(cart, offset, Width::Word, value, cx_with_rom(now, &rom()))
+}
+
+/// A read of the data port as the ARM9 at master time `now`.
+fn take_at(cart: &mut Cart, now: u64) -> Effect {
+    Device::<true>::read(cart, DATA_OFFSET, Width::Word, cx_with_rom(now, &rom())).1
+}
+
+/// Starts a read of `size` at master time `now` with the ROMCTRL bits `extra` (clock, gaps).
+fn start_at(cart: &mut Cart, now: u64, size: u32, extra: u32) -> Effect {
+    write_at(cart, now, COMMAND_OFFSET, 0x0000_00B7);
+    write_at(cart, now, COMMAND_OFFSET + 4, 0);
+    write_at(
+        cart,
+        now,
+        ROMCTRL_OFFSET,
+        START | RESB | extra | (size << SIZE_SHIFT),
+    )
+}
+
+/// The cases (ROMCTRL bits, size, expected time of the first event) whose event time differs,
+/// for a start at master time 1000.
+fn wrong_first_event_times(cases: &[(u32, u32, u64)]) -> Vec<(u32, u32)> {
+    cases
+        .iter()
+        .filter(|&&(extra, size, want)| {
+            let mut cart = Cart::new();
+            start_at(&mut cart, 1000, size, extra);
+            cart.next_word_due() != Some(want)
+        })
+        .map(|&(extra, size, _)| (extra, size))
+        .collect()
+}
+
+#[test]
+fn given_clock_and_gap_settings_when_a_read_starts_then_the_first_word_is_due_after_command_gap_and_word()
+ {
+    // (8 command clocks + gap 1 + 4 for the word) card clocks of 10 (6.7 MHz) or 16 (4.2 MHz)
+    // master cycles after the start (`cart-protocol.md`, "Timing").
+    let cases = [
+        (0, 1, 1000 + (8 + 4) * 10),
+        (0x657, 1, 1000 + (8 + 0x657 + 4) * 10),
+        (SLOW_CLOCK, 1, 1000 + (8 + 4) * 16),
+        (SLOW_CLOCK | 0x10, 7, 1000 + (8 + 0x10 + 4) * 16),
+        (0x1FFF, 1, 1000 + (8 + 0x1FFF + 4) * 10),
+    ];
+    assert_eq!(wrong_first_event_times(&cases), Vec::<(u32, u32)>::new());
+}
+
+#[test]
+fn given_a_block_of_size_0_when_it_starts_then_its_event_is_due_after_command_and_gap_only() {
+    let cases = [(5, 0, 1000 + (8 + 5) * 10), (SLOW_CLOCK, 0, 1000 + 8 * 16)];
+    assert_eq!(wrong_first_event_times(&cases), Vec::<(u32, u32)>::new());
+}
+
+#[test]
+fn given_a_start_when_it_returns_then_it_names_the_event_slot_to_replace() {
+    let mut cart = Cart::new();
+    assert_eq!(start_at(&mut cart, 0, 1, 0).reschedule, 1);
+}
+
+#[test]
+fn given_a_started_read_when_the_event_slot_is_asked_then_it_is_the_next_words_due_time() {
+    let mut cart = Cart::new();
+    start_at(&mut cart, 1000, 1, 0);
+    assert_eq!(Device::<true>::slot_due(&cart, 0), Some(1000 + 12 * 10));
+}
+
+#[test]
+fn given_a_started_read_when_data_is_read_before_the_event_then_nothing_is_taken() {
+    let mut cart = Cart::new();
+    start_at(&mut cart, 0, 1, 0);
+    take_at(&mut cart, 50);
+    assert_eq!(cart.remaining(), 0x200);
+}
+
+#[test]
+fn given_a_word_taken_when_romctrl_is_read_then_no_word_is_ready_until_the_event_fires() {
+    let mut cart = ready_read(0x9000, 1);
+    take_at(&mut cart, 500);
+    assert_eq!(romctrl::<true>(&cart) & ROMCTRL_READY, 0);
+}
+
+/// The time of the event after `words` words were each taken at master time 5000 with gap 2 of 3.
+fn due_after_taking(words: usize) -> Option<u64> {
+    let mut cart = Cart::new();
+    start_at(&mut cart, 0, 2, 3 << 16);
+    for _ in 0..words {
+        fire(&mut cart);
+        take_at(&mut cart, 5000);
+    }
+    cart.next_word_due()
+}
+
+#[test]
+fn given_words_taken_inside_a_200h_part_when_the_next_is_scheduled_then_it_is_one_word_later() {
+    assert_eq!(due_after_taking(1), Some(5000 + 4 * 10));
+    assert_eq!(due_after_taking(127), Some(5000 + 4 * 10));
+}
+
+#[test]
+fn given_the_128th_word_taken_when_the_next_is_scheduled_then_gap_2_is_added() {
+    assert_eq!(due_after_taking(128), Some(5000 + (4 + 3) * 10));
+}
+
+#[test]
+fn given_a_word_taken_after_the_gap_when_the_next_is_scheduled_then_it_is_one_word_later_again() {
+    assert_eq!(due_after_taking(129), Some(5000 + 4 * 10));
+}
+
+#[test]
+fn given_the_last_word_taken_when_the_transfer_ends_then_no_event_is_left() {
+    let mut cart = Cart::new();
+    start_at(&mut cart, 0, 7, 0);
+    fire(&mut cart);
+    take_at(&mut cart, 100);
+    assert_eq!(cart.next_word_due(), None);
+}
+
+#[test]
+fn given_a_word_taken_with_more_left_when_it_returns_then_it_names_the_event_slot_to_replace() {
+    let mut cart = ready_read(0x9000, 1);
+    assert_eq!(take_at(&mut cart, 100).reschedule, 1);
+}
+
+#[test]
+fn given_a_word_ready_when_the_event_fires_then_it_asks_for_the_owners_dma_channels() {
+    let mut cart = Cart::new();
+    start_read::<true>(&mut cart, 0x8000, 1);
+    assert_eq!(
+        fire(&mut cart).trigger,
+        Some(Trigger::CardWord { arm9: true })
+    );
+}
+
+#[test]
+fn given_the_arm7_owns_the_slot_when_a_word_is_ready_then_the_request_is_for_the_arm7() {
+    let mut cart = Cart::new();
+    write::<true>(&mut cart, EXMEMCNT_OFFSET, Width::Half, SLOT_TO_ARM7);
+    start_read::<false>(&mut cart, 0x8000, 1);
+    assert_eq!(
+        fire(&mut cart).trigger,
+        Some(Trigger::CardWord { arm9: false })
+    );
+}
+
+#[test]
+fn given_a_block_of_size_0_when_its_event_fires_then_no_dma_request_is_made() {
+    let mut cart = Cart::new();
+    start_read::<true>(&mut cart, 0x8000, 0);
+    assert_eq!(fire(&mut cart).trigger, None);
+}
+
+#[test]
+fn given_no_event_on_its_way_when_the_slot_fires_then_nothing_happens() {
+    let mut cart = Cart::new();
+    assert_eq!(
+        Device::<true>::slot_fire(&mut cart, 0, 10),
+        Fired::default()
+    );
+}
+
+#[test]
+fn given_a_transfer_waiting_for_its_event_when_checked_without_one_then_it_is_not_well_formed() {
+    let mut cart = Cart::new();
+    start_read::<true>(&mut cart, 0x8000, 1);
+    cart.due = None;
+    assert!(!cart.well_formed(0));
+}
+
+#[test]
+fn given_a_transfer_with_its_event_pending_when_serialized_and_restored_then_the_event_time_survives()
+ {
+    let mut cart = Cart::new();
+    start_at(&mut cart, 1000, 1, 0);
+    let bytes = postcard::to_allocvec(&cart).expect("the slot serializes");
+    let restored: Cart = postcard::from_bytes(&bytes).expect("the bytes parse");
+    assert_eq!(restored.next_word_due(), Some(1120));
 }

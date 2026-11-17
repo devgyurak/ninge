@@ -1565,3 +1565,158 @@ fn given_arm7_start_timings_3_and_4_when_the_display_starts_are_raised_then_noth
         (0, 0)
     );
 }
+
+// ------------------------------------------------------------------- the cartridge slot start
+
+const CARD9: u32 = 5 << 27;
+const CARD7: u32 = 2 << 28;
+
+/// Arms channel 0 and raises `trigger`; the slot mask of the channels it queued.
+fn queued_by<const A: bool>(control: u32, trigger: Trigger) -> SlotMask {
+    let mut dma = Dma::<A>::new();
+    arm(&mut dma, 0, MAIN, OTHER, control);
+    dma.trigger(trigger)
+}
+
+#[test]
+fn given_an_arm9_channel_with_start_mode_5_when_the_owner_is_the_arm9_then_a_word_queues_it() {
+    assert_eq!(
+        queued_by::<true>(ENABLE | WORD | CARD9 | 1, Trigger::CardWord { arm9: true }),
+        0b1
+    );
+}
+
+#[test]
+fn given_an_arm7_channel_with_start_mode_2_when_a_word_is_ready_then_it_queues_it() {
+    assert_eq!(
+        queued_by::<false>(ENABLE | WORD | CARD7 | 1, Trigger::CardWord { arm9: false }),
+        0b1
+    );
+}
+
+#[test]
+fn given_an_arm9_channel_with_the_hblank_start_when_a_word_is_ready_then_it_is_not_queued() {
+    assert_eq!(
+        queued_by::<true>(
+            ENABLE | WORD | timing9(2) | 1,
+            Trigger::CardWord { arm9: true }
+        ),
+        0
+    );
+}
+
+#[test]
+fn given_a_card_channel_when_a_vblank_comes_then_it_is_not_queued() {
+    assert_eq!(
+        queued_by::<true>(ENABLE | WORD | CARD9 | 1, Trigger::VBlank),
+        0
+    );
+}
+
+#[test]
+fn given_a_card_channel_with_a_count_of_128_when_its_transfer_begins_then_it_moves_one_unit() {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | CARD9 | 128,
+        Trigger::CardWord { arm9: true },
+    );
+    assert_eq!(t.count, 1);
+}
+
+/// Requests a card channel of `count` units takes to finish, the IF bits requested by every
+/// request but the last (they must be none) and by the last one.
+fn requests_to_finish(count: u32, extra: u32) -> (u32, u32, u32) {
+    let control = ENABLE | WORD | CARD9 | extra | count;
+    let mut dma = Dma::<true>::new();
+    arm(&mut dma, 0, MAIN, OTHER, control);
+    let (mut requests, mut early, mut last) = (0, 0, 0);
+    for _ in 0..count + 2 {
+        if dma.trigger(Trigger::CardWord { arm9: true }) == 0 {
+            break;
+        }
+        let t = dma.begin(0).expect("the trigger queued a start");
+        let effect = dma.finish(
+            &t,
+            End {
+                source: t.source,
+                destination: t.destination.wrapping_add(4),
+            },
+        );
+        requests += 1;
+        early |= last;
+        last = effect.requests.arm9;
+    }
+    (requests, early, last)
+}
+
+#[test]
+fn given_a_card_channel_of_4_units_when_words_arrive_then_it_takes_4_requests_and_raises_its_irq_once_at_the_end()
+ {
+    assert_eq!(requests_to_finish(4, IRQ), (4, 0, IF_DMA0));
+}
+
+#[test]
+fn given_a_card_channel_of_1_unit_when_a_word_arrives_then_it_finishes_on_that_request() {
+    assert_eq!(requests_to_finish(1, IRQ), (1, 0, IF_DMA0));
+}
+
+#[test]
+fn given_a_card_channel_with_units_left_when_a_unit_finishes_then_it_stays_enabled_with_its_addresses_moved()
+ {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | CARD9 | 3,
+        Trigger::CardWord { arm9: true },
+    );
+    dma.finish(
+        &t,
+        End {
+            source: MAIN + 4,
+            destination: OTHER + 4,
+        },
+    );
+    dma.trigger(Trigger::CardWord { arm9: true });
+    let next = dma.begin(0).expect("the second word queued a start");
+    assert_eq!(
+        (dma.control(0) >> 31, next.source, next.destination),
+        (1, MAIN + 4, OTHER + 4)
+    );
+}
+
+#[test]
+fn given_a_repeating_card_channel_when_its_last_unit_finishes_then_it_waits_for_the_next_word() {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | REPEAT | CARD9 | 1,
+        Trigger::CardWord { arm9: true },
+    );
+    dma.finish(&t, END);
+    assert_eq!(dma.trigger(Trigger::CardWord { arm9: true }), 0b1);
+}
+
+#[test]
+fn given_a_card_channel_without_repeat_when_its_last_unit_finishes_then_it_is_disabled() {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | CARD9 | 1,
+        Trigger::CardWord { arm9: true },
+    );
+    dma.finish(&t, END);
+    assert_eq!(dma.control(0) >> 31, 0);
+}

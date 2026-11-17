@@ -291,8 +291,9 @@ that is "in flight" is rebuilt as an event on load (`scheduler.md`, "Savestate c
 - **The transfer waits for the CPU.** The next word is scheduled when the previous is taken,
   so a slow reader slows the transfer. Hardware may instead overrun; see "Unverified".
 - **Cart events sort before DMA events** at the same master time, so a DMA channel started by the
-  word that just became ready finds the word ready. This is our choice of tie order;
-  `scheduler.md` records it when the card's event lands (#37, timing PR).
+  word that just became ready finds the word ready. This is our choice of tie order, recorded in
+  `scheduler.md` ("Events"). The card's single event is queued as the ARM9's whichever CPU's
+  access queued it (both CPUs see the one device).
 - **Plain data.** See "Scope".
 
 ## Edge cases
@@ -326,6 +327,8 @@ Each item is a choice the model makes where GBATEK is silent or unclear. Each ge
   GBATEK says only that the IRQ is on the transfer's end.
 - **Word taking:** the model takes a ready word on any data register read that includes byte 3.
   Hardware behavior for partial reads is not stated.
+- **Tie order and the event's CPU:** the card's event sorts before the timers and DMA and is queued
+  as the ARM9's (`scheduler.md`, "Unverified"); neither is a hardware fact.
 - **A slow reader:** the model waits for the CPU before it prepares the next word; hardware may
   overrun or drop data.
 - **Start rules:** AUXSPICNT bit 15 (enable) and ROMCTRL RESB are stored but do not gate a

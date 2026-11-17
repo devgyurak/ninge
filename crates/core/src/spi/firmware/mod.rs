@@ -132,6 +132,8 @@ impl Default for FirmwareSettings {
             birthday_month: 1,
             birthday_day: 1,
             year: 2025,
+            // TODO(hw-unverified): the boot menu bit is our choice, because ninge boots the cartridge
+            // directly (`firmware.md`, "Unverified").
             boot_menu_disabled: true,
         }
     }

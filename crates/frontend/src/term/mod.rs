@@ -147,7 +147,17 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
     // The save file is written last and even when the loop failed, so a game's save is not lost;
     // a write failure shows once the terminal is restored.
     let saved = app.finish().context("writing the save file");
-    looped.and(saved).map(|()| app.save_note())
+    outcome(looped.and(saved), app.save_note())
+}
+
+/// The run's result with the save note: on success the note is handed back to print; on failure it
+/// is put in the error, so the user still learns which chip the save file belongs to.
+fn outcome(result: anyhow::Result<()>, note: Option<String>) -> anyhow::Result<Option<String>> {
+    match (result, note) {
+        (Ok(()), note) => Ok(note),
+        (Err(error), Some(note)) => Err(error.context(note)),
+        (Err(error), None) => Err(error),
+    }
 }
 
 /// Draws and reads input until the user quits.

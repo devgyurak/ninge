@@ -103,6 +103,9 @@ These are choices of the emulator. They do not describe a part.
   SPICNT bit 14 set. It fires at `done_at` and raises ARM7 IF bit 23. A transfer without the IRQ
   queues nothing. The event is not saved: a loaded state rebuilds it from `done_at` and the stored
   IRQ bit (the same approach as every other timed device, `scheduler.md`).
+- **A late interrupt.** If a unit's event has not fired yet when the next unit starts (the ARM7 can
+  run past the unit's end before the queue reaches it), the old interrupt is raised at that write
+  and its queued event is dropped, so a new transfer never loses it.
 - **The reply is known at once.** The device answers when the transfer starts; busy only delays
   when software sees it.
 
@@ -131,6 +134,8 @@ hardware, or a trace against the reference emulator used as an oracle.
   `io/spi/`.
 - **16-bit mode:** the second byte sent is zero, the byte kept is the second one received, and the
   unit takes twice as long. GBATEK says only that every second byte appears. `io/spi/`.
+- **A late interrupt** (a unit's event has not fired when the next unit starts) is raised at that
+  write, not at the unit's end; real hardware raises it at the end. `io/spi/`.
 - **When the IRQ fires** if SPICNT bit 14 changes during a transfer: the bit as it was at the
   start decides. `io/spi/`.
 - **The bus enable bit:** a write with bit 15 clear is dropped. GBATEK does not say what the

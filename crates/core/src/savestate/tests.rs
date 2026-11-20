@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::bus::{Region, VramBankState, VramMapping};
+use crate::cart::save::{SaveChip, SaveType};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::DeviceId;
@@ -18,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_215_031;
-const PINNED_HASH: u64 = 0x9ce3c64ca64ea24a;
+const PINNED_LEN: usize = 5_477_187;
+const PINNED_HASH: u64 = 0xa468016964a32e51;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -82,8 +83,12 @@ const PINNED_HASH: u64 = 0x9ce3c64ca64ea24a;
 /// chip fitted), so both lengths grew by 8 and both hashes moved.
 /// Version 36 (#38) added the bytes a chip of unknown type records of its open session; with no
 /// session open they take no space, so only the version in the header changed and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_950;
-const PINNED_BOOTED_HASH: u64 = 0x735451d2f4933b68;
+/// Version 37 (#39) added the SPI bus and the firmware chip: SPICNT, SPIDATA, the time the unit on
+/// the wire is done and the interrupt's due time (four one-byte fields while idle), and the chip's
+/// own fields with its 256 KiB image behind a three-byte length, so both lengths grew by 262,156 and
+/// both hashes moved.
+const PINNED_BOOTED_LEN: usize = 6_067_106;
+const PINNED_BOOTED_HASH: u64 = 0x8c4d9692c1ec3205;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -661,6 +666,140 @@ fn given_the_input_a_when_hashed_with_fnv1a64_then_it_matches_the_published_vect
 #[test]
 fn given_the_input_foobar_when_hashed_with_fnv1a64_then_it_matches_the_published_vector() {
     assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+}
+
+// ------------------------------------------------------------------------- the SPI bus (#39)
+
+/// SPICNT, SPIDATA and the bits the tests set (`docs/hw/spi.md`).
+const SPICNT_ADDR: u32 = 0x0400_01C0;
+const SPIDATA_ADDR: u32 = 0x0400_01C2;
+/// Enabled, firmware selected, hold, IRQ, at baud 3 so the byte is long on the wire.
+const SPI_ON: u16 = 0x8000 | 0x4000 | 0x0800 | 0x0100 | 0x0003;
+const RDID: u8 = 0x9F;
+const IF_SPI: u32 = 1 << 23;
+
+/// A machine that booted the counter program, ran a frame, and whose ARM7 then writes the first
+/// byte of RDID and has IE for the SPI interrupt set, so the unit is on the wire when it returns.
+fn with_a_byte_in_flight() -> Machine {
+    let mut machine = booted(&counter_rom(), 1);
+    let now = machine.arm7_clock;
+    {
+        let mut bus = machine.bus7(now);
+        bus.write32(0x0400_0210, IF_SPI);
+        bus.write16(SPICNT_ADDR, SPI_ON);
+        bus.write8(SPIDATA_ADDR, RDID);
+    }
+    machine
+}
+
+/// Sends each session to the firmware through the ARM7's bus, hold on for every byte but the last.
+/// A frame runs after each byte, so the next finds the bus idle and the ARM7 where a CPU would be.
+fn write_firmware(machine: &mut Machine, sessions: &[&[u8]]) {
+    let units = sessions.iter().flat_map(|bytes| {
+        let last = bytes.len() - 1;
+        bytes
+            .iter()
+            .enumerate()
+            .map(move |(i, &byte)| (byte, [0x0800u16, 0][usize::from(i == last)]))
+    });
+    units.for_each(|(byte, hold)| {
+        let now = machine.arm7_clock;
+        let mut bus = machine.bus7(now);
+        bus.write16(SPICNT_ADDR, 0x8100 | hold);
+        bus.write8(SPIDATA_ADDR, byte);
+        run_frames(machine, 1);
+    });
+}
+
+#[test]
+fn given_a_byte_in_flight_when_saved_loaded_and_continued_then_it_equals_an_uninterrupted_run() {
+    let rom = counter_rom();
+    let bytes = with_a_byte_in_flight().save_state();
+    let mut resumed = booted(&rom, 0);
+    let result = resumed.load_state(&bytes);
+    run_frames(&mut resumed, 1);
+
+    let mut straight = with_a_byte_in_flight();
+    run_frames(&mut straight, 1);
+    assert_eq!(
+        (result, resumed.save_state() == straight.save_state()),
+        (Ok(()), true)
+    );
+}
+
+#[test]
+fn given_a_byte_in_flight_when_the_frame_runs_then_the_interrupt_is_raised_on_the_arm7_only() {
+    let mut machine = with_a_byte_in_flight();
+    let before = machine.inspect().irq7().if_() & IF_SPI;
+    run_frames(&mut machine, 1);
+    let view = machine.inspect();
+    assert_eq!(
+        (
+            before,
+            view.irq7().if_() & IF_SPI,
+            view.irq9().if_() & IF_SPI
+        ),
+        (0, IF_SPI, 0)
+    );
+}
+
+#[test]
+fn given_a_byte_in_flight_when_loaded_then_the_firmware_session_and_the_busy_time_are_kept() {
+    let saved = with_a_byte_in_flight();
+    let mut loaded = booted(&counter_rom(), 0);
+    let result = loaded.load_state(&saved.save_state());
+    let (a, b) = (saved.inspect(), loaded.inspect());
+    assert_eq!(
+        (
+            result,
+            b.spi().firmware().command(),
+            b.spi().done_at() == a.spi().done_at(),
+            b.spi().spicnt() == a.spi().spicnt(),
+        ),
+        (Ok(()), Some(RDID), true, true)
+    );
+}
+
+#[test]
+fn given_a_byte_written_to_the_firmware_when_saved_and_loaded_then_the_image_keeps_it() {
+    let mut machine = booted(&counter_rom(), 1);
+    // WREN, then a page program of one byte at 10000h.
+    write_firmware(&mut machine, &[&[0x06], &[0x02, 0x01, 0x00, 0x00, 0xA5]]);
+    let mut loaded = booted(&counter_rom(), 0);
+    let result = loaded.load_state(&machine.save_state());
+    assert_eq!(
+        (result, loaded.inspect().spi().firmware().data()[0x1_0000]),
+        (Ok(()), 0xA5)
+    );
+}
+
+#[test]
+fn given_the_same_rom_and_the_same_spi_traffic_when_run_twice_then_the_savestate_bytes_are_identical()
+ {
+    let run = || {
+        let mut machine = with_a_byte_in_flight();
+        run_frames(&mut machine, 2);
+        machine.save_state()
+    };
+    assert_eq!(run(), run());
+}
+
+#[test]
+fn given_a_state_whose_firmware_image_is_short_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = booted(&counter_rom(), 1);
+    let wrong_chip = SaveChip::blank(SaveType::Flash512K);
+    saver
+        .io
+        .replace_spi_for_test(crate::io::spi::Spi::with_firmware_for_test(wrong_chip));
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let before = target.save_state();
+    let result = target.load_state(&bytes);
+    assert_eq!(
+        (result, target.save_state() == before),
+        (Err(SavestateError::Corrupt), true)
+    );
 }
 
 // ------------------------------------------------------------------------------- pinned layout

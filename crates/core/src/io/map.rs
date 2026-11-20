@@ -20,6 +20,7 @@ use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::IME_ADDR;
 use crate::io::keypad::{ARM7_BYTES as KEYPAD7_BYTES, ARM9_BYTES as KEYPAD9_BYTES, KEYINPUT_ADDR};
 use crate::io::power::{BLOCK_BYTES as POWER_BYTES, POSTFLG_ADDR};
+use crate::io::spi::{BLOCK_BYTES as SPI_BYTES, SPICNT_ADDR};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::DISPSTAT_ADDR;
 
@@ -62,6 +63,8 @@ pub(crate) enum Port {
     DivSqrt,
     /// HALTCNT, ARM7 only.
     Power,
+    /// SPICNT and SPIDATA, ARM7 only.
+    Spi,
     /// AUXSPICNT, AUXSPIDATA, ROMCTRL and the command registers of the cartridge slot.
     Cart,
     /// EXMEMCNT / EXMEMSTAT: its own entry, because it lives in a different block, but the same
@@ -87,6 +90,7 @@ impl Port {
             Self::DivSqrt => DIVCNT_ADDR,
             Self::Keypad => KEYINPUT_ADDR,
             Self::Power => POSTFLG_ADDR,
+            Self::Spi => SPICNT_ADDR,
             Self::Cart | Self::CartExmem | Self::CartData => AUXSPICNT_ADDR,
         }
     }
@@ -153,7 +157,7 @@ pub(crate) const ARM9_PORTS: [PortEntry; 30] = [
 
 /// What the ARM7 sees: the same blocks, without the 2D engines, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
-pub(crate) const ARM7_PORTS: [PortEntry; 12] = [
+pub(crate) const ARM7_PORTS: [PortEntry; 13] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
@@ -167,6 +171,8 @@ pub(crate) const ARM7_PORTS: [PortEntry; 12] = [
     (VRAMCNT_A_ADDR, 4, None),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
     (AUXSPICNT_ADDR, CART_BYTES, Some(Port::Cart)),
+    // SPICNT and SPIDATA, after the cartridge block.
+    (SPICNT_ADDR, SPI_BYTES, Some(Port::Spi)),
     (EXMEMCNT_ADDR, 4, Some(Port::CartExmem)),
     (CART_DATA_ADDR, 4, Some(Port::CartData)),
 ];

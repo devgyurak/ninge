@@ -15,6 +15,7 @@ mod ipc;
 mod irq;
 mod mmdisp;
 mod rebuild;
+mod rtc;
 mod save;
 mod scheduler;
 mod swi_data;

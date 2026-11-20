@@ -34,9 +34,11 @@ pub use crate::io::ipc::Ipc;
 pub use crate::io::irq::InterruptController;
 pub use crate::io::keypad::Keypad;
 pub use crate::io::power::Power;
+pub use crate::io::rtc::Rtc;
 pub use crate::io::spi::Spi;
 pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
+pub use crate::rtc::{Chip, Register, Session};
 pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
 
 /// A read-only view of one [`Machine`], from [`Machine::inspect`]. It borrows the machine, so the
@@ -169,6 +171,14 @@ impl<'a> Inspect<'a> {
     // and status; #57's memory view shows the firmware image through it.
     pub fn spi(&self) -> &'a Spi {
         self.machine.io.spi()
+    }
+
+    /// The ARM7's RTCCNT and the clock chip behind its pins.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows RTCCNT, the chip's
+    // transfer in progress, its status and alarm registers, and the clock as the host's time plus
+    // the program's offset.
+    pub fn rtc(&self) -> &'a Rtc {
+        self.machine.io.rtc()
     }
 
     /// The ARM9's four timers.

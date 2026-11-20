@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_477_187;
-const PINNED_HASH: u64 = 0xa468016964a32e51;
+const PINNED_LEN: usize = 5_477_202;
+const PINNED_HASH: u64 = 0xf60583d875d39197;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -87,11 +87,15 @@ const PINNED_HASH: u64 = 0xa468016964a32e51;
 /// the wire is done and the interrupt's due time (four one-byte fields while idle), and the chip's
 /// own fields with its 256 KiB image behind a three-byte length, so both lengths grew by 262,156 and
 /// both hashes moved.
+/// Version 38 (#40) added the clock chip and the host's time in the input: RTCCNT, the chip's offset,
+/// weekday base, two status bytes, two three-byte alarms, the adjust and free bytes and the idle
+/// session (fourteen fields, each a one-byte varint at power-on) and the input's `wall_time` (one byte while zero),
+/// so both lengths grew by 15 and both hashes moved.
 /// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
 /// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
 /// being zero) and the version stayed.
-const PINNED_BOOTED_LEN: usize = 6_067_108;
-const PINNED_BOOTED_HASH: u64 = 0xd0a067ec7c3d50a1;
+const PINNED_BOOTED_LEN: usize = 6_067_123;
+const PINNED_BOOTED_HASH: u64 = 0x1893b5b9cba1e497;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -601,6 +605,7 @@ fn input_for(frame: u32) -> Input {
         buttons: Buttons::from_bits_truncate(0x0111_u16.rotate_left(frame)),
         touch: None,
         hinge_closed: frame % 2 == 1,
+        wall_time: frame * 3_600,
     }
 }
 
@@ -795,6 +800,26 @@ fn given_a_state_whose_firmware_image_is_short_when_loaded_then_it_is_corrupt_an
     saver
         .io
         .replace_spi_for_test(crate::io::spi::Spi::with_firmware_for_test(wrong_chip));
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let before = target.save_state();
+    let result = target.load_state(&bytes);
+    assert_eq!(
+        (result, target.save_state() == before),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_clock_chip_is_in_a_session_that_cannot_exist_when_loaded_then_it_is_corrupt()
+{
+    let mut saver = booted(&counter_rom(), 1);
+    let session = crate::rtc::Session::Command { byte: 0, bits: 9 };
+    saver
+        .io
+        .replace_rtc_for_test(crate::io::rtc::Rtc::with_chip_for_test(
+            crate::rtc::Chip::with_session_for_test(session),
+        ));
     let bytes = saver.save_state();
     let mut target = booted(&counter_rom(), 1);
     let before = target.save_state();

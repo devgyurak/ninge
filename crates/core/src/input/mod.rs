@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What the host gives the machine for one frame: the buttons held, where the touch panel is
-//! pressed and whether the hinge is closed (`docs/hw/keypad.md`, "Where the bits come from").
+//! pressed, whether the hinge is closed (`docs/hw/keypad.md`, "Where the bits come from") and the
+//! time of day the clock chip shows (`docs/hw/rtc.md`, "How the model gets its time").
 //!
 //! The host builds an [`Input`] and hands it to `Machine::run_frame`; the machine latches it as
 //! the frame begins, so one `Input` per frame is a complete input log (AGENTS.md §2 rule 6).
@@ -95,6 +96,12 @@ pub struct Input {
     pub touch: Option<Touch>,
     /// Whether the hinge is closed (EXTKEYIN bit 7).
     pub hinge_closed: bool,
+    /// The host's wall-clock time for this frame, in whole seconds since 2000-01-01 00:00:00 in the
+    /// host's local time: a plain number, with no time zone in the core. The clock chip shows this
+    /// plus whatever the program set it by (`rtc.md`, "How the model gets its time"); the default
+    /// is 0, the first second of 2000, so a run with no setup is deterministic. A time past 2099
+    /// wraps to 2000 inside the chip.
+    pub wall_time: u32,
 }
 
 impl Input {
@@ -104,6 +111,7 @@ impl Input {
             buttons: Buttons::empty(),
             touch: None,
             hinge_closed: false,
+            wall_time: 0,
         }
     }
 
@@ -125,6 +133,14 @@ impl Input {
     #[must_use]
     pub const fn with_hinge_closed(mut self, hinge_closed: bool) -> Self {
         self.hinge_closed = hinge_closed;
+        self
+    }
+
+    /// This input with the host's wall-clock time `wall_time`: seconds since 2000-01-01 00:00:00,
+    /// local time.
+    #[must_use]
+    pub const fn with_wall_time(mut self, wall_time: u32) -> Self {
+        self.wall_time = wall_time;
         self
     }
 }

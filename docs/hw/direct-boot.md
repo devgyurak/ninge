@@ -26,11 +26,11 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
    starts at its entry point (see "ARM7 state at entry").
 
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not
-holding cartridge data is zero-filled. The chip ID the BIOS leaves at `027FF800h` and the
-firmware's copies are filled (see "The chip ID"); the other values written into `027FF800h`-
-`027FFC41h`, the user settings and the firmware boot-code fragments are not modeled
-(`TODO(#39)` for the user settings). Binaries go through the bus views' `write8`, so
-they land only in main RAM.
+holding cartridge data is zero-filled. The values the BIOS and firmware leave in `027FF800h`-
+`027FF893h`, `027FFC00h`-`027FFC41h` and `027FFC80h`-`027FFCEFh` (the chip ID, the header CRC
+copies, the flags, the boot indicator, the user settings) are filled after the binaries; see "The
+chip ID" and "Boot-time values in main RAM" (#39). The firmware boot-code fragments are not
+modeled. Binaries go through the bus views' `write8`, so they land only in main RAM.
 
 ## ARM9 state at entry
 
@@ -89,6 +89,47 @@ the one after it, so `pipeline[0]` is the opcode at the entry address and R15 re
 (`arm-branch-pipeline.md`, "Refill after an R15 write"). The fetch goes through the same bus
 view as every instruction fetch.
 
+## Boot-time values in main RAM
+
+Sources: GBATEK "NDS BIOS RAM Usage"; GBATEK "DS Firmware User Settings"; GBATEK "DS Cartridge
+Header". Written by `crates/core/src/hle/direct_boot.rs` through the ARM9 view, after the
+binaries (#39). A row's source is **GBATEK** (a constant GBATEK states for cartridge boot time),
+**image** (computed from the loaded image or the synthetic firmware, `firmware.md`) or **zero**
+(left at zero). Widths are bytes. `TODO(hw-unverified)` sits at every GBATEK-constant row and every
+zero row that GBATEK gives a meaning to.
+
+| Address | Width | Value | Source |
+|---|---|---|---|
+| `027FF800h`, `027FFC00h` | 4 | cartridge chip ID 1 | image (see "The chip ID") |
+| `027FF804h`, `027FFC04h` | 4 | cartridge chip ID 2 | image (see "The chip ID") |
+| `027FF808h`, `027FFC08h` | 2 | header CRC: the header's `15Eh` | image |
+| `027FF80Ah`, `027FFC0Ah` | 2 | secure-area CRC: the header's `06Ch` | image |
+| `027FF80Ch`, `027FFC0Ch` | 2 | header missing or bad: 0 if CRC-16 of header `000h`-`15Dh` equals `15Eh`, else 1 | image |
+| `027FF80Eh`, `027FFC0Eh` | 2 | secure area bad: 0 (direct boot never checks it) | image |
+| `027FF810h` | 2 | boot handler task number: `FFFFh` | GBATEK |
+| `027FF812h`, `027FFC12h` | 2 | secure disable | zero |
+| `027FF814h`, `027FFC14h` | 2 | SIO debug connection exists | zero |
+| `027FF816h`, `027FFC16h` | 2 / 1 | RTC status | zero |
+| `027FF818h`, `027FFC17h` | 1 | random byte | zero (determinism) |
+| `027FF850h`, `027FFC10h` | 2 | ARM7 BIOS CRC: `5835h` | GBATEK |
+| `027FF860h` | 4 | copy of the header's ARM7 RAM address (`038h`) | image |
+| `027FF864h` | 4 | firmware user settings bad: 0 | image |
+| `027FF868h` | 4 | user settings flash address: `[020h] * 8` of the firmware header, `3FE00h` | image |
+| `027FF874h` | 2 | firmware part 5 CRC: our firmware header's `026h` | image |
+| `027FF876h` | 2 | firmware part 3/4 CRC: 0 (usually zero at cartridge boot) | GBATEK |
+| `027FF880h` | 4 | message from the ARM9 to the ARM7: 7 | GBATEK |
+| `027FF884h` | 4 | ARM7 boot task: 6 | GBATEK |
+| `027FF890h` | 4 | boot flags: `B0002A22h` ("somewhat") | GBATEK |
+| `027FFC30h`-`027FFC3Bh` | 12 | GBA-slot header fields | zero |
+| `027FFC3Ch` | 4 | frame counter | zero |
+| `027FFC40h` | 2 | boot indicator: 1 (required by some games) | GBATEK |
+| `027FFC80h`-`027FFCEFh` | `70h` | the first `70h` bytes of the newest user-settings area | image |
+
+Row `027FF860h` ("somewhat a copy" in GBATEK) is written with the ARM7 RAM address of the header,
+`TODO(hw-unverified)`. Everything else in `027FF800h`-`027FF893h` and `027FFC00h`-`027FFC41h` stays
+zero, as does `023FEE00h` (the firmware's ARM9 boot-code fragments) and `0380F700h`, `0380F980h`
+(the ARM7's), which only a dump could give.
+
 ## CP15 state at entry
 
 GBATEK says the firmware configures the ITCM size to 32 MiB (mirrors through `0000_0000h`-
@@ -128,10 +169,14 @@ the frame counter.
 - **Other register banks** (FIQ, Abort, Undefined) start at zero. — `boot` — verify likewise.
 - **The ARM9 and ARM7 placement order** when the two binaries overlap: the ARM9 binary is copied
   first, then the ARM7's. GBATEK says nothing. — `boot` — verify likewise.
-- **The values the BIOS and firmware leave outside the header copy** (the header CRC copy, user
-  settings, boot flags such as the boot indicator at `027FFC40h`, which GBATEK calls required for
-  some games) are zero here; only the chip ID is filled (see "The chip ID"). — `boot` — verify
-  likewise; `TODO(#39)` for the user settings; the others have no issue yet.
+- **The values the BIOS and firmware leave outside the header copy** are written from GBATEK's
+  constants and our own images (see "Boot-time values in main RAM", #39). The constants (the boot
+  handler task, the BIOS CRC, the boot messages, the boot flags, the boot indicator) are GBATEK's
+  claims for cartridge boot time and are not checked on hardware; the secure-area-bad flag is 0
+  because direct boot never checks the secure area; the fields that need a BIOS value (secure
+  disable, SIO debug, RTC status, the random byte, the GBA-slot fields, the frame counter, the
+  firmware boot-code fragments) stay zero. — `hle/direct_boot.rs` — verify by a test ROM that
+  dumps the range on hardware.
 - **The chip ID stands in for the real card's.** The BIOS leaves what the card answers; the model
   writes the ID computed from the image, the same function `B8` uses, so the two agree by
   construction (`cart-protocol.md`, "Unverified"). — `boot` — verify with a test ROM that compares

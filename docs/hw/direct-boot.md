@@ -28,7 +28,7 @@ from a BIOS or firmware dump; the values are GBATEK's description of the state.
 All other memory is zero: GBATEK's summary of memory at cartridge boot says everything not
 holding cartridge data is zero-filled. The values the BIOS and firmware leave in `027FF800h`-
 `027FF893h`, `027FFC00h`-`027FFC41h` and `027FFC80h`-`027FFCEFh` (the chip ID, the header CRC
-copies, the flags, the boot indicator, the user settings) are filled after the binaries; see "The
+copies, the flags, the boot indicator, the user settings) are filled with the header copy; see "The
 chip ID" and "Boot-time values in main RAM" (#39). The firmware boot-code fragments are not
 modeled. Binaries go through the bus views' `write8`, so they land only in main RAM.
 
@@ -92,11 +92,11 @@ view as every instruction fetch.
 ## Boot-time values in main RAM
 
 Sources: GBATEK "NDS BIOS RAM Usage"; GBATEK "DS Firmware User Settings"; GBATEK "DS Cartridge
-Header". Written by `crates/core/src/hle/direct_boot.rs` through the ARM9 view, after the
-binaries (#39). A row's source is **GBATEK** (a constant GBATEK states for cartridge boot time),
+Header". Written by `crates/core/src/hle/direct_boot.rs` through the ARM9 view, with the header
+copy and before the binaries (#39: no binary can reach this range). A row's source is **GBATEK** (a constant GBATEK states for cartridge boot time),
 **image** (computed from the loaded image or the synthetic firmware, `firmware.md`) or **zero**
-(left at zero). Widths are bytes. `TODO(hw-unverified)` sits at every GBATEK-constant row and every
-zero row that GBATEK gives a meaning to.
+(left at zero). Widths are bytes. `TODO(hw-unverified)` sits at each GBATEK-constant value in `boot_values` and in one block above
+the zero rows that GBATEK gives a meaning to.
 
 | Address | Width | Value | Source |
 |---|---|---|---|
@@ -113,7 +113,7 @@ zero row that GBATEK gives a meaning to.
 | `027FF818h`, `027FFC17h` | 1 | random byte | zero (determinism) |
 | `027FF850h`, `027FFC10h` | 2 | ARM7 BIOS CRC: `5835h` | GBATEK |
 | `027FF860h` | 4 | copy of the header's ARM7 RAM address (`038h`) | image |
-| `027FF864h` | 4 | firmware user settings bad: 0 | image |
+| `027FF864h` | 4 | firmware user settings bad: 0, or 1 when neither settings area has a valid CRC (then no copy is written) | image |
 | `027FF868h` | 4 | user settings flash address: `[020h] * 8` of the firmware header, `3FE00h` | image |
 | `027FF874h` | 2 | firmware part 5 CRC: our firmware header's `026h` | image |
 | `027FF876h` | 2 | firmware part 3/4 CRC: 0 (usually zero at cartridge boot) | GBATEK |
@@ -171,7 +171,7 @@ the frame counter.
   first, then the ARM7's. GBATEK says nothing. — `boot` — verify likewise.
 - **The values the BIOS and firmware leave outside the header copy** are written from GBATEK's
   constants and our own images (see "Boot-time values in main RAM", #39). The constants (the boot
-  handler task, the BIOS CRC, the boot messages, the boot flags, the boot indicator) are GBATEK's
+  handler task `FFFFh`, the BIOS CRC `5835h`, the boot messages, the boot flags, the boot indicator) are GBATEK's
   claims for cartridge boot time and are not checked on hardware; the secure-area-bad flag is 0
   because direct boot never checks the secure area; the fields that need a BIOS value (secure
   disable, SIO debug, RTC status, the random byte, the GBA-slot fields, the frame counter, the

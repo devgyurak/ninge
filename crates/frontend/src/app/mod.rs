@@ -16,6 +16,7 @@
 //! [`Input`], and keep the terminal poll a thin adapter around it, as [`map_event`] is. That holds
 //! whether the poll later runs on this loop or on an input thread.
 
+use crate::clock::local_wall_time;
 use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
@@ -83,6 +84,8 @@ pub struct App<S = NoShm> {
     quit: bool,
     transfer: Transfer,
     sink: S,
+    /// The host's wall-clock time, read once a frame for the machine's clock chip.
+    clock: fn() -> u32,
 }
 
 impl App<NoShm> {
@@ -105,7 +108,15 @@ impl<S: ShmSink> App<S> {
             quit: false,
             transfer,
             sink,
+            clock: local_wall_time,
         }
+    }
+
+    /// Reads the host's time from `clock` instead of the system clock, so a test controls it.
+    #[must_use]
+    pub fn with_clock(mut self, clock: fn() -> u32) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Takes frames from `source` instead of the dummy pattern.
@@ -182,8 +193,9 @@ impl<S: ShmSink> App<S> {
     pub fn graphics(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         if let Source::Machine(machine) = &mut self.source {
-            // TODO(phase5): the key mapping will build the frame's input here; until then none is held.
-            machine.run_frame(Input::new());
+            // TODO(phase5): the key mapping will build the rest of the frame's input here; until
+            // then no button is held. The host's local time feeds the clock chip (`rtc.md`).
+            machine.run_frame(Input::new().with_wall_time((self.clock)()));
             if let Some(save) = &mut self.save {
                 save.after_frame(machine);
             }

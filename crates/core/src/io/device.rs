@@ -140,8 +140,8 @@ impl Effect {
 ///
 /// `host` is the [`Input`] `Io` latched as the frame began: stored once, in `Io`, and handed to
 /// whichever device an access reaches. This is the path a device takes host data in: the keypad
-/// reads its buttons here, and the touch controller (#44) and the RTC will read the touch point and
-/// the host's time here too, with no copy of their own and no latch call. `rom` is the image the
+/// reads its buttons here, and the RTC reads the host's time here (`wall_time`), and the touch controller
+/// (#44) will read the touch point, with no copy of their own and no latch call. `rom` is the image the
 /// machine was loaded with, handed over the same way: the cartridge device reads it here and keeps
 /// no copy, so the savestate stays free of ROM bytes (`cart-protocol.md`, "Savestate"). `Copy`, and
 /// built per access on the I/O slow path only.

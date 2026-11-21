@@ -8,12 +8,6 @@
 //! the start. Everything here is integer arithmetic and total: a value that is not a calendar
 //! value comes back as `None`, never as a panic.
 
-// The chip that uses these arrives in the next PR of #40; until then only the tests do.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the chip of the next PR of #40 uses the calendar")
-)]
-
 /// Seconds in a day.
 pub(crate) const SECONDS_PER_DAY: u32 = 86_400;
 
@@ -30,7 +24,8 @@ const DAYS_IN_RANGE: u32 = 36_525;
 
 /// Seconds in the whole range, 2000-01-01 00:00:00 up to and not including 2100-01-01 00:00:00.
 /// A time at or past it wraps to the start (`rtc.md`, "Unverified").
-// TODO(hw-unverified): the wrap at the end of the range (`rtc.md`, "Unverified").
+// TODO(hw-unverified): the wrap at the end of the range, and the weekday across it (`rtc.md`,
+// "Unverified").
 pub(crate) const SPAN: u32 = DAYS_IN_RANGE * SECONDS_PER_DAY;
 
 /// The weekday of 2000-01-01 (a Saturday) when Monday is 0: the day-of-week counter's value for

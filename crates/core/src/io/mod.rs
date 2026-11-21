@@ -25,6 +25,7 @@ pub mod irq;
 pub mod keypad;
 pub(crate) mod map;
 pub mod power;
+pub mod rtc;
 pub mod spi;
 #[cfg(test)]
 mod tests;
@@ -43,6 +44,7 @@ use irq::{InterruptController, Requests};
 use keypad::Keypad;
 use map::Port;
 use power::Power;
+use rtc::Rtc;
 use serde::{Deserialize, Serialize};
 use spi::Spi;
 use timers::Timers;
@@ -82,6 +84,8 @@ registry! {
         power / power_mut: Power = Power::new() => [Port::Power],
         /// The ARM7's SPI bus and the firmware chip on it (`spi.md`).
         spi: Spi = Spi::new() => [Port::Spi],
+        /// The ARM7's RTCCNT and the clock chip on its pins (`rtc.md`).
+        rtc: Rtc = Rtc::new() => [Port::Rtc],
     }
     each {
         /// Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
@@ -351,6 +355,12 @@ impl Io {
     #[cfg(test)]
     pub(crate) fn replace_spi_for_test(&mut self, spi: Spi) {
         self.spi = spi;
+    }
+
+    /// Replaces the RTC, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn replace_rtc_for_test(&mut self, rtc: Rtc) {
+        self.rtc = rtc;
     }
 
     /// Replaces the IPC block, to build a corrupt state in a test.

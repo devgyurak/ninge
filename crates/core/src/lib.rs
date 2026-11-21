@@ -35,6 +35,7 @@ mod hle;
 pub mod input;
 mod io;
 mod machine;
+mod rtc;
 pub mod savestate;
 mod scheduler;
 pub mod spi;

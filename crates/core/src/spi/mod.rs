@@ -3,8 +3,10 @@
 //! (`docs/hw/firmware.md`). The register window that reaches them is `io::spi`.
 
 pub mod firmware;
+pub mod touch;
 
 pub use firmware::{FIRMWARE_LEN, FirmwareSettings, Language, build, newest_user_settings};
+pub use touch::Tsc;
 
 /// The touch-screen calibration points the synthetic firmware stores, and the pair of points the
 /// touch controller of #41 must use to turn a pixel into ADC values (`docs/hw/firmware.md`, "The

@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod cli;
+pub mod clock;
 mod diacritics;
 pub mod kitty;
 pub mod layout;

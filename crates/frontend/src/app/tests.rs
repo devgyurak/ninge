@@ -352,3 +352,13 @@ fn given_a_machine_with_a_save_when_the_note_is_asked_then_it_names_the_chip() {
 fn given_the_dummy_pattern_when_the_note_is_asked_then_there_is_none() {
     assert_eq!(App::new(size()).save_note(), None);
 }
+
+#[test]
+fn given_a_machine_and_a_clock_when_a_frame_runs_then_the_machine_got_the_clock_s_time() {
+    let (app, path) = app_with_saved_machine("clock.bin");
+    let mut app = app.with_clock(|| 123_456);
+    run_frames(&mut app, 1);
+    let latched = app.machine().map(|m| m.inspect().input().wall_time);
+    let _ = std::fs::remove_file(path);
+    assert_eq!(latched, Some(123_456));
+}

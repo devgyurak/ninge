@@ -215,8 +215,8 @@ impl<'a> Inspect<'a> {
     }
 
     /// The ARM9's KEYCNT.
-    // The debugger's IO register panel shows it with the other devices'; the key bits are
-    // constants until input exists (`keypad.md`, #44).
+    // The debugger's IO register panel shows it with the other devices'; the key bits come from the
+    // latched input (`Inspect::input`).
     pub fn keypad9(&self) -> &'a Keypad<true> {
         self.machine.io.keypad9()
     }

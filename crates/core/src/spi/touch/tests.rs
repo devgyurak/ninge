@@ -294,6 +294,11 @@ fn malformed() -> Vec<Tsc> {
     let fresh = Tsc::new();
     vec![
         Tsc { mode: 4, ..fresh },
+        Tsc { mode: 1, ..fresh },
+        Tsc {
+            command: 0x81,
+            ..fresh
+        },
         Tsc { left: 3, ..fresh },
         Tsc { reply: 1, ..fresh },
         Tsc {

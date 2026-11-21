@@ -72,9 +72,16 @@ fn given_x_y_and_a_closed_hinge_when_a_frame_runs_then_the_arm7_extkeyin_follows
 }
 
 #[test]
-fn given_a_touch_point_when_a_frame_runs_then_the_pen_bit_still_reads_released() {
+fn given_a_touch_point_when_a_frame_runs_then_the_pen_bit_reads_pressed_in_the_default_mode() {
     let mut machine = Machine::new();
     machine.run_frame(Input::new().with_touch(Some(Touch { x: 10, y: 20 })));
+    assert_eq!(machine.inspect().arm7_peek16(0, EXTKEYIN), 0x003F);
+}
+
+#[test]
+fn given_no_touch_point_when_a_frame_runs_then_the_pen_bit_reads_released() {
+    let mut machine = Machine::new();
+    machine.run_frame(Input::new());
     assert_eq!(machine.inspect().arm7_peek16(0, EXTKEYIN), 0x007F);
 }
 

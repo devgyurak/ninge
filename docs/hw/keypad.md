@@ -76,12 +76,18 @@ keys; bits 10-15 read 0 as before. EXTKEYIN bit 0 follows X and bit 1 follows Y 
 bit 7 follows the hinge (1 = closed, 0 = open). With the default `Input` (nothing held, hinge
 open) both registers read what the "nothing pressed" stub read.
 
+### The pen bit
+
+The pen bit (EXTKEYIN bit 6) reads 0 while the latched `Input` has the panel touched **and** the
+touch controller's pen output is enabled by the power-down mode of its last control byte, and 1
+otherwise (`touch-power.md`, "The pen bit"). The keypad does not look at the controller: `Io` reads
+the pen output from the SPI bus and hands it over with the access. The bit follows the latched
+touch state, not the analog line (`touch-power.md`, "Unverified").
+
 ### What is still a stub
 
-The pen bit (EXTKEYIN bit 6) reads released whatever the touch position is: the touch point is
-carried in the `Input` and latched, but nothing reads it until the touch controller exists
-(Phase 5). The debug button reads released, and the unknown bits read as before. The keypad
-interrupt condition is never met, so no IRQ is raised, and the hinge IRQ is not raised either.
+The debug button reads released, and the unknown bits read as before. The keypad interrupt
+condition is never met, so no IRQ is raised, and the hinge IRQ is not raised either.
 
 KEYCNT stores the bits it defines (0-9, 14, 15) and reads them back; the other bits read 0. Each
 CPU has its own copy.
@@ -113,8 +119,7 @@ modeled and reads 0.
 
 Not modeled, so no code site: the keypad IRQ condition with an empty selection mask in AND mode,
 and the hinge IRQ (GBATEK: it cannot be disabled). Both arrive with the keypad and hinge
-interrupts (Phase 5, #231). The pen bit's link to the touch controller's pen-IRQ enable arrives
-with the touch SPI (Phase 5, #41, `touch-power.md`).
+interrupts (Phase 5, #231). The pen bit's link to the touch controller's pen enable is done (#41, `touch-power.md`).
 
 - That a button change reaches the registers at a frame boundary only is a choice of the model:
   on hardware the key matrix is read when the CPU reads the register — `crates/core/src/input/`

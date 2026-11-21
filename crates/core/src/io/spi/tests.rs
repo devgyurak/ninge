@@ -2,9 +2,10 @@
 //! The SPI bus and the firmware chip behind it, from `docs/hw/spi.md` and `docs/hw/firmware.md`.
 //! The firmware is the synthetic image; scenarios go through helpers and a test body only asserts.
 
-use super::{BUSY, Checked, ENABLE, HOLD, IRQ, SPICNT_MASK, Spi, WIDE};
+use super::{BUSY, Checked, ENABLE, HOLD, IRQ, PowerManagement, SPICNT_MASK, Spi, Tsc, WIDE};
 use crate::cpu::Bus;
-use crate::io::device::{Device, Effect, Width, cx_at};
+use crate::input::{Input, Touch};
+use crate::io::device::{Cx, Device, Effect, Lines, Width, cx_at};
 use crate::io::irq::{Requests, SPI_IRQ};
 use crate::io::map::{Owner, Port, decode};
 use crate::machine::Machine;
@@ -362,22 +363,144 @@ fn given_a_word_write_over_both_registers_when_made_then_spicnt_is_set_before_th
 }
 
 #[test]
-fn given_the_other_devices_when_a_byte_is_sent_then_the_line_floats_high_and_the_firmware_is_untouched()
+fn given_the_reserved_select_when_a_byte_is_sent_then_the_line_floats_high_and_the_firmware_is_untouched()
  {
-    // Selects 0 (power), 2 (touch) and 3 (reserved).
-    let answers: Vec<(u16, u8, bool)> = [0u16, 2, 3]
+    let mut spi = Spi::new();
+    write(
+        &mut spi,
+        0,
+        SPICNT,
+        Width::Half,
+        u32::from(ENABLE | 3 << 8 | HOLD),
+    );
+    write(&mut spi, 0, SPIDATA, Width::Byte, u32::from(RDID));
+    assert_eq!((spi.data(), spi.firmware().selected()), (0xFF, false));
+}
+
+/// SPICNT with the bus enabled and the power-management device selected, baud 0, 8-bit.
+const POWER: u16 = ENABLE;
+/// The same with the touch-screen controller selected.
+const TOUCH: u16 = ENABLE | (2 << 8);
+/// A touch control byte: X position, 12-bit, differential, power-down mode 0.
+const TOUCH_X: u8 = 0xD0;
+/// The panel the host presses in the touch tests.
+const PANEL: Option<Touch> = Some(Touch { x: 100, y: 50 });
+
+/// A write whose context carries the host's `input`, as `Io` hands it over.
+fn write_with(spi: &mut Spi, now: u64, offset: u32, value: u32, input: &Input) {
+    let cx = Cx {
+        now,
+        host: input,
+        rom: &[],
+        lines: Lines {
+            pen_irq_enabled: true,
+        },
+    };
+    // SPICNT takes a halfword write, SPIDATA a byte.
+    let width = match offset {
+        SPICNT => Width::Half,
+        _ => Width::Byte,
+    };
+    Device::<false>::write(spi, offset, width, value, cx);
+}
+
+/// Sends `bytes` as one session at `cnt` while the host's panel is `panel`, hold on for every
+/// byte but the last, and returns the reply of each.
+fn session_with(spi: &mut Spi, cnt: u16, bytes: &[u8], panel: Option<Touch>) -> Vec<u8> {
+    let input = Input::new().with_touch(panel);
+    let last = bytes.len() - 1;
+    bytes
         .iter()
-        .map(|&device| {
-            let mut spi = Spi::new();
-            let cnt = ENABLE | device << 8;
-            write(&mut spi, 0, SPICNT, Width::Half, u32::from(cnt | HOLD));
-            write(&mut spi, 0, SPIDATA, Width::Byte, u32::from(RDID));
-            (device, spi.data(), spi.firmware().selected())
+        .enumerate()
+        .map(|(i, &byte)| {
+            let now = spi.done_at() + GAP;
+            let hold = if i == last { 0 } else { HOLD };
+            write_with(spi, now, SPICNT, u32::from(cnt | hold), &input);
+            write_with(spi, now, SPIDATA, u32::from(byte), &input);
+            peek(spi, now + GAP - 1, SPIDATA, Width::Byte) as u8
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn given_the_touch_device_when_a_conversion_is_clocked_then_x_is_16_times_the_pixel() {
+    // The reply to the control byte, then the high byte and the low byte: ((hi << 8) | lo) >> 3.
+    let mut spi = Spi::new();
+    let reply = session_with(&mut spi, TOUCH, &[TOUCH_X, 0, 0], PANEL);
+    let adc = ((u16::from(reply[1]) << 8) | u16::from(reply[2])) >> 3;
+    assert_eq!(adc, 100 * 16);
+}
+
+#[test]
+fn given_the_touch_device_when_the_panel_is_released_then_x_reads_zero() {
+    let mut spi = Spi::new();
     assert_eq!(
-        answers,
-        [(0, 0xFF, false), (2, 0xFF, false), (3, 0xFF, false)]
+        session_with(&mut spi, TOUCH, &[TOUCH_X, 0, 0], None),
+        [0, 0, 0]
+    );
+}
+
+#[test]
+fn given_a_touch_command_in_mode_1_when_sent_then_the_pen_output_is_disabled_and_mode_0_enables_it()
+{
+    let mut spi = Spi::new();
+    session_with(&mut spi, TOUCH, &[TOUCH_X | 1], None);
+    let after_mode_1 = spi.pen_irq_enabled();
+    session_with(&mut spi, TOUCH, &[TOUCH_X], None);
+    assert_eq!((after_mode_1, spi.pen_irq_enabled()), (false, true));
+}
+
+#[test]
+fn given_the_touch_device_when_a_16_bit_unit_is_sent_then_the_second_reply_is_kept() {
+    // The control byte, then a zero byte: the reply of the zero byte is the high result byte.
+    let mut spi = Spi::new();
+    let input = Input::new().with_touch(PANEL);
+    write_with(&mut spi, 0, SPICNT, u32::from(TOUCH | WIDE | HOLD), &input);
+    write_with(&mut spi, 0, SPIDATA, u32::from(TOUCH_X), &input);
+    // 100 * 16 = 0x640 << 3 = 0x3200: the high byte is 0x32.
+    assert_eq!(spi.data(), 0x32);
+}
+
+#[test]
+fn given_the_power_device_when_register_0_is_written_and_read_then_it_reads_back_masked() {
+    let mut spi = Spi::new();
+    session_with(&mut spi, POWER, &[0x00, 0xFF], None);
+    let read = session_with(&mut spi, POWER, &[0x80, 0], None);
+    assert_eq!((read[1], spi.power().control()), (0x7F, 0x7F));
+}
+
+#[test]
+fn given_the_power_device_when_the_index_byte_is_sent_then_firmware_and_touch_are_untouched() {
+    let mut spi = Spi::new();
+    session_with(&mut spi, POWER, &[0x80, 0], None);
+    assert_eq!(
+        (spi.firmware().selected(), spi.touch().command()),
+        (false, 0)
+    );
+}
+
+#[test]
+fn given_the_power_device_when_a_16_bit_unit_is_sent_then_the_second_reply_is_kept() {
+    // Write register 0 = 0x0C, then read it with a 16-bit unit: index 80h, then a zero byte whose
+    // reply is the register.
+    let mut spi = Spi::new();
+    session_with(&mut spi, POWER, &[0x00, 0x0C], None);
+    let input = Input::new();
+    let now = spi.done_at() + GAP;
+    write_with(&mut spi, now, SPICNT, u32::from(POWER | WIDE), &input);
+    write_with(&mut spi, now, SPIDATA, 0x80, &input);
+    assert_eq!(spi.data(), 0x0C);
+}
+
+#[test]
+fn given_a_touch_or_power_state_the_hardware_cannot_reach_when_checked_then_the_bus_is_not_well_formed()
+ {
+    let bad_touch = Spi::with_devices_for_test(PowerManagement::new(), Tsc::with_mode_for_test(4));
+    let bad_power =
+        Spi::with_devices_for_test(PowerManagement::with_control_for_test(0x80), Tsc::new());
+    assert_eq!(
+        (bad_touch.well_formed(0), bad_power.well_formed(0)),
+        (false, false)
     );
 }
 

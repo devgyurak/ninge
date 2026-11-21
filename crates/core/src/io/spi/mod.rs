@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The ARM7's SPI bus: SPICNT and SPIDATA, and the firmware flash on device select 1. Note:
-//! `docs/hw/spi.md`; the firmware is `docs/hw/firmware.md`.
+//! The ARM7's SPI bus: SPICNT and SPIDATA, the power-management device on select 0, the firmware
+//! flash on select 1 and the touch-screen controller on select 2. Note: `docs/hw/spi.md`; the
+//! firmware is `docs/hw/firmware.md`, the other two `docs/hw/touch-power.md`.
 //!
 //! A plain device for one CPU (`AGENTS.md` §4, "Per-CPU devices"): only the ARM7 reaches the
 //! registers. Like the cartridge's SPI side, a unit takes a time that follows from the clock, so
@@ -8,12 +9,14 @@
 //! the completion interrupt, queued only when SPICNT bit 14 is set.
 //!
 //! The firmware chip is the save chip's FLASH model (`cart::save`) holding the synthetic image
-//! (`spi::firmware`). The power and touch devices (selects 0 and 2) belong to #41.
+//! (`spi::firmware`). The touch controller reads the panel from the access's host data (`Cx`), and
+//! `Io` reads its pen output to hand to the keypad, so no device reaches another.
 
 use crate::cart::save::{SaveChip, SaveType};
+use crate::input::Touch;
 use crate::io::device::{Checked, Cx, Device, Effect, Fired, Width, read_bytes, write_bytes};
 use crate::io::irq::{Requests, SPI_IRQ};
-use crate::spi::{FIRMWARE_LEN, FirmwareSettings, build};
+use crate::spi::{FIRMWARE_LEN, FirmwareSettings, PowerManagement, Tsc, build};
 use serde::{Deserialize, Serialize};
 
 /// SPICNT, at `0400_01C0h`; the device's register space starts here.
@@ -30,8 +33,12 @@ const BUSY: u16 = 1 << 7;
 /// SPICNT bits 8-9: the device select.
 const DEVICE_SHIFT: u32 = 8;
 const DEVICE_MASK: u16 = 0b11;
+/// Device select 0: the power-management device.
+const DEVICE_POWER: u16 = 0;
 /// Device select 1: the firmware flash.
 const DEVICE_FIRMWARE: u16 = 1;
+/// Device select 2: the touch-screen controller.
+const DEVICE_TOUCH: u16 = 2;
 /// SPICNT bit 10: the 16-bit ("bugged") transfer size.
 const WIDE: u16 = 1 << 10;
 /// SPICNT bit 11: keep the chip selected after the transfer.
@@ -54,8 +61,7 @@ const UNIT_CYCLES: u64 = 128;
 const LONGEST_UNIT: u64 = UNIT_CYCLES << (BAUD_MASK + 1);
 
 /// What a device answers when nothing drives the output line: it floats high.
-// TODO(hw-unverified): what select 3 and the power and touch devices answer before #41 (`spi.md`,
-// "Unverified").
+// TODO(hw-unverified): what select 3 answers (`spi.md`, "Unverified").
 const FLOATING: u8 = 0xFF;
 
 /// SPICNT and SPIDATA, and the firmware chip behind them. Plain data.
@@ -73,6 +79,10 @@ pub struct Spi {
     irq_due: Option<u64>,
     /// The firmware flash.
     firmware: SaveChip,
+    /// The power-management device (select 0).
+    power: PowerManagement,
+    /// The touch-screen controller (select 2).
+    touch: Tsc,
 }
 
 impl Spi {
@@ -92,6 +102,8 @@ impl Spi {
             firmware: SaveChip::new(SaveType::Flash256K, build(settings)).expect(
                 "the builder always makes a FIRMWARE_LEN image, the length of a 256K flash",
             ),
+            power: PowerManagement::new(),
+            touch: Tsc::new(),
         }
     }
 
@@ -100,6 +112,16 @@ impl Spi {
     pub(crate) fn with_firmware_for_test(firmware: SaveChip) -> Self {
         Self {
             firmware,
+            ..Self::new()
+        }
+    }
+
+    /// A bus holding `power` and `touch`, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn with_devices_for_test(power: PowerManagement, touch: Tsc) -> Self {
+        Self {
+            power,
+            touch,
             ..Self::new()
         }
     }
@@ -141,12 +163,39 @@ impl Spi {
         &self.firmware
     }
 
+    /// The power-management device, for the debugger.
+    pub fn power(&self) -> &PowerManagement {
+        &self.power
+    }
+
+    /// The touch-screen controller, for the debugger.
+    pub fn touch(&self) -> &Tsc {
+        &self.touch
+    }
+
+    /// Whether the touch controller's pen output is enabled: what EXTKEYIN bit 6 needs besides a
+    /// touched panel (`touch-power.md`, "The pen bit"). `Io` hands it to the keypad through `Cx`.
+    pub fn pen_irq_enabled(&self) -> bool {
+        self.touch.pen_irq_enabled()
+    }
+
+    /// One byte exchanged with the device `select` names while the panel is `panel`: what comes
+    /// back. Select 3 is unconnected.
+    fn exchange(&mut self, select: u16, byte: u8, hold: bool, panel: Option<Touch>) -> u8 {
+        match select {
+            DEVICE_POWER => self.power.transfer(byte, hold),
+            DEVICE_FIRMWARE => self.firmware.transfer(byte, hold),
+            DEVICE_TOUCH => self.touch.transfer(byte, hold, panel),
+            _ => FLOATING,
+        }
+    }
+
     /// The unit written at `now`, if the bus takes it: the selected device answers at once and the
     /// unit takes its time on the wire. Nothing happens with the bus disabled, and a write while
     /// a unit is on the wire is dropped.
     // TODO(hw-unverified): SPIDATA written with the bus disabled or while busy (`spi.md`,
     // "Unverified").
-    fn start(&mut self, byte: u8, now: u64) -> Effect {
+    fn start(&mut self, byte: u8, now: u64, panel: Option<Touch>) -> Effect {
         if self.spicnt & ENABLE == 0 || self.busy(now) {
             return Effect::default();
         }
@@ -154,19 +203,14 @@ impl Spi {
         // device's session as it was and sends the byte to the new one (`spi.md`, "Unverified").
         let hold = self.spicnt & HOLD != 0;
         let wide = self.spicnt & WIDE != 0;
-        self.data = if self.spicnt >> DEVICE_SHIFT & DEVICE_MASK == DEVICE_FIRMWARE {
-            if wide {
-                // TODO(hw-unverified): the bugged 16-bit mode sends the byte and then a zero, and
-                // SPIDATA keeps the second reply (`spi.md`, "Unverified").
-                self.firmware.transfer(byte, true);
-                self.firmware.transfer(0, hold)
-            } else {
-                self.firmware.transfer(byte, hold)
-            }
+        let select = self.spicnt >> DEVICE_SHIFT & DEVICE_MASK;
+        self.data = if wide {
+            // TODO(hw-unverified): the bugged 16-bit mode sends the byte and then a zero, and
+            // SPIDATA keeps the second reply, for every device (`spi.md`, "Unverified").
+            self.exchange(select, byte, true, panel);
+            self.exchange(select, 0, hold, panel)
         } else {
-            // TODO(#41): the power-management (0) and touch-screen (2) devices; select 3 stays
-            // unconnected.
-            FLOATING
+            self.exchange(select, byte, hold, panel)
         };
         let baud = u32::from(self.spicnt & BAUD_MASK) + u32::from(wide);
         self.done_at = now.saturating_add(UNIT_CYCLES << baud);
@@ -195,7 +239,7 @@ impl Spi {
     }
 
     /// A write of one byte at `offset`.
-    fn write_byte(&mut self, offset: u32, byte: u8, now: u64) -> Effect {
+    fn write_byte(&mut self, offset: u32, byte: u8, now: u64, panel: Option<Touch>) -> Effect {
         match offset {
             0 => {
                 self.spicnt = (self.spicnt & 0xFF00) | u16::from(byte) & (SPICNT_MASK & 0xFF);
@@ -205,7 +249,7 @@ impl Spi {
                 self.spicnt = (self.spicnt & 0x00FF) | (u16::from(byte) << 8 & SPICNT_MASK);
                 Effect::default()
             }
-            SPIDATA_OFFSET => self.start(byte, now),
+            SPIDATA_OFFSET => self.start(byte, now, panel),
             _ => Effect::default(),
         }
     }
@@ -223,6 +267,8 @@ impl Checked for Spi {
             && self.firmware.kind() == SaveType::Flash256K
             && self.firmware.data().len() == FIRMWARE_LEN
             && self.firmware.well_formed()
+            && self.power.well_formed()
+            && self.touch.well_formed()
             && self.done_at <= now.saturating_add(LONGEST_UNIT)
             && self.irq_due.is_none_or(|due| due == self.done_at)
     }
@@ -238,7 +284,7 @@ impl Device<false> for Spi {
     /// A byte write to SPIDATA starts a transfer; a wider write that covers it uses its low byte.
     fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
-            self.write_byte(at, byte, cx.now)
+            self.write_byte(at, byte, cx.now, cx.host.touch)
         })
     }
 

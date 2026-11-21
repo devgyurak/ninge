@@ -32,6 +32,15 @@ copies, the flags, the boot indicator, the user settings) are filled with the he
 chip ID" and "Boot-time values in main RAM" (#39). The firmware boot-code fragments are not
 modeled. Binaries go through the bus views' `write8`, so they land only in main RAM.
 
+## Devices at entry
+
+The firmware boot code leaves the console's devices set up, and direct boot skips it, so a few
+start in the state a program expects instead of the power-on one:
+
+| Device | State at entry | Source |
+|---|---|---|
+| Power-management register 0 (`touch-power.md`) | `0Dh`: sound amplifier and both backlights on | our choice (Unverified in `touch-power.md`) |
+
 ## ARM9 state at entry
 
 GBATEK, "register settings at cartridge boot time":

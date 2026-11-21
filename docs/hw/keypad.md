@@ -3,8 +3,8 @@
 Sources: GBATEK "GBA Keypad Input" (KEYINPUT, KEYCNT) and "DS Keypad" (the DS additions,
 EXTKEYIN).
 Used by: `crates/core/src/io/keypad/`, `crates/core/src/input/`   Phase: 3 (the "nothing
-pressed" stub); host buttons and the hinge are wired in Phase 4 (#177); the keypad IRQ, the pen
-and the touch controller are Phase 5 (#44)
+pressed" stub); host buttons and the hinge are wired in Phase 4 (#177); the pen bit and the touch
+controller are Phase 5 (#41, `touch-power.md`); the keypad and hinge IRQs are Phase 5 (#231)
 
 ## Registers
 
@@ -112,9 +112,9 @@ modeled and reads 0.
 - Whether KEYCNT bits 10-13 are writable — same site.
 
 Not modeled, so no code site: the keypad IRQ condition with an empty selection mask in AND mode,
-the hinge IRQ (GBATEK: it cannot be disabled), and whether EXTKEYIN's pen bit follows the touch
-controller's pen-IRQ enable. All three arrive with the keypad IRQ and the touch SPI (Phase 5,
-#44).
+and the hinge IRQ (GBATEK: it cannot be disabled). Both arrive with the keypad and hinge
+interrupts (Phase 5, #231). The pen bit's link to the touch controller's pen-IRQ enable arrives
+with the touch SPI (Phase 5, #41, `touch-power.md`).
 
 - That a button change reaches the registers at a frame boundary only is a choice of the model:
   on hardware the key matrix is read when the CPU reads the register — `crates/core/src/input/`

@@ -5,7 +5,7 @@ modes, the reply, the overlapped command, the calibration formula, the pen inter
 Power Management Device" (the index register and registers 0-4, the mirrors); GBATEK "DS Keypad"
 (EXTKEYIN bit 6, the pen); GBATEK "DS Serial Peripheral Interface Bus (SPI)" (device select, hold).
 Used by: `crates/core/src/spi/touch/`, `crates/core/src/spi/power/`, `crates/core/src/io/spi/`,
-`crates/core/src/io/keypad/`   Phase: 5 (#41)
+`crates/core/src/io/keypad/`, `crates/core/src/machine/`   Phase: 5 (#41; the power register's effects #231)
 
 Two of the three chips on the internal serial bus (`spi.md`): the power-management device on device
 select 0 and the touch-screen controller (TSC) on device select 2. Only the ARM7 reaches them,
@@ -18,10 +18,12 @@ Implemented (#41): the TSC's control byte, every channel, the reply and the over
 command, the power-down mode and the pen line that follows it; EXTKEYIN bit 6 (the pen); the
 power-management device's registers 0-3 and their mirrors; the original console's model.
 
+Implemented (#231): the shutdown bit and the two backlight bits of register 0 reach the host
+("What the power register does").
+
 Not implemented: the DS-Lite and DSi chips (the Asahi Kasei touch controller and its changed
 channels and power-down modes, the Mitsumi 3205B and its register 4, the DSi's registers), the
-keypad and hinge interrupts (#231), the console shutting down or dimming the screens in answer to
-the power register, the sound amplifier, the microphone data (#44), sleep mode (HALTCNT).
+sound amplifier, the microphone data (#44), sleep mode (HALTCNT).
 
 ## The touch-screen controller
 
@@ -155,10 +157,9 @@ These are choices of the emulator. They do not describe a part.
   time of `spi.md` passes.
 - **The microphone is silent.** Channel 6 returns a fixed value, the middle of the range, whatever
   the amplifier registers say. The blow key (#44) brings real data; the code site says so.
-- **The power register is stored, not acted on.** The shutdown bit, the backlight bits and the
-  amplifier bits are kept and read back (and shown in the debugger); nothing reacts. The sound
-  amplifier is Phase 6 work; the shutdown and the backlights are #231; each code site carries the
-  matching `TODO(phase6)` or `TODO(#231)`.
+- **The power register's amplifier bits are stored, not acted on.** They are kept and read back
+  (and shown in the debugger); the sound amplifier is Phase 6 work, and the code site carries
+  `TODO(phase6)`. The shutdown and backlight bits act as the next section says.
 - **Register 0 starts at `0Dh`.** Direct boot skips the firmware boot, and a program that starts
   after it finds the sound amplifier and both backlights on (`direct-boot.md`, "Devices at entry").
   Registers 2 and 3 start at zero.
@@ -167,6 +168,20 @@ These are choices of the emulator. They do not describe a part.
   the host's touch state.
 - **Fixed values.** The values GBATEK leaves open (below) are fixed numbers of ours; no value is
   random.
+
+## What the power register does
+
+Register 0 bit 2 is the lower screen's backlight, bit 3 the upper screen's (0 = off, 1 = on), and bit 6
+asks the console to shut down (1 = shut down). The model gives each a visible effect:
+
+- **Shutdown is sticky.** Once bit 6 has been written as 1, it stays set: a later write of 0 keeps
+  it, because nothing runs after the power is gone to clear it. The rest of the frame in which it
+  was written still runs. Every later `run_frame` runs nothing, like a machine with no program:
+  the frame counter advances and the screens stay as they were. The machine reports the state to
+  the host, which ends the run through its normal quit path, so the save file is flushed.
+- **Backlights.** The core's frame buffers do not change. The machine reports each screen's
+  backlight to the host (the upper backlight for the top screen, the lower for the bottom), and
+  the host draws an unlit screen black.
 
 ## Edge cases
 
@@ -219,3 +234,7 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **Register 0's start value, `0Dh`** (amplifier and both backlights on): GBATEK gives none; the
   value is what a program is assumed to find after the firmware boot that direct boot skips.
   `spi/power/`.
+- **Shutdown cannot be cleared, and the rest of its frame runs.** GBATEK says only that the bit
+  shuts the system down; the sticky bit, the frame that completes and the frozen frames after
+  it are the model's. `spi/power/`, `machine/`.
+- **What an unlit screen shows.** GBATEK does not say; the host draws black. `frontend/`.

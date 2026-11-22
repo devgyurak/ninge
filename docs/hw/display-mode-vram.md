@@ -38,8 +38,8 @@ All 32 bits are stored and read back. Only bits 16-19 change what is drawn in Ph
 |---|---|---|
 | 0 | LCD enable | see "Unverified" |
 | 1 | engine A (2D) power | see "Unverified" |
-| 2 | 3D rendering engine power | `TODO(phase7)` |
-| 3 | 3D geometry engine power | `TODO(phase7)` |
+| 2 | 3D rendering engine power: clear makes ports `0320h`-`03FFh` read-only (`gx-stub.md`, "Power control") | 5 (#43) |
+| 3 | 3D geometry engine power: clear makes ports `0400h`-`06FFh` read-only (`gx-stub.md`, "Power control") | 5 (#43) |
 | 9 | engine B (2D) power: with it clear engine B's registers are read-only and its screen is black (`bg-modes.md`, "Engine B") | now |
 | 15 | display swap: 1 = engine A to the upper screen, engine B to the lower; 0 = engine A to the lower, B to the upper | now |
 

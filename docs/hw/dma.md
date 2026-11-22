@@ -69,7 +69,7 @@ ARM9 (bits 27-29):
 | 4 | Main-memory display (`display-capture.md`) | 4 (#36) |
 | 5 | DS cartridge slot: one unit per word the card makes ready (`cart-protocol.md`, "DMA start") | 5 (#37) |
 | 6 | GBA cartridge slot | no phase plans it |
-| 7 | Geometry command FIFO | `TODO(phase7)` (#48) |
+| 7 | Geometry command FIFO: starts when the FIFO is less than half full, 112 words at a time (`gx-stub.md`, "ARM9 DMA start mode 7") | 5 (#43); the real FIFO is `TODO(phase7)` (#48) |
 
 ARM7 (bits 28-29):
 

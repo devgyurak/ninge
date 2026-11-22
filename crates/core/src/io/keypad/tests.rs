@@ -26,6 +26,7 @@ fn peek9_with(pad: &Keypad<true>, input: &Input, offset: u32, width: Width) -> u
             rom: &[],
             lines: Lines {
                 pen_irq_enabled: true,
+                ..Lines::default()
             },
         },
     )
@@ -42,6 +43,7 @@ fn peek7_with(pad: &Keypad<false>, input: &Input, offset: u32, width: Width) -> 
             rom: &[],
             lines: Lines {
                 pen_irq_enabled: true,
+                ..Lines::default()
             },
         },
     )
@@ -181,7 +183,10 @@ fn extkeyin_with(touch: Option<Touch>, pen_irq_enabled: bool) -> u32 {
             now: 0,
             host: &input,
             rom: &[],
-            lines: Lines { pen_irq_enabled },
+            lines: Lines {
+                pen_irq_enabled,
+                ..Lines::default()
+            },
         },
     )
 }
@@ -222,6 +227,7 @@ fn given_a_touched_panel_with_x_held_and_the_hinge_closed_when_extkeyin_is_read_
             rom: &[],
             lines: Lines {
                 pen_irq_enabled: true,
+                ..Lines::default()
             },
         },
     );

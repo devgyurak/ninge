@@ -394,6 +394,7 @@ fn write_with(spi: &mut Spi, now: u64, offset: u32, value: u32, input: &Input) {
         rom: &[],
         lines: Lines {
             pen_irq_enabled: true,
+            ..Lines::default()
         },
     };
     // SPICNT takes a halfword write, SPIDATA a byte.

@@ -185,10 +185,12 @@ fn given_the_sound_window_when_decoded_then_only_the_arm7_owns_it() {
         (0x0400_03FF, None),
         (0x0400_0520, None),
     ];
+    // The ARM9 has the geometry engine's registers at these addresses, not the sound registers:
+    // offsets from DISP3DCNT (`0400_0060h`).
     let arm9 = [
-        (0x0400_0400, None),
-        (0x0400_0500, None),
-        (0x0400_051F, None),
+        (0x0400_0400, Some(Owner::Io(Port::Gpu3d, 0x3A0))),
+        (0x0400_0500, Some(Owner::Io(Port::Gpu3d, 0x4A0))),
+        (0x0400_051F, Some(Owner::Io(Port::Gpu3d, 0x4BF))),
     ];
     assert_eq!(
         (

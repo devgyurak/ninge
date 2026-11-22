@@ -32,6 +32,7 @@ fn write(rtc: &mut Rtc, host_time: u32, offset: u32, width: Width, value: u32) {
         rom: &[],
         lines: Lines {
             pen_irq_enabled: true,
+            ..Lines::default()
         },
     };
     Device::<false>::write(rtc, offset, width, value, cx);

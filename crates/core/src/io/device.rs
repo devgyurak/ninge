@@ -165,6 +165,10 @@ pub(crate) struct Lines {
     /// The touch controller's `/PENIRQ` output is enabled: the keypad's EXTKEYIN bit 6 needs it
     /// (`touch-power.md`, "The pen bit").
     pub(crate) pen_irq_enabled: bool,
+    /// POWCNT1 bit 3 powers the geometry engine: with it clear its ports (`0400_0400h`-`0400_06FFh`)
+    /// are read-only (`gx-stub.md`, "Power control"). The bit 2 of the rendering engine gates ports
+    /// that hold no state in the stub, so it has no line.
+    pub(crate) geometry_powered: bool,
 }
 
 /// The wires at power-on: the touch controller starts in power-down mode 0, so the pen output is
@@ -173,6 +177,7 @@ impl Default for Lines {
     fn default() -> Self {
         Self {
             pen_irq_enabled: true,
+            geometry_powered: true,
         }
     }
 }

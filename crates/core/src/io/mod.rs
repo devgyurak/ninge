@@ -33,6 +33,7 @@ pub mod timers;
 pub mod timing;
 
 use crate::gpu2d::Gpu2d;
+use crate::gpu3d::Gpu3d;
 use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
 use crate::spu::Spu;
@@ -79,6 +80,9 @@ registry! {
         gpu2d / gpu2d_mut: Gpu2d = Gpu2d::new() => [Port::Gpu2d],
         /// The ARM9's divider and square-root unit (`divsqrt.md`).
         divsqrt: DivSqrt = DivSqrt::new() => [Port::DivSqrt],
+        /// The ARM9's 3D engine stub: DISP3DCNT, the geometry command decoder and GXSTAT
+        /// (`gx-stub.md`).
+        gpu3d: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
     }
     arm7 {
         /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
@@ -115,6 +119,7 @@ impl Io {
     fn lines(&self) -> Lines {
         Lines {
             pen_irq_enabled: self.spi.pen_irq_enabled(),
+            geometry_powered: self.gpu2d.geometry_engine_on(),
         }
     }
 
@@ -205,6 +210,15 @@ impl Io {
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
+        // The FIFO IRQ is level driven: IF bit 21 is held up while the condition holds, so a write
+        // that sets the mode, and any write to the ARM9's IF (an acknowledge), re-raises it. No
+        // other path can make the condition true or clear an IF bit (`gx-stub.md`, "GXSTAT and the
+        // FIFO IRQ").
+        // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is
+        // acknowledged (`gx-stub.md`, "Unverified").
+        if ARM9 && matches!(port, Port::Gpu3d | Port::Irq) {
+            self.request_irq(self.gpu3d.fifo_irq_asserted());
+        }
     }
 
     /// Hands an access's effect on: its IF bits to the controllers, the event slots it names to

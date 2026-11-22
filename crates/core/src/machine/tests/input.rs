@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::cart::test_image::Image;
+use crate::cpu::Bus;
 use crate::input::{Buttons, Input, Touch};
 
 const KEYINPUT: u32 = 0x0400_0130;
@@ -105,4 +106,102 @@ fn given_a_held_input_when_a_rom_is_loaded_then_the_input_is_cleared_with_everyt
 #[test]
 fn given_a_new_machine_when_the_audio_is_asked_for_then_it_is_empty_until_the_spu_exists() {
     assert_eq!(Machine::new().audio(), &[] as &[i16]);
+}
+
+// ------------------------------------------------------------------------ keypad and hinge IRQs
+
+const KEYCNT: u32 = 0x0400_0132;
+const IF: u32 = 0x0400_0214;
+const KEYPAD_IF: u32 = 1 << 12;
+const UNFOLD_IF: u32 = 1 << 22;
+/// KEYCNT: IRQ enable, OR mode, A and B selected.
+const OR_A_B: u16 = 0x4003;
+
+fn machine_selecting_a_or_b() -> Machine {
+    let mut machine = Machine::new();
+    machine.bus9().write16(KEYCNT, OR_A_B);
+    machine
+}
+
+#[test]
+fn given_a_selected_key_when_a_frame_latches_it_then_the_arm9_if_has_bit_12() {
+    let mut machine = machine_selecting_a_or_b();
+    machine.run_frame(held(Buttons::A));
+    assert_eq!(machine.inspect().irq9().if_(), KEYPAD_IF);
+}
+
+#[test]
+fn given_a_held_key_when_the_request_is_acknowledged_then_bit_12_stays_clear_until_the_next_latch()
+{
+    let mut machine = machine_selecting_a_or_b();
+    machine.run_frame(held(Buttons::A));
+    machine.bus9().write32(IF, KEYPAD_IF);
+    assert_eq!(machine.inspect().irq9().if_(), 0);
+}
+
+#[test]
+fn given_a_held_key_when_the_request_is_acknowledged_and_a_frame_latches_then_bit_12_is_requested_again()
+ {
+    let mut machine = machine_selecting_a_or_b();
+    machine.run_frame(held(Buttons::A));
+    machine.bus9().write32(IF, KEYPAD_IF);
+    machine.run_frame(held(Buttons::A));
+    assert_eq!(machine.inspect().irq9().if_(), KEYPAD_IF);
+}
+
+#[test]
+fn given_a_key_already_held_when_keycnt_is_written_then_the_arm9_if_has_bit_12() {
+    let mut machine = Machine::new();
+    machine.run_frame(held(Buttons::B));
+    machine.bus9().write16(KEYCNT, OR_A_B);
+    assert_eq!(machine.inspect().irq9().if_(), KEYPAD_IF);
+}
+
+#[test]
+fn given_an_unselected_key_when_a_frame_latches_it_then_no_if_bit_is_set() {
+    let mut machine = machine_selecting_a_or_b();
+    machine.run_frame(held(Buttons::START | Buttons::X));
+    assert_eq!(
+        (
+            machine.inspect().irq9().if_(),
+            machine.inspect().irq7().if_()
+        ),
+        (0, 0)
+    );
+}
+
+#[test]
+fn given_the_hinge_open_from_the_first_frame_when_frames_run_then_no_unfolding_is_requested() {
+    let mut machine = Machine::new();
+    machine.run_frame(Input::new());
+    assert_eq!(machine.inspect().irq7().if_(), 0);
+}
+
+#[test]
+fn given_the_hinge_closing_when_a_frame_latches_it_then_the_arm7_if_stays_clear() {
+    let mut machine = Machine::new();
+    machine.run_frame(Input::new().with_hinge_closed(true));
+    assert_eq!(machine.inspect().irq7().if_(), 0);
+}
+
+#[test]
+fn given_a_closed_hinge_when_a_frame_opens_it_then_the_arm7_if_has_bit_22_although_ie_is_clear() {
+    let mut machine = Machine::new();
+    machine.run_frame(Input::new().with_hinge_closed(true));
+    machine.run_frame(Input::new());
+    assert_eq!(
+        (
+            machine.inspect().irq7().if_(),
+            machine.inspect().irq7().ie()
+        ),
+        (UNFOLD_IF, 0)
+    );
+}
+
+#[test]
+fn given_a_closed_hinge_when_a_frame_opens_it_then_the_arm9_if_stays_clear() {
+    let mut machine = Machine::new();
+    machine.run_frame(Input::new().with_hinge_closed(true));
+    machine.run_frame(Input::new());
+    assert_eq!(machine.inspect().irq9().if_(), 0);
 }

@@ -62,6 +62,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Cartridge save chips: the AUXSPI bus (EEPROM, FLASH, FRAM)](auxspi-saves.md)
 - [The SPI bus (SPICNT, SPIDATA)](spi.md)
 - [The real-time clock (RTCCNT)](rtc.md)
+- [The touch-screen controller and the power-management device](touch-power.md)
 - [Firmware: the flash chip and our synthetic image](firmware.md)
 - [Direct boot (ARM9)](direct-boot.md)
 - [HLE BIOS: the BIOS area, the vectors, SWI entry and the IRQ dispatcher](hle-swi.md)

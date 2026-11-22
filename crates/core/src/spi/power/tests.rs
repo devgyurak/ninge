@@ -183,3 +183,43 @@ fn given_states_the_device_cannot_reach_when_checked_then_none_is_well_formed() 
         .collect();
     assert_eq!(accepted, vec![]);
 }
+
+#[test]
+fn given_the_shutdown_bit_set_when_register_0_is_written_with_zero_then_the_bit_stays() {
+    let mut pm = PowerManagement::new();
+    write_reg(&mut pm, 0, CONTROL_SHUTDOWN);
+    write_reg(&mut pm, 0, 0);
+    assert_eq!(read_reg(&mut pm, 0), CONTROL_SHUTDOWN);
+}
+
+#[test]
+fn given_the_shutdown_bit_clear_when_other_bits_are_written_then_the_device_is_not_shut_down() {
+    let mut pm = PowerManagement::new();
+    write_reg(&mut pm, 0, 0x3F);
+    assert!(!pm.is_shut_down());
+}
+
+#[test]
+fn given_a_fresh_device_when_asked_then_both_backlights_are_on_and_it_is_not_shut_down() {
+    let pm = PowerManagement::new();
+    assert_eq!(
+        (
+            pm.lower_backlight(),
+            pm.upper_backlight(),
+            pm.is_shut_down()
+        ),
+        (true, true, false)
+    );
+}
+
+#[test]
+fn given_each_backlight_bit_written_alone_when_asked_then_only_that_backlight_is_on() {
+    let mut pm = PowerManagement::new();
+    write_reg(&mut pm, 0, CONTROL_LOWER_BACKLIGHT);
+    let lower_only = (pm.lower_backlight(), pm.upper_backlight());
+    write_reg(&mut pm, 0, CONTROL_UPPER_BACKLIGHT);
+    assert_eq!(
+        (lower_only, (pm.lower_backlight(), pm.upper_backlight())),
+        ((true, false), (false, true))
+    );
+}

@@ -137,9 +137,9 @@ fn given_the_arm9_when_it_reads_extkeyin_on_a_touched_frame_then_it_reads_zero()
 fn given_the_power_device_when_register_0_is_written_then_it_reads_back_and_the_debugger_shows_it()
 {
     let mut m = machine();
-    session(&mut m, POWER, &[0x00, 0x4C]);
+    session(&mut m, POWER, &[0x00, 0x0C]);
     let read = session(&mut m, POWER, &[0x80, 0]);
-    assert_eq!((read[1], m.inspect().spi().power().control()), (0x4C, 0x4C));
+    assert_eq!((read[1], m.inspect().spi().power().control()), (0x0C, 0x0C));
 }
 
 #[test]
@@ -197,4 +197,91 @@ fn given_the_pen_output_disabled_when_the_state_is_saved_and_loaded_then_the_pen
     let result = loaded.load_state(&state);
     loaded.run_frame(touched());
     assert_eq!((result, extkeyin(&mut loaded)), (Ok(()), 0x7F));
+}
+
+// ------------------------------------------------------------------- shutdown and backlights
+
+/// `add r1, r1, #1` and `b` back to it: a counter the ARM9 keeps running.
+const COUNT_R1: [u32; 2] = [0xE281_1001, 0xEAFF_FFFD];
+
+/// `b .`: the ARM7 spins.
+const SPIN7: [u32; 1] = [0xEAFF_FFFE];
+
+fn counting_machine() -> Machine {
+    super::bios::machine_with(&COUNT_R1, &SPIN7)
+}
+
+#[test]
+fn given_direct_boot_when_asked_then_both_screens_are_lit_and_the_machine_is_running() {
+    let m = counting_machine();
+    assert_eq!(
+        (
+            m.backlight(Screen::Top),
+            m.backlight(Screen::Bottom),
+            m.is_shut_down()
+        ),
+        (true, true, false)
+    );
+}
+
+#[test]
+fn given_the_lower_backlight_bit_alone_when_asked_then_only_the_bottom_screen_is_lit() {
+    let mut m = counting_machine();
+    session(&mut m, POWER, &[0x00, 0x04]);
+    assert_eq!(
+        (m.backlight(Screen::Top), m.backlight(Screen::Bottom)),
+        (false, true)
+    );
+}
+
+#[test]
+fn given_the_upper_backlight_bit_alone_when_asked_then_only_the_top_screen_is_lit() {
+    let mut m = counting_machine();
+    session(&mut m, POWER, &[0x00, 0x08]);
+    assert_eq!(
+        (m.backlight(Screen::Top), m.backlight(Screen::Bottom)),
+        (true, false)
+    );
+}
+
+#[test]
+fn given_a_shutdown_write_when_a_frame_runs_then_the_machine_reports_it_and_the_arm9_does_not_move()
+{
+    let mut m = counting_machine();
+    m.run_frame(Input::new());
+    let before = (m.inspect().arm9().regs().get(1), m.frame_count());
+    session(&mut m, POWER, &[0x00, 0x4C]);
+    m.run_frame(Input::new());
+    assert_eq!(
+        (
+            m.is_shut_down(),
+            m.inspect().arm9().regs().get(1),
+            m.frame_count()
+        ),
+        (true, before.0, before.1 + 1)
+    );
+}
+
+/// Rounds until the clock has passed the units a `session` left on the wire, which it started
+/// far ahead of the master clock: a savestate needs the machine settled.
+fn run_rounds(m: &mut Machine, rounds: usize) {
+    (0..rounds).for_each(|_| crate::scheduler::run_round(m));
+}
+
+#[test]
+fn given_a_machine_that_is_shut_down_when_a_savestate_round_trips_then_it_is_still_shut_down() {
+    let mut m = counting_machine();
+    m.run_frame(Input::new());
+    session(&mut m, POWER, &[0x00, 0x44]);
+    run_rounds(&mut m, 2_000);
+    let mut loaded = counting_machine();
+    let loaded_ok = loaded.load_state(&m.save_state());
+    assert_eq!(
+        (
+            loaded_ok,
+            loaded.is_shut_down(),
+            loaded.backlight(Screen::Top)
+        ),
+        (Ok(()), true, false)
+    );
 }

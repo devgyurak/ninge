@@ -274,7 +274,11 @@ impl Machine {
     // (`docs/hw/keypad.md`, "Unverified").
     pub fn run_frame(&mut self, input: Input) {
         self.io.latch_input(input);
-        if self.header.is_none() {
+        // A machine that was shut down runs nothing, as with no program: the frame only counts
+        // (`touch-power.md`, "What the power register does").
+        // TODO(hw-unverified): the frozen frames after shutdown are the model's (`touch-power.md`,
+        // "Unverified").
+        if self.header.is_none() || self.is_shut_down() {
             self.frame_count = self.frame_count.wrapping_add(1);
             return;
         }
@@ -375,6 +379,27 @@ impl Machine {
     // `docs/hw/` note yet; until then no sound is made and it is empty.
     pub fn audio(&self) -> &[i16] {
         &[]
+    }
+
+    /// Whether the program shut the console down through the power-management device. A host ends
+    /// its run when this turns true: every later [`Machine::run_frame`] runs nothing
+    /// (`docs/hw/touch-power.md`, "What the power register does").
+    pub fn is_shut_down(&self) -> bool {
+        self.io.spi().power().is_shut_down()
+    }
+
+    /// Whether `screen`'s backlight is on. The frame buffers are not dimmed: an unlit screen is
+    /// the host's to draw black (`docs/hw/touch-power.md`, "What the power register does").
+    /// `Screen::Top` is the upper backlight and `Screen::Bottom` the lower, the physical screens
+    /// [`Machine::frame`] returns.
+    // TODO(hw-unverified): what an unlit screen shows is the host's choice (`touch-power.md`,
+    // "Unverified").
+    pub fn backlight(&self, screen: Screen) -> bool {
+        let power = self.io.spi().power();
+        match screen {
+            Screen::Top => power.upper_backlight(),
+            Screen::Bottom => power.lower_backlight(),
+        }
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.

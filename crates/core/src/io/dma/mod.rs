@@ -516,6 +516,8 @@ impl<const ARM9: bool> Dma<ARM9> {
                 // enabled, so it is queued like an Immediate one.
                 // TODO(hw-unverified): a repeating mode 7 channel is not started again: no trigger
                 // follows the first start (`gx-stub.md`, "Unverified").
+                // TODO(phase7): with the real FIFO (#48) a repeating channel restarts when the FIFO
+                // drains below half again.
                 if matches!(Self::start_of(new), Start::Immediate | Start::GeometryFifo) {
                     channel.pending = true;
                     slot

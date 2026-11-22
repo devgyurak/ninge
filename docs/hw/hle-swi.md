@@ -8,14 +8,14 @@ not read, so each is under "Unverified": the SWI comment field ("ARM Opcodes ...
 Opcodes ... SWI") and the DS function numbers ("BIOS Function Summary"). Also
 `arm-exceptions-modes.md` for the exception entry.
 Used by: `crates/core/src/hle/`, `crates/core/src/bus/memory/mod.rs`,
-`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 to 3 of 3)
+`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 to 3 of 3); SoundBias: 5 (#42)
 
 ninge boots without a BIOS dump (AGENTS.md §3.2). The BIOS is high-level emulated: the CPU
 enters its exception vectors exactly as on hardware, and the machine does in Rust what the BIOS
 code at those addresses would do. No BIOS image exists in ninge, and no instruction of it is
 written down anywhere. This note covers the BIOS area, the vectors, how an SWI number is found,
 the IRQ dispatcher, the wait routines (Halt, WaitByLoop, IntrWait, VBlankIntrWait), the copy,
-math, checksum and decompression routines, and the SWI numbers nothing implements.
+math, checksum and decompression routines, SoundBias, and the SWI numbers nothing implements.
 
 ## The BIOS area
 
@@ -178,6 +178,7 @@ would, and costs one instruction (see "Cost").
 | `0Ch` | CpuFastSet | same | memory |
 | `0Dh` | Sqrt | `R0` unsigned | `R0` integer square root |
 | `0Eh` | GetCRC16 | `R0` initial value, `R1` address, `R2` length in bytes | `R0` the CRC |
+| `08h` | SoundBias | `R0` level (0 or not), `R1` delay count | SOUNDBIAS |
 | `0Fh` | IsDebugger | none | `R0 = 0` |
 | `11h` | LZ77 to 8-bit writes | `R0` source, `R1` destination | memory |
 | `12h` | LZ77 to 16-bit writes | same | memory |
@@ -201,6 +202,12 @@ words: a count of 9 moves 16 words, a count of 1 fills 8.
 bytes read as halfwords from `R1`: for each halfword the low byte, then the high byte. `R2` is
 halved. Only `R0` changes. An odd length and the registers other than `R0` are under
 "Unverified".
+
+**SoundBias.** ARM7 only (GBATEK lists `08h` as SoundBias for the ARM7 and DSi7). `R0 = 0`
+sets the bias in SOUNDBIAS bits 0-9 to `000h`, any other `R0` to `200h`; the bits above bit 9 are
+kept (`sound-registers.md`). `R1` is the BIOS's delay between the steps it takes, and is ignored.
+The write goes through the ARM7's bus view like an instruction's. The delay, the single steps and
+the register's value in between are under "Unverified".
 
 **IsDebugger.** Retail hardware has no debugger: `R0 = 0`.
 
@@ -359,7 +366,12 @@ checks").
   size follow the model above; on the DS GBATEK describes `12h` as reading through callbacks given
   in `R3` (`LZ77UnCompReadByCallbackWrite16bit`) and the model reads memory directly and ignores
   `R3`, as it also treats `11h`. — `hle::swi::lz77` — verify likewise.
-- **Not implemented.** Sleep (`07h`, `TODO(phase5)`), SoundBias (`08h`, `TODO(phase6)`), BitUnPack,
+- **SoundBias.** The BIOS steps SOUNDBIAS toward the target with a delay between steps (`R1`
+  counts it); the model writes the target at once and has no delay, as for WaitByLoop. Which `R1`
+  values are valid, and what the BIOS does on a target equal to the current level, are not
+  described by GBATEK. — `hle::swi` — `TODO(hw-unverified)`; verify by a test ROM reading
+  SOUNDBIAS from a timer interrupt during the call.
+- **Not implemented.** Sleep (`07h`, `TODO(phase5)`), BitUnPack,
   Huffman and run-length decompression (`10h`, `13h`-`15h`), the DSi-only numbers, and the other
   GBA-compatible numbers take the "Unimplemented number" path.
 - **The hardware divider and square root** (`DIVCNT`, `SQRTCNT` at `04000280h`/`040002B0h`, ARM9)

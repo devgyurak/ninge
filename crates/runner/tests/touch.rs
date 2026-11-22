@@ -9,7 +9,8 @@
 //! the 12-bit one; Z1, Z2, both temperatures and the microphone are the note's fixed values; the
 //! pen bit (EXTKEYIN bit 6) is 0 while the panel is touched and the last command left the pen output
 //! enabled (modes 0 and 2), 1 otherwise; a released panel reads X 000h and Y FFFh; the power
-//! device keeps bits 0-6 of register 0, reads the battery register as 0 and mirrors index 4 onto 0.
+//! device keeps bits 0-6 of register 0 (bit 6, shutdown, stays clear
+//! in the ROM: it would end the run), reads the battery register as 0 and mirrors index 4 onto 0.
 //! Many of these are the note's own modelling choices, listed under its "Unverified": a green band
 //! says the model follows the note, not that hardware was measured.
 
@@ -87,10 +88,10 @@ fn given_the_touch_rom_when_4_frames_run_then_the_record_shows_the_expected_resu
             0x7F,        // panel released
             0x0000,      // X released
             0x0FFF,      // Y released
-            0x4C,        // power register 0 written 4Ch
+            0x0C,        // power register 0 written 0Ch
             0x00,        // battery register
-            0x7F,        // register 0 written FFh keeps bits 0-6
-            0x7F,        // index 4 mirrors register 0
+            0x3F, // register 0 written BFh: bit 7 is dropped, and bit 6 (shutdown) stays clear
+            0x3F, // index 4 mirrors register 0
             1,
             0x4D48_4354 // "TCHM"
         ]

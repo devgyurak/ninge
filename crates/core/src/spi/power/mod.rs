@@ -3,8 +3,9 @@
 //! then a data byte, over registers 0-3. The original console's chip, so register 4 and above
 //! mirror 0-3.
 //!
-//! The device stores what a program writes and reads it back; nothing reacts to it: no shutdown,
-//! no backlight, no amplifier. The bits are visible to the debugger.
+//! The device stores what a program writes and reads it back. The shutdown bit and the two
+//! backlight bits are reported to the host through accessors (`touch-power.md`, "What the power
+//! register does"); the amplifier bits are stored only. The bits are visible to the debugger.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,17 +26,17 @@ const AMP_MASK: u8 = 0b1;
 /// Register 3, microphone gain: bits 0-1.
 const GAIN_MASK: u8 = 0b11;
 
-/// Register 0 bit 6: the program asks the console to shut down. Stored, not acted on.
-// TODO(#231): nothing powers the machine off (`touch-power.md`, "Model (not hardware)").
+/// Register 0 bit 6: the program asks the console to shut down. Once set it stays set, and the
+/// machine runs no more frames (`touch-power.md`, "What the power register does").
+// TODO(hw-unverified): the bit is sticky and the rest of its frame runs (`touch-power.md`,
+// "Unverified").
 pub const CONTROL_SHUTDOWN: u8 = 1 << 6;
 /// Register 0 bit 0: sound amplifier enable. Stored, not acted on.
 // TODO(phase6): the amplifier decides how audible the sound is (`touch-power.md`).
 pub const CONTROL_AMP: u8 = 1 << 0;
-/// Register 0 bit 2: lower backlight.
-// TODO(#231): nothing reacts to the backlights (`touch-power.md`, "Model (not hardware)").
+/// Register 0 bit 2: lower backlight; 0 = off, 1 = on. The host draws an unlit screen black.
 pub const CONTROL_LOWER_BACKLIGHT: u8 = 1 << 2;
-/// Register 0 bit 3: upper backlight.
-// TODO(#231): nothing reacts to it either (`touch-power.md`, "Model (not hardware)").
+/// Register 0 bit 3: upper backlight; 0 = off, 1 = on.
 pub const CONTROL_UPPER_BACKLIGHT: u8 = 1 << 3;
 
 /// The power-management device. Plain data.
@@ -79,6 +80,22 @@ impl PowerManagement {
     /// Register 0 as stored.
     pub const fn control(&self) -> u8 {
         self.control
+    }
+
+    /// Whether the program asked the console to shut down: register 0 bit 6, which no later write
+    /// clears.
+    pub const fn is_shut_down(&self) -> bool {
+        self.control & CONTROL_SHUTDOWN != 0
+    }
+
+    /// Whether the lower screen's backlight is on (register 0 bit 2).
+    pub const fn lower_backlight(&self) -> bool {
+        self.control & CONTROL_LOWER_BACKLIGHT != 0
+    }
+
+    /// Whether the upper screen's backlight is on (register 0 bit 3).
+    pub const fn upper_backlight(&self) -> bool {
+        self.control & CONTROL_UPPER_BACKLIGHT != 0
     }
 
     /// Register 2 as stored.
@@ -131,7 +148,9 @@ impl PowerManagement {
     // "Unverified").
     fn write(&mut self, index: u8, value: u8) {
         match index & REGISTER_MASK {
-            0 => self.control = value & CONTROL_MASK,
+            // TODO(hw-unverified): the bit is sticky (`touch-power.md`, "Unverified").
+            // Nothing runs after the power is gone to clear the shutdown bit, so a write keeps it.
+            0 => self.control = (value & CONTROL_MASK) | (self.control & CONTROL_SHUTDOWN),
             2 => self.amp = value & AMP_MASK,
             3 => self.gain = value & GAIN_MASK,
             _ => {}

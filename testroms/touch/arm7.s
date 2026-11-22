@@ -19,9 +19,9 @@
 @  10  EXTKEYIN after a command in power-down mode 0 again.
 @ then the power device, then, once EXTKEYIN shows the release (mode 0 enabled the pen output):
 @  11  EXTKEYIN released.   12  X released.   13  Y released.
-@  14  Power register 0, written 4Ch and read back.
+@  14  Power register 0, written 0Ch and read back.
 @  15  The battery register (1).
-@  16  Power register 0, written FFh and read back.
+@  16  Power register 0, written BFh and read back.
 @  17  Index 4, which mirrors register 0 on this console.
 @ Slot 30: progress (1 when done). Slot 31: sentinel, written last.
     .equ REC, 0x02008000
@@ -130,12 +130,12 @@ _start:
     str r0, [r8, #(10 * 4)]
 
     @ ---- 14-17: the power device.
-    PMW 0, 0x4C
+    PMW 0, 0x0C
     PMR 0
     str r0, [r8, #(14 * 4)]
     PMR 1
     str r0, [r8, #(15 * 4)]
-    PMW 0, 0xFF
+    PMW 0, 0xBF
     PMR 0
     str r0, [r8, #(16 * 4)]
     PMR 4

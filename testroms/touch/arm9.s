@@ -12,8 +12,8 @@
 @   2  X in 8-bit mode 640h; X and Y with the next command in the low-byte slot, 03200640h.
 @   3  Temperatures 600h and 68Eh (068E0600h); microphone 800h, battery 000h.
 @   4  EXTKEYIN 7Fh in power-down mode 1, 3Fh in mode 0, 7Fh once the panel is released.
-@   5  Released: X 000h, Y FFFh; power register 0 reads 4Ch, the battery register 0, the register
-@      written FFh reads 7Fh, and index 4 mirrors register 0 (7Fh).
+@   5  Released: X 000h, Y FFFh; power register 0 reads 0Ch, the battery register 0, the register
+@      written BFh reads 3Fh, and index 4 mirrors register 0 (3Fh).
 @
 @ Record at 0x02008000 (slots 0-17 and the sentinel are described in arm7.s; the expected values
 @ are in crates/runner/tests/touch.rs):
@@ -89,10 +89,10 @@ wait_arm7:
     PAINT 4
     FIRST 12, 0
     NEXT 13, 0xFFF
-    NEXT 14, 0x4C
+    NEXT 14, 0x0C
     NEXT 15, 0
-    NEXT 16, 0x7F
-    NEXT 17, 0x7F
+    NEXT 16, 0x3F
+    NEXT 17, 0x3F
     PAINT 5
 
     @ ---- Show the bands: engine A, display mode 2 (VRAM display), bank A as LCDC.

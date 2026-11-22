@@ -48,6 +48,14 @@ pub const CARD_TRANSFER_IRQ: u32 = 1 << 19;
 /// "A transfer").
 pub const SPI_IRQ: u32 = 1 << 23;
 
+/// IF bit 12: the keypad condition of the CPU's own KEYCNT holds (`interrupts.md`, "IE and IF
+/// bits"; `keypad.md`, "The keypad IRQ").
+pub const KEYPAD_IRQ: u32 = 1 << 12;
+
+/// IF bit 22: the screens unfolded (the hinge opened), ARM7 only (`interrupts.md`, "IE and IF
+/// bits"; `keypad.md`, "The hinge IRQ").
+pub const UNFOLD_IRQ: u32 = 1 << 22;
+
 /// IF bit 21: the geometry command FIFO, ARM9 only; level driven, held up while GXSTAT's FIFO IRQ
 /// condition is true (`interrupts.md`, "IE and IF bits"; `gx-stub.md`, "GXSTAT and the FIFO IRQ").
 pub const GXFIFO_IRQ: u32 = 1 << 21;

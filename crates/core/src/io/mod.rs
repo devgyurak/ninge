@@ -109,10 +109,17 @@ registry! {
 impl Io {
     /// Latches `input` as a frame begins (`keypad.md`, "Where the bits come from"). The one copy
     /// of the host's data: every device reads it through the access's [`Cx`].
-    // TODO(phase5): a device that must react when the input changes (the keypad IRQ, the hinge
-    // IRQ) needs a change hook here; the keypad only reads it for now.
+    ///
+    /// The keypad IRQ and the hinge IRQ are checked here, against the input latched before this one
+    /// (`keypad.md`, "The keypad IRQ"); a request raised outside a CPU access takes the same
+    /// [`Io::request_irq`] path as the events.
     pub(crate) fn latch_input(&mut self, input: Input) {
-        self.input = input;
+        let previous = std::mem::replace(&mut self.input, input);
+        let requests = self
+            .keypad9
+            .latch_requests(&previous, &input)
+            .merge(self.keypad7.latch_requests(&previous, &input));
+        self.request_irq(requests);
     }
 
     /// The wires between devices as they stand now (`device::Lines`).

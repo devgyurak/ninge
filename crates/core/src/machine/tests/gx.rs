@@ -3,7 +3,7 @@
 //! still reaching the sound registers at the same addresses, POWCNT1 bit 3 gating the geometry
 //! block, the level-driven IF bit 21, and a savestate taken in the middle of a command.
 
-use super::dma::machine;
+use super::dma::{DST, ENABLE, SRC, WORD, machine, peek_words, poke_words, run_frames, set7, set9};
 use super::*;
 use crate::cpu::Bus;
 
@@ -201,4 +201,111 @@ fn given_a_savestate_in_the_middle_of_a_packed_word_when_loaded_then_the_paramet
 fn given_the_same_geometry_writes_when_two_machines_save_then_the_states_are_identical() {
     let (a, b) = (mid_command(), mid_command());
     assert_eq!(a.save_state(), b.save_state());
+}
+
+// ------------------------------------------------------------------- DMA start mode 7
+
+/// DMA control: the transfer-complete IRQ (bit 30), a fixed destination (bits 21-22 = 2) and ARM9
+/// start timing 7, the geometry command FIFO (bits 27-29).
+const IRQ: u32 = 1 << 30;
+const DEST_FIXED: u32 = 2 << 21;
+const GEOMETRY_FIFO: u32 = 7 << 27;
+/// IF bit 8, DMA channel 0.
+const DMA0_IRQ: u32 = 1 << 8;
+
+/// An unpacked `MTX_MODE` 1 and then `pushes` unpacked `MTX_PUSH` commands, one word each: the
+/// coordinate pointer ends at `pushes` if every word reaches the engine in order.
+fn display_list(pushes: u32) -> Vec<u32> {
+    [MTX_MODE, 1]
+        .into_iter()
+        .chain((0..pushes).map(|_| MTX_PUSH))
+        .collect()
+}
+
+/// A machine whose ARM9 enabled channel 0 in start mode 7 for a 300-word display list.
+fn gx_dma_enabled() -> Machine {
+    let mut m = machine();
+    poke_words(&mut m, SRC, &display_list(298));
+    set9(
+        &mut m,
+        0,
+        SRC,
+        GXFIFO,
+        ENABLE | IRQ | WORD | DEST_FIXED | GEOMETRY_FIFO | 300,
+    );
+    m
+}
+
+/// The same, after one frame has run.
+fn gx_dma_done() -> Machine {
+    let mut m = gx_dma_enabled();
+    run_frames(&mut m, 1);
+    m
+}
+
+#[test]
+fn given_a_mode_7_channel_of_300_words_when_it_runs_then_the_engine_took_every_word_in_order() {
+    // MTX_MODE 1 first, then 298 pushes: the 6-bit coordinate pointer is 298 mod 64 = 42. A lost
+    // word, or a push before the mode, would change it.
+    let m = gx_dma_done();
+    assert_eq!(m.inspect().gpu3d().coordinate_pointer(), 42);
+}
+
+#[test]
+fn given_a_mode_7_channel_when_it_runs_then_the_enable_bit_clears() {
+    let m = gx_dma_done();
+    assert_eq!(m.inspect().dma9().control(0) >> 31, 0);
+}
+
+#[test]
+fn given_a_mode_7_channel_with_the_irq_bit_when_it_runs_then_if_bit_8_is_raised() {
+    let m = gx_dma_done();
+    assert_eq!(m.inspect().irq9().if_() & DMA0_IRQ, DMA0_IRQ);
+}
+
+#[test]
+fn given_a_mode_7_channel_when_it_is_enabled_but_has_not_run_then_the_engine_saw_nothing() {
+    let m = gx_dma_enabled();
+    assert_eq!(m.inspect().gpu3d().coordinate_pointer(), 0);
+}
+
+#[test]
+fn given_a_mode_7_channel_when_the_transfer_ends_then_the_error_flag_shows_the_pointer_passed_31() {
+    // 298 pushes take the pointer through entry 31 and past it.
+    let m = gx_dma_done();
+    assert!(m.inspect().gpu3d().stack_error());
+}
+
+#[test]
+fn given_an_arm7_channel_with_the_same_start_bits_when_a_frame_runs_then_nothing_is_moved() {
+    // Timing bits 27-29 = 7 leave 3 in the ARM7's bits 28-29: the wireless / GBA-slot start.
+    let mut m = machine();
+    poke_words(&mut m, SRC, &[5]);
+    set7(&mut m, 0, 0, SRC, DST, ENABLE | WORD | GEOMETRY_FIFO | 1);
+    run_frames(&mut m, 1);
+    assert_eq!(
+        (peek_words(&m, DST, 1), m.inspect().dma7().control(0) >> 31),
+        (vec![0], 1)
+    );
+}
+
+#[test]
+fn given_a_savestate_with_a_mode_7_start_queued_when_loaded_and_run_then_it_equals_an_uninterrupted_run()
+ {
+    let mut uninterrupted = gx_dma_enabled();
+    let saved = uninterrupted.save_state();
+    run_frames(&mut uninterrupted, 1);
+
+    let mut resumed = machine();
+    let loaded = resumed.load_state(&saved);
+    run_frames(&mut resumed, 1);
+    assert_eq!(
+        (loaded, resumed.save_state() == uninterrupted.save_state()),
+        (Ok(()), true)
+    );
+}
+
+#[test]
+fn given_a_mode_7_channel_when_the_machine_runs_twice_then_the_savestate_bytes_are_identical() {
+    assert_eq!(gx_dma_done().save_state(), gx_dma_done().save_state());
 }

@@ -432,6 +432,56 @@ fn given_a_register_read_when_done_through_the_device_read_then_it_has_no_effect
 // ---------------------------------------------------------------------- the enable edge
 
 #[test]
+fn given_an_arm9_geometry_fifo_channel_when_enable_is_written_then_a_start_is_queued_on_its_own_slot()
+ {
+    let mut dma = Arm9Dma::new();
+    let effect = arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    assert_eq!(
+        (effect, dma.pending(2), dma.pending(0)),
+        (slot_effect(2), true, false)
+    );
+}
+
+#[test]
+fn given_an_arm9_geometry_fifo_channel_when_it_starts_then_the_transfer_moves_its_whole_count() {
+    let mut dma = Arm9Dma::new();
+    let transfer = started(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
+    assert_eq!(transfer.count, 300);
+}
+
+#[test]
+fn given_an_arm7_channel_with_the_same_start_bits_when_enable_is_written_then_no_start_is_queued() {
+    // Bit 27 does not exist on the ARM7, so timing bits 27-29 = 7 leave 3 in bits 28-29: the
+    // wireless / GBA-slot start, which no phase implements.
+    let mut dma = Arm7Dma::new();
+    let effect = arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    assert_eq!((effect, dma.pending(0)), (rechecked(), false));
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_without_repeat_when_it_finishes_then_enable_clears_and_the_irq_is_raised()
+ {
+    let mut dma = Arm9Dma::new();
+    let control = ENABLE | IRQ | WORD | timing9(7) | 4;
+    let t = started(&mut dma, 1, MAIN, OTHER, control);
+    let effect = dma.finish(&t, END);
+    assert_eq!(
+        (read32(&dma, cnt(1)) >> 31, effect.requests.arm9),
+        (0, 1 << 9)
+    );
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_with_repeat_when_it_finishes_then_it_stays_enabled_and_is_not_restarted()
+ {
+    let mut dma = Arm9Dma::new();
+    let control = ENABLE | REPEAT | WORD | timing9(7) | 4;
+    let t = started(&mut dma, 0, MAIN, OTHER, control);
+    dma.finish(&t, END);
+    assert_eq!((read32(&dma, cnt(0)) >> 31, dma.pending(0)), (1, false));
+}
+
+#[test]
 fn given_an_immediate_channel_when_enable_is_written_then_a_start_is_queued_on_its_own_slot() {
     let mut dma = Arm9Dma::new();
     let effect = arm(&mut dma, 3, MAIN, OTHER, ENABLE | 4);
@@ -645,9 +695,9 @@ fn trigger_failures<const A: bool>(
 
 #[test]
 fn given_arm9_start_timings_when_vblank_and_hblank_are_raised_then_only_1_and_2_start_a_channel() {
-    // Timing 1 is VBlank, 2 is HBlank; 3-7 (display start, main-memory display, cartridge
-    // slots, geometry FIFO) are not implemented: the channel is enabled and never starts
-    // (`dma.md`, "Start timing").
+    // Timing 1 is VBlank, 2 is HBlank; the others are not started by these two triggers: 3-5
+    // wait for their own, 6 (GBA slot) is not implemented, and 7 (geometry FIFO) starts when the
+    // channel is enabled, not on a trigger (`dma.md`, "Start timing").
     let want = [
         (1, 1, 0),
         (2, 0, 1),
@@ -670,8 +720,9 @@ fn given_arm7_start_timings_when_vblank_and_hblank_are_raised_then_only_timing_1
 
 #[test]
 fn given_an_arm9_channel_with_an_unimplemented_timing_when_read_then_it_is_enabled_and_busy() {
+    // Timing 6 is the GBA slot, which no phase plans.
     let mut dma = Arm9Dma::new();
-    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(6) | 4);
     assert_eq!(
         (read32(&dma, cnt(0)) >> 31, dma.pending(0), dma.slot_due(0)),
         (1, false, None)

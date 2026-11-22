@@ -83,9 +83,10 @@ impl<const ARM9: bool> Keypad<ARM9> {
     pub fn condition_met(&self, input: &Input) -> bool {
         let selected = self.keycnt & KEYCNT_KEYS;
         let held = input.buttons.bits() & selected;
-        match self.keycnt & KEYCNT_AND != 0 {
-            true => selected != 0 && held == selected,
-            false => held != 0,
+        if self.keycnt & KEYCNT_AND != 0 {
+            selected != 0 && held == selected
+        } else {
+            held != 0
         }
     }
 
@@ -171,9 +172,10 @@ impl<const ARM9: bool> Device<ARM9> for Keypad<ARM9> {
         });
         // The condition is checked again as KEYCNT lands, with the buttons latched for the frame
         // (`keypad.md`, "The keypad IRQ").
-        match keycnt_written {
-            true => effect.merge(Effect::raising(self.keypad_request(cx.host))),
-            false => effect,
+        if keycnt_written {
+            effect.merge(Effect::raising(self.keypad_request(cx.host)))
+        } else {
+            effect
         }
     }
 }

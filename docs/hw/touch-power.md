@@ -177,7 +177,7 @@ These are choices of the emulator. They do not describe a part.
   returns zero (see "Unverified").
 - A reply that has been read to its end keeps returning zero.
 - A write to the battery register (1) is dropped (GBATEK marks it read-only; see "Unverified").
-- A read of a register keeps returning its value for every further byte of the session.
+- A held session repeats its access: further bytes read the same register again, or write it again.
 
 ## Unverified
 
@@ -206,11 +206,14 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **The pen line's timing.** The bit follows the touch state latched at the start of the frame and
   the mode set by the last control byte; the real line is analog and can glitch when the screen is
   newly pressed or released (GBATEK's note). `io/keypad/`.
-- **The power-management device's answer to the index byte** (zero here) and to extra data bytes
-  (the register again). `spi/power/`.
+- **The power-management device's answer to the index byte and to a write's data byte** (zero
+  here), and what a further byte of a held session does (it repeats the read or the write of the
+  same register). `spi/power/`.
 - **A write to the read-only battery register** is dropped, and a byte with the start bit clear is
   padding. `spi/power/`, `spi/touch/`.
 - **The battery status** reads "power good" (0) always. `spi/power/`.
+- **The power-on values** of registers 2 and 3: zero (GBATEK says only that the microphone amplifier is
+  off after power-up). Register 0's start value is the next item. `spi/power/`.
 - **Which bits of register 0 a real original console stores.** GBATEK lists bits 0-6; the model
   stores exactly those. `spi/power/`.
 - **Register 0's start value, `0Dh`** (amplifier and both backlights on): GBATEK gives none; the

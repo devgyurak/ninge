@@ -136,10 +136,10 @@ the same address; the ARM7 sees only this one.
 
 ### SoundBias: SWI `08h` (ARM7)
 
-`R0` is the target: 0 means level `000h`, any other value means `200h`. `R1` is the delay count: the DS
-takes it as a parameter, where the GBA has no `R1` and always uses a fixed delay of 8. The BIOS steps SOUNDBIAS up or down one at a time, with a
-short delay between steps, until it reaches the target. The bits above bit 9 are kept as they were.
-Nothing is returned.
+`R0` is the target: 0 means level `000h`, any other value means `200h`. `R1` is the delay count:
+the DS takes it as a parameter, where the GBA has no `R1` and always uses a fixed delay of 8. The
+BIOS steps SOUNDBIAS up or down one at a time, with a short delay between steps, until it reaches
+the target. The bits above bit 9 are kept as they were. Nothing is returned.
 
 ## Behavior
 

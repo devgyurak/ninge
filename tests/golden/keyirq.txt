@@ -1,0 +1,3 @@
+# Golden frames for testroms/keyirq. Format and review flow: tests/golden/README.md.
+# Run with the input log in crates/runner/tests/keyirq.rs (A, A and B, nothing, B, Start, hinge closed, hinge open, then nothing). Top: engine B's black placeholder (same hash as touch, vramdisp, cartread, savechip and rtc). Bottom: six 32-row bands, all green, so the same uniform green screen as touch's: the hash cannot tell the bands apart, and crates/runner/tests/keyirq.rs checks the record and each band itself. The two hashes are copied from tests/golden/touch.txt, which draws the same uniform screens; they were not regenerated from this ROM's run.
+frames=10 top=1a0564b2e8de2325 bottom=f4b3a251ac302325

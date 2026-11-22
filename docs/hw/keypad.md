@@ -105,12 +105,13 @@ acknowledge of IF bit 12 does not request again until the next check: the reques
 driven (contrast the geometry FIFO's bit, `gx-stub.md`). When the condition is checked, and the
 re-request behavior, are the model's choice ("Unverified").
 
-With **no key selected** (bits 0-9 all clear) the condition is never met, in OR or in AND mode (the model's choice, "Unverified").
+With **no key selected** (bits 0-9 all clear) the condition is never met, in OR or in AND mode
+(the model's choice, "Unverified").
 
 ### The hinge IRQ
 
 IF bit 22 exists on the ARM7 only. GBATEK says the hinge generates it when the screens unfold and
-that there seems to be no way to disable the request; only IE decides whether the ARM7 takes it.
+that there seems to be no way to disable the request; IE (with IME and the CPU's I flag, as for any source) decides whether the ARM7 takes it.
 The model compares the previously latched `Input` with the new one at each frame-boundary latch:
 a change from closed to open requests ARM7 IF bit 22, whatever KEYCNT, its enable and IE say.
 Closing the lid requests nothing, and a frame whose hinge state equals the last one requests

@@ -35,6 +35,7 @@ pub mod timing;
 use crate::gpu2d::Gpu2d;
 use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
+use crate::spu::Spu;
 use cart::Cart;
 use device::{Checked, Cx, Device, Effect, Fired, Lines, Signal, Signals, SlotMask, Width};
 use divsqrt::DivSqrt;
@@ -86,6 +87,8 @@ registry! {
         spi: Spi = Spi::new() => [Port::Spi],
         /// The ARM7's RTCCNT and the clock chip on its pins (`rtc.md`).
         rtc: Rtc = Rtc::new() => [Port::Rtc],
+        /// The ARM7's sound and capture registers (`sound-registers.md`).
+        spu: Spu = Spu::new() => [Port::Spu],
     }
     each {
         /// Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).

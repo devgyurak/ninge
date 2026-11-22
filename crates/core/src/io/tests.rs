@@ -147,7 +147,6 @@ fn given_each_arm7_register_address_when_decoded_then_the_expected_port_and_offs
 fn given_arm9_only_registers_when_the_arm7_decodes_them_then_no_port_owns_them() {
     let expected = [
         (DISPCNT_A_ADDR, None),
-        (POWCNT1_ADDR, None),
         (WRAMCNT, None),
         (VRAMCNT_G, None),
         (VRAMCNT_H, None),
@@ -163,8 +162,34 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
         (0x0400_0300, Some(Owner::Io(Port::Power, 0))),
         (0x0400_0301, Some(Owner::Io(Port::Power, 1))),
         (0x0400_0303, Some(Owner::Io(Port::Power, 3))),
+        // POWCNT2, at the address the ARM9 knows as POWCNT1.
+        (0x0400_0304, Some(Owner::Io(Port::Power, 4))),
+        (0x0400_0307, Some(Owner::Io(Port::Power, 7))),
     ];
     let arm9 = [(0x0400_0300, None), (0x0400_0301, None)];
+    assert_eq!(
+        (
+            decode_failures::<false>(&arm7),
+            decode_failures::<true>(&arm9)
+        ),
+        (vec![], vec![])
+    );
+}
+
+#[test]
+fn given_the_sound_window_when_decoded_then_only_the_arm7_owns_it() {
+    let arm7 = [
+        (0x0400_0400, Some(Owner::Io(Port::Spu, 0))),
+        (0x0400_0504, Some(Owner::Io(Port::Spu, 0x104))),
+        (0x0400_051F, Some(Owner::Io(Port::Spu, 0x11F))),
+        (0x0400_03FF, None),
+        (0x0400_0520, None),
+    ];
+    let arm9 = [
+        (0x0400_0400, None),
+        (0x0400_0500, None),
+        (0x0400_051F, None),
+    ];
     assert_eq!(
         (
             decode_failures::<false>(&arm7),

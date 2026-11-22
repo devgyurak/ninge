@@ -40,6 +40,7 @@ pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
 pub use crate::rtc::{Chip, Register, Session};
 pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
+pub use crate::spu::{Capture, Channel, Spu};
 
 /// A read-only view of one [`Machine`], from [`Machine::inspect`]. It borrows the machine, so the
 /// machine cannot run while a view of it is alive.
@@ -231,6 +232,13 @@ impl<'a> Inspect<'a> {
     // The debugger's CPU panel (#56) will show whether the ARM7 asked to halt.
     pub fn power(&self) -> &'a Power {
         self.machine.io.power()
+    }
+
+    /// The ARM7's sound registers: every channel's registers and end time, SOUNDCNT, SOUNDBIAS and
+    /// the capture units.
+    // No panel shows them yet: the debugger's sound panel comes with the mixer in Phase 6 (#47).
+    pub fn spu(&self) -> &'a Spu {
+        self.machine.io.spu()
     }
 
     /// VRAMCNT_A as decoded.

@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 /// SOUND0CNT, the first register of the window, at `0400_0400h` (`sound-registers.md`, "The
 /// channels").
 pub const SOUND_REGS_ADDR: u32 = 0x0400_0400;
+/// SOUNDBIAS, at `0400_0504h`.
+pub const SOUNDBIAS_ADDR: u32 = SOUND_REGS_ADDR + SOUNDBIAS_OFFSET;
 /// Bytes of the window the device owns: the channels, SOUNDCNT, SOUNDBIAS and the captures, up to
 /// and including SNDCAP1LEN (`0400_051Fh`).
 pub const BLOCK_BYTES: u32 = 0x120;

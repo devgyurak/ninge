@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_477_210;
-const PINNED_HASH: u64 = 0x9d0ff204813bff91;
+const PINNED_LEN: usize = 5_477_317;
+const PINNED_HASH: u64 = 0x0f5f83d8174e57a1;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -94,8 +94,8 @@ const PINNED_HASH: u64 = 0x9d0ff204813bff91;
 /// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
 /// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
 /// being zero) and the version stayed.
-const PINNED_BOOTED_LEN: usize = 6_067_131;
-const PINNED_BOOTED_HASH: u64 = 0xb7c2de0b6de799e3;
+const PINNED_BOOTED_LEN: usize = 6_067_238;
+const PINNED_BOOTED_HASH: u64 = 0x6b39ae2e3adcbe23;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -270,6 +270,20 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         Err(SavestateError::VersionMismatch {
             found: 10,
             expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
+fn given_a_version_39_state_from_before_the_sound_registers_when_loaded_then_it_is_refused() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &39u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 39,
+            expected: 40
         })
     );
 }

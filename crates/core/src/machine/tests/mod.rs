@@ -18,6 +18,7 @@ mod rebuild;
 mod rtc;
 mod save;
 mod scheduler;
+mod sound;
 mod swi_data;
 mod timers;
 mod timing;

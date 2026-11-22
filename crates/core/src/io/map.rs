@@ -24,6 +24,7 @@ use crate::io::rtc::{BLOCK_BYTES as RTC_BYTES, RTCCNT_ADDR};
 use crate::io::spi::{BLOCK_BYTES as SPI_BYTES, SPICNT_ADDR};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::DISPSTAT_ADDR;
+use crate::spu::{BLOCK_BYTES as SPU_BYTES, SOUND_REGS_ADDR};
 
 /// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..I,
 /// WRAMCNT, WRAMSTAT) stays in `Memory` because the page tables derive from it (#109), every
@@ -62,8 +63,10 @@ pub(crate) enum Port {
     Keypad,
     /// DIVCNT to SQRT_PARAM, ARM9 only.
     DivSqrt,
-    /// HALTCNT, ARM7 only.
+    /// HALTCNT and POWCNT2, ARM7 only.
     Power,
+    /// The sound channels, SOUNDCNT, SOUNDBIAS and the capture registers, ARM7 only.
+    Spu,
     /// SPICNT and SPIDATA, ARM7 only.
     Spi,
     /// RTCCNT, ARM7 only.
@@ -93,6 +96,7 @@ impl Port {
             Self::DivSqrt => DIVCNT_ADDR,
             Self::Keypad => KEYINPUT_ADDR,
             Self::Power => POSTFLG_ADDR,
+            Self::Spu => SOUND_REGS_ADDR,
             Self::Spi => SPICNT_ADDR,
             Self::Rtc => RTCCNT_ADDR,
             Self::Cart | Self::CartExmem | Self::CartData => AUXSPICNT_ADDR,
@@ -161,7 +165,7 @@ pub(crate) const ARM9_PORTS: [PortEntry; 30] = [
 
 /// What the ARM7 sees: the same blocks, without the 2D engines, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
-pub(crate) const ARM7_PORTS: [PortEntry; 14] = [
+pub(crate) const ARM7_PORTS: [PortEntry; 15] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
@@ -171,8 +175,11 @@ pub(crate) const ARM7_PORTS: [PortEntry; 14] = [
     (RTCCNT_ADDR, RTC_BYTES, Some(Port::Rtc)),
     (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
     (IME_ADDR, 16, Some(Port::Irq)),
-    // POSTFLG and HALTCNT.
+    // POSTFLG, HALTCNT and POWCNT2.
     (POSTFLG_ADDR, POWER_BYTES, Some(Port::Power)),
+    // The sound registers. The list is not strictly ascending: the entries keep the places of
+    // the blocks they belong to.
+    (SOUND_REGS_ADDR, SPU_BYTES, Some(Port::Spu)),
     // WRAMSTAT sits in the second byte.
     (VRAMCNT_A_ADDR, 4, None),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),

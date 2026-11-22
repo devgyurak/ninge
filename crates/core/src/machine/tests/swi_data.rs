@@ -256,9 +256,8 @@ fn given_the_implemented_data_numbers_when_called_then_none_is_recorded_as_unimp
 }
 
 #[test]
-fn given_sleep_soundbias_and_the_other_decompressors_when_called_then_each_is_recorded_unimplemented()
- {
-    let recorded: Vec<Option<u8>> = [0x07, 0x08, 0x10, 0x13, 0x14, 0x15]
+fn given_sleep_and_the_other_decompressors_when_called_then_each_is_recorded_unimplemented() {
+    let recorded: Vec<Option<u8>> = [0x07, 0x10, 0x13, 0x14, 0x15]
         .iter()
         .map(|&n| {
             arm7_after(n, [0, 0, 0, 0])
@@ -267,8 +266,47 @@ fn given_sleep_soundbias_and_the_other_decompressors_when_called_then_each_is_re
                 .last_unimplemented()
         })
         .collect();
-    assert_eq!(
-        recorded,
-        [0x07, 0x08, 0x10, 0x13, 0x14, 0x15].map(Some).to_vec()
-    );
+    assert_eq!(recorded, [0x07, 0x10, 0x13, 0x14, 0x15].map(Some).to_vec());
+}
+
+// ------------------------------------------------------------------------------- SoundBias
+
+const SOUNDBIAS: u32 = 0x0400_0504;
+
+/// SOUNDBIAS after SWI 08h with `r0`, from a register that held `start`.
+fn bias_after_swi(r0: u32, start: u32) -> u32 {
+    let mut m = arm7_running(&[arm_swi(0x08 << 16), MOV_R6, SPIN]);
+    let at = m.inspect().arm7_clock();
+    m.bus7(at).write32(SOUNDBIAS, start);
+    m.arm7.regs_mut().set(0, r0);
+    step7(&mut m, 2);
+    let at = m.inspect().arm7_clock();
+    m.bus7(at).read32(SOUNDBIAS)
+}
+
+#[test]
+fn given_swi_soundbias_when_r0_is_zero_then_the_bias_becomes_000h() {
+    assert_eq!(bias_after_swi(0, 0x3FF), 0);
+}
+
+#[test]
+fn given_swi_soundbias_when_r0_is_not_zero_then_the_bias_becomes_200h() {
+    assert_eq!(bias_after_swi(1, 0), 0x200);
+}
+
+#[test]
+fn given_swi_soundbias_when_r0_has_only_high_bits_then_the_bias_is_200h() {
+    assert_eq!(bias_after_swi(0x8000_0000, 0x1), 0x200);
+}
+
+#[test]
+fn given_swi_soundbias_on_the_arm7_when_called_then_it_is_not_recorded_unimplemented() {
+    let m = arm7_after(0x08, [1, 0, 0, 0]);
+    assert_eq!(m.inspect().swi_record7().last_unimplemented(), None);
+}
+
+#[test]
+fn given_swi_08_on_the_arm9_when_called_then_it_is_recorded_unimplemented() {
+    let m = arm9_after(0x08, [1, 0, 0, 0]);
+    assert_eq!(m.inspect().swi_record9().last_unimplemented(), Some(0x08));
 }

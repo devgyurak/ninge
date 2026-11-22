@@ -19,9 +19,9 @@ const WAIT_BY_LOOP: u8 = 0x03;
 const INTR_WAIT: u8 = 0x04;
 const VBLANK_INTR_WAIT: u8 = 0x05;
 const HALT: u8 = 0x06;
-/// The data routines (`hle-swi.md`, "The copy, math and decompression SWIs").
 /// SoundBias, ARM7 only (`hle-swi.md`, "The copy, math and decompression SWIs").
 const SOUND_BIAS: u8 = 0x08;
+/// The data routines (`hle-swi.md`, "The copy, math and decompression SWIs").
 const DIV: u8 = 0x09;
 const CPU_SET: u8 = 0x0B;
 const CPU_FAST_SET: u8 = 0x0C;

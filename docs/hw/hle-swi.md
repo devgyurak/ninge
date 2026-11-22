@@ -173,12 +173,12 @@ would, and costs one instruction (see "Cost").
 
 | Number | Name | Arguments | Result |
 |---|---|---|---|
+| `08h` | SoundBias | `R0` level (0 or not), `R1` delay count | SOUNDBIAS |
 | `09h` | Div | `R0` numerator, `R1` denominator, both signed | `R0` quotient, `R1` remainder, `R3` absolute quotient |
 | `0Bh` | CpuSet | `R0` source, `R1` destination, `R2` control | memory |
 | `0Ch` | CpuFastSet | same | memory |
 | `0Dh` | Sqrt | `R0` unsigned | `R0` integer square root |
 | `0Eh` | GetCRC16 | `R0` initial value, `R1` address, `R2` length in bytes | `R0` the CRC |
-| `08h` | SoundBias | `R0` level (0 or not), `R1` delay count | SOUNDBIAS |
 | `0Fh` | IsDebugger | none | `R0 = 0` |
 | `11h` | LZ77 to 8-bit writes | `R0` source, `R1` destination | memory |
 | `12h` | LZ77 to 16-bit writes | same | memory |

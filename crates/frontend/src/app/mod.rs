@@ -74,6 +74,17 @@ pub fn map_event(event: &Event) -> Action {
     }
 }
 
+/// The pixels of a screen as shown: unchanged while its backlight is on, all black while it is
+/// off. The core's frame buffers are not dimmed; what an unlit screen looks like is the host's
+/// choice (`touch-power.md`, "What the power register does").
+// TODO(hw-unverified): what an unlit screen shows (`touch-power.md`, "Unverified").
+pub fn lit_or_black(pixels: Vec<u32>, backlight: bool) -> Vec<u32> {
+    match backlight {
+        true => pixels,
+        false => vec![0; pixels.len()],
+    }
+}
+
 /// Frontend state. `S` is where shared-memory frames are written.
 pub struct App<S = NoShm> {
     size: TermSize,
@@ -199,6 +210,10 @@ impl<S: ShmSink> App<S> {
             if let Some(save) = &mut self.save {
                 save.after_frame(machine);
             }
+            // The program shut the console down: end the run the way a quit does, so `finish`
+            // writes the save as usual. The frontend only reads what the machine reports
+            // (`touch-power.md`, "What the power register does").
+            self.quit |= machine.is_shut_down();
         }
         if let Some(areas) = self.areas {
             let (top, bottom) = self.screens();
@@ -213,8 +228,14 @@ impl<S: ShmSink> App<S> {
     fn screens(&self) -> (Vec<u32>, Vec<u32>) {
         match &self.source {
             Source::Machine(machine) => (
-                machine.frame(Screen::Top).to_vec(),
-                machine.frame(Screen::Bottom).to_vec(),
+                lit_or_black(
+                    machine.frame(Screen::Top).to_vec(),
+                    machine.backlight(Screen::Top),
+                ),
+                lit_or_black(
+                    machine.frame(Screen::Bottom).to_vec(),
+                    machine.backlight(Screen::Bottom),
+                ),
             ),
             Source::Pattern => (dummy_frame(self.frame_no, 0), dummy_frame(self.frame_no, 1)),
         }

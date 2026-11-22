@@ -201,13 +201,6 @@ impl Gpu3d {
     /// every write that could make an acknowledge stick, so an acknowledge has no effect while the
     /// condition holds (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
     // TODO(hw-unverified): mode 3 (reserved) raises nothing (`gx-stub.md`, "Unverified").
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "`Io` registers the device and calls this in the wiring PR"
-        )
-    )]
     pub(crate) fn fifo_irq_asserted(&self) -> Requests {
         match self.irq_mode {
             IRQ_HALF_FULL | IRQ_EMPTY => Requests::for_cpu::<true>(GXFIFO_IRQ),
@@ -460,7 +453,14 @@ impl Device<true> for Gpu3d {
         read_bytes(offset, width, |at| self.byte_at(at))
     }
 
-    fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
+    fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
+        // POWCNT1 bit 3 clear makes the whole geometry block read-only: GXFIFO, the ports and
+        // GXSTAT drop their writes (`gx-stub.md`, "Power control").
+        // TODO(hw-unverified): GXSTAT's R/W bits count as read-only too (`gx-stub.md`,
+        // "Unverified").
+        if offset.wrapping_sub(GEOMETRY_OFFSET) < GEOMETRY_BYTES && !cx.lines.geometry_powered {
+            return Effect::default();
+        }
         match offset.wrapping_sub(GEOMETRY_OFFSET) {
             // GXFIFO and its mirrors: one write, one word, whatever its width.
             // TODO(hw-unverified): all 16 words mirror GXFIFO and a narrow write is one entry

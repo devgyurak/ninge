@@ -9,6 +9,7 @@ mod bios;
 mod boot;
 mod cart;
 mod dma;
+mod gx;
 mod halt;
 mod input;
 mod ipc;

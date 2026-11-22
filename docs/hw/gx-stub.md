@@ -286,6 +286,9 @@ With bit 3 clear, then, GXFIFO and the command ports drop their writes (no comma
 bits 30-31 and the write-1-to-clear of bit 15 are dropped, and a GXSTAT read still reports the state
 as it was.
 
+Bit 2 gates the rendering block, whose registers all drop writes in the stub anyway, so clearing it
+has no observable effect here; `TODO(phase7)` with the rasterizer (#49-#52).
+
 GBATEK also advises sending one SwapBuffers after powering the two engines on; the stub does not need
 it.
 

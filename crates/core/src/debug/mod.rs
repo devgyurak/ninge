@@ -25,6 +25,7 @@ pub use crate::gpu2d::{
     AffineBg, AffineFormat, BrightnessMode, EffectMode, Effects, EngineId, Gpu2d, LayerSet,
     MasterBrightness, Mosaic, OBJ_COUNT, ObjAttrs, Targets, TextBg, WindowRect, Windows,
 };
+pub use crate::gpu3d::Gpu3d;
 pub use crate::hle::SwiRecord;
 pub use crate::io::DeviceId;
 pub use crate::io::cart::Cart;
@@ -239,6 +240,14 @@ impl<'a> Inspect<'a> {
     // No panel shows them yet: the debugger's sound panel comes with the mixer in Phase 6 (#47).
     pub fn spu(&self) -> &'a Spu {
         self.machine.io.spu()
+    }
+
+    /// The 3D engine stub: DISP3DCNT, the matrix mode, the three stack pointers, the error flag and
+    /// the command decoder's state.
+    // No panel shows them yet: the debugger's 3D panels come with the geometry engine in Phase 7
+    // (#53).
+    pub fn gpu3d(&self) -> &'a Gpu3d {
+        self.machine.io.gpu3d()
     }
 
     /// VRAMCNT_A as decoded.

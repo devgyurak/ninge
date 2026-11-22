@@ -11,6 +11,9 @@ use crate::gpu2d::{
     MASTER_BRIGHT_ADDR, MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, MOSAIC_ADDR, MOSAIC_B_ADDR,
     MOSAIC_BYTES, POWCNT1_ADDR, WINDOW_REGS_ADDR, WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES,
 };
+use crate::gpu3d::{
+    DISP3DCNT_ADDR, DISP3DCNT_BYTES, GEOMETRY_ADDR, GEOMETRY_BYTES, RENDER_ADDR, RENDER_BYTES,
+};
 use crate::io::cart::{
     AUXSPICNT_ADDR, BLOCK_LEN as CART_BYTES, DATA_ADDR as CART_DATA_ADDR, EXMEMCNT_ADDR,
 };
@@ -63,6 +66,9 @@ pub(crate) enum Port {
     Keypad,
     /// DIVCNT to SQRT_PARAM, ARM9 only.
     DivSqrt,
+    /// DISP3DCNT, the 3D rendering block and the geometry block, ARM9 only (three table entries,
+    /// one device).
+    Gpu3d,
     /// HALTCNT and POWCNT2, ARM7 only.
     Power,
     /// The sound channels, SOUNDCNT, SOUNDBIAS and the capture registers, ARM7 only.
@@ -94,6 +100,7 @@ impl Port {
             Self::Timers => TM0CNT_L_ADDR,
             Self::Dma | Self::DmaFill => DMA0SAD_ADDR,
             Self::DivSqrt => DIVCNT_ADDR,
+            Self::Gpu3d => DISP3DCNT_ADDR,
             Self::Keypad => KEYINPUT_ADDR,
             Self::Power => POSTFLG_ADDR,
             Self::Spu => SOUND_REGS_ADDR,
@@ -113,7 +120,7 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 30] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 33] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
@@ -126,6 +133,8 @@ pub(crate) const ARM9_PORTS: [PortEntry; 30] = [
     (MOSAIC_ADDR, MOSAIC_BYTES, Some(Port::Gpu2d)),
     // BLDCNT, BLDALPHA and BLDY, the colour special effects.
     (BLD_REGS_ADDR, BLD_REGS_BYTES, Some(Port::Gpu2d)),
+    // DISP3DCNT, a halfword and two unused bytes.
+    (DISP3DCNT_ADDR, DISP3DCNT_BYTES, Some(Port::Gpu3d)),
     // DISPCAPCNT, the display capture control register.
     (DISPCAPCNT_ADDR, DISPCAPCNT_BYTES, Some(Port::Gpu2d)),
     // DISP_MMEM_FIFO, the main-memory display FIFO.
@@ -148,6 +157,12 @@ pub(crate) const ARM9_PORTS: [PortEntry; 30] = [
     // holds (the block stays on the 4-byte grid).
     (VRAMCNT_A_ADDR, 12, None),
     (POWCNT1_ADDR, 4, Some(Port::Gpu2d)),
+    // The 3D rendering registers, RDLINES_COUNT to TOON_TABLE, and the geometry engine's GXFIFO,
+    // command ports, GXSTAT and result registers.
+    (RENDER_ADDR, RENDER_BYTES, Some(Port::Gpu3d)),
+    // TODO(hw-unverified): GXFIFO mirrors every 4 bytes up to `0400_043Fh`, and the addresses no
+    // register uses read 0 (`gx-stub.md`, "Unverified").
+    (GEOMETRY_ADDR, GEOMETRY_BYTES, Some(Port::Gpu3d)),
     // Engine B's block, the same layout 1000h on: DISPCNT, then the BG control and scroll registers.
     (DISPCNT_B_ADDR, 4, Some(Port::Gpu2d)),
     (BG_REGS_B_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),

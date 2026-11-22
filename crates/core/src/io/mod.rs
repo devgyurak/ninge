@@ -36,7 +36,7 @@ use crate::gpu2d::Gpu2d;
 use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
 use cart::Cart;
-use device::{Checked, Cx, Device, Effect, Fired, Signal, Signals, SlotMask, Width};
+use device::{Checked, Cx, Device, Effect, Fired, Lines, Signal, Signals, SlotMask, Width};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -108,6 +108,13 @@ impl Io {
         self.input = input;
     }
 
+    /// The wires between devices as they stand now (`device::Lines`).
+    fn lines(&self) -> Lines {
+        Lines {
+            pen_irq_enabled: self.spi.pen_irq_enabled(),
+        }
+    }
+
     /// The input latched when the frame began, for the debugger.
     pub(crate) fn input(&self) -> Input {
         self.input
@@ -135,6 +142,7 @@ impl Io {
             now,
             host: &self.input,
             rom,
+            lines: self.lines(),
         };
         device_call!(self, ARM9, port, ref, peek(offset, width, cx), 0)
     }
@@ -153,6 +161,7 @@ impl Io {
             now: at.now,
             host: &self.input,
             rom: at.rom,
+            lines: self.lines(),
         };
         let (value, effect) = device_call!(
             self,
@@ -182,6 +191,7 @@ impl Io {
             now: at.now,
             host: &self.input,
             rom: at.rom,
+            lines: self.lines(),
         };
         let effect = device_call!(
             self,

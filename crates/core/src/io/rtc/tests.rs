@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::input::Input;
-use crate::io::device::cx_at;
+use crate::io::device::{Lines, cx_at};
 use crate::io::map::{Owner, Port, decode};
 use crate::rtc::Session;
 
@@ -30,6 +30,9 @@ fn write(rtc: &mut Rtc, host_time: u32, offset: u32, width: Width, value: u32) {
         now: 0,
         host: &input,
         rom: &[],
+        lines: Lines {
+            pen_irq_enabled: true,
+        },
     };
     Device::<false>::write(rtc, offset, width, value, cx);
 }

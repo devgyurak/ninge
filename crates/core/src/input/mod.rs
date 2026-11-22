@@ -90,9 +90,8 @@ pub struct Touch {
 pub struct Input {
     /// The buttons held.
     pub buttons: Buttons,
-    /// Where the panel is pressed, if it is.
-    // TODO(phase5): nothing reads the touch point until the touch controller and the pen bit
-    // exist (#44, `keypad.md`, "What is still a stub").
+    /// Where the panel is pressed, if it is. The touch controller converts it, and EXTKEYIN's pen
+    /// bit follows it (`touch-power.md`).
     pub touch: Option<Touch>,
     /// Whether the hinge is closed (EXTKEYIN bit 7).
     pub hinge_closed: bool,

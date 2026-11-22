@@ -89,6 +89,15 @@ impl Tsc {
         }
     }
 
+    /// A chip in power-down mode `mode`, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) const fn with_mode_for_test(mode: u8) -> Self {
+        Self {
+            mode,
+            ..Self::new()
+        }
+    }
+
     /// The power-down mode of the last control byte.
     pub const fn mode(&self) -> u8 {
         self.mode
@@ -147,10 +156,11 @@ impl Tsc {
         out
     }
 
-    /// Whether the state is one the chip can be in: a mode below 4, and a reply that holds only
+    /// Whether the state is one the chip can be in: a mode that is the last command's, and a reply that holds only
     /// what is still on the wire.
     pub fn well_formed(&self) -> bool {
-        self.mode <= MODE_MASK
+        // The mode is the low two bits of the last control byte, and 0 before any.
+        self.mode == self.command & MODE_MASK
             // The dummy bit on top and the three bits under a 12-bit result are zero.
             && self.reply & 0x8007 == 0
             && match self.left {

@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_477_202;
-const PINNED_HASH: u64 = 0xf60583d875d39197;
+const PINNED_LEN: usize = 5_477_210;
+const PINNED_HASH: u64 = 0x9d0ff204813bff91;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -94,8 +94,8 @@ const PINNED_HASH: u64 = 0xf60583d875d39197;
 /// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
 /// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
 /// being zero) and the version stayed.
-const PINNED_BOOTED_LEN: usize = 6_067_123;
-const PINNED_BOOTED_HASH: u64 = 0x1893b5b9cba1e497;
+const PINNED_BOOTED_LEN: usize = 6_067_131;
+const PINNED_BOOTED_HASH: u64 = 0xb7c2de0b6de799e3;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -1745,4 +1745,36 @@ fn given_oam_when_loaded_and_saved_again_then_the_bytes_are_identical() {
     let mut target = booted(&counter_rom(), 0);
     let result = target.load_state(&first);
     assert_eq!((result, target.save_state() == first), (Ok(()), true));
+}
+
+/// A saved state whose SPI bus is `spi`, loaded into a booted machine: the load result and whether
+/// the target stayed as it was.
+fn load_with_spi(spi: crate::io::spi::Spi) -> (Result<(), SavestateError>, bool) {
+    let mut saver = booted(&counter_rom(), 1);
+    saver.io.replace_spi_for_test(spi);
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let before = target.save_state();
+    let result = target.load_state(&bytes);
+    (result, target.save_state() == before)
+}
+
+#[test]
+fn given_a_state_whose_touch_controller_has_a_power_down_mode_that_cannot_exist_when_loaded_then_it_is_corrupt()
+ {
+    let spi = crate::io::spi::Spi::with_devices_for_test(
+        crate::spi::PowerManagement::new(),
+        crate::spi::Tsc::with_mode_for_test(4),
+    );
+    assert_eq!(load_with_spi(spi), (Err(SavestateError::Corrupt), true));
+}
+
+#[test]
+fn given_a_state_whose_power_register_holds_a_bit_that_cannot_exist_when_loaded_then_it_is_corrupt()
+{
+    let spi = crate::io::spi::Spi::with_devices_for_test(
+        crate::spi::PowerManagement::with_control_for_test(0x80),
+        crate::spi::Tsc::new(),
+    );
+    assert_eq!(load_with_spi(spi), (Err(SavestateError::Corrupt), true));
 }

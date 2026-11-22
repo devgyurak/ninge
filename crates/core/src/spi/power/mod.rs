@@ -67,6 +67,15 @@ impl PowerManagement {
         }
     }
 
+    /// A device whose register 0 holds `control`, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) const fn with_control_for_test(control: u8) -> Self {
+        Self {
+            control,
+            ..Self::new()
+        }
+    }
+
     /// Register 0 as stored.
     pub const fn control(&self) -> u8 {
         self.control

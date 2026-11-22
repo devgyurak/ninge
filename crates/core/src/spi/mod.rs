@@ -11,7 +11,7 @@ pub use power::PowerManagement;
 pub use touch::Tsc;
 
 /// The touch-screen calibration points the synthetic firmware stores, and the pair of points the
-/// touch controller of #41 must use to turn a pixel into ADC values (`docs/hw/firmware.md`, "The
+/// touch controller (`touch`) uses to turn a pixel into ADC values (`docs/hw/firmware.md`, "The
 /// touch calibration constant").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchCalibration {

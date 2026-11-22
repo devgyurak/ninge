@@ -135,13 +135,13 @@ impl Effect {
     }
 }
 
-/// What an access carries besides its address: the master time of the access, the host's data and
-/// the cartridge ROM.
+/// What an access carries besides its address: the master time of the access, the host's data, the
+/// cartridge ROM and the pen output of the touch controller.
 ///
 /// `host` is the [`Input`] `Io` latched as the frame began: stored once, in `Io`, and handed to
 /// whichever device an access reaches. This is the path a device takes host data in: the keypad
 /// reads its buttons here, and the RTC reads the host's time here (`wall_time`), and the touch controller
-/// (#44) will read the touch point, with no copy of their own and no latch call. `rom` is the image the
+/// reads the touch point, with no copy of their own and no latch call. `rom` is the image the
 /// machine was loaded with, handed over the same way: the cartridge device reads it here and keeps
 /// no copy, so the savestate stays free of ROM bytes (`cart-protocol.md`, "Savestate"). `Copy`, and
 /// built per access on the I/O slow path only.
@@ -153,6 +153,28 @@ pub(crate) struct Cx<'a> {
     pub(crate) host: &'a Input,
     /// The cartridge image, empty before a ROM is loaded.
     pub(crate) rom: &'a [u8],
+    /// The levels one device presents to another, read by `Io` when the access began.
+    pub(crate) lines: Lines,
+}
+
+/// The current state of one device that another device reads: wires between them, as opposed to
+/// events (`Signal`). A device never reaches another, so `Io` reads each wire from its source and
+/// hands it over here; a new pair adds a field, not a field on [`Cx`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lines {
+    /// The touch controller's `/PENIRQ` output is enabled: the keypad's EXTKEYIN bit 6 needs it
+    /// (`touch-power.md`, "The pen bit").
+    pub(crate) pen_irq_enabled: bool,
+}
+
+/// The wires at power-on: the touch controller starts in power-down mode 0, so the pen output is
+/// enabled (`touch-power.md`, "Unverified").
+impl Default for Lines {
+    fn default() -> Self {
+        Self {
+            pen_irq_enabled: true,
+        }
+    }
 }
 
 /// The context of an access at master time `now` with no host input held and no ROM, for device
@@ -170,6 +192,7 @@ pub(crate) fn cx_with_rom(now: u64, rom: &[u8]) -> Cx<'_> {
         now,
         host: &NOTHING_HELD,
         rom,
+        lines: Lines::default(),
     }
 }
 

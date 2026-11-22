@@ -2,8 +2,8 @@
 //! The keypad stub, from `docs/hw/keypad.md`.
 
 use super::*;
-use crate::input::Buttons;
-use crate::io::device::cx_at;
+use crate::input::{Buttons, Touch};
+use crate::io::device::{Lines, cx_at};
 
 /// A read with no key held: the context carries the default input.
 fn peek9(pad: &Keypad<true>, offset: u32, width: Width) -> u32 {
@@ -24,6 +24,9 @@ fn peek9_with(pad: &Keypad<true>, input: &Input, offset: u32, width: Width) -> u
             now: 0,
             host: input,
             rom: &[],
+            lines: Lines {
+                pen_irq_enabled: true,
+            },
         },
     )
 }
@@ -37,6 +40,9 @@ fn peek7_with(pad: &Keypad<false>, input: &Input, offset: u32, width: Width) -> 
             now: 0,
             host: input,
             rom: &[],
+            lines: Lines {
+                pen_irq_enabled: true,
+            },
         },
     )
 }
@@ -161,4 +167,72 @@ fn given_a_keycnt_when_a_key_is_held_in_the_context_then_keycnt_is_unchanged() {
 
 fn held(buttons: Buttons) -> Input {
     Input::new().with_buttons(buttons)
+}
+
+/// EXTKEYIN as the ARM7 reads it with the panel at `touch` and the touch controller's pen output
+/// enabled or not, as `Io` hands both over.
+fn extkeyin_with(touch: Option<Touch>, pen_irq_enabled: bool) -> u32 {
+    let input = Input::new().with_touch(touch);
+    Device::<false>::peek(
+        &Keypad::<false>::new(),
+        6,
+        Width::Half,
+        Cx {
+            now: 0,
+            host: &input,
+            rom: &[],
+            lines: Lines { pen_irq_enabled },
+        },
+    )
+}
+
+#[test]
+fn given_a_touched_panel_and_the_pen_output_enabled_when_extkeyin_is_read_then_the_pen_bit_is_zero()
+{
+    assert_eq!(extkeyin_with(Some(Touch { x: 1, y: 2 }), true), 0x003F);
+}
+
+#[test]
+fn given_a_touched_panel_and_the_pen_output_disabled_when_extkeyin_is_read_then_the_pen_bit_is_one()
+{
+    assert_eq!(extkeyin_with(Some(Touch { x: 1, y: 2 }), false), 0x007F);
+}
+
+#[test]
+fn given_an_untouched_panel_and_the_pen_output_enabled_when_extkeyin_is_read_then_the_pen_bit_is_one()
+ {
+    assert_eq!(extkeyin_with(None, true), 0x007F);
+}
+
+#[test]
+fn given_a_touched_panel_with_x_held_and_the_hinge_closed_when_extkeyin_is_read_then_each_bit_is_its_own()
+ {
+    // X held (bit 0 clear), pen down (bit 6 clear), hinge closed (bit 7 set).
+    let input = Input::new()
+        .with_touch(Some(Touch { x: 1, y: 2 }))
+        .with_buttons(Buttons::X)
+        .with_hinge_closed(true);
+    let value = Device::<false>::peek(
+        &Keypad::<false>::new(),
+        6,
+        Width::Half,
+        Cx {
+            now: 0,
+            host: &input,
+            rom: &[],
+            lines: Lines {
+                pen_irq_enabled: true,
+            },
+        },
+    );
+    assert_eq!(value, 0x00BE);
+}
+
+#[test]
+fn given_a_touched_panel_when_the_arm9_reads_its_keypad_then_no_pen_bit_reaches_it() {
+    let input = Input::new().with_touch(Some(Touch { x: 1, y: 2 }));
+    assert_eq!(
+        peek9_with(&Keypad::<true>::new(), &input, 6, Width::Half),
+        0
+    );
 }

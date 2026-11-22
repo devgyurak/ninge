@@ -8,16 +8,16 @@ Used by: `crates/core/src/io/spi/`, `crates/core/src/spi/`   Phase: 5 (#39)
 The console's internal serial bus. Three chips hang on it, each with its own chip select: the
 power-management device, the firmware flash and the touch-screen controller. Only the ARM7 reaches
 the registers. This note covers the bus controller and what the bus does with a byte; the firmware
-chip is in `firmware.md`, and the power and touch devices belong to #41.
+chip is in `firmware.md`, and the power and touch devices are in `touch-power.md`.
 
 The cartridge slot has a second, separate serial bus (AUXSPI, `auxspi-saves.md`); the two share
 nothing but the idea.
 
 ## Scope
 
-Implemented (#39): SPICNT, SPIDATA, the SPI session (device select, hold, busy, the IRQ) and the
-firmware device on select 1. The power device (select 0) and the touch device (select 2) are
-selectable but answer a fixed value until #41 (`TODO(#41)` at the site).
+Implemented (#39, #41): SPICNT, SPIDATA, the SPI session (device select, hold, busy, the IRQ), the
+firmware device on select 1, the power-management device on select 0 and the touch-screen
+controller on select 2 (`touch-power.md`).
 
 Not implemented: the DSi's 8 MHz baud rate (SPICNT bit 2) and everything else DSi-only.
 
@@ -117,8 +117,8 @@ These are choices of the emulator. They do not describe a part.
   (`0400_01C3h`) does nothing. A halfword or word write that covers SPIDATA uses its low 8 bits.
 - A write to SPICNT changes the bits that are stored and never bit 7. A transfer already on the
   wire keeps the device, hold and IRQ values it started with.
-- Select 3 (reserved) and the devices of #41 answer `FFh` (the output line floats high, as on the
-  cartridge bus) and keep no state.
+- Select 3 (reserved) answers `FFh` (the output line floats high, as on the cartridge bus) and keeps
+  no state.
 
 ## Unverified
 
@@ -127,13 +127,13 @@ hardware, or a trace against the reference emulator used as an oracle.
 
 - **The clock divisor** for "4 MHz" etc.: bus clock divided by 8, 16, 32, 64 (4.19 MHz for baud 0),
   where GBATEK gives round numbers. `io/spi/` (the busy time). Verify by timing a transfer.
-- **What an unconnected or reserved device answers** (select 3), and what the power and touch
-  stubs answer before #41: `FFh` here, chosen. `io/spi/`.
+- **What an unconnected or reserved device answers** (select 3): `FFh` here, chosen. `io/spi/`.
 - **SPIDATA's reset value** (0) and its read while busy (the last received byte). `io/spi/`.
 - **A write to SPIDATA while busy** is ignored; the real bus may corrupt the unit or queue it.
   `io/spi/`.
 - **16-bit mode:** the second byte sent is zero, the byte kept is the second one received, and the
-  unit takes twice as long. GBATEK says only that every second byte appears. `io/spi/`.
+  unit takes twice as long, for every device alike. GBATEK says only that every second byte
+  appears. `io/spi/`.
 - **A late interrupt** (a unit's event has not fired when the next unit starts) is raised at that
   write, not at the unit's end; real hardware raises it at the end. `io/spi/`.
 - **When the IRQ fires** if SPICNT bit 14 changes during a transfer: the bit as it was at the

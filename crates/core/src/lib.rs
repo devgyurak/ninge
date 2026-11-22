@@ -31,6 +31,7 @@ pub mod cart;
 pub mod cpu;
 pub mod debug;
 mod gpu2d;
+pub mod gpu3d;
 mod hle;
 pub mod input;
 mod io;

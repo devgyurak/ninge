@@ -48,6 +48,10 @@ pub const CARD_TRANSFER_IRQ: u32 = 1 << 19;
 /// "A transfer").
 pub const SPI_IRQ: u32 = 1 << 23;
 
+/// IF bit 21: the geometry command FIFO, ARM9 only; level driven, held up while GXSTAT's FIFO IRQ
+/// condition is true (`interrupts.md`, "IE and IF bits"; `gx-stub.md`, "GXSTAT and the FIFO IRQ").
+pub const GXFIFO_IRQ: u32 = 1 << 21;
+
 /// IF bit 16: IPC sync, from the other CPU's IPCSYNC bit 13 (`ipc.md`, "Behavior").
 pub const IPCSYNC_IRQ: u32 = 1 << 16;
 /// IF bit 17: IPC send FIFO empty (`ipc.md`, "Interrupts").

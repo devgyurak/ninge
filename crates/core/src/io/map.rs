@@ -160,6 +160,8 @@ pub(crate) const ARM9_PORTS: [PortEntry; 33] = [
     // The 3D rendering registers, RDLINES_COUNT to TOON_TABLE, and the geometry engine's GXFIFO,
     // command ports, GXSTAT and result registers.
     (RENDER_ADDR, RENDER_BYTES, Some(Port::Gpu3d)),
+    // TODO(hw-unverified): GXFIFO mirrors every 4 bytes up to `0400_043Fh`, and the addresses no
+    // register uses read 0 (`gx-stub.md`, "Unverified").
     (GEOMETRY_ADDR, GEOMETRY_BYTES, Some(Port::Gpu3d)),
     // Engine B's block, the same layout 1000h on: DISPCNT, then the BG control and scroll registers.
     (DISPCNT_B_ADDR, 4, Some(Port::Gpu2d)),

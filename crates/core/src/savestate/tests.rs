@@ -275,6 +275,20 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
 }
 
 #[test]
+fn given_a_version_40_state_from_before_the_3d_stub_when_loaded_then_it_is_refused() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &40u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 40,
+            expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
 fn given_a_version_39_state_from_before_the_sound_registers_when_loaded_then_it_is_refused() {
     let rom = counter_rom();
     let bytes = patched(&booted(&rom, 0).save_state(), 8, &39u32.to_le_bytes());

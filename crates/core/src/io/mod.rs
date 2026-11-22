@@ -211,9 +211,10 @@ impl Io {
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
         // The FIFO IRQ is level driven: IF bit 21 is held up while the condition holds, so a write
-        // that sets the mode, and any write to the ARM9's IF (an acknowledge), re-raises it. No
-        // other path can make the condition true or clear an IF bit (`gx-stub.md`, "GXSTAT and the
-        // FIFO IRQ").
+        // that sets the mode, and any write by the ARM9 to the interrupt controller (IF, an
+        // acknowledge; IE and IME too, which the match cannot tell apart and which are harmless),
+        // re-raises it. No other path can make the condition true or clear an IF bit
+        // (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
         // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is
         // acknowledged (`gx-stub.md`, "Unverified").
         if ARM9 && matches!(port, Port::Gpu3d | Port::Irq) {

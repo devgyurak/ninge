@@ -39,6 +39,7 @@ mod rtc;
 pub mod savestate;
 mod scheduler;
 pub mod spi;
+pub mod spu;
 
 pub use input::{Buttons, Input, Touch};
 pub use machine::{Machine, RomError, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};

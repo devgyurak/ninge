@@ -315,6 +315,9 @@ impl Spu {
     }
 
     /// One byte written to the window at `offset` at master time `now`.
+    // TODO(hw-unverified): a write to an unused address of the window is dropped, and a partial
+    // write changes only its bytes without reading the write-only registers back to merge
+    // (`sound-registers.md`, "Unverified").
     fn write_byte(&mut self, offset: u32, byte: u8, now: u64) {
         match offset {
             ..SOUNDCNT_OFFSET => self.write_channel_byte(offset, byte, now),
@@ -394,7 +397,8 @@ impl Spu {
 
 impl Checked for Spu {
     /// Every register holds only the bits it keeps, and a stopped unit has no end time. A started
-    /// unit may be past its end: the bit is folded away lazily.
+    /// unit may be past its end (the bit is folded away lazily), and `end` is deliberately not
+    /// checked against `now`: any end time is one a program can have reached.
     fn well_formed(&self, _now: u64) -> bool {
         let channels = self.channels.iter().all(|c| {
             c.cnt & !CNT_MASK == 0

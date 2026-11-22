@@ -7,7 +7,7 @@
 @   0  SOUNDCNT after a halfword write of FFFFh.            1  SOUNDBIAS after a word write of all ones.
 @   2  SOUND2CNT after a word write of all ones (PSG, so it starts and stays busy).
 @   3  SOUND2CNT after a word write of 0 (stopped).
-@   4  SNDCAP0CNT after a byte write of FFh (a loop capture, busy).
+@   4  SNDCAP0CNT after a byte write of FFh (bit 2 set: a one-shot capture, busy for a long time).
 @   5  The write-only registers of channel 4 (SAD, TMR, PNT, LEN), all written with all ones, ORed
 @      together as read back.
 @   6  Timer counts until a one-shot PCM8 channel of 4 words at TMR FC00h stops being busy. A sample
@@ -141,7 +141,6 @@ poll_channel:
     ldr r0, =SNDCAP1CNT
     mov r3, #0x80               @ start, loop
     strb r3, [r0]
-    ldr r0, =SNDCAP0CNT
     ldr r0, =SNDCAP0CNT
     strh r4, [r9]
     mov r1, #0x80

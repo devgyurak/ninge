@@ -200,7 +200,11 @@ accepts the writes one at a time until the `N`th arrives.
 
 Ports not assigned to a valid command (the gaps in the table, for example `0400_0474h`-`0400_047Fh`)
 drop the write (see "Unverified"). A write to a port while the decoder waits for parameters of a
-different command abandons that command and starts the port's (see "Unverified").
+different command abandons that command and starts the port's (see "Unverified"). Two cases follow
+from the decoder having one "command waiting for parameters" state shared by GXFIFO and the ports:
+a GXFIFO word that arrives while a port command still owes parameters is taken as that command's
+parameter, and a port write with the same ID as a command in progress from GXFIFO continues that
+command; when it completes, the rest of the packed word it came from still runs (see "Unverified").
 
 ### Matrix mode and the stack pointers
 
@@ -342,7 +346,9 @@ hardware, or a comparison with the reference emulator used as an oracle.
   the ports, the rendering registers, DISP_1DOT_DEPTH) return 0. GBATEK states neither. —
   `gpu3d/` — verify by reading them on hardware.
 - **A port write while another command is mid-way**, whether from GXFIFO or from another port. The
-  stub abandons the old command and starts the port's. — `gpu3d/`.
+  stub abandons the old command and starts the port's, except for the same ID, which continues it
+  (the rest of its packed word then still runs). A GXFIFO word that arrives while a port command
+  owes parameters is that command's parameter. GBATEK states none of this. — `gpu3d/`.
 - **Writes narrower than a word** to GXFIFO and the ports are each one entry with the value written;
   GBATEK does not say. — `gpu3d/`.
 - **A dummy parameter in projection mode.** GBATEK is unsure whether POP, STORE and RESTORE in
@@ -353,7 +359,10 @@ hardware, or a comparison with the reference emulator used as an oracle.
   twice in mode 3.
 - **The invalid entries of the coordinate stack.** GBATEK says "entries 1 or 1Fh..3Fh" and also that
   the upper half mirrors the lower half, which would make 20h-3Eh valid. The stub reads the list
-  literally: an access to entry 1Fh or above sets the flag. The pointer moves even then. — `gpu3d/`.
+  literally: an access to entry 1Fh or above sets the flag. The pointer moves even then. The literal
+  reading is chosen because the same sentence names entry 1 of the projection stack, which is
+  certainly an error, so the sentence is a list of error entries and not a statement about
+  mirroring. — `gpu3d/`.
 - **IF bit 21 after the mode goes to 0.** GBATEK does not say plainly whether a bit already set
   stays until acknowledged. The stub leaves it set. — `io/mod.rs` (`Io::request_irq` and the GXSTAT
   write path).
@@ -364,8 +373,6 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **RDLINES_COUNT.** A real value depends on the renderer. The stub reads 46, the largest the field
   can hold (a renderer that always keeps its 48-line buffer full), so a program that checks for
   underflow danger sees none. — `gpu3d/`.
-- **POS_RESULT and the other results read 0** and **BOX_TEST gives "inside"**; neither is hardware.
-  — `gpu3d/`.
 - **DISP3DCNT bits 12 and 13** are not stored and a write of 1 to them does nothing. GBATEK says only
   "underflow/acknowledge". — `gpu3d/` — verify by a test ROM writing 1 to them.
 - **Unnamed addresses** between `0320h` and `06A3h` (the gaps in the table above) read 0 and drop

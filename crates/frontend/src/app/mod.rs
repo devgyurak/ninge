@@ -79,9 +79,10 @@ pub fn map_event(event: &Event) -> Action {
 /// choice (`touch-power.md`, "What the power register does").
 // TODO(hw-unverified): what an unlit screen shows (`touch-power.md`, "Unverified").
 pub fn lit_or_black(pixels: Vec<u32>, backlight: bool) -> Vec<u32> {
-    match backlight {
-        true => pixels,
-        false => vec![0; pixels.len()],
+    if backlight {
+        pixels
+    } else {
+        vec![0; pixels.len()]
     }
 }
 

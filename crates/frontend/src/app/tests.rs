@@ -411,11 +411,42 @@ fn given_a_program_that_shuts_the_console_down_when_a_frame_runs_then_the_app_qu
     assert!(app.should_quit());
 }
 
+/// An app running the poweroff ROM with a save file, whose save memory counts as changed (a
+/// savestate load raises the generation), so a `finish` has something to write.
+fn poweroff_app_with_changed_save(name: &str) -> (App, std::path::PathBuf) {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testroms/build/poweroff.nds"),
+    )
+    .expect("poweroff ROM is built");
+    let mut machine = crate::source::boot(rom).expect("valid header");
+    machine
+        .insert_save(ninge_core::cart::SaveType::Eeprom512, vec![0x21; 512])
+        .expect("512 bytes fit");
+    let path = std::env::temp_dir().join(format!("ninge-app-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let save = SaveFile::new(path.clone(), &machine);
+    let state = machine.save_state();
+    machine.load_state(&state).expect("own state loads");
+    let app = App::new(size())
+        .with_source(Source::Machine(Box::new(machine)))
+        .with_save(Some(save));
+    (app, path)
+}
+
 #[test]
-fn given_a_shut_down_machine_when_the_app_finishes_then_it_finishes_without_error() {
-    let mut app = poweroff_app();
+fn given_a_shut_down_machine_with_changed_save_memory_when_the_app_finishes_then_the_save_file_holds_it()
+ {
+    let (mut app, path) = poweroff_app_with_changed_save("poweroff.sav");
     run_frames(&mut app, 1);
-    assert!(app.finish().is_ok());
+    let quit = app.should_quit();
+    let finished = app.finish();
+    let written = std::fs::read(&path).ok();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        (quit, finished.is_ok(), written),
+        (true, true, Some(vec![0x21; 512]))
+    );
 }
 
 #[test]

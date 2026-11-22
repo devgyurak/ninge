@@ -64,7 +64,7 @@ CPU:
 | 18 | IPC receive FIFO not empty | yes | yes |
 | 19 | Card slot transfer complete (requested on the CPU that owns the slot, when AUXSPICNT bit 14 is set; `cart-protocol.md`) | yes | yes |
 | 20 | Card slot IREQ_MC | yes | yes |
-| 21 | Geometry command FIFO | yes | no |
+| 21 | Geometry command FIFO: level driven, set while GXSTAT's FIFO IRQ condition holds, so an acknowledge has no effect until the condition ends (`gx-stub.md`, "GXSTAT and the FIFO IRQ") | yes | no |
 | 22 | Screens unfolding | no | yes |
 | 23 | SPI bus | no | yes |
 | 24 | Wi-Fi | no | yes |

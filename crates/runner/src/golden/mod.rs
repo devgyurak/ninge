@@ -244,6 +244,25 @@ pub fn assert_frame_hash(rom: &str, frames: u64) {
     assert_golden(rom, frames, |bytes| run(bytes, frames));
 }
 
+/// [`assert_frame_hash`] with the host's input for each frame taken from `log`, for a ROM whose
+/// result depends on it (a touch press, a held key).
+///
+/// # Panics
+///
+/// As [`assert_frame_hash`].
+pub fn assert_frame_hash_with_input(rom: &str, frames: u64, log: &InputLog) {
+    assert_golden(rom, frames, |bytes| {
+        let mut machine = booted(bytes);
+        let hashes = step_frame_hashes(&mut machine, frames, 0, log);
+        let (top_hash, bottom_hash) = hashes.last().copied().unwrap_or_default();
+        Ok(RunReport {
+            frames: machine.frame_count(),
+            top_hash,
+            bottom_hash,
+        })
+    });
+}
+
 /// [`assert_frame_hash`] for a ROM that talks to its save chip: the machine is given a blank chip
 /// of `kind` first ([`run_with_blank_save`]). The chip's image is synthesized, never a file.
 ///

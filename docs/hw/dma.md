@@ -198,6 +198,10 @@ hardware behavior.
 
 ## Unverified
 
+- **Geometry FIFO start with repeat.** A repeating ARM9 mode 7 channel stays enabled after its count
+  and is not started again: the model looks at the FIFO level only when the channel is enabled
+  (`gx-stub.md`, "Unverified") — `crates/core/src/io/dma/mod.rs` (`Dma::write_control`) — verify with
+  a test ROM that repeats a mode 7 channel on hardware.
 - **A unit for each cartridge request.** GBATEK gives the recipe with length 1 and repeat on and does
   not say what a longer count does. The model paces any count one unit for each word, which equals the
   recipe's behavior for count 1 — `crates/core/src/io/dma/mod.rs` (`Dma::begin`, `Dma::finish`) —

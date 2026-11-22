@@ -53,7 +53,8 @@ _start:
     strh r0, [r9, #2]          @ KEYCNT: AND, IRQ enable, A and B selected
 
     @ TODO(hw-unverified): the sampling points and the request on every latch are the model's choice
-    @ (keypad.md, "Unverified"); so is no re-request after the acknowledge below.
+    @ (keypad.md, "Unverified"). Slot 10 cannot tell a re-request after the acknowledge from the AND
+    @ condition being false: the machine tests of the core pin that rule.
     WAIT_KEYS 3, 2             @ A alone: bit 0 clear, bit 1 set
     REC_IF 0x1000, 8
     WAIT_KEYS 3, 0             @ A and B

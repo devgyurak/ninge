@@ -13,12 +13,12 @@
 //!   (frame 4), and Start, which KEYCNT does not select, adds none (frame 5).
 //! - AND: A alone gives no request (frame 1), A with B does (frame 2), and after an acknowledge B
 //!   alone gives none again (frame 4).
-//! - The hinge: closing it (frame 6) requests nothing, opening it again (frame 7) sets the ARM7's IF
-//!   bit 22 although its IE is clear.
+//! - The hinge: closing it (frame 6) requests nothing, opening it again (frame 7) sets the ARM7's
+//!   IF bit 22 although its IE is clear.
 //!
 //! The sampling points and the closing edge are the model's choices (the note's "Unverified"); the
-//! IRQ-enable-clear and empty-selection rules are pinned by the keypad unit tests, not by this ROM: a green band says the model follows the note, not that hardware was
-//! measured.
+//! IRQ-enable-clear and empty-selection rules are pinned by the keypad unit tests, not by this ROM:
+//! a green band says the model follows the note, not that hardware was measured.
 
 use ninge_core::{Buttons, Input, Machine, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{

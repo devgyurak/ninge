@@ -78,9 +78,8 @@ drops writes.
 | 15-31 | Not used, read 0 |
 
 Bits 0-11 and 14 are plain read/write (mask `4FFFh`). Bits 12 and 13 are status flags raised by the
-rendering engine; there is no rendering engine in the stub, so they never become 1, and a write of 1
-to them changes nothing. The write goes into the register like any other halfword write: a byte
-write changes only its byte.
+rendering engine; there is no rendering engine in the stub, so they are not stored: they read 0 and
+a write of 1 to them changes nothing (see "Unverified"). A byte write changes only its byte.
 
 ### GXSTAT bits (`0400_0600h`)
 
@@ -238,10 +237,10 @@ for the projection stack, entries 1Fh-3Fh for the coordinate stack. For PUSH the
 the increment; for POP it is `S` after the subtraction; for STORE and RESTORE it is `N`. So a second
 PUSH in projection mode, a PUSH with the coordinate pointer at 31 or above, a POP below 0, and a
 STORE or RESTORE with `N` = 31 all set it. The flag stays set until a program writes 1 to GXSTAT bit
-15. The pointer moves whether or not the entry was valid.
+15. In the stub the pointer moves whether or not the entry was valid (see "Unverified").
 
-Entry 31 exists and can be read and written, GBATEK says, though it raises the flag. The stub keeps
-no matrices, so that matters only to the flag.
+GBATEK says entry 31 appears to exist and to be readable and writable, though it raises the flag. The
+stub keeps no matrices, so that matters only to the flag.
 
 In projection mode GBATEK is "not sure" whether the ignored parameter of POP, STORE and RESTORE has
 to be written to the FIFO; the stub requires it (one parameter word) like any other command with
@@ -254,9 +253,9 @@ and the engine are never occupied, so bits 0 and 14 read 0, bit 1 reads the stub
 bits 16-24 read 0 (an empty FIFO), bits 25 and 26 read 1, and bit 27 reads 0.
 
 The FIFO IRQ (IF bit 21 on the ARM9) is level driven. With the mode in bits 30-31 set to 1 (less than
-half full) or 2 (empty), the IF bit is set while and as long as that condition is true, and a write
-of 1 to IF bit 21 has no effect while it is: a handler must either fill the FIFO or set the mode to 0
-before it acknowledges. Mode 0 raises nothing, and mode 3 is reserved: the stub raises nothing for
+half full) or 2 (empty), the IF bit stays set for as long as that condition is true, and an
+acknowledge written to IF bit 21 does nothing meanwhile: a handler has to make the condition false
+(refill the FIFO) or turn the mode off before its acknowledge counts. Mode 0 raises nothing, and mode 3 is reserved: the stub raises nothing for
 it. The stub's FIFO is always empty and always less than half full, so the condition holds for
 modes 1 and 2 and never for 0 and 3.
 
@@ -283,8 +282,8 @@ With bit 3 clear, then, GXFIFO and the command ports drop their writes (no comma
 bits 30-31 and the write-1-to-clear of bit 15 are dropped, and a GXSTAT read still reports the state
 as it was.
 
-GBATEK adds: use the SwapBuffers command once after enabling the rendering and geometry engines. The
-stub needs no such step.
+GBATEK also advises sending one SwapBuffers after powering the two engines on; the stub does not need
+it.
 
 ### ARM9 DMA start mode 7
 
@@ -367,5 +366,13 @@ hardware, or a comparison with the reference emulator used as an oracle.
   underflow danger sees none. — `gpu3d/`.
 - **POS_RESULT and the other results read 0** and **BOX_TEST gives "inside"**; neither is hardware.
   — `gpu3d/`.
+- **DISP3DCNT bits 12 and 13** are not stored and a write of 1 to them does nothing. GBATEK says only
+  "underflow/acknowledge". — `gpu3d/` — verify by a test ROM writing 1 to them.
+- **Unnamed addresses** between `0320h` and `06A3h` (the gaps in the table above) read 0 and drop
+  writes. — `gpu3d/`, `io/map.rs`.
+- **A write of 0 to GXSTAT bit 15** changes nothing, and the pointer moves even when a stack
+  command reaches an invalid entry. GBATEK states neither. — `gpu3d/`.
+- **POWCNT1 bit 3 clear and GXSTAT.** "Read-only" is read as: GXSTAT bits 30-31 and the clear of bit
+  15 are dropped and reads still answer. — `gpu3d/`, `io/mod.rs`.
 - **The GXSTAT reset value** `0600_0000h` follows from an empty FIFO; the stack pointers start at 0
   (GBATEK). The stub has no cold-boot evidence for the rest. — `gpu3d/`.

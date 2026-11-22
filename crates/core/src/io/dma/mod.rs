@@ -63,8 +63,13 @@ enum Start {
     /// The DS cartridge slot, ARM9 mode 5 and ARM7 mode 2: one unit for each word the card makes
     /// ready (`cart-protocol.md`, "DMA start").
     Card,
-    /// A start timing no phase implements yet: the channel is enabled and busy but never starts.
-    // TODO(phase7): the ARM9's geometry command FIFO start (#48).
+    /// The ARM9's geometry command FIFO, mode 7: the FIFO is less than half full, a condition the
+    /// stub's always-empty FIFO keeps true, so the channel starts when it is enabled
+    /// (`gx-stub.md`, "ARM9 DMA start mode 7").
+    // TODO(phase7): the geometry engine (#48) has a real FIFO that fills, and the start waits for
+    // it to drain below half, 112 words a burst.
+    GeometryFifo,
+    /// A start timing no phase implements: the channel is enabled and busy but never starts.
     // The GBA slot and the ARM7's wireless start have no phase.
     Unimplemented,
 }
@@ -284,6 +289,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             (3, true) => Start::Display,
             (4, true) => Start::MainMemory,
             (5, true) | (2, false) => Start::Card,
+            (7, true) => Start::GeometryFifo,
             _ => Start::Unimplemented,
         }
     }
@@ -506,7 +512,11 @@ impl<const ARM9: bool> Dma<ARM9> {
                 channel.destination_now = channel.destination;
                 channel.count_now = Self::count_of(new, index);
                 channel.frame_wait = true;
-                if Self::start_of(new) == Start::Immediate {
+                // The geometry FIFO start is a level that already holds when the channel is
+                // enabled, so it is queued like an Immediate one.
+                // TODO(hw-unverified): a repeating mode 7 channel is not started again: no trigger
+                // follows the first start (`gx-stub.md`, "Unverified").
+                if matches!(Self::start_of(new), Start::Immediate | Start::GeometryFifo) {
                     channel.pending = true;
                     slot
                 } else {

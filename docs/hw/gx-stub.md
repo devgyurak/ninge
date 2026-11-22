@@ -300,10 +300,12 @@ gives the usual setup as 32-bit units, a fixed destination `0400_0400h`, repeat 
 
 The stub's FIFO is always less than half full, so the condition always holds: a channel set to mode 7
 starts as soon as it is enabled and moves its words in bursts of 112 (the last burst shorter), one
-after the other, until the count is spent. Then the end of a transfer works as for any channel
-(`dma.md`): IF bit 8 + *n* if control bit 30 is set, and the enable bit clears when repeat is off.
-Each word goes to the destination exactly as a CPU write of that word would, so the decoder above
-sees them in order.
+after the other, until the count is spent. The bursts follow one another with nothing in between
+(the FIFO never fills, so no burst waits), and the model's transfers are atomic (`dma.md`,
+"Model"), so it moves the whole count in one transfer; the words and their order are the same as in
+bursts. Then the end of a transfer works as for any channel (`dma.md`): IF bit 8 + *n* if control
+bit 30 is set, and the enable bit clears when repeat is off. Each word goes to the destination
+exactly as a CPU write of that word would, so the decoder above sees them in order.
 
 The ARM7 has no start mode 7. A channel of the ARM7 with the same bits does not start.
 
@@ -371,8 +373,9 @@ hardware, or a comparison with the reference emulator used as an oracle.
   write path).
 - **Mode 3 of the FIFO IRQ** ("reserved") raises nothing. — `gpu3d/`.
 - **Repeat on in DMA mode 7.** GBATEK gives repeat off as the usual setup and says nothing of repeat
-  on. The stub treats the channel like any other: a repeat channel stays enabled after its count and
-  restarts at the next trigger, which here is immediately. — `io/dma/mod.rs`.
+  on. The stub starts the channel once, when it is enabled; a repeating channel stays enabled with
+  its count reloaded and is not started again, because no trigger follows (the level that starts it
+  is only looked at when the channel is enabled). — `io/dma/mod.rs` (`Dma::write_control`).
 - **RDLINES_COUNT.** A real value depends on the renderer. The stub reads 46, the largest the field
   can hold (a renderer that always keeps its 48-line buffer full), so a program that checks for
   underflow danger sees none. — `gpu3d/`.

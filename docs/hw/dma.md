@@ -69,7 +69,7 @@ ARM9 (bits 27-29):
 | 4 | Main-memory display (`display-capture.md`) | 4 (#36) |
 | 5 | DS cartridge slot: one unit per word the card makes ready (`cart-protocol.md`, "DMA start") | 5 (#37) |
 | 6 | GBA cartridge slot | no phase plans it |
-| 7 | Geometry command FIFO: starts when the FIFO is less than half full, 112 words at a time (`gx-stub.md`, "ARM9 DMA start mode 7") | 5 (#43); the real FIFO is `TODO(phase7)` (#48) |
+| 7 | Geometry command FIFO: starts when the FIFO is less than half full, 112 words a burst; the stub's FIFO is always empty, so it starts when the channel is enabled and moves the whole count (`gx-stub.md`, "ARM9 DMA start mode 7") | 5 (#43); the real FIFO is `TODO(phase7)` (#48) |
 
 ARM7 (bits 28-29):
 
@@ -104,6 +104,8 @@ that polls it waits for the transfer to finish.
 ### Starting
 
 - **Immediately:** the transfer starts when the enable write retires.
+- **Geometry command FIFO (ARM9 mode 7):** the same, in the stub: the FIFO condition already holds
+  when the channel is enabled (`gx-stub.md`). Repeat does not start it again.
 - **VBlank start:** the transfer starts at the start of VBlank, line 192 (`display-timing.md`,
   "Hooks for later features"). Enabling during VBlank waits for the next one.
 - **HBlank start:** the transfer starts at the start of HBlank in each visible line, 0-191. See

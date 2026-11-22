@@ -362,3 +362,114 @@ fn given_a_machine_and_a_clock_when_a_frame_runs_then_the_machine_got_the_clock_
     let _ = std::fs::remove_file(path);
     assert_eq!(latched, Some(123_456));
 }
+
+// ------------------------------------------------------------- shutdown and unlit screens
+
+/// An app running the poweroff ROM: its ARM7 shuts the console down (backlights off, bit 6).
+fn poweroff_app() -> App {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testroms/build/poweroff.nds"),
+    )
+    .expect("poweroff ROM is built");
+    let machine = crate::source::boot(rom).expect("valid header");
+    App::new(size()).with_source(Source::Machine(Box::new(machine)))
+}
+
+#[test]
+fn given_a_lit_screen_when_choosing_the_pixels_then_they_are_unchanged() {
+    assert_eq!(
+        lit_or_black(vec![1, 2, 0x00FF_FFFF], true),
+        vec![1, 2, 0x00FF_FFFF]
+    );
+}
+
+#[test]
+fn given_an_unlit_screen_when_choosing_the_pixels_then_every_pixel_is_black_and_the_size_is_kept() {
+    assert_eq!(lit_or_black(vec![1, 2, 0x00FF_FFFF], false), vec![0, 0, 0]);
+}
+
+#[test]
+fn given_the_dummy_pattern_when_frames_run_then_the_app_does_not_quit_by_itself() {
+    let mut app = App::new(size());
+    run_frames(&mut app, 3);
+    assert!(!app.should_quit());
+}
+
+#[test]
+fn given_a_program_that_has_not_shut_down_when_a_frame_runs_then_the_app_does_not_quit() {
+    let (mut app, path) = app_with_saved_machine("running.bin");
+    run_frames(&mut app, 2);
+    let _ = std::fs::remove_file(path);
+    assert!(!app.should_quit());
+}
+
+#[test]
+fn given_a_program_that_shuts_the_console_down_when_a_frame_runs_then_the_app_quits() {
+    let mut app = poweroff_app();
+    run_frames(&mut app, 1);
+    assert!(app.should_quit());
+}
+
+/// An app running the poweroff ROM with a save file, whose save memory counts as changed (a
+/// savestate load raises the generation), so a `finish` has something to write.
+fn poweroff_app_with_changed_save(name: &str) -> (App, std::path::PathBuf) {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testroms/build/poweroff.nds"),
+    )
+    .expect("poweroff ROM is built");
+    let mut machine = crate::source::boot(rom).expect("valid header");
+    machine
+        .insert_save(ninge_core::cart::SaveType::Eeprom512, vec![0x21; 512])
+        .expect("512 bytes fit");
+    let path = std::env::temp_dir().join(format!("ninge-app-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let save = SaveFile::new(path.clone(), &machine);
+    let state = machine.save_state();
+    machine.load_state(&state).expect("own state loads");
+    let app = App::new(size())
+        .with_source(Source::Machine(Box::new(machine)))
+        .with_save(Some(save));
+    (app, path)
+}
+
+#[test]
+fn given_a_shut_down_machine_with_changed_save_memory_when_the_app_finishes_then_the_save_file_holds_it()
+ {
+    let (mut app, path) = poweroff_app_with_changed_save("poweroff.sav");
+    run_frames(&mut app, 1);
+    let quit = app.should_quit();
+    let finished = app.finish();
+    let written = std::fs::read(&path).ok();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        (quit, finished.is_ok(), written),
+        (true, true, Some(vec![0x21; 512]))
+    );
+}
+
+#[test]
+fn given_a_shut_down_machine_with_unlit_screens_when_graphics_are_taken_then_both_images_are_still_placed()
+ {
+    let mut app = poweroff_app();
+    run_frames(&mut app, 1);
+    let out = text(app.graphics());
+    assert_eq!((out.contains("i=1"), out.contains("i=2")), (true, true));
+}
+
+/// How many pixels of each screen the app would send that are not black.
+fn lit_pixel_counts(app: &App) -> (usize, usize) {
+    let (top, bottom) = app.screens();
+    (
+        top.iter().filter(|&&p| p != 0).count(),
+        bottom.iter().filter(|&&p| p != 0).count(),
+    )
+}
+
+#[test]
+fn given_a_machine_with_both_backlights_off_when_the_screens_are_taken_then_no_pixel_is_lit() {
+    let mut app = poweroff_app();
+    run_frames(&mut app, 1);
+    assert_eq!(lit_pixel_counts(&app), (0, 0));
+}

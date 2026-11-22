@@ -7,9 +7,9 @@
 //! 0, SoundBias levels `200h` and `000h`, POWCNT2 `1` then `3`. The two timings follow from a
 //! sample taking `4 * (10000h - TMR)` master cycles (TMR `FC00h`: 4,096): a one-shot PCM8 channel of
 //! 4 words is 16 samples, 65,536 master cycles, 32,768 ARM7 cycles; a one-shot PCM16 capture of
-//! length 0 (one word) is 2 samples, 8,192 master cycles, 4,096 ARM7 cycles. The ARM7 starts its
-//! timer a few instructions before the write and polls a few after, so the windows are
-//! `[32700, 33100)` and `[4000, 4300)`. Several of these are the note's modelling choices, listed
+//! length 0 (one word) is 2 samples, 8,192 master cycles, 4,096 ARM7 cycles. The timer is on before the
+//! start write, so a count cannot be below the expected one, and the poll adds a few: the windows are
+//! `[32768, 33100)` and `[4096, 4300)`. Several of these are the note's modelling choices, listed
 //! under its "Unverified": a green band says the model follows the note, not that hardware was
 //! measured.
 
@@ -20,10 +20,10 @@ use ninge_runner::{load_rom_file, testrom_path};
 const REC: u32 = 0x0200_8000;
 const FRAMES: u64 = 4;
 const GREEN: u32 = 0x0000_FF00;
-/// The record slots the ROM writes: 0-12, the progress and the sentinel.
-const SLOTS: [u32; 15] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 30, 31];
-const ONE_SHOT_WINDOW: std::ops::Range<u32> = 32_700..33_100;
-const CAPTURE_WINDOW: std::ops::Range<u32> = 4_000..4_300;
+/// The record slots the ROM writes: 0-13, the progress and the sentinel.
+const SLOTS: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 30, 31];
+const ONE_SHOT_WINDOW: std::ops::Range<u32> = 32_768..33_100;
+const CAPTURE_WINDOW: std::ops::Range<u32> = 4_096..4_300;
 
 fn boot_for(frames: u64) -> Machine {
     let mut machine = Machine::new();
@@ -57,8 +57,8 @@ fn bands(machine: &Machine) -> Vec<u32> {
 #[test]
 fn given_the_sound_rom_when_4_frames_run_then_the_exact_slots_hold_the_note_values() {
     let slots = record(&boot());
-    // Slots 0-5, then 7-9, then 11, 12, the progress and the sentinel; 6 and 10 are timings.
-    let exact = [0, 1, 2, 3, 4, 5, 7, 8, 9, 11, 12, 13, 14].map(|i| slots[i]);
+    // Slots 0-5, then 7-9, then 11-13, the progress and the sentinel; 6 and 10 are timings.
+    let exact = [0, 1, 2, 3, 4, 5, 7, 8, 9, 11, 12, 13, 14, 15].map(|i| slots[i]);
     assert_eq!(
         exact,
         [
@@ -73,6 +73,7 @@ fn given_the_sound_rom_when_4_frames_run_then_the_exact_slots_hold_the_note_valu
             0,           // SoundBias with r0 = 0
             1,           // POWCNT2 at power-on
             3,           // POWCNT2 after all ones
+            1,           // the loop capture is still busy
             1,           // progress
             0x4D53_4E44  // "SNDM"
         ]

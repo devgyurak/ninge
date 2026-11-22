@@ -17,6 +17,7 @@
 @  10  Timer counts until a one-shot PCM16 capture of LEN 0 (taken as 1 word, 2 samples at channel 1's
 @      TMR FC00h) stops being busy: 8,192 master cycles = 4,096 ARM7 cycles.
 @  11  POWCNT2 at power-on.   12  POWCNT2 after a halfword write of FFFFh.
+@  13  Bit 7 of a loop capture 1 (channel 3's TMR FC00h) read after capture 0's one-shot ended (busy).
 @ Slot 30: progress (1 when done). Slot 31: sentinel, written last.
     .equ REC, 0x02008000
     .equ SND0, 0x04000400
@@ -26,13 +27,15 @@
     .equ SOUNDBIAS, 0x04000504
     .equ SNDCAP0CNT, 0x04000508
     .equ SNDCAP0LEN, 0x04000514
+    .equ SND3, 0x04000430
+    .equ SNDCAP1CNT, 0x04000509
+    .equ SNDCAP1LEN, 0x0400051C
     .equ POWCNT2, 0x04000304
     .equ TM0CNT_L, 0x04000100
     .equ START, 0x80000000
     @ Start, one-shot (repeat 2), PCM8; and start, loop (repeat 1), PCM8.
     .equ ONE_SHOT_PCM8, 0x90000000
     .equ LOOP_PCM8, 0x88000000
-    @ SOUNDxCNT with start, repeat 3 and format 3 (PSG): the busy bit never clears.
     .equ TMR, 0xFC00
 
     .section .text, "ax"
@@ -73,7 +76,8 @@ _start:
     ldr r2, [r0]
     str r2, [r8, #(3 * 4)]
 
-    @ ---- 4: a loop capture, byte write of FFh; then stop it.
+    @ ---- 4: SNDCAP0CNT, byte write of FFh. Bit 2 is set, so this is a one-shot PCM8 capture; it still
+    @ reads busy because channel 1's TMR is 0 here, which makes a sample very long. Then stop it.
     ldr r0, =SNDCAP0CNT
     mov r2, #0xFF
     strb r2, [r0]
@@ -125,9 +129,19 @@ poll_channel:
     strh r4, [r9, #2]           @ timer off
     str r4, [r0]                @ stop the loop channel
 
-    @ ---- 10: a one-shot PCM16 capture of length 0 at channel 1's rate.
+    @ ---- 10, 13: a one-shot PCM16 capture of length 0 at channel 1's rate, timed; beside it a loop
+    @ capture 1 at channel 3's rate, which is still busy when the one-shot has ended.
     ldr r0, =SNDCAP0LEN
     str r4, [r0]
+    ldr r1, =TMR
+    ldr r0, =SND3
+    strh r1, [r0, #8]
+    ldr r0, =SNDCAP1LEN
+    str r4, [r0]
+    ldr r0, =SNDCAP1CNT
+    mov r3, #0x80               @ start, loop
+    strb r3, [r0]
+    ldr r0, =SNDCAP0CNT
     ldr r0, =SNDCAP0CNT
     strh r4, [r9]
     mov r1, #0x80
@@ -142,6 +156,11 @@ poll_capture:
     str r2, [r8, #(10 * 4)]
     mov r4, #0
     strh r4, [r9, #2]
+    ldr r0, =SNDCAP1CNT
+    ldrb r1, [r0]
+    mov r1, r1, lsr #7
+    str r1, [r8, #(13 * 4)]
+    strb r4, [r0]               @ stop the loop capture
 
     @ ---- 8, 9: SoundBias with r0 = 1 and r0 = 0.
     mov r0, #1

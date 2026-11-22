@@ -8,12 +8,12 @@
 @   0  SOUNDCNT BF7Fh, SOUNDBIAS 3FFh, a PSG channel FF7F837Fh then 0 after a stop.
 @   1  SNDCAP0CNT 8Fh; the write-only registers read 0.
 @   2  The one-shot channel stops being busy after 32,768 ARM7 cycles: the count lies in
-@      [32700, 33100) (the ARM7 starts the timer a few instructions early and polls a few late).
-@   3  The loop channel is still busy (1) after the one-shot ended.
-@   4  The capture of LEN 0 stops after 4,096 ARM7 cycles: [4000, 4300).
+@      [32768, 33100) (the timer is on before the start write, so the count cannot be below 32,768; the poll adds a few).
+@   3  The loop channel and the loop capture 1 are still busy (1) after the one-shots ended.
+@   4  The capture of LEN 0 stops after 4,096 ARM7 cycles: [4096, 4300).
 @   5  SoundBias: 200h for r0 = 1, 000h for r0 = 0; POWCNT2 1 at power-on and 3 after all ones.
 @
-@ Record at 0x02008000 (slots 0-12 and the sentinel are described in arm7.s; the expected values
+@ Record at 0x02008000 (slots 0-13 and the sentinel are described in arm7.s; the expected values
 @ are in crates/runner/tests/sound.rs):
 @   20..25  the band colours (halfwords 03E0h green, 001Fh red)
 @ Slot 30: progress (1 when done). Slot 31: the ARM7's sentinel.
@@ -89,11 +89,12 @@ wait_arm7:
     FIRST 4, 0x8F
     NEXT 5, 0
     PAINT 1
-    WINDOW 6, 32700, 400
+    WINDOW 6, 32768, 332
     PAINT 2
     FIRST 7, 1
+    NEXT 13, 1
     PAINT 3
-    WINDOW 10, 4000, 300
+    WINDOW 10, 4096, 204
     PAINT 4
     FIRST 8, 0x200
     NEXT 9, 0

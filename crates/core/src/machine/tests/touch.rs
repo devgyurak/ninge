@@ -285,3 +285,17 @@ fn given_a_machine_that_is_shut_down_when_a_savestate_round_trips_then_it_is_sti
         (Ok(()), true, false)
     );
 }
+
+#[test]
+fn given_the_display_swap_set_when_only_the_lower_backlight_is_on_then_the_bottom_screen_is_still_the_lit_one()
+ {
+    let mut m = counting_machine();
+    // POWCNT1: both engines on (bits 1 and 9), the geometry parts clear, and bit 15 swaps which
+    // engine drives which screen; the backlight belongs to the physical screen.
+    m.bus9().write16(0x0400_0304, 0x8203);
+    session(&mut m, POWER, &[0x00, 0x04]);
+    assert_eq!(
+        (m.backlight(Screen::Top), m.backlight(Screen::Bottom)),
+        (false, true)
+    );
+}

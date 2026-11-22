@@ -51,6 +51,8 @@ const PORT_SHIFT: u32 = 2;
 
 /// DISP3DCNT: bits 0-11 and 14 are plain read/write; bits 12-13 are status flags the stub never
 /// raises, so they are not stored (`gx-stub.md`, "DISP3DCNT bits").
+// TODO(hw-unverified): bits 12-13 are not stored and a write of 1 does nothing (`gx-stub.md`,
+// "Unverified").
 pub const DISP3DCNT_MASK: u16 = 0x4FFF;
 /// RDLINES_COUNT as the stub reads it: the largest value the field holds, as for a renderer that
 /// keeps its line buffer full.
@@ -282,6 +284,8 @@ impl Gpu3d {
 
     /// A word written to GXFIFO: a parameter when the decoder still owes some, a command word
     /// otherwise (`gx-stub.md`, "GXFIFO: packed and unpacked words").
+    // TODO(hw-unverified): a GXFIFO word while a port command owes parameters is that command's
+    // parameter (`gx-stub.md`, "Unverified").
     fn gxfifo_word(&mut self, word: u32) {
         match self.owed {
             0 => {
@@ -323,6 +327,8 @@ impl Gpu3d {
 
     /// Runs the IDs of the packed word in order, up to the first that needs parameters. A byte of 0
     /// (NOP) and an ID that is not a command take none.
+    // TODO(hw-unverified): the last non-zero command of a packed word may have no parameters;
+    // the hardware's behavior is not stated (`gx-stub.md`, "Unverified").
     fn run_pending(&mut self) {
         while self.owed == 0 && self.pending != 0 {
             let id = self.pending as u8;
@@ -388,6 +394,8 @@ impl Gpu3d {
     /// error flag.
     // TODO(hw-unverified): the pointer moves even when the entry is invalid
     // (`gx-stub.md`, "Unverified").
+    // TODO(hw-unverified): entries 1Fh and above of the coordinate stack are all invalid, read
+    // literally from GBATEK (`gx-stub.md`, "Unverified").
     fn push(&mut self) {
         let (pointer, mask, valid) = self.stack();
         let entry = *pointer;
@@ -397,6 +405,8 @@ impl Gpu3d {
 
     /// MTX_POP: `S` moves down by the signed 6-bit offset in the parameter (always 1 off the
     /// coordinate stack), then entry `S` is loaded; an invalid entry raises the error flag.
+    // TODO(hw-unverified): in projection and texture mode the ignored parameter is still one FIFO
+    // entry, so POP, STORE and RESTORE take one parameter word there (`gx-stub.md`, "Unverified").
     fn pop(&mut self, param: u32) {
         let offset = match self.is_coordinate() {
             true => sign_extend_6(param),
@@ -453,11 +463,15 @@ impl Device<true> for Gpu3d {
     fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         match offset.wrapping_sub(GEOMETRY_OFFSET) {
             // GXFIFO and its mirrors: one write, one word, whatever its width.
+            // TODO(hw-unverified): all 16 words mirror GXFIFO and a narrow write is one entry
+            // (`gx-stub.md`, "Unverified").
             ..GXFIFO_BYTES => {
                 self.gxfifo_word(value);
                 Effect::default()
             }
-            // The command ports, `4 * id` bytes into the block.
+            // The command ports, `4 * id` bytes into the block. A port no command uses drops the
+            // write (`port_word`).
+            // TODO(hw-unverified): writes to unused ports are dropped (`gx-stub.md`, "Unverified").
             PORTS_REL..GXSTAT_REL => {
                 let id = ((offset - GEOMETRY_OFFSET) >> PORT_SHIFT) as u8;
                 self.port_word(id, value);

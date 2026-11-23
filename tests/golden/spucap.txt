@@ -1,0 +1,8 @@
+# spucap: capture 0 writes a buffer that channel 1 plays back, through eight phases (a silent
+# buffer, the mixer as PCM16, a clip, channel 0 alone, channel 0 plus channel 1, the mixer as PCM8,
+# a one-shot, and a muted source). The screens
+# are blank. The audio is eight plateaus, listed with their hand-worked values in
+# crates/runner/tests/spucap.rs and corroborated there by an independent model; the hash covers
+# every output sample, the settling between plateaus included. Phase E (the addition for the mixer) is this
+# emulator's model, unverified on hardware (docs/hw/sound-capture.md).
+frames=4 top=37bb6fb31ef02325 bottom=37bb6fb31ef02325 audio=6b60d90e69e438d0

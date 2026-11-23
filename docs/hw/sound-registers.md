@@ -18,10 +18,11 @@ is still running. The mixer, the sample output and the capture data are Phase 6.
 Implemented (#42): the 16 channels' registers, SOUNDCNT, SOUNDBIAS, the two capture units'
 registers, the busy bits of channels and captures, POWCNT2, and the SoundBias SWI.
 
-Not implemented (`TODO(phase6)`): the mixer and the volume, panning and PSG/noise generation,
-reading the sample data (PCM8, PCM16, ADPCM), the capture writing to memory, the sound amplifier of
-the power-management device (`touch-power.md`), the BIOS table SWIs (sine, pitch and volume tables,
-which are BIOS data and need a plan of their own).
+The mixer, the volume and panning, the PSG and noise generation, reading the sample data (PCM8,
+PCM16, ADPCM) and the gates (SOUNDCNT, POWCNT2, the sound amplifier of the power-management device)
+are in `spu.md` (#45). Not implemented (`TODO(phase6)`): the capture writing to memory and feeding
+channels 1 and 3 (#46), and the BIOS table SWIs (sine, pitch and volume tables, which are BIOS data
+and need a plan of their own).
 
 ## Who sees them
 

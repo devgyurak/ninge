@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_477_540;
-const PINNED_HASH: u64 = 0x3662ba09eeb2e3ad;
+const PINNED_LEN: usize = 5_477_604;
+const PINNED_HASH: u64 = 0xfb2a1724f8a07d10;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -98,8 +98,10 @@ const PINNED_HASH: u64 = 0x3662ba09eeb2e3ad;
 /// latches (one-byte varints at power-on), so both lengths grew by 112 and both hashes moved.
 /// Version 44 (#45): each channel gained its IMA-ADPCM decoder state, six one-byte varints at
 /// power-on, so both lengths grew by 96 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_067_461;
-const PINNED_BOOTED_HASH: u64 = 0xc6e1b701e4513139;
+/// Version 45 (#45): each channel gained its number and its noise generator (four one-byte varints
+/// at power-on), so both lengths grew by 64 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 6_067_525;
+const PINNED_BOOTED_HASH: u64 = 0x27d93c44d47f2732;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

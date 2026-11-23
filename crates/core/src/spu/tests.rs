@@ -684,7 +684,7 @@ fn adpcm_run(spu: &Spu, times: &[u64]) -> Vec<i32> {
     times
         .iter()
         .map(|&time| {
-            channel.adpcm = channel.advanced(time, adpcm_memory);
+            channel.decoders = channel.advanced(time, adpcm_memory);
             channel.sample(time, adpcm_memory)
         })
         .collect()
@@ -751,7 +751,7 @@ fn given_a_pcm_channel_when_advanced_then_the_decoder_state_does_not_change() {
     let spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
     assert_eq!(
         spu.channel(0).advanced(at_sample(9), memory),
-        *spu.channel(0).adpcm()
+        Decoders::default()
     );
 }
 
@@ -759,7 +759,7 @@ fn given_a_pcm_channel_when_advanced_then_the_decoder_state_does_not_change() {
 fn given_an_adpcm_channel_when_stopped_then_the_decoder_state_is_cleared() {
     let mut spu = started(0, start(LOOP, ADPCM), 1, 3, STARTED_AT);
     let state = spu.channel(0).advanced(at_sample(5), adpcm_memory);
-    spu.set_adpcm(std::array::from_fn(|_| state));
+    spu.set_decoders(std::array::from_fn(|_| state));
     write(
         &mut spu,
         ch(0, CNT_OFFSET) + 3,
@@ -773,9 +773,178 @@ fn given_an_adpcm_channel_when_stopped_then_the_decoder_state_is_cleared() {
 #[test]
 fn given_a_decoder_state_with_a_wide_index_when_checked_then_the_device_is_not_well_formed() {
     let mut spu = Spu::new();
-    spu.channels[0].adpcm = Adpcm {
+    spu.channels[0].decoders.adpcm = Adpcm {
         index: 200,
         ..Adpcm::default()
     };
+    assert!(!spu.well_formed(0));
+}
+
+// ------------------------------------------------------------------------------ PSG and noise
+//
+// A PSG channel samples 8 positions per wave at 64 master cycles each (TMR `FFF0h`); the wave starts
+// LOW (`spu.md`, "PSG"). Noise runs the formula of `spu.md` ("Noise") from `7FFFh`: its first four
+// outputs are LOW with the register at `5FFFh`, `4FFFh`, `47FFh`, `43FFh` (see `psg/tests.rs`).
+
+const HIGH: i32 = 0x7FFF;
+const LOW: i32 = -0x7FFF;
+
+/// A device with channel `x` started as PSG or noise with `duty` and `cnt` extras at `STARTED_AT`.
+fn generator(x: u32, duty: u32) -> Spu {
+    started(x, start(LOOP, PSG) | duty << 24, 0, 0, STARTED_AT)
+}
+
+/// `channel` with its generators advanced to each of `times` in turn.
+fn advance_each(mut channel: Channel, times: &[u64]) -> Channel {
+    times
+        .iter()
+        .for_each(|&time| channel.decoders = channel.advanced(time, memory));
+    channel
+}
+
+/// The channel `x` sample at each of `times`, the generators advanced to each in turn.
+fn generated(spu: &Spu, x: usize, times: &[u64]) -> Vec<i32> {
+    let mut channel = *spu.channel(x);
+    times
+        .iter()
+        .map(|&time| {
+            channel.decoders = channel.advanced(time, memory);
+            channel.sample(time, memory)
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_psg_channel_with_duty_3_when_played_then_it_is_four_low_and_four_high_each_wave() {
+    let spu = generator(8, 3);
+    assert_eq!(
+        generated(&spu, 8, &sample_times(0, 9)),
+        vec![LOW, LOW, LOW, LOW, HIGH, HIGH, HIGH, HIGH, LOW]
+    );
+}
+
+#[test]
+fn given_each_psg_channel_when_started_then_channels_8_to_13_play_the_wave() {
+    let failures: Vec<u32> = (8..=13)
+        .filter(|&x| generated(&generator(x, 0), x as usize, &[at_sample(7)]) != vec![HIGH])
+        .collect();
+    assert_eq!(failures, Vec::<u32>::new());
+}
+
+#[test]
+fn given_a_psg_channel_when_the_length_and_repeat_mode_are_anything_then_it_never_ends() {
+    let mut spu = Spu::new();
+    write(&mut spu, ch(9, TMR_OFFSET), Width::Half, TMR, STARTED_AT);
+    write(
+        &mut spu,
+        ch(9, CNT_OFFSET),
+        Width::Word,
+        start(ONE_SHOT, PSG) | 7 << 24,
+        STARTED_AT,
+    );
+    let late = at_sample(10_000_000);
+    assert_eq!(
+        (busy(&spu, 9, late), generated(&spu, 9, &[late])),
+        (true, vec![LOW])
+    );
+}
+
+#[test]
+fn given_a_psg_channel_restarted_when_started_again_then_the_wave_begins_with_its_low_part() {
+    let mut spu = generator(8, 3);
+    write(
+        &mut spu,
+        ch(8, CNT_OFFSET) + 3,
+        Width::Byte,
+        0,
+        at_sample(5),
+    );
+    write(
+        &mut spu,
+        ch(8, CNT_OFFSET),
+        Width::Word,
+        start(LOOP, PSG) | 3 << 24,
+        at_sample(5),
+    );
+    let restart = at_sample(5);
+    let times: Vec<u64> = (0..5).map(|n| restart + 64 * n).collect();
+    assert_eq!(generated(&spu, 8, &times), vec![LOW, LOW, LOW, LOW, HIGH]);
+}
+
+#[test]
+fn given_a_psg_duty_written_while_playing_when_read_then_the_new_duty_applies_at_once() {
+    let mut spu = generator(8, 0);
+    write(
+        &mut spu,
+        ch(8, CNT_OFFSET) + 3,
+        Width::Byte,
+        0x80 | 1 << 3 | 3 << 5 | 3,
+        at_sample(2),
+    );
+    // CNT byte 3 is bits 24-31: start, PSG (3 << 29), loop (1 << 27), duty 3 here.
+    assert_eq!(spu.channel(8).duty(), 3);
+}
+
+#[test]
+fn given_format_3_on_channels_0_to_7_when_started_then_it_is_silent_and_busy() {
+    let spu = generator(3, 3);
+    assert_eq!(
+        (
+            generated(&spu, 3, &[at_sample(7)]),
+            busy(&spu, 3, at_sample(1_000_000))
+        ),
+        (vec![0], true)
+    );
+}
+
+#[test]
+fn given_a_noise_channel_when_played_then_the_outputs_follow_the_formula() {
+    let spu = generator(14, 0);
+    assert_eq!(
+        generated(&spu, 14, &sample_times(0, 4)),
+        vec![LOW, LOW, LOW, LOW]
+    );
+}
+
+#[test]
+fn given_noise_on_channel_15_when_caught_up_in_one_jump_then_the_register_matches_stepping() {
+    let spu = generator(15, 0);
+    let jump = spu.channel(15).advanced(at_sample(3), memory);
+    let stepped = advance_each(*spu.channel(15), &sample_times(0, 4));
+    assert_eq!(
+        (jump.noise.register(), jump == stepped.decoders),
+        (0x43FF, true)
+    );
+}
+
+#[test]
+fn given_a_noise_channel_when_restarted_then_the_register_starts_again_at_7fff() {
+    let mut spu = generator(14, 0);
+    let state = spu.channel(14).advanced(at_sample(9), memory);
+    let mut all = [Decoders::default(); CHANNELS];
+    all[14] = state;
+    spu.set_decoders(all);
+    write(
+        &mut spu,
+        ch(14, CNT_OFFSET) + 3,
+        Width::Byte,
+        0,
+        at_sample(10),
+    );
+    write(
+        &mut spu,
+        ch(14, CNT_OFFSET),
+        Width::Word,
+        start(LOOP, PSG),
+        at_sample(10),
+    );
+    let first = spu.channel(14).advanced(at_sample(10), memory);
+    assert_eq!(first.noise.register(), 0x5FFF);
+}
+
+#[test]
+fn given_a_noise_register_wider_than_15_bits_when_checked_then_the_device_is_not_well_formed() {
+    let mut spu = Spu::new();
+    spu.channels[14].decoders.noise.x = 0x8000;
     assert!(!spu.well_formed(0));
 }

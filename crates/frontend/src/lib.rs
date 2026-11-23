@@ -13,6 +13,7 @@ pub mod cli;
 pub mod clock;
 pub mod cursor;
 mod diacritics;
+pub mod gamepad;
 pub mod input;
 pub mod kitty;
 pub mod layout;

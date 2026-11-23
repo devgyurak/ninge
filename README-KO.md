@@ -57,7 +57,9 @@ cargo install ninge
 cargo install --locked --path crates/frontend
 ```
 
-macOS(Apple Silicon 우선)와 Linux를 지원하고, Windows는 지원 예정입니다.
+macOS(Apple Silicon 우선)와 Linux를 지원하고, Windows는 지원 예정입니다. Linux에서는 게임패드
+지원을 빌드하려면 libudev 헤더가 필요하므로 `libudev-dev`와 `pkg-config`(Debian·Ubuntu 패키지
+이름)를 먼저 설치하세요.
 
 ## 실행
 

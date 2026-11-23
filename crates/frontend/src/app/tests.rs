@@ -802,3 +802,65 @@ fn given_cursor_mode_when_drawing_then_the_panel_shows_the_position() {
     app.apply(tab_key());
     assert!(panel_text(&mut app).contains("cursor mode: 128,96"));
 }
+
+// -------------------------------------------------------------------------------- gamepad
+
+#[test]
+fn given_a_pad_button_and_a_key_when_a_frame_runs_then_the_machine_gets_both_or_ed() {
+    let mut app = smoke_app(true).with_gamepads(true, 1);
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
+    app.apply_pad(PadEvent::Button(gilrs::Button::South, true));
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(
+        input.buttons,
+        ninge_core::Buttons::A | ninge_core::Buttons::B
+    );
+}
+
+#[test]
+fn given_the_same_button_on_pad_and_keyboard_when_the_key_is_released_then_the_pad_still_holds_it()
+{
+    let mut app = smoke_app(true).with_gamepads(true, 1);
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
+    app.apply_pad(PadEvent::Button(gilrs::Button::East, true));
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Release));
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(input.buttons, ninge_core::Buttons::A);
+}
+
+#[test]
+fn given_a_held_pad_button_when_focus_is_lost_then_the_machine_gets_no_button() {
+    let mut app = smoke_app(true).with_gamepads(true, 1);
+    app.apply_pad(PadEvent::Button(gilrs::Button::East, true));
+    app.apply(Action::ReleaseAll);
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(input.buttons, ninge_core::Buttons::empty());
+}
+
+#[test]
+fn given_the_gamepad_library_failed_when_drawing_then_the_panel_says_it_is_unavailable() {
+    let mut app = App::new(size()).with_gamepads(false, 0);
+    assert!(panel_text(&mut app).contains("gamepad unavailable"));
+}
+
+#[test]
+fn given_no_pad_plugged_in_when_drawing_then_the_panel_says_none_is_connected() {
+    let mut app = App::new(size()).with_gamepads(true, 0);
+    assert!(panel_text(&mut app).contains("no gamepad connected"));
+}
+
+#[test]
+fn given_a_pad_plugged_in_when_drawing_then_the_panel_says_it_is_connected() {
+    let mut app = App::new(size()).with_gamepads(true, 1);
+    assert!(panel_text(&mut app).contains("gamepad connected"));
+}
+
+#[test]
+fn given_a_pad_plugged_in_later_when_the_count_is_updated_then_the_panel_says_it_is_connected() {
+    let mut app = App::new(size()).with_gamepads(true, 0);
+    app.set_pads_connected(1);
+    assert!(panel_text(&mut app).contains("gamepad connected"));
+}

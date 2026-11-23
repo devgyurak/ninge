@@ -103,6 +103,11 @@ jobs:
           done
           echo "PACKAGES=$packages" >> "$GITHUB_ENV"
 
+      # gilrs (gamepads, the frontend) links libudev on Linux, so the dry run's build needs it.
+      - name: libudev
+        if: env.PACKAGES != ''
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
       # Both crates in one command: `cargo publish` verifies every package before it uploads
       # any, in dependency order, so a failure in ninge cannot leave ninge-core alone on
       # crates.io. The build runs here, in a step that has no token: build scripts and proc

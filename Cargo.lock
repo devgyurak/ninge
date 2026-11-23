@@ -1036,6 +1036,7 @@ dependencies = [
  "flate2",
  "gilrs",
  "ninge-core",
+ "proptest",
  "ratatui",
  "rustix",
 ]

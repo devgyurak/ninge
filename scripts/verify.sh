@@ -3,7 +3,7 @@
 #
 # Steps run in order and stop at the first failure: a fix in an earlier step changes a later
 # step's result. Until Phase 0 adds Cargo.toml, the cargo steps print SKIPPED — they did not
-# pass, they did not run.
+# pass, they did not run. The same holds for a documentation-only change (see below).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +31,21 @@ if [ ! -f Cargo.toml ]; then
   skip "no Cargo workspace yet (Phase 0 adds it)"
   printf '\nverify: Python gates passed; Rust gates skipped.\n'
   exit 0
+fi
+
+# A documentation-only change skips the cargo steps: nothing they read has changed, and the
+# Python gates above, which do read the documentation, have run. NINGE_DOCS_ONLY_BASE names the
+# commit to compare with (ci.yml sets it; `origin/develop` works locally). The variable is only
+# a request: scripts/docs_only.py looks at the change itself, working tree included, and
+# anything but documentation, or a comparison that fails, runs the whole gate.
+if [ -n "${NINGE_DOCS_ONLY_BASE:-}" ]; then
+  step "change scope (since ${NINGE_DOCS_ONLY_BASE})"
+  if "$PYTHON" scripts/docs_only.py "$NINGE_DOCS_ONLY_BASE"; then
+    step "cargo fmt · clippy · deny · test ROMs · tests + coverage"
+    skip "documentation-only change"
+    printf '\nverify: Python gates passed; cargo gates skipped (documentation-only change).\n'
+    exit 0
+  fi
 fi
 
 command -v cargo >/dev/null 2>&1 || { echo "cargo not found — install the Rust toolchain" >&2; exit 1; }

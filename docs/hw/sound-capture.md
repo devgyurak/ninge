@@ -105,6 +105,15 @@ These are choices of the emulator, made so that capture, busy bit and the mixer 
 - **Writes go to memory at once**, one sample at a time, along the path a DMA write of the ARM7
   takes (`dma.md`), so the shared WRAM split, the mirrors and the I/O window behave as for a DMA.
   The 8-word FIFO of the diagram is not modeled.
+- **The addition for the mixer** is on while the capture's busy bit reads set and SNDCAPxCNT bit 0
+  is set. Channel `a`'s mixer value is then `a`'s panning applied to the sum of the two channels'
+  values after volume (before panning), and channel `b` reaches the mixer only through that sum:
+  it is left out of the sum when channel `a` is not busy or SOUNDCNT bit 12 (channel 1) or 13
+  (channel 3) sends it away from the mixer. The speaker output selection of SOUNDCNT bits 8-11
+  still sees channel `b`'s own panned value.
+- **The addition for the capture** (source = channel `a`) is `a + b` with the integer part wrapped
+  to 16 bits (the overflow bug); the 8 fraction bits stay. For PCM8 the wrap happens before the
+  conversion. With addition off, the both-negative bug applies.
 - **A rate faster than the output rate** (a TMR near `FFFFh`) has several slots to fill in one
   output sample; all of them get the same value.
 - **The mixer source ignores SOUNDCNT bit 15 and the speaker gates.** The capture reads the sum
@@ -157,6 +166,10 @@ oracle.
   mixer and to the output selection of SOUNDCNT bits 8-11. The model gives channel `a`'s mixer
   contribution the pan of `a` applied to `vol(a) + vol(b)`, and mutes `ch(b)`'s own contribution
   as the text says. — `spu/mixer/`.
+- **The AND of the overflow bug for PCM8 and the fraction.** GBATEK gives `FFFFh` for the 16-bit
+  value; the model wraps the integer part and keeps the fraction. — `spu/mixer/`.
+- **A one-shot capture's last event.** The addition for the mixer stops when the busy bit clears;
+  the final slots of that run are still written with the capture-side addition. — `spu/`.
 - **A write of 1 to bit 7 while busy.** It keeps the current run here; GBATEK says nothing. —
   `spu/`.
 - **A write to TMR, LEN, DAD or the format while a capture runs.** Latched at the start here. —

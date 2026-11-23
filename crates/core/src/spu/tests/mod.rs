@@ -10,6 +10,7 @@
 use super::*;
 use crate::io::device::cx_at;
 
+mod addition;
 mod capture;
 
 /// TMR `FFF0h`: 16 steps of 4 master cycles.

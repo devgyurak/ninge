@@ -106,7 +106,7 @@ impl Machine {
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
         let spu = io.spu();
         let samples = std::array::from_fn(|x| spu.channel(x).sample(time, read));
-        let mix = spu.mix(&samples);
+        let mix = spu.mix(&samples, spu.adding(time));
         // The gates outside the unit: the speakers and the sound amplifier (`spu.md`, "The gates").
         let audible = io.power().speakers_on() && io.spi().power().amplifier_audible();
         let pair = spu.output_mixed(&mix, audible);

@@ -32,6 +32,14 @@ PLAIN=$(binary target/debug/deps)
 CARGO_PROFILE_DEV_OPT_LEVEL=3 CARGO_TARGET_DIR=target/probe-o3 cargo test -p ninge-runner --test mmdisp --locked --no-run 2>&1 | grep -E 'Finished|error' | tail -1
 PLAIN3=$(binary target/probe-o3/debug/deps)
 echo "gate=$GATE"; echo "plaincov=$PLAINCOV"; echo "plain=$PLAIN"; echo "plain3=$PLAIN3"
+# arm64 Linux calls a helper for every atomic operation unless LSE is assumed at compile time.
+LSE=""
+if [ "$(uname -m)" = "aarch64" ]; then
+  echo "lse in /proc/cpuinfo: $(grep -m1 -c -w atomics /proc/cpuinfo)"
+  RUSTFLAGS="$PROMOTE -C target-feature=+lse" CARGO_TARGET_DIR=target/probe-lse cargo llvm-cov nextest -p ninge-runner --test mmdisp --locked --no-report -E "test(=$TEST)" 2>&1 | grep -E 'Finished|PASS|FAIL|error' | tail -3
+  LSE=$(binary target/probe-lse/llvm-cov-target/debug/deps)
+  echo "lse=$LSE"
+fi
 
 echo "### timings (one test, alone)"
 run "coverage + counter promotion (the gate's build)" "$GATE"
@@ -39,6 +47,10 @@ run "coverage + counter promotion, again" "$GATE"
 run "coverage, no counter promotion" "$PLAINCOV"
 run "no coverage, opt-level 1" "$PLAIN"
 run "no coverage, opt-level 3" "$PLAIN3"
+if [ -n "$LSE" ]; then
+  run "coverage + promotion, +lse (inline atomics)" "$LSE"
+  for i in 1 2 3 4; do run "coverage +lse, 4 in parallel #$i" "$LSE" & done; wait
+fi
 run "gate build, glibc without ERMS/FSRM" "$GATE" GLIBC_TUNABLES=glibc.cpu.hwcaps=-ERMS,-FSRM
 run "gate build, glibc rep-movsb threshold huge" "$GATE" GLIBC_TUNABLES=glibc.cpu.x86_rep_movsb_threshold=0x4000000
 run "gate build, glibc non-temporal threshold huge" "$GATE" GLIBC_TUNABLES=glibc.cpu.x86_non_temporal_threshold=0x40000000

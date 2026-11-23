@@ -54,9 +54,11 @@ impl LineEvent {
 pub enum EventKind {
     /// One of the machine's own events.
     Line(LineEvent),
-    /// An output sample of the sound unit is due: the mixer reads every channel and the next one
-    /// is scheduled. The events sit on the grid `k * OUTPUT_SAMPLE_CYCLES`, so a load rebuilds the
-    /// next one from the clock alone (`spu.md`, "Output samples"; `scheduler.md`).
+    /// An output sample of the sound unit is due: the mixer reads every channel and the next one is
+    /// scheduled. It is a kind of its own, not a device slot: it is no register's schedule but a
+    /// fixed grid of the clock, `k * OUTPUT_SAMPLE_CYCLES`, so a load rebuilds the next one from the
+    /// clock alone and the sound unit keeps no slot for it (`spu.md`, "Output samples";
+    /// `scheduler.md`).
     Sample,
     /// One event slot of a registered device (`Device::SLOTS`): a timer's overflow, a DMA
     /// channel's start. The device says what it does when it fires, so adding a device with

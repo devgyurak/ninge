@@ -52,6 +52,8 @@ pub(super) fn channel(sample: i32, divider: u32, volume: u32, panning: u32) -> (
 }
 
 /// The master stage: `sum` (1/256 units) times `N / 128 / 64`, fraction dropped.
+// TODO(hw-unverified): the rounding order of the master stage is read from GBATEK's table
+// (`spu.md`, "Unverified").
 pub(super) fn master(sum: i64, volume: u32) -> i64 {
     (sum * factor(volume)) >> MASTER_DROP
 }
@@ -62,6 +64,8 @@ pub(super) fn level(signal: i64, bias: u16) -> u16 {
 }
 
 /// The 10-bit level as an `i16` centered on the medium level (`spu.md`, "Output samples").
+// TODO(hw-unverified): the conversion to `i16` is ours; GBATEK gives only the 10-bit level
+// (`spu.md`, "Unverified").
 pub(super) const fn to_i16(level: u16) -> i16 {
     ((level as i32 - LEVEL_MEDIUM) * LEVEL_SCALE) as i16
 }

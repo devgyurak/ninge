@@ -143,14 +143,14 @@ fn given_shm_name_when_transmitting_shm_then_payload_decodes_to_the_name_in_one_
 #[test]
 fn given_name_when_building_probe_query_then_query_keys_payload_and_da1_follow_in_order() {
     let query = probe_query("/ninge-1-2");
-    let (graphics, da1) = query.split_at(query.len() - 3);
+    let (graphics, tail) = query.split_at(query.len() - 7);
     let seqs = seqs(graphics);
     assert_eq!(
-        (seqs[0].0.as_str(), STANDARD.decode(&seqs[0].1).ok(), da1),
+        (seqs[0].0.as_str(), STANDARD.decode(&seqs[0].1).ok(), tail),
         (
             "a=q,i=31,t=s,f=24,s=1,v=1,S=3,q=0",
             Some(b"/ninge-1-2".to_vec()),
-            b"\x1b[c".as_slice()
+            b"\x1b[?u\x1b[c".as_slice()
         )
     );
 }
@@ -220,4 +220,35 @@ fn given_private_csi_before_da1_when_checking_completeness_then_the_da1_still_co
 #[test]
 fn given_csi_that_is_not_da1_when_checking_completeness_then_it_is_not_complete() {
     assert_eq!(first_complete(b"\x1b[?25h"), None);
+}
+
+/// The cases of `parse_keyboard_reply` whose answer is not the expected one.
+fn keyboard_failures(cases: &[(&str, Vec<u8>, bool)]) -> Vec<String> {
+    cases
+        .iter()
+        .filter(|(_, bytes, want)| parse_keyboard_reply(bytes) != *want)
+        .map(|(name, ..)| (*name).to_string())
+        .collect()
+}
+
+#[test]
+fn given_assorted_replies_when_parsing_the_keyboard_answer_then_only_a_flags_reply_counts() {
+    let ok = reply("i=31;OK");
+    let cases = [
+        ("flags 0", b"\x1b[?0u".to_vec(), true),
+        ("flags 11", b"\x1b[?11u".to_vec(), true),
+        ("before da1", joined(&[b"\x1b[?0u", DA1_ANSWER]), true),
+        (
+            "after graphics",
+            joined(&[&ok, b"\x1b[?0u", DA1_ANSWER]),
+            true,
+        ),
+        ("da1 only", DA1_ANSWER.to_vec(), false),
+        ("graphics only", ok.clone(), false),
+        ("no flags", b"\x1b[?u".to_vec(), false),
+        ("cut before the final byte", b"\x1b[?11".to_vec(), false),
+        ("another private mode", b"\x1b[?2026;2$y".to_vec(), false),
+        ("nothing", Vec::new(), false),
+    ];
+    assert_eq!(keyboard_failures(&cases), Vec::<String>::new());
 }

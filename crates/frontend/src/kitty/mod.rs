@@ -28,6 +28,11 @@ const PROBE_IMAGE_ID: u32 = 31;
 /// any graphics reply, so its answer marks the end of the wait.
 const DA1_REQUEST: &[u8] = b"\x1b[c";
 
+/// Asks the terminal which kitty keyboard protocol flags are on. A terminal that has the protocol
+/// answers `ESC [ ? flags u` and one that does not ignores the query, so the DA1 answer that follows
+/// it ends the wait either way.
+const KEYBOARD_QUERY: &[u8] = b"\x1b[?u";
+
 /// Bytes of a frame in the shared-memory object: RGB24 for the whole screen.
 pub const FRAME_BYTES: usize = SCREEN_WIDTH * SCREEN_HEIGHT * 3;
 
@@ -94,14 +99,17 @@ pub fn transmit_shm(image_id: u32, name: &str, cols: u16, rows: u16) -> Vec<u8> 
     out
 }
 
-/// The query that asks whether the terminal accepts `t=s`, followed by a DA1 request.
+/// The query that asks whether the terminal accepts `t=s`, the query for the keyboard protocol, and
+/// a DA1 request, in that order.
 ///
-/// `name` is an object of [`PROBE_BYTES`] bytes. `q=0` asks for a reply either way; it
-/// arrives before the DA1 answer.
+/// `name` is an object of [`PROBE_BYTES`] bytes. `q=0` asks for a reply either way; the graphics
+/// reply and the keyboard reply (if the terminal has the protocol) arrive before the DA1 answer
+/// ([`parse_probe_reply`], [`parse_keyboard_reply`]).
 pub fn probe_query(name: &str) -> Vec<u8> {
     let keys = format!("a=q,i={PROBE_IMAGE_ID},t=s,f=24,s=1,v=1,S={PROBE_BYTES},q=0");
     let mut out = Vec::new();
     push_chunk(&mut out, &keys, STANDARD.encode(name).as_bytes());
+    out.extend_from_slice(KEYBOARD_QUERY);
     out.extend_from_slice(DA1_REQUEST);
     out
 }
@@ -161,6 +169,19 @@ pub fn parse_probe_reply(buf: &[u8]) -> Probe {
         Some(message) => Probe::Unsupported(String::from_utf8_lossy(message).into_owned()),
         None => Probe::Unsupported("malformed reply".to_string()),
     }
+}
+
+/// Whether the terminal answered the keyboard query in [`probe_query`]: a `ESC [ ? flags u` reply
+/// anywhere in `buf`. Only a terminal with the kitty keyboard protocol sends one.
+pub fn parse_keyboard_reply(buf: &[u8]) -> bool {
+    buf.windows(3)
+        .enumerate()
+        .filter(|(_, w)| *w == b"\x1b[?")
+        .any(|(at, _)| {
+            let rest = &buf[at + 3..];
+            let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+            digits > 0 && rest.get(digits) == Some(&b'u')
+        })
 }
 
 #[cfg(test)]

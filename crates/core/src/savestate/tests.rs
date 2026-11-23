@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_477_332;
-const PINNED_HASH: u64 = 0xf92942303dccc03f;
+const PINNED_LEN: usize = 5_477_444;
+const PINNED_HASH: u64 = 0x8213_b0ba_39c4_ea92;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -94,8 +94,10 @@ const PINNED_HASH: u64 = 0xf92942303dccc03f;
 /// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
 /// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
 /// being zero) and the version stayed.
-const PINNED_BOOTED_LEN: usize = 6_067_253;
-const PINNED_BOOTED_HASH: u64 = 0xaf9c5a462368f1d3;
+/// Version 43 (#45): each of the 16 sound channels gained its start time and the six registers it
+/// latches (one-byte varints at power-on), so both lengths grew by 112 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 6_067_365;
+const PINNED_BOOTED_HASH: u64 = 0x5e15_619d_3d49_42ec;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

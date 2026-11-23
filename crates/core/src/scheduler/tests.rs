@@ -363,10 +363,11 @@ fn given_frame_cycles_when_computed_from_the_display_timing_then_it_is_1120380()
 }
 
 #[test]
-fn given_the_line_events_and_every_device_slot_when_the_queue_is_sized_then_it_holds_2_plus_18() {
+fn given_the_line_events_the_sample_and_every_device_slot_when_the_queue_is_sized_then_it_holds_2_plus_1_plus_18()
+ {
     assert_eq!(
         (LineEvent::ALL.len(), crate::io::EVENT_SLOTS, EVENT_CAPACITY),
-        (2, 18, 20)
+        (2, 18, 21)
     );
 }
 

@@ -394,3 +394,264 @@ fn given_a_one_shot_past_its_end_when_checked_then_it_is_still_well_formed() {
     let spu = started(0, start(ONE_SHOT, PCM8), 0, 4, 0);
     assert!(spu.well_formed(1 << 40));
 }
+
+// ----------------------------------------------------------------------------------- playback
+//
+// Expected samples come from `docs/hw/spu.md` ("Position"): a sample is `4 * (10000h - TMR)` master
+// cycles, here 64, counted from the write that started the sound, at 1,000 below. PCM8 `NN` is the
+// PCM16 value `NN00h`; PCM16 is little-endian.
+
+/// The source data: sixteen bytes, at address 0.
+const DATA: [u8; 16] = [
+    0x10, 0x20, 0x30, 0x40, 0x80, 0x7F, 0xFF, 0x01, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+];
+/// The byte at `addr`, `0xEE` past the data so a read out of range shows.
+fn memory(addr: u32) -> u8 {
+    DATA.get(addr as usize).copied().unwrap_or(0xEE)
+}
+const STARTED_AT: u64 = 1_000;
+/// Samples of a PCM8 channel started at [`STARTED_AT`], `n` samples in.
+const fn at_sample(n: u64) -> u64 {
+    STARTED_AT + 64 * n
+}
+
+/// The (time, value) pairs where channel `x` does not play what `expected` says.
+fn sample_failures(spu: &Spu, x: usize, expected: &[(u64, i32)]) -> Vec<(u64, i32)> {
+    expected
+        .iter()
+        .map(|&(time, _)| (time, spu.channel(x).sample(time, memory)))
+        .zip(expected)
+        .filter(|(got, want)| got != *want)
+        .map(|(got, _)| got)
+        .collect()
+}
+
+#[test]
+fn given_a_pcm8_one_shot_when_the_sample_clock_runs_then_each_byte_plays_as_pcm16_in_order() {
+    let spu = started(0, start(ONE_SHOT, PCM8), 0, 4, STARTED_AT);
+    let expected = [
+        (at_sample(0), 0x1000),
+        (at_sample(1), 0x2000),
+        (at_sample(3), 0x4000),
+        (at_sample(4), -0x8000),
+        (at_sample(5), 0x7F00),
+        (at_sample(6), -0x100),
+        (at_sample(15), 0x0C00),
+    ];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_time_inside_a_sample_when_read_then_the_sample_does_not_change_until_the_next_one() {
+    let spu = started(0, start(ONE_SHOT, PCM8), 0, 4, STARTED_AT);
+    let expected = [
+        (at_sample(0), 0x1000),
+        (at_sample(1) - 1, 0x1000),
+        (at_sample(1), 0x2000),
+    ];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_pcm16_one_shot_when_the_sample_clock_runs_then_each_halfword_plays_little_endian() {
+    // 64-cycle samples; 4 words are 8 samples.
+    let spu = started(0, start(ONE_SHOT, PCM16), 0, 4, STARTED_AT);
+    let expected = [
+        (at_sample(0), 0x2010),
+        (at_sample(1), 0x4030),
+        (at_sample(2), 0x7F80),
+        (at_sample(3), 0x01FF),
+        (at_sample(7), 0x0C0B),
+    ];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_one_shot_when_it_ends_then_the_output_is_zero_and_the_busy_bit_clears_together() {
+    let spu = started(0, start(ONE_SHOT, PCM8), 0, 4, STARTED_AT);
+    let end = at_sample(16);
+    assert_eq!(
+        (
+            spu.channel(0).sample(end - 1, memory),
+            busy(&spu, 0, end - 1),
+            spu.channel(0).sample(end, memory),
+            busy(&spu, 0, end)
+        ),
+        (0x0C00, true, 0, false)
+    );
+}
+
+#[test]
+fn given_a_one_shot_with_hold_when_it_ends_then_the_last_sample_stays_for_ever() {
+    let spu = started(0, start(ONE_SHOT, PCM8) | CNT_HOLD, 0, 4, STARTED_AT);
+    let expected = [(at_sample(16), 0x0C00), (at_sample(1_000_000), 0x0C00)];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_loop_with_a_pnt_part_when_it_wraps_then_only_the_len_part_repeats() {
+    // PNT 1 word (samples 0-3) once, then LEN 3 words (samples 4-15) for ever.
+    let spu = started(0, start(LOOP, PCM8), 1, 3, STARTED_AT);
+    let expected = [
+        (at_sample(3), 0x4000),
+        (at_sample(15), 0x0C00),
+        (at_sample(16), -0x8000),
+        (at_sample(27), 0x0C00),
+        (at_sample(28), -0x8000),
+    ];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_loop_with_pnt_zero_when_it_wraps_then_it_restarts_at_the_first_sample() {
+    let spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
+    let expected = [(at_sample(15), 0x0C00), (at_sample(16), 0x1000)];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_the_manual_and_prohibited_repeat_modes_when_played_then_they_loop() {
+    let manual = started(0, start(0, PCM8), 0, 4, STARTED_AT);
+    let prohibited = started(0, start(3, PCM8), 0, 4, STARTED_AT);
+    let expected = [(at_sample(16), 0x1000)];
+    assert_eq!(
+        (
+            sample_failures(&manual, 0, &expected),
+            sample_failures(&prohibited, 0, &expected)
+        ),
+        (Vec::new(), Vec::new())
+    );
+}
+
+#[test]
+fn given_a_sound_shorter_than_the_minimum_when_played_then_it_is_silent_and_stays_busy() {
+    let spu = started(0, start(ONE_SHOT, PCM8), 1, 2, STARTED_AT);
+    let looped = started(0, start(LOOP, PCM8), 0, 3, STARTED_AT);
+    assert_eq!(
+        (
+            spu.channel(0).sample(at_sample(0), memory),
+            looped.channel(0).sample(at_sample(0), memory),
+            busy(&spu, 0, at_sample(10_000))
+        ),
+        (0, 0, true)
+    );
+}
+
+#[test]
+fn given_a_loop_with_an_empty_loop_part_when_the_pnt_part_ends_then_it_is_silent() {
+    let spu = started(0, start(LOOP, PCM8), 4, 0, STARTED_AT);
+    let expected = [
+        (at_sample(15), 0x0C00),
+        (at_sample(16), 0),
+        (at_sample(99), 0),
+    ];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_timer_of_zero_when_played_then_a_sample_lasts_four_times_ten_thousand_hex_cycles() {
+    let mut spu = Spu::new();
+    write(&mut spu, ch(0, LEN_OFFSET), Width::Word, 4, STARTED_AT);
+    write(
+        &mut spu,
+        ch(0, CNT_OFFSET),
+        Width::Word,
+        start(LOOP, PCM8),
+        STARTED_AT,
+    );
+    let slow = 4 * 0x1_0000;
+    let expected = [(STARTED_AT + slow - 1, 0x1000), (STARTED_AT + slow, 0x2000)];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_stopped_channel_when_sampled_then_it_is_silent() {
+    let spu = Spu::new();
+    assert_eq!(
+        (
+            spu.channel(0).sample(STARTED_AT, memory),
+            spu.channel(0).elapsed(STARTED_AT)
+        ),
+        (0, None)
+    );
+}
+
+#[test]
+fn given_a_started_channel_when_stopped_then_its_output_is_zero_at_once() {
+    let mut spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
+    write(
+        &mut spu,
+        ch(0, CNT_OFFSET) + 3,
+        Width::Byte,
+        0,
+        at_sample(2),
+    );
+    assert_eq!(
+        (
+            spu.channel(0).sample(at_sample(2), memory),
+            spu.channel(0).start()
+        ),
+        (0, 0)
+    );
+}
+
+#[test]
+fn given_a_playing_channel_when_sad_len_and_tmr_are_written_then_the_sound_does_not_move() {
+    let mut spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
+    let later = at_sample(2);
+    write(&mut spu, ch(0, SAD_OFFSET), Width::Word, 4, later);
+    write(&mut spu, ch(0, LEN_OFFSET), Width::Word, 1, later);
+    write(&mut spu, ch(0, TMR_OFFSET), Width::Half, 0, later);
+    let expected = [
+        (at_sample(2), 0x3000),
+        (at_sample(3), 0x4000),
+        (at_sample(16), 0x1000),
+    ];
+    assert_eq!(sample_failures(&spu, 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_playing_channel_when_the_volume_is_written_then_the_registers_are_read_live() {
+    let mut spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
+    write(&mut spu, ch(0, CNT_OFFSET), Width::Byte, 0x2A, at_sample(1));
+    let channel = spu.channel(0);
+    assert_eq!(
+        (
+            channel.volume(),
+            channel.format(),
+            channel.repeat_mode(),
+            channel.elapsed(at_sample(5))
+        ),
+        (0x2A, PCM8, LOOP, Some(5))
+    );
+}
+
+#[test]
+fn given_a_channel_read_at_each_field_when_cnt_is_set_then_the_accessors_return_the_fields() {
+    let mut spu = Spu::new();
+    let cnt = 0x45 | 2 << 8 | 1 << 15 | 0x33 << 16 | 5 << 24;
+    write(&mut spu, ch(0, CNT_OFFSET), Width::Word, cnt, 0);
+    let channel = spu.channel(0);
+    assert_eq!(
+        (
+            channel.volume(),
+            channel.divider(),
+            channel.hold(),
+            channel.panning(),
+            channel.duty()
+        ),
+        (0x45, 2, true, 0x33, 5)
+    );
+}
+
+#[test]
+fn given_a_time_before_the_start_when_sampled_then_the_channel_is_silent_and_has_no_position() {
+    let spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
+    assert_eq!(
+        (
+            spu.channel(0).sample(STARTED_AT - 1, memory),
+            spu.channel(0).elapsed(STARTED_AT - 1)
+        ),
+        (0, None)
+    );
+}

@@ -11,6 +11,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 use crate::io::DeviceId;
+use crate::spu::OUTPUT_SAMPLE_CYCLES;
 
 /// ARM9 cycles per line: 355 dots x 6 bus cycles x 2 (`display-timing.md`, "Frame layout").
 pub const LINE_CYCLES: u64 = 355 * 6 * 2;
@@ -27,7 +28,7 @@ pub const SLICE: u64 = 64;
 /// Events the queue holds without growing: the line events and every event slot the
 /// devices register ([`crate::io::EVENT_SLOTS`]: the timers and the DMA starts of both CPUs).
 /// Reserved up front so scheduling on the hot path does not allocate.
-const EVENT_CAPACITY: usize = LineEvent::ALL.len() + crate::io::EVENT_SLOTS;
+const EVENT_CAPACITY: usize = LineEvent::ALL.len() + 1 + crate::io::EVENT_SLOTS;
 
 /// The latest time the clock or an event may hold, about 2,180 years of emulated time. A
 /// savestate beyond it is refused, so line starts never reach the saturation point of `u64`.
@@ -53,6 +54,10 @@ impl LineEvent {
 pub enum EventKind {
     /// One of the machine's own events.
     Line(LineEvent),
+    /// An output sample of the sound unit is due: the mixer reads every channel and the next one
+    /// is scheduled. The events sit on the grid `k * OUTPUT_SAMPLE_CYCLES`, so a load rebuilds the
+    /// next one from the clock alone (`spu.md`, "Output samples"; `scheduler.md`).
+    Sample,
     /// One event slot of a registered device (`Device::SLOTS`): a timer's overflow, a DMA
     /// channel's start. The device says what it does when it fires, so adding a device with
     /// events adds no variant here (`timers.md`, "Model"; `dma.md`, "Model").
@@ -68,7 +73,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Where the kind sorts among events at the same time (`scheduler.md`, "Events"): line start,
-    /// HBlank start, then device slots by registration order of the device, the ARM9's copy before
+    /// HBlank start, the output sample, then device slots by registration order of the device, the ARM9's copy before
     /// the ARM7's, lower slot first. The registry fixes the device order: timers before DMA.
     /// Explicit, not derived: `bool` sorts `false` first, so `arm9` is negated on purpose or the
     /// ARM7 would go ahead.
@@ -77,6 +82,7 @@ impl EventKind {
         match self {
             Self::Line(LineEvent::Start) => (0, 0, 0, 0),
             Self::Line(LineEvent::HBlank) => (0, 1, 0, 0),
+            Self::Sample => (0, 2, 0, 0),
             Self::Slot { device, arm9, slot } => (1, device as u8, u8::from(!arm9), slot),
         }
     }
@@ -251,6 +257,13 @@ impl Scheduler {
     /// `k * LINE_CYCLES + HBLANK_START_CYCLES`.
     pub(crate) fn next_hblank_start(now: u64) -> u64 {
         Self::next_on_grid(now, HBLANK_START_CYCLES)
+    }
+
+    /// The first output sample strictly after `now`, on the grid `k * OUTPUT_SAMPLE_CYCLES`.
+    pub(crate) fn next_sample_time(now: u64) -> u64 {
+        (now / OUTPUT_SAMPLE_CYCLES)
+            .saturating_add(1)
+            .saturating_mul(OUTPUT_SAMPLE_CYCLES)
     }
 
     fn next_on_grid(now: u64, offset: u64) -> u64 {

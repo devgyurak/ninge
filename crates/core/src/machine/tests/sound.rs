@@ -99,3 +99,145 @@ fn given_all_ones_written_to_powcnt2_when_read_back_then_only_bits_0_and_1_remai
     let read = m.bus7(at + 1).read16(POWCNT2);
     assert_eq!((read, m.inspect().power().powcnt2()), (3, 3));
 }
+
+// ------------------------------------------------------------------------- the sample clock
+//
+// Expected values come from `docs/hw/spu.md` ("Output samples"): one output sample per 2,048 master
+// cycles, on the grid `k * 2048`. A frame is 1,120,380 cycles, so the frame that ends at line 0
+// holds the samples at 2048 * 1..=547 (the next, 548 * 2048, is past it), and the second frame the
+// 547 from 548 to 1094; each is a left and a right `i16`.
+
+/// `i16` values (two a sample) one frame of audio holds, as worked out above.
+const FRAME_AUDIO_LEN: usize = 2 * 547;
+/// Main RAM where the test data sits, and the PCM8 bytes `40h`, which play as `4000h`.
+const DATA_ADDR: u32 = 0x0200_1000;
+const PCM8_QUARTER: u32 = 0x4040_4040;
+/// Start, loop (repeat 1), PCM8, with SOUND0SAD at [`DATA_ADDR`].
+const LOOP_PCM8: u32 = 1 << 31 | 1 << 27;
+const SOUND0SAD: u32 = 0x0400_0404;
+
+/// A machine whose channel 0 plays four words of `40h` PCM8 bytes in a loop, started at `at`.
+fn looping(at: u64) -> Machine {
+    let mut m = machine();
+    super::dma::poke_words(&mut m, DATA_ADDR, &[PCM8_QUARTER; 4]);
+    m.bus7(at).write32(SOUND0SAD, DATA_ADDR);
+    m.bus7(at).write16(SOUND0TMR, 0xFFF0);
+    m.bus7(at).write32(SOUND0LEN, 4);
+    m.bus7(at).write32(SOUND0CNT, LOOP_PCM8);
+    m
+}
+
+/// `steps` debug steps of the ARM9.
+fn step_arm9(m: &mut Machine, steps: u64) {
+    (0..steps).for_each(|_| m.step_arm9());
+}
+
+/// The first and the last left sample of the audio and its length.
+fn audio_ends(m: &Machine) -> (i16, i16, usize) {
+    let audio = m.audio();
+    (audio[0], audio[audio.len() - 2], audio.len())
+}
+
+#[test]
+fn given_a_booted_machine_when_a_frame_runs_then_audio_holds_one_stereo_pair_per_2048_cycles() {
+    let mut m = machine();
+    m.run_frame(crate::Input::new());
+    let first = m.audio().len();
+    m.run_frame(crate::Input::new());
+    assert_eq!((first, m.audio().len()), (FRAME_AUDIO_LEN, FRAME_AUDIO_LEN));
+}
+
+#[test]
+fn given_no_channel_started_when_a_frame_runs_then_every_sample_is_zero() {
+    let mut m = machine();
+    m.run_frame(crate::Input::new());
+    assert_eq!(m.audio().iter().filter(|&&s| s != 0).count(), 0);
+}
+
+#[test]
+fn given_a_looping_pcm8_channel_when_a_frame_runs_then_the_samples_after_the_start_carry_its_level()
+{
+    let mut m = looping(3_000);
+    m.run_frame(crate::Input::new());
+    // The pair at 2048 comes before the start at 3000; the last pair is long after it, and the
+    // first sample is the ARM7-time-ahead case: its event is earlier than the write.
+    assert_eq!(audio_ends(&m), (0, 0x4000, FRAME_AUDIO_LEN));
+}
+
+#[test]
+fn given_a_looping_channel_when_the_frame_runs_then_the_pair_after_the_start_is_the_first_to_sound()
+{
+    let mut m = looping(3_000);
+    m.run_frame(crate::Input::new());
+    // Pairs are at 2048 (before 3000) and 4096, 6144 (after it).
+    assert_eq!(&m.audio()[..6], &[0, 0, 0x4000, 0x4000, 0x4000, 0x4000]);
+}
+
+#[test]
+fn given_a_frame_run_when_the_next_starts_then_the_audio_of_the_first_is_dropped() {
+    let mut m = looping(3_000);
+    m.run_frame(crate::Input::new());
+    let first = m.audio()[..8].to_vec();
+    m.run_frame(crate::Input::new());
+    assert_eq!((first.len(), &m.audio()[..2]), (8, &[0x4000, 0x4000][..]));
+}
+
+#[test]
+fn given_a_savestate_taken_mid_playback_when_loaded_then_the_next_frame_matches_an_uninterrupted_run()
+ {
+    let mut straight = looping(3_000);
+    straight.run_frame(crate::Input::new());
+    let state = straight.save_state();
+    let mut loaded = machine();
+    let result = loaded.load_state(&state);
+    straight.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
+    assert_eq!(
+        (
+            result,
+            loaded.audio() == straight.audio(),
+            loaded.save_state() == straight.save_state()
+        ),
+        (Ok(()), true, true)
+    );
+}
+
+#[test]
+fn given_a_loaded_state_when_listing_pending_then_the_next_sample_is_on_the_grid_after_now() {
+    let mut m = machine();
+    m.run_frame(crate::Input::new());
+    let state = m.save_state();
+    let mut loaded = machine();
+    loaded
+        .load_state(&state)
+        .expect("a state we just saved loads");
+    let now = loaded.inspect().scheduler().now();
+    let samples: Vec<u64> = loaded
+        .inspect()
+        .scheduler()
+        .pending()
+        .iter()
+        .filter(|event| event.kind == crate::scheduler::EventKind::Sample)
+        .map(|event| event.time)
+        .collect();
+    assert_eq!(samples, vec![(now / 2_048 + 1) * 2_048]);
+}
+
+#[test]
+fn given_two_machines_with_the_same_sound_when_each_runs_a_frame_then_audio_and_state_are_equal() {
+    let mut a = looping(3_000);
+    let mut b = looping(3_000);
+    a.run_frame(crate::Input::new());
+    b.run_frame(crate::Input::new());
+    assert_eq!(
+        (a.audio() == b.audio(), a.save_state() == b.save_state()),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_debug_steps_far_past_a_frame_when_no_frame_runs_then_the_audio_stays_within_its_bound() {
+    let mut m = machine();
+    step_arm9(&mut m, 3 * 1_120_380);
+    assert!(m.audio().len() <= super::super::AUDIO_CAPACITY);
+}

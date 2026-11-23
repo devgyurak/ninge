@@ -13,6 +13,7 @@ use crate::io::power::POSTFLG_ADDR;
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::{DISPSTAT_ADDR, VBLANK_IRQ_ENABLE};
 use crate::scheduler::{HBLANK_START_CYCLES, LINE_CYCLES};
+use crate::spu::OUTPUT_SAMPLE_CYCLES;
 
 const VRAMCNT_A: u32 = 0x0400_0240;
 const WRAMCNT: u32 = 0x0400_0247;
@@ -145,6 +146,7 @@ fn given_a_new_machine_when_inspected_then_pending_lists_the_line_events_in_firi
     assert_eq!(
         kinds,
         vec![
+            (OUTPUT_SAMPLE_CYCLES, EventKind::Sample),
             (HBLANK_START_CYCLES, EventKind::Line(LineEvent::HBlank)),
             (LINE_CYCLES, EventKind::Line(LineEvent::Start)),
         ]
@@ -169,6 +171,7 @@ fn given_a_running_arm9_timer_when_inspected_then_pending_lists_its_overflow_fir
                 arm9: true,
                 slot: 0
             },
+            EventKind::Sample,
             EventKind::Line(LineEvent::HBlank),
             EventKind::Line(LineEvent::Start),
         ]

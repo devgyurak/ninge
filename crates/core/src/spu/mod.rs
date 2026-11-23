@@ -2,17 +2,16 @@
 //! The sound registers of the ARM7: the 16 channels, SOUNDCNT, SOUNDBIAS and the two capture
 //! units (`docs/hw/sound-registers.md`).
 //!
-//! No sound is made. The registers are stored and read back, and the one thing a program can
-//! observe without audio, the busy bit of a channel and of a capture, is computed lazily from an
-//! end time recorded when the unit starts: no scheduler event and no event slot. A read compares
-//! the master time of the access with the end time, so a savestate taken mid-playback clears the
-//! bit at the same time as an uninterrupted run.
+//! A channel's playback is a pure function of the master time it started, the registers latched at
+//! the start and the time of the query (`docs/hw/spu.md`, "Position"): how many samples have
+//! elapsed, and so which sample of the data is playing. The busy bit uses the same elapsed count (an
+//! end time computed once at the start), so the bit and the output cannot disagree, and a savestate
+//! taken mid-playback plays on exactly as an uninterrupted run. Capture units keep the lazy end time.
 //!
 //! Only the ARM7 sees these registers, so [`Spu`] is a plain type implementing `Device<false>`
 //! (`AGENTS.md` §4, "Per-CPU devices"): the "seen by one CPU" class. It registers directly with
 //! its own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
-// TODO(phase6): the mixer, the sample output and the capture writes replace the lazy end time with
-// the real playback position (`sound-registers.md`, "Scope").
+// TODO(phase6): the capture writes replace the capture's lazy end time with a real position (#46).
 
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
@@ -64,6 +63,25 @@ const CNT_FORMAT_MASK: u32 = 0b11;
 const FORMAT_PCM8: u32 = 0;
 const FORMAT_PCM16: u32 = 1;
 const FORMAT_ADPCM: u32 = 2;
+/// SOUNDxCNT bit 15: keep the last sample after a one-shot ends (`spu.md`, "Position").
+const CNT_HOLD: u32 = 1 << 15;
+/// SOUNDxCNT bits 0-6, 8-9 and 16-22: volume, divider, panning.
+const CNT_VOLUME_MASK: u32 = 0x7F;
+const CNT_DIVIDER_SHIFT: u32 = 8;
+const CNT_DIVIDER_MASK: u32 = 0b11;
+const CNT_PANNING_SHIFT: u32 = 16;
+const CNT_PANNING_MASK: u32 = 0x7F;
+/// SOUNDxCNT bits 24-26: the PSG wave duty.
+const CNT_DUTY_SHIFT: u32 = 24;
+const CNT_DUTY_MASK: u32 = 0b111;
+/// Samples in a word: four PCM8 samples, two PCM16 samples (`spu.md`, "Position").
+const PCM8_PER_WORD: u64 = 4;
+const PCM16_PER_WORD: u64 = 2;
+/// Master cycles between two output samples: 1024 ARM7 cycles, two master cycles each
+/// (`spu.md`, "Output samples").
+// TODO(hw-unverified): GBATEK's 32.768 kHz is not exactly 1024 ARM7 cycles (`spu.md`,
+// "Unverified").
+pub const OUTPUT_SAMPLE_CYCLES: u64 = 2048;
 /// The bits SOUNDxCNT keeps: volume 0-6, divider 8-9, hold 15, panning 16-22, duty 24-26,
 /// repeat 27-28, format 29-30 and start 31; bits 7, 10-14 and 23 read zero.
 pub const CNT_MASK: u32 = 0xFF7F_837F;
@@ -103,7 +121,21 @@ const CAPTURE_TIMER_CHANNEL: [usize; CAPTURES] = [1, 3];
 /// The end time of a unit that never ends by itself. An unstarted unit holds 0.
 const NEVER: u64 = u64::MAX;
 
-/// One sound channel's registers and the end time of its sound.
+/// What a channel latches when it starts: the registers that decide where each sample comes from.
+/// A write to them while the sound plays does not move it (`spu.md`, "Model"). Volume, divider,
+/// panning, hold and duty are not here: they are read live from SOUNDxCNT.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Latched {
+    sad: u32,
+    pnt: u32,
+    len: u32,
+    format: u32,
+    one_shot: bool,
+    /// Master cycles per sample.
+    period: u64,
+}
+
+/// One sound channel's registers, the master time it started and what it latched then.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channel {
     cnt: u32,
@@ -111,7 +143,11 @@ pub struct Channel {
     tmr: u16,
     pnt: u16,
     len: u32,
-    /// Master time the busy bit clears, [`NEVER`] if it does not, 0 while stopped.
+    /// Master time of the write that started the sound; 0 while stopped.
+    start: u64,
+    latched: Latched,
+    /// Master time the busy bit clears, [`NEVER`] if it does not, 0 while stopped. Computed once at
+    /// the start from the latched registers, so the busy bit and the output share one position.
     end: u64,
 }
 
@@ -163,14 +199,108 @@ impl Channel {
         self.cnt & CNT_START != 0 && now < self.end
     }
 
+    /// The master time the sound started, 0 while stopped.
+    pub const fn start(&self) -> u64 {
+        self.start
+    }
+
+    /// SOUNDxCNT bits 0-6: the volume multiplier as written.
+    pub const fn volume(&self) -> u32 {
+        self.cnt & CNT_VOLUME_MASK
+    }
+
+    /// SOUNDxCNT bits 8-9: the volume divider selector as written.
+    pub const fn divider(&self) -> u32 {
+        (self.cnt >> CNT_DIVIDER_SHIFT) & CNT_DIVIDER_MASK
+    }
+
+    /// SOUNDxCNT bits 16-22: the panning as written.
+    pub const fn panning(&self) -> u32 {
+        (self.cnt >> CNT_PANNING_SHIFT) & CNT_PANNING_MASK
+    }
+
+    /// SOUNDxCNT bit 15: the hold flag.
+    pub const fn hold(&self) -> bool {
+        self.cnt & CNT_HOLD != 0
+    }
+
+    /// SOUNDxCNT bits 24-26: the PSG wave duty as written.
+    pub const fn duty(&self) -> u32 {
+        (self.cnt >> CNT_DUTY_SHIFT) & CNT_DUTY_MASK
+    }
+
+    /// SOUNDxCNT bits 27-28: the repeat mode as written.
+    pub const fn repeat_mode(&self) -> u32 {
+        (self.cnt >> CNT_REPEAT_SHIFT) & CNT_REPEAT_MASK
+    }
+
+    /// SOUNDxCNT bits 29-30: the format as written.
+    pub const fn format(&self) -> u32 {
+        (self.cnt >> CNT_FORMAT_SHIFT) & CNT_FORMAT_MASK
+    }
+
+    /// Samples elapsed since the start at master time `now`: the position of the sample clock, or
+    /// `None` while the channel is stopped or `now` is before the start (the ARM7 can write at a
+    /// time past the master clock, and a sample event at the master clock is then earlier than the
+    /// write; `spu.md`, "Position").
+    pub const fn elapsed(&self, now: u64) -> Option<u64> {
+        if self.cnt & CNT_START == 0 || self.latched.period == 0 || now < self.start {
+            return None;
+        }
+        Some((now - self.start) / self.latched.period)
+    }
+
+    /// The channel's sample at master time `now` as a PCM16 value (`-8000h`-`7FFFh`), or 0 while
+    /// it is silent. `read` is the ARM7's side-effect-free byte read of the source data.
+    ///
+    /// A pure function of the start time, the latched registers and `now`; nothing is stepped.
+    /// After a one-shot ends the sample is 0, or the last one with Hold set (`spu.md`, "Position").
+    // TODO(phase6): IMA-ADPCM, PSG and noise are silent until their own steps of #45 land.
+    pub fn sample(&self, now: u64, read: impl Fn(u32) -> u8) -> i32 {
+        let Some(elapsed) = self.elapsed(now) else {
+            return 0;
+        };
+        let latched = &self.latched;
+        let per_word = match latched.format {
+            FORMAT_PCM8 => PCM8_PER_WORD,
+            FORMAT_PCM16 => PCM16_PER_WORD,
+            _ => return 0,
+        };
+        let pnt = per_word * u64::from(latched.pnt);
+        let len = per_word * u64::from(latched.len);
+        // Below the minimum length nothing plays (`spu.md`, "Position").
+        if pnt + len < per_word * u64::from(MIN_WORDS) {
+            return 0;
+        }
+        let index = if latched.one_shot {
+            match (elapsed < pnt + len, self.hold()) {
+                (true, _) => elapsed,
+                (false, true) => pnt + len - 1,
+                (false, false) => return 0,
+            }
+        } else if elapsed < pnt {
+            elapsed
+        } else if len == 0 {
+            // An empty loop: the PNT part, then silence (`spu.md`, "Model").
+            return 0;
+        } else {
+            pnt + (elapsed - pnt) % len
+        };
+        let at = latched.sad.wrapping_add((index * (4 / per_word)) as u32);
+        match latched.format {
+            FORMAT_PCM8 => i32::from(read(at) as i8) << 8,
+            _ => i32::from(i16::from_le_bytes([read(at), read(at.wrapping_add(1))])),
+        }
+    }
+
     /// The end time of a sound that starts at `now` with the registers as they are.
     // TODO(hw-unverified): no start delay before the first sample, and TMR, PNT and LEN written
-    // while busy do not move the end (`sound-registers.md`, "Unverified").
+    // while busy do not move the end (`sound-registers.md`, "Unverified"; `spu.md`, "Unverified").
     // TODO(hw-unverified): the manual and prohibited repeat modes, and PSG and noise on any
     // channel, never end (`sound-registers.md`, "Unverified").
     fn end_from(&self, now: u64) -> u64 {
-        let words = u64::from(u32::from(self.pnt) + self.len);
-        let one_shot = (self.cnt >> CNT_REPEAT_SHIFT) & CNT_REPEAT_MASK == REPEAT_ONE_SHOT;
+        let words = u64::from(self.latched.pnt + self.latched.len);
+        let one_shot = self.latched.one_shot;
         let samples = match (self.cnt >> CNT_FORMAT_SHIFT) & CNT_FORMAT_MASK {
             FORMAT_PCM8 => 4 * words,
             FORMAT_PCM16 => 2 * words,
@@ -180,7 +310,20 @@ impl Channel {
         if !one_shot || words < u64::from(MIN_WORDS) {
             return NEVER;
         }
-        now.saturating_add(samples * ticks_per_sample(self.tmr))
+        now.saturating_add(samples * self.latched.period)
+    }
+
+    /// Latches the registers a started sound reads from, at master time `now`.
+    fn latch(&mut self, now: u64) {
+        self.start = now;
+        self.latched = Latched {
+            sad: self.sad,
+            pnt: u32::from(self.pnt),
+            len: self.len,
+            format: self.format(),
+            one_shot: self.repeat_mode() == REPEAT_ONE_SHOT,
+            period: ticks_per_sample(self.tmr),
+        };
     }
 }
 
@@ -364,11 +507,18 @@ impl Spu {
                 channel.cnt = with_byte(channel.cnt_at(now), reg - CNT_OFFSET, byte) & CNT_MASK;
                 let started = channel.cnt & CNT_START != 0;
                 // Writing 1 while busy does not restart the sound: the end stays.
-                channel.end = match (was_busy, started) {
-                    (false, true) => channel.end_from(now),
-                    (true, true) => channel.end,
-                    (_, false) => 0,
-                };
+                match (was_busy, started) {
+                    (false, true) => {
+                        channel.latch(now);
+                        channel.end = channel.end_from(now);
+                    }
+                    (true, true) => {}
+                    (_, false) => {
+                        channel.start = 0;
+                        channel.latched = Latched::default();
+                        channel.end = 0;
+                    }
+                }
             }
             SAD_OFFSET..TMR_OFFSET => {
                 channel.sad = with_byte(channel.sad, reg - SAD_OFFSET, byte) & SAD_MASK;
@@ -406,7 +556,7 @@ impl Checked for Spu {
             c.cnt & !CNT_MASK == 0
                 && c.sad & !SAD_MASK == 0
                 && c.len & !LEN_MASK == 0
-                && (c.cnt & CNT_START != 0 || c.end == 0)
+                && (c.cnt & CNT_START != 0 || (c.end == 0 && c.start == 0))
         });
         let captures = self.captures.iter().all(|c| {
             c.cnt & !CAP_MASK == 0

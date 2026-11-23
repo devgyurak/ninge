@@ -27,7 +27,6 @@ use crate::source::Source;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
-use std::time::{Duration, Instant};
 
 /// What an input event asks the app to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -331,13 +330,6 @@ impl App {
             cursor::overlay(&mut snapshot.bottom, self.cursor.position());
         }
     }
-}
-
-/// How long to wait for input: the time left until `deadline`, or zero once it has
-/// passed. Zero still polls, so pending keys and resizes are read every frame even when
-/// drawing overran the frame time.
-pub fn poll_timeout(deadline: Instant, now: Instant) -> Duration {
-    deadline.saturating_duration_since(now)
 }
 
 #[cfg(test)]

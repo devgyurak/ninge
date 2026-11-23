@@ -127,24 +127,6 @@ fn given_resized_action_when_applied_then_app_keeps_running() {
     assert!(!app.should_quit());
 }
 
-#[test]
-fn given_time_left_when_choosing_poll_timeout_then_it_is_the_remainder() {
-    let now = Instant::now();
-    assert_eq!(
-        poll_timeout(now + Duration::from_millis(10), now),
-        Duration::from_millis(10)
-    );
-}
-
-#[test]
-fn given_deadline_passed_when_choosing_poll_timeout_then_it_is_zero() {
-    let now = Instant::now();
-    assert_eq!(
-        poll_timeout(now, now + Duration::from_millis(20)),
-        Duration::ZERO
-    );
-}
-
 // ------------------------------------------------------------------------------- save file
 
 fn app_with_saved_machine(name: &str) -> (App, std::path::PathBuf) {

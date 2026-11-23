@@ -5,10 +5,11 @@
 //! tested through [`crate::app`] with a test backend. OS-specific pieces stay here so a
 //! Windows backend is an addition (AGENTS.md §2).
 
-use crate::app::{Action, App, map_event, poll_timeout};
+use crate::app::{Action, App, map_event};
 use crate::gamepad::Gamepads;
 use crate::kitty;
 use crate::layout::TermSize;
+use crate::pacing::{FramePacer, Pacer};
 use crate::pen::Unit;
 use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
@@ -40,9 +41,6 @@ use {
 /// nothing still answers the DA1 request that follows it, so this is only the bound for
 /// one that answers neither. A reply that arrives later would reach the input reader.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1000);
-
-/// Fixed output rate; adaptive rate is #63.
-const FRAME_TIME: Duration = Duration::from_micros(16_667);
 
 /// Most input events handled between two frames.
 const MAX_EVENTS_PER_FRAME: usize = 64;
@@ -239,8 +237,9 @@ fn main_loop(
     pads: &mut Gamepads,
 ) -> anyhow::Result<()> {
     let mut snapshot = Snapshot::default();
+    let mut pacer = FramePacer::new(Instant::now());
     while !app.should_quit() {
-        let deadline = Instant::now() + FRAME_TIME;
+        pacer.frame_started(Instant::now());
         // The pads are read once a frame, before the frame runs.
         pads.poll().into_iter().for_each(|e| app.apply_pad(e));
         app.set_pads_connected(pads.connected());
@@ -250,7 +249,7 @@ fn main_loop(
         // Poll at least once per frame, even after an overrun, so quit and resize are
         // always read. The cap keeps a flood of input (key repeat) from starving drawing.
         for _ in 0..MAX_EVENTS_PER_FRAME {
-            if !event::poll(poll_timeout(deadline, Instant::now()))? {
+            if !event::poll(pacer.remaining(Instant::now()))? {
                 break;
             }
             match map_event(&event::read()?) {

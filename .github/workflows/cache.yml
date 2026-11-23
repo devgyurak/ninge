@@ -1,0 +1,29 @@
+name: cache
+
+# Saves the caches pull requests restore. A pull request cannot use a cache another pull
+# request saved, only one saved on its base branch, so the cargo cache and the CPU test suite
+# have to be saved by a run on develop. ci.yml no longer runs for every merge into develop, so
+# this workflow runs it for the merges that change what those caches are keyed by: the
+# lockfile, a manifest, the toolchain pin, the cargo configuration, or the suite's checksums,
+# and for a change to the workflows themselves, which decide what is cached. It is the whole
+# gate, not a build of its own, so the cache holds exactly what a pull request's run builds,
+# and a dependency change is also checked once on develop itself.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - rust-toolchain.toml
+      - .cargo/config.toml
+      - tests/cpu_suite/SHA256SUMS
+      - .github/workflows/ci.yml
+      - .github/workflows/cache.yml
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: ./.github/workflows/ci.yml

@@ -13,12 +13,19 @@ name: ci
 # no Rust tools: verify.sh runs its Python gates and skips the cargo steps, in one shard. The
 # verify jobs still run, because a workflow that does not start, or a matrix job skipped as a
 # whole, never reports the required checks.
+#
+# When it runs: for every pull request into develop or main, and for a push to main (a
+# release). A merge into develop does not run it again: the pull request already ran this gate
+# on its merge with develop, and the release pull request runs it on develop as a whole. The
+# one exception is cache.yml, which calls this workflow for a push to develop that changes
+# the dependencies, because only a run on develop may save the caches pull requests restore.
 
 on:
   push:
-    branches: [develop, main]
+    branches: [main]
   pull_request:
     branches: [develop, main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -148,6 +155,7 @@ jobs:
       # half per job. The cache holds ~/.cargo and target/; our own crates are always rebuilt.
       # It is keyed by Cargo.lock and the toolchain, and only develop saves it, so pull requests
       # restore develop's cache without filling the repository's cache quota with their own.
+      # A run on develop is the one cache.yml starts when the dependencies change.
       # Every shard builds the same things, so they share one cache and the first shard saves
       # it. The key keeps the name it had when this job was called verify, so the caches
       # develop already holds still match.

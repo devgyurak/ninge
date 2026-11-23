@@ -26,19 +26,26 @@ What it runs, in order:
 | 7 | Format | `cargo fmt --all --check` |
 | 8 | Lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | 9 | Dependency licenses | `cargo deny --locked check licenses bans sources` |
-| 10 | Tests + coverage ≥ 90% | `cargo llvm-cov nextest --workspace --locked --lcov`, then `scripts/merge_coverage.py --floor 90` |
-| 11 | Doc tests | `cargo test --workspace --locked --doc` |
+| 10 | Unit tests + coverage ≥ 90% | `cargo llvm-cov nextest --workspace --locked --lib --bins --lcov`, then `scripts/merge_coverage.py --floor 90` |
+| 11 | Integration tests, no coverage | `cargo nextest run --workspace --locked --test '*'` |
+| 12 | Doc tests | `cargo test --workspace --locked --doc` |
+
+Coverage is measured over the unit tests only (the lib and bin targets). The integration tests
+(`crates/*/tests`: the test ROMs, the CPU suite) run from an ordinary build and always gate, but
+add nothing to the measured coverage: rustc updates coverage counters atomically, which made a
+ROM test 7 to 25 times slower depending on the runner's CPU. A line that only a ROM test
+reaches is uncovered — cover it with a unit test.
 
 The floor is checked on the line records of the report, each source line counted once, by
 `scripts/merge_coverage.py`. cargo-llvm-cov's own summary counts a closure's lines twice and
 reads a little lower; it is not what the gate compares.
 
-CI runs step 10 in shards: `NINGE_TEST_SHARD=<k>/<n>` runs one part of the tests and writes
-its report without checking the floor, and a run with `NINGE_COVERAGE_SHARDS=<directory>`
+CI runs steps 10 and 11 in shards: `NINGE_TEST_SHARD=<k>/<n>` runs one part of the tests and
+writes its report without checking the floor, and a run with `NINGE_COVERAGE_SHARDS=<directory>`
 checks the floor over every shard's report merged. Only `ci.yml` sets them; a local run is
 the one shard of one and checks the floor itself. A shard that passed has not met the floor.
 
-Until Phase 0 adds `Cargo.toml`, steps 7–11 print `SKIPPED`. Once it exists, a missing
+Until Phase 0 adds `Cargo.toml`, steps 7–12 print `SKIPPED`. Once it exists, a missing
 `cargo-deny` or `cargo-llvm-cov` fails the gate with the install command. Say that when you report — the
 Rust gates did not pass, they did not run.
 
@@ -92,10 +99,10 @@ English original — add the original, or remove the translation.
 A dependency's license is not on the `deny.toml` allow-list. Pick another crate. Widening the
 list is a `decision` issue, never part of the change that needed it.
 
-### 10. Tests and coverage
-- **Coverage below 90%** — **do not lower the floor or exclude files**; write tests that
-  assert behavior (delegate to `test-author`). `cargo llvm-cov --html` shows the uncovered
-  lines. `scripts/check_agent_config.py` fails if the floor in `verify.sh` drifts from
+### 10–11. Tests and coverage
+- **Coverage below 90%** — **do not lower the floor or exclude files**; write unit tests that
+  assert behavior (delegate to `test-author`); an integration test does not count.
+  `cargo llvm-cov --lib --bins --html` shows the uncovered lines. `scripts/check_agent_config.py` fails if the floor in `verify.sh` drifts from
   AGENTS.md §5.9.
 - **A golden frame mismatch is a regression until shown otherwise.** Do not regenerate the
   hash. Find which hardware behavior changed; if the new frame is right, the PR says why.

@@ -47,8 +47,8 @@ gates; reopening one is a new `decision` issue.
 - [x] **License: Apache-2.0** (single license). `LICENSE` holds the text; every source
       carries `SPDX-License-Identifier: Apache-2.0` on line 1; dependencies are limited to
       the permissive allow-list in `deny.toml`. (AGENTS.md §3.7.)
-- [x] **Coverage floor: 90% line coverage**, workspace-wide, through `cargo-llvm-cov` in
-      `./scripts/verify.sh` and CI. (AGENTS.md §5.9.)
+- [x] **Coverage floor: 90% line coverage**, workspace-wide, over the unit tests, through
+      `cargo-llvm-cov` in `./scripts/verify.sh` and CI. (AGENTS.md §5.9.)
 - [x] **Repository** — `github.com/devgyurak/ninge`.
 - [x] **Branch model** — PRs to `develop`, releases `develop` → `main`. After the first
       commit on `main`, create `develop` and protect both (PR + green CI). (AGENTS.md §7.)

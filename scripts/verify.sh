@@ -123,31 +123,41 @@ fi
 step "CPU test suite (fetch + checksums)"
 ./scripts/fetch_cpu_suite.sh
 
+# Coverage is measured over the unit tests (the lib and bin targets) only. The integration
+# tests (crates/*/tests: the test ROMs, the CPU suite) run from an ordinary build, right after.
+# rustc updates a coverage counter atomically, a `lock add` on x86, and an interpreter passes
+# several counters for every guest instruction. One ROM test that takes 1 s uninstrumented took
+# 10 s on some CI runners and 18 to 25 s on others (Zen 5, Intel), and up to 56 s with four
+# running at once, so which CPU a job happened to get decided how long CI took. No compiler
+# option turns the atomics off. The integration tests still run, and still gate, on every
+# change; what they no longer do is add to the measured coverage.
+#
 # The floor is checked on line records (scripts/merge_coverage.py), not with cargo-llvm-cov's
 # --fail-under-lines. That summary counts a line once for every function it belongs to, so a
 # closure's lines count twice, and it cannot be merged across shards. A line counted once can:
 # a whole run and the merged shards then give exactly the same number, and one script decides.
 #
-# NINGE_TEST_SHARD=<k>/<n> runs shard k of n of the tests and only writes that shard's report:
-# no single shard can meet the floor. Only ci.yml sets it, and a run with
-# NINGE_COVERAGE_SHARDS (above) then checks the floor over all n. Without it this is a whole
-# run, the one shard of one, and the floor is checked right here.
+# NINGE_TEST_SHARD=<k>/<n> runs shard k of n of both kinds of test and only writes that
+# shard's coverage report: no single shard can meet the floor. Only ci.yml sets it, and a run
+# with NINGE_COVERAGE_SHARDS (above) then checks the floor over all n. Without it this is a
+# whole run, the one shard of one, and the floor is checked right here.
 SHARD_PATTERN='^([1-9][0-9]*)/([1-9][0-9]*)$'
 if [ -z "${NINGE_TEST_SHARD:-}" ]; then
   COVERAGE_REPORT="target/coverage/shard-1-of-1.lcov"
-  step "tests + coverage (floor ${COVERAGE_FLOOR}%)"
+  SHARD_NOTE=""
+  step "unit tests + coverage (floor ${COVERAGE_FLOOR}%)"
 elif [[ "$NINGE_TEST_SHARD" =~ $SHARD_PATTERN ]]; then
   COVERAGE_REPORT="target/coverage/shard-${BASH_REMATCH[1]}-of-${BASH_REMATCH[2]}.lcov"
-  step "tests + coverage (shard ${NINGE_TEST_SHARD}; the floor is checked over the merged shards)"
+  SHARD_NOTE=" (shard ${NINGE_TEST_SHARD})"
+  step "unit tests + coverage (shard ${NINGE_TEST_SHARD}; the floor is checked over the merged shards)"
 else
   echo "NINGE_TEST_SHARD must be <k>/<n>, as in 2/4 — got '${NINGE_TEST_SHARD}'" >&2
   exit 1
 fi
 INSTALL="cargo install --locked cargo-llvm-cov && rustup component add llvm-tools-preview"
 need cargo llvm-cov --version
-# Coverage counters are memory increments, so in the optimized emulator loops they cost more
-# than the work they count. Counter promotion keeps a loop's counts in registers and stores
-# them when the loop exits; the counts, and so the coverage, are the same.
+# Counter promotion keeps a loop's counts in registers and stores them when the loop exits;
+# the counts, and so the coverage, are the same.
 COV_RUSTFLAGS="-C llvm-args=-do-counter-promotion=true -C llvm-args=-speculative-counter-promotion-to-loop=true"
 COV_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$COV_RUSTFLAGS"
 # A report left by an earlier run must not be merged with this one.
@@ -158,16 +168,23 @@ if [ -n "${NINGE_TEST_SHARD:-}" ]; then
   # ROM's tests, which cost about the same, spread over the shards.
   INSTALL="cargo install --locked cargo-nextest"
   need cargo nextest --version
-  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked \
+  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked --lib --bins \
     --partition "slice:${NINGE_TEST_SHARD}" --lcov --output-path "$COVERAGE_REPORT"
   echo "  wrote ${COVERAGE_REPORT}; the floor was NOT checked here"
-else
-  if cargo nextest --version >/dev/null 2>&1; then
-    RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked --lcov --output-path "$COVERAGE_REPORT"
-  else
-    RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov --workspace --locked --lcov --output-path "$COVERAGE_REPORT"
-  fi
+  step "integration tests${SHARD_NOTE}, without coverage"
+  cargo nextest run --workspace --locked --test '*' --partition "slice:${NINGE_TEST_SHARD}"
+elif cargo nextest --version >/dev/null 2>&1; then
+  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked --lib --bins \
+    --lcov --output-path "$COVERAGE_REPORT"
   "$PYTHON" scripts/merge_coverage.py --floor "$COVERAGE_FLOOR" target/coverage
+  step "integration tests, without coverage"
+  cargo nextest run --workspace --locked --test '*'
+else
+  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov --workspace --locked --lib --bins \
+    --lcov --output-path "$COVERAGE_REPORT"
+  "$PYTHON" scripts/merge_coverage.py --floor "$COVERAGE_FLOOR" target/coverage
+  step "integration tests, without coverage"
+  cargo test --workspace --locked --test '*'
 fi
 step "doc tests"
 cargo test --workspace --locked --doc

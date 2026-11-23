@@ -5,7 +5,7 @@ name: ci
 #
 # The tests are most of a run, so each OS splits them over shards: the `test` jobs each run
 # the whole gate with one part of the tests (NINGE_TEST_SHARD) and upload that part's
-# coverage. No shard can meet the coverage floor alone, so the `verify` job of each OS merges
+# coverage, which verify.sh measures over the unit tests only. No shard can meet the coverage floor alone, so the `verify` job of each OS merges
 # its shards' coverage and checks the floor (NINGE_COVERAGE_SHARDS). The branch rulesets
 # require the `verify` checks by name, and those fail unless every shard passed.
 #
@@ -151,7 +151,8 @@ jobs:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny
 
       # Without a cache every run downloads the crates and builds the dependencies, at
-      # opt-level 1, three times (clippy, the coverage build, doc tests): about a minute and a
+      # opt-level 1, three times (clippy, the coverage build of the unit tests, the ordinary
+      # build of the integration tests, which the doc tests share): about a minute and a
       # half per job. The cache holds ~/.cargo and target/; our own crates are always rebuilt.
       # It is keyed by Cargo.lock and the toolchain, and only develop saves it, so pull requests
       # restore develop's cache without filling the repository's cache quota with their own.

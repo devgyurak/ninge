@@ -136,10 +136,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # gilrs (gamepads, the frontend) links libudev on Linux.
-      - name: libudev (Linux)
+      # gilrs (gamepads, the frontend) links libudev on Linux, and cpal (sound, the frontend) links
+      # ALSA. The runner has no sound device: the run takes the no-device path.
+      - name: libudev and ALSA (Linux)
         if: env.DOCS_ONLY != 'true' && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libasound2-dev pkg-config
 
       # rustup installs the exact version and components pinned in rust-toolchain.toml
       # (AGENTS.md §4) — never a floating `stable`.

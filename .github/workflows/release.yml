@@ -103,10 +103,11 @@ jobs:
           done
           echo "PACKAGES=$packages" >> "$GITHUB_ENV"
 
-      # gilrs (gamepads, the frontend) links libudev on Linux, so the dry run's build needs it.
-      - name: libudev
+      # gilrs (gamepads, the frontend) links libudev on Linux and cpal (sound) links ALSA, so the
+      # dry run's build needs both.
+      - name: libudev and ALSA
         if: env.PACKAGES != ''
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libasound2-dev pkg-config
 
       # Both crates in one command: `cargo publish` verifies every package before it uploads
       # any, in dependency order, so a failure in ninge cannot leave ninge-core alone on

@@ -21,8 +21,8 @@ registers, the busy bits of channels and captures, POWCNT2, and the SoundBias SW
 The mixer, the volume and panning, the PSG and noise generation, reading the sample data (PCM8,
 PCM16, ADPCM) and the gates (SOUNDCNT, POWCNT2, the sound amplifier of the power-management device)
 are in `spu.md` (#45). Not implemented (`TODO(phase6)`): the capture writing to memory and feeding
-channels 1 and 3 (#46), and the BIOS table SWIs (sine, pitch and volume tables, which are BIOS data
-and need a plan of their own).
+channels 1 and 3 (#46, specified in `sound-capture.md`), and the BIOS table SWIs (sine, pitch and
+volume tables, which are BIOS data and need a plan of their own).
 
 ## Who sees them
 
@@ -122,7 +122,8 @@ Readable mask `8Fh`.
   capture 1 at channel 3's (SOUND3TMR).
 
 GBATEK also describes two hardware bugs in the capture data when the source is a channel; they
-change the data written, which is Phase 6.
+change the data written, which is Phase 6. The data, the writes and the bugs are specified in
+`sound-capture.md`.
 
 ### POWCNT2: `0400_0304h`, R/W
 

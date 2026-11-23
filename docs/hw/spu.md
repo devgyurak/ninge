@@ -10,7 +10,8 @@ Used by: `crates/core/src/spu/`, `crates/core/src/machine/`, `crates/core/src/io
 `sound-registers.md` covers the registers a program writes and reads back. This note covers what
 the unit does with them: how a channel turns its source data into samples, how the 16 channels are
 mixed into a stereo output, and what silences it. The capture units write the output to memory and
-feed channels 1 and 3 (#46); they are not part of this note beyond the lines marked "capture".
+feed channels 1 and 3 (#46); they are in `sound-capture.md`, not in this note beyond the lines
+marked "capture".
 
 ## Clocks
 
@@ -198,8 +199,9 @@ the first gate is `(bias - 200h) * 64`.
 ## What this note does not cover
 
 - **Capture** (#46): the capture units read the output of the mixer or of channel 0 or 2, and
-  can add channel 1 or 3 (SNDCAPxCNT bits 0 and 7), which also changes the mixer. None of it is
-  modeled here; `TODO(phase6)` stays at the capture's code site.
+  can add channel 1 or 3 (SNDCAPxCNT bits 0 and 7), which also changes the mixer. The behavior
+  is specified in `sound-capture.md`; it is not modeled by #45, and `TODO(phase6)` stays at the
+  capture's code site until #46 lands.
 - **BIOS table SWIs** (sine, pitch and volume tables): BIOS data, see `sound-registers.md`.
 - **The 15 ms rule**: GBATEK says no sound is to be output during the first 15 ms after the sound
   circuit is powered. That is a rule for the program, not a behavior to model.

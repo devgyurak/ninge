@@ -43,6 +43,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Keypad](keypad.md)
 - [Sound registers, capture registers and POWCNT2](sound-registers.md)
 - [The sound unit: channels, PCM/ADPCM/PSG generation, mixing and the gates](spu.md)
+- [Sound capture: sources, formats, the writes to memory and channel addition](sound-capture.md)
 
 **Video**
 

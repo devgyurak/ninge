@@ -109,6 +109,27 @@ fix/ldm-base-in-list
 docs/divcnt-timing
 ```
 
+### Stacked PRs
+
+**Stack by hand, not with GitHub's stacked-PR feature (`gh stack`).** Only the bottom PR of a
+stack targets `develop`; each PR above it targets the branch of the PR below.
+
+```bash
+gh pr create --base develop      --head add/mic-input        # bottom: CI runs
+gh pr create --base add/mic-input --head add/keyboard-input  # above: no CI yet
+```
+
+CI runs only for a PR into `develop` or `main` (`.github/workflows/ci.yml`), so a stack made
+this way runs CI for one PR at a time. `gh stack` runs CI for every PR of the stack at each
+push and again after each merge: a stack of six (#255–#262) started CI 42 times, 21 of them
+cancelled, and wanted six macOS jobs at once where the plan allows five across all runs.
+
+- A PR above the bottom has **no CI result** until it reaches the bottom. Until then
+  `./scripts/verify.sh`, run locally, is the only evidence — say in the PR that it passed.
+- When the PR below merges, retarget the next one to `develop`
+  (`gh pr edit <n> --base develop`). If no CI run starts, update its branch
+  (`gh pr update-branch <n>`): a push to the head branch starts one.
+
 ## 6. PR body
 
 Use `.github/pull_request_template.md`. It must say:

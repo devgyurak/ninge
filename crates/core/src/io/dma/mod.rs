@@ -568,7 +568,7 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
     fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         let effect = write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte));
         Effect {
-            recheck_held: offset < CHANNELS_BYTES,
+            recheck_held_signals: offset < CHANNELS_BYTES,
             ..effect
         }
     }

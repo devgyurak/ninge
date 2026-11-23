@@ -558,14 +558,14 @@ fn given_two_effects_with_signals_and_a_recheck_when_merged_then_both_are_kept()
     }
     .merge(Effect {
         signals: Signals::of(Signal::CardWordArm7),
-        recheck_held: true,
+        recheck_held_signals: true,
         ..Effect::default()
     });
     assert_eq!(
         (
             merged.signals.contains(Signal::CardWordArm9),
             merged.signals.contains(Signal::CardWordArm7),
-            merged.recheck_held
+            merged.recheck_held_signals
         ),
         (true, true, true)
     );
@@ -690,5 +690,22 @@ fn given_the_fifo_irq_mode_set_when_the_held_requests_are_merged_then_only_the_a
     assert_eq!(
         (io.held_requests::<true>(), io.held_requests::<false>()),
         (Requests::for_cpu::<true>(1 << 21), Requests::default())
+    );
+}
+
+#[test]
+fn given_a_write_that_rechecks_only_requests_when_merged_with_one_that_rechecks_signals_then_both_are_asked()
+ {
+    let merged = Effect {
+        recheck_held_requests: true,
+        ..Effect::default()
+    }
+    .merge(Effect {
+        recheck_held_signals: true,
+        ..Effect::default()
+    });
+    assert_eq!(
+        (merged.recheck_held_signals, merged.recheck_held_requests),
+        (true, true)
     );
 }

@@ -268,8 +268,8 @@ while the mode is 1 or 2 leaves it set. A write that sets the mode to 0 or 3 sto
 the bit that is already in IF stays until the program acknowledges it (see "Unverified").
 
 In the model the device holds the bit as a level: while the condition is true it reports IF bit 21 as
-held up, and a write that could change the outcome (any write to the geometry block, any write to
-the ARM9 interrupt controller's IE, IME or IF, and any DMA channel write) asks the I/O layer to recheck, which raises the held bit
+held up, and a write that could change the outcome (any write to the geometry block, and any write to
+the ARM9 interrupt controller's IE, IME or IF) asks the I/O layer to recheck, which raises the held bit
 again. Raising a bit that is already set changes nothing, so the recheck is safe after any write.
 
 ### BOX_TEST, POS_TEST and VEC_TEST

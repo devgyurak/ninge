@@ -504,7 +504,7 @@ fn given_a_mask_when_built_for_the_arm7_then_only_the_arm7_side_is_filled() {
 fn given_an_if_write_when_it_returns_then_it_asks_for_the_held_requests_to_be_rechecked() {
     let mut c = InterruptController::<true>::new();
     let effect = c.write(IF, Width::Word, 1 << 21, cx_at(0));
-    assert!(effect.recheck_held);
+    assert!(effect.recheck_held_requests);
 }
 
 #[test]
@@ -513,10 +513,19 @@ fn given_an_ie_or_ime_write_on_either_cpu_when_it_returns_then_it_asks_for_a_rec
     let mut arm7 = InterruptController::<false>::new();
     assert_eq!(
         (
-            arm9.write(IE, Width::Word, 1, cx_at(0)).recheck_held,
-            arm9.write(IME, Width::Word, 1, cx_at(0)).recheck_held,
-            arm7.write(IF, Width::Word, 1, cx_at(0)).recheck_held
+            arm9.write(IE, Width::Word, 1, cx_at(0))
+                .recheck_held_requests,
+            arm9.write(IME, Width::Word, 1, cx_at(0))
+                .recheck_held_requests,
+            arm7.write(IF, Width::Word, 1, cx_at(0))
+                .recheck_held_requests
         ),
         (true, true, true)
     );
+}
+
+#[test]
+fn given_an_irq_controller_write_when_it_returns_then_it_does_not_ask_for_the_signals() {
+    let mut c = InterruptController::<true>::new();
+    assert!(!c.write(IF, Width::Word, 1, cx_at(0)).recheck_held_signals);
 }

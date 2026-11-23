@@ -237,10 +237,12 @@ impl Io {
         self.route(scheduler, effect.signals, at.floor);
         // A signal that is a level: the device that waits for it may have been enabled while it
         // already holds, and takes it now. One already queued is not queued twice.
-        if effect.recheck_held {
+        if effect.recheck_held_signals {
             self.route(scheduler, self.held_signals::<ARM9>(), at.floor);
-            // An IF bit that is a level (the FIFO IRQ): an acknowledge cleared it while its
-            // condition holds, so it is raised again. A bit that is already set stays set.
+        }
+        // An IF bit that is a level (the FIFO IRQ): an acknowledge cleared it while its condition
+        // holds, so it is raised again. A bit that is already set stays set.
+        if effect.recheck_held_requests {
             self.request_irq(self.held_requests::<ARM9>());
         }
     }

@@ -119,7 +119,7 @@ fn started_by<const A: bool>(
 }
 
 /// The effect of a channel write that queues a start on channel `ch`: a write to the channel
-/// registers always asks for the held signals to be rechecked ([`Effect::recheck_held`]).
+/// registers always asks for the held signals to be rechecked ([`Effect::recheck_held_signals`]).
 fn slot_effect(ch: u32) -> Effect {
     Effect {
         reschedule: 1 << ch,
@@ -130,7 +130,7 @@ fn slot_effect(ch: u32) -> Effect {
 /// The effect of a channel write that changes no schedule.
 fn rechecked() -> Effect {
     Effect {
-        recheck_held: true,
+        recheck_held_signals: true,
         ..Effect::default()
     }
 }
@@ -1785,8 +1785,8 @@ fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_held
     let mut dma = Dma::<true>::new();
     assert_eq!(
         (
-            write32(&mut dma, 0, 0x0200_0000).recheck_held,
-            write32(&mut dma, cnt(1), 1).recheck_held
+            write32(&mut dma, 0, 0x0200_0000).recheck_held_signals,
+            write32(&mut dma, cnt(1), 1).recheck_held_signals
         ),
         (true, true)
     );
@@ -1795,5 +1795,11 @@ fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_held
 #[test]
 fn given_a_write_to_a_fill_register_when_it_returns_then_it_does_not_ask_for_a_recheck() {
     let mut dma = Dma::<true>::new();
-    assert!(!write32(&mut dma, fill(0), 0xDEAD_BEEF).recheck_held);
+    assert!(!write32(&mut dma, fill(0), 0xDEAD_BEEF).recheck_held_signals);
+}
+
+#[test]
+fn given_a_write_to_a_channel_register_when_it_returns_then_it_does_not_ask_for_the_requests() {
+    let mut dma = Dma::<true>::new();
+    assert!(!write32(&mut dma, cnt(1), 1).recheck_held_requests);
 }

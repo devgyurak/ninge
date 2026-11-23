@@ -549,13 +549,13 @@ fn write_effect(gpu: &mut Gpu3d, offset: u32, value: u32) -> Effect {
 #[test]
 fn given_a_gxstat_write_when_it_returns_then_it_asks_for_the_held_requests_to_be_rechecked() {
     let mut gpu = Gpu3d::new();
-    assert!(write_effect(&mut gpu, GXSTAT, 1 << 30).recheck_held);
+    assert!(write_effect(&mut gpu, GXSTAT, 1 << 30).recheck_held_requests);
 }
 
 #[test]
 fn given_a_gxfifo_write_when_it_returns_then_it_asks_for_the_held_requests_to_be_rechecked() {
     let mut gpu = Gpu3d::new();
-    assert!(write_effect(&mut gpu, GXFIFO, 0).recheck_held);
+    assert!(write_effect(&mut gpu, GXFIFO, 0).recheck_held_requests);
 }
 
 #[test]
@@ -565,7 +565,10 @@ fn given_the_geometry_block_unpowered_when_gxstat_is_written_then_it_still_asks_
     cx.lines.geometry_powered = false;
     let effect = gpu.write(GXSTAT, Width::Word, 1 << 30, cx);
     assert_eq!(
-        (effect.recheck_held, Device::<true>::held_requests(&gpu)),
+        (
+            effect.recheck_held_requests,
+            Device::<true>::held_requests(&gpu)
+        ),
         (true, Requests::default())
     );
 }
@@ -760,4 +763,10 @@ fn parameter_count_failures() -> Vec<(u8, Option<u8>)> {
 #[test]
 fn given_every_byte_when_its_parameter_count_is_looked_up_then_it_matches_the_command_table() {
     assert_eq!(parameter_count_failures(), vec![]);
+}
+
+#[test]
+fn given_a_gxstat_write_when_it_returns_then_it_does_not_ask_for_the_signals() {
+    let mut gpu = Gpu3d::new();
+    assert!(!write_effect(&mut gpu, GXSTAT, 1 << 30).recheck_held_signals);
 }

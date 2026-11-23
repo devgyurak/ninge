@@ -256,7 +256,7 @@ impl<const ARM9: bool> Device<ARM9> for InterruptController<ARM9> {
             Effect::default()
         });
         Effect {
-            recheck_held: true,
+            recheck_held_requests: true,
             ..effect
         }
     }

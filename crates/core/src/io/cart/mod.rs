@@ -593,7 +593,7 @@ impl<const ARM9: bool> Device<ARM9> for Cart {
     }
 
     /// The word waiting for the CPU that owns the slot, as a level: a channel enabled later takes
-    /// it ([`Effect::recheck_held`]).
+    /// it ([`Effect::recheck_held_signals`]).
     fn held_signals(&self) -> Signals {
         if self.word_waiting::<ARM9>() {
             Signals::of(word_signal(ARM9))

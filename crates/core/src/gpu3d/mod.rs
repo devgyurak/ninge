@@ -460,7 +460,7 @@ impl Device<true> for Gpu3d {
     /// make the FIFO IRQ's condition true ([`Device::held_requests`]).
     fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         Effect {
-            recheck_held: true,
+            recheck_held_requests: true,
             ..self.write_registers(offset, width, value, cx)
         }
     }

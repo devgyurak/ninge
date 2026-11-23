@@ -37,7 +37,8 @@ pub struct Options {
 
 /// Parses the arguments after the program name: none shows the dummy pattern, one path is the ROM,
 /// `--save PATH` and `--save-type TYPE` (which need a ROM) name the save file and chip, and
-/// `--no-audio` (with or without a ROM) opens no sound device. More than one path, or any other option, is a usage error.
+/// `--no-audio` (with or without a ROM) opens no sound device. More than one path, or any other
+/// option, is a usage error.
 pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, UsageError> {
     let mut args = args.into_iter();
     let mut options = Options::default();

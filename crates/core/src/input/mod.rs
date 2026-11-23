@@ -95,6 +95,10 @@ pub struct Input {
     pub touch: Option<Touch>,
     /// Whether the hinge is closed (EXTKEYIN bit 7).
     pub hinge_closed: bool,
+    /// Whether the player is blowing into the microphone. The touch controller's AUX channel
+    /// turns it into samples while the microphone amplifier is on (`touch-power.md`, "The
+    /// microphone").
+    pub mic: bool,
     /// The host's wall-clock time for this frame, in whole seconds since 2000-01-01 00:00:00 in the
     /// host's local time: a plain number, with no time zone in the core. The clock chip shows this
     /// plus whatever the program set it by (`rtc.md`, "How the model gets its time"); the default
@@ -110,6 +114,7 @@ impl Input {
             buttons: Buttons::empty(),
             touch: None,
             hinge_closed: false,
+            mic: false,
             wall_time: 0,
         }
     }
@@ -132,6 +137,13 @@ impl Input {
     #[must_use]
     pub const fn with_hinge_closed(mut self, hinge_closed: bool) -> Self {
         self.hinge_closed = hinge_closed;
+        self
+    }
+
+    /// This input with the player blowing into the microphone or not.
+    #[must_use]
+    pub const fn with_mic(mut self, mic: bool) -> Self {
+        self.mic = mic;
         self
     }
 

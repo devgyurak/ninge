@@ -7,6 +7,7 @@
 //! (AGENTS.md §2).
 
 use crate::app::App;
+use crate::audio::sink::NoAudio;
 use crate::gamepad::Gamepads;
 use crate::handoff::Handoff;
 use crate::kitty;
@@ -17,7 +18,8 @@ use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::threads::{
-    HostEvent, INPUT_POLL, StopGuard, forward_event, forward_pads, run_emu_and_save, run_render,
+    HostEvent, INPUT_POLL, Pace, StopGuard, forward_event, forward_pads, run_emu_and_save,
+    run_render,
 };
 use crate::transfer::{ShmSink, Transfer};
 use anyhow::Context as _;
@@ -284,7 +286,10 @@ fn run_threads<S: ShmSink + Send>(
                 app,
                 &rx,
                 &handoff,
-                &mut pacer,
+                &mut Pace {
+                    pacer: &mut pacer,
+                    sink: &mut NoAudio,
+                },
                 &stop,
                 Instant::now,
                 thread::sleep,

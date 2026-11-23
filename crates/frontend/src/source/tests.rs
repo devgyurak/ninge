@@ -63,6 +63,7 @@ fn options(save: PathBuf, save_type: Option<ninge_core::cart::SaveType>) -> Opti
         rom: Some(smoke_rom()),
         save: Some(save),
         save_type,
+        ..Options::default()
     }
 }
 

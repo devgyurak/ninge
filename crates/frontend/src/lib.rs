@@ -7,8 +7,8 @@
 //! The original vertical layout; other layout modes are #62 and adaptive output rate #63. Three
 //! threads (#218): emu runs the machine, render writes the frames and draws, input reads the
 //! terminal and the pads ([`threads`]). Frames pass from emu to render through a triple buffer
-//! ([`handoff`]), and the emu thread's rate comes from a [`pacing::Pacer`], which audio pacing
-//! (#47) will replace. Frames go over shared memory when the terminal accepts it and as zlib
+//! ([`handoff`]), and the emu thread's rate comes from a [`pacing::Pacer`]: the sound device's
+//! ring when there is one ([`audio`], #47), the machine's frame period otherwise. Frames go over shared memory when the terminal accepts it and as zlib
 //! otherwise ([`transfer`], #6).
 
 pub mod app;

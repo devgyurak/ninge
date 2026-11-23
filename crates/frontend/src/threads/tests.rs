@@ -2,7 +2,8 @@
 //! Tests of `threads`: each loop is driven directly, with no thread spawned.
 
 use super::*;
-use crate::pacing::FramePacer;
+use crate::audio::sink::NoAudio;
+use crate::pacing::{AudioPacer, FramePacer, Pacing};
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::transfer::{NoShm, Transfer};
@@ -10,6 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifi
 use ninge_core::Buttons;
 use ratatui::backend::TestBackend;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::channel;
 
 fn size() -> TermSize {
@@ -96,7 +98,10 @@ fn run_emu_thread(
         &mut app,
         &rx,
         &handoff,
-        &mut FramePacer::new(Instant::now()),
+        &mut Pace {
+            pacer: &mut FramePacer::new(Instant::now()),
+            sink: &mut NoAudio,
+        },
         &stop,
         Instant::now,
         &mut sleep,
@@ -188,7 +193,10 @@ fn given_frames_when_the_emu_runs_then_each_frame_publishes_a_snapshot_and_waits
         &mut app,
         &rx,
         &handoff,
-        &mut FramePacer::new(started),
+        &mut Pace {
+            pacer: &mut FramePacer::new(started),
+            sink: &mut NoAudio,
+        },
         &AtomicBool::new(false),
         || started,
         |wait| {
@@ -201,6 +209,123 @@ fn given_frames_when_the_emu_runs_then_each_frame_publishes_a_snapshot_and_waits
         (shown, waits.into_inner()),
         (Some(true), vec![crate::pacing::FRAME_TIME])
     );
+}
+
+// ----------------------------------------------------------------------------------- audio
+
+/// A sink that keeps what each frame handed it.
+#[derive(Default)]
+struct Recorder {
+    frames: Vec<Vec<i16>>,
+}
+
+impl AudioSink for Recorder {
+    fn push(&mut self, samples: &[i16]) {
+        self.frames.push(samples.to_vec());
+    }
+}
+
+/// A sleep that sets `failed` after `fail_after` frames and quits after `quit_after`.
+fn fail_then_quit(
+    failed: Arc<AtomicBool>,
+    tx: Sender<HostEvent>,
+    fail_after: u32,
+    quit_after: u32,
+) -> impl FnMut(Duration) {
+    let mut count = 0;
+    move |_| {
+        count += 1;
+        if count == fail_after {
+            failed.store(true, Ordering::Release);
+        }
+        if count == quit_after {
+            tx.send(HostEvent::Action(Action::Quit)).expect("receiver");
+        }
+    }
+}
+
+/// What the sink got when `app` ran under `pacer` until `quit_after` frames had run; `fail_after`
+/// frames in, `failed` is set.
+fn sunk_frames(
+    mut app: App,
+    pacer: &mut impl Pacer,
+    failed: &Arc<AtomicBool>,
+    fail_after: u32,
+    quit_after: u32,
+) -> Vec<Vec<i16>> {
+    let (tx, rx) = channel();
+    let mut sink = Recorder::default();
+    run_emu(
+        &mut app,
+        &rx,
+        &Handoff::new(Snapshot::default),
+        &mut Pace {
+            pacer,
+            sink: &mut sink,
+        },
+        &AtomicBool::new(false),
+        Instant::now,
+        fail_then_quit(Arc::clone(failed), tx, fail_after, quit_after),
+    );
+    sink.frames
+}
+
+fn smoke_app() -> App {
+    let machine = crate::source::boot(rom("smoke.nds")).expect("valid header");
+    App::new(size()).with_source(Source::Machine(Box::new(machine)))
+}
+
+/// A pacing that follows a ring that is always empty (so it never waits) until `failed` is set.
+fn audio_pacing(failed: &Arc<AtomicBool>) -> Pacing<fn() -> usize> {
+    let pacer = AudioPacer::new((|| 0) as fn() -> usize, 2_400, 48_000);
+    Pacing::audio(pacer, Arc::clone(failed), Instant::now())
+}
+
+/// The audio of the first `frames` frames of the smoke ROM on a bare machine.
+fn reference_audio(frames: usize) -> Vec<Vec<i16>> {
+    let mut machine = crate::source::boot(rom("smoke.nds")).expect("valid header");
+    (0..frames)
+        .map(|_| {
+            machine.run_frame(ninge_core::Input::default());
+            machine.audio().to_vec()
+        })
+        .collect()
+}
+
+#[test]
+fn given_audio_pacing_when_frames_run_then_each_frames_audio_reaches_the_sink_in_order() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let got = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 99, 3);
+    assert_eq!(got, reference_audio(3));
+}
+
+#[test]
+fn given_no_rom_when_frames_run_under_audio_pacing_then_nothing_is_pushed() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let got = sunk_frames(App::new(size()), &mut audio_pacing(&failed), &failed, 99, 3);
+    assert_eq!(got, Vec::<Vec<i16>>::new());
+}
+
+#[test]
+fn given_frame_pacing_when_frames_run_then_nothing_is_pushed() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let got = sunk_frames(
+        smoke_app(),
+        &mut FramePacer::new(Instant::now()),
+        &failed,
+        99,
+        3,
+    );
+    assert_eq!(got, Vec::<Vec<i16>>::new());
+}
+
+#[test]
+fn given_the_pacing_falls_back_when_more_frames_run_then_nothing_more_is_pushed() {
+    let failed = Arc::new(AtomicBool::new(false));
+    // Frames 1 and 2 are pushed; `failed` is set while the second one waits, so frame 3 starts on
+    // frame pacing and frame 4 too.
+    let got = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 2, 4);
+    assert_eq!(got, reference_audio(2));
 }
 
 #[test]

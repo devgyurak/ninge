@@ -61,7 +61,10 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
           # macOS runs at most five jobs at once on this plan, across every run in progress.
-          SHARDS: 4
+          # Two is enough since the integration tests stopped being instrumented: a shard's
+          # tests take well under a minute, and the rest of a job (setup, lint, the two builds)
+          # is spent once per shard whatever the count.
+          SHARDS: 2
         run: |
           DOCS_ONLY=false
           if python3 scripts/docs_only.py "$BASE"; then

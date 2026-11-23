@@ -295,6 +295,54 @@ fn given_an_adpcm_savestate_mid_playback_when_loaded_then_the_next_frame_matches
 }
 
 #[test]
+fn given_a_psg_channel_at_one_sample_per_output_when_a_frame_runs_then_the_audio_is_its_wave() {
+    // TMR FE00h is one wave position per output sample; duty 3 is four LOW then four HIGH. Channel
+    // 8 started at 2048, so the first output sample is its first position.
+    let mut m = machine();
+    let channel_8 = SOUND0CNT + 8 * 0x10;
+    m.bus7(2_048).write16(channel_8 + 8, 0xFE00);
+    m.bus7(2_048)
+        .write32(channel_8, 1 << 31 | 1 << 27 | 3 << 29 | 3 << 24);
+    m.run_frame(crate::Input::new());
+    let low = -0x7FFF;
+    assert_eq!(
+        &m.audio()[..16],
+        &[
+            low, low, low, low, low, low, low, low, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF,
+            0x7FFF, 0x7FFF
+        ]
+    );
+}
+
+#[test]
+fn given_a_noise_savestate_mid_playback_when_loaded_then_the_next_frame_matches_an_uninterrupted_run()
+ {
+    let build = || {
+        let mut m = machine();
+        let channel_14 = SOUND0CNT + 14 * 0x10;
+        m.bus7(2_048).write16(channel_14 + 8, 0xFFF0);
+        m.bus7(2_048)
+            .write32(channel_14, 1 << 31 | 1 << 27 | 3 << 29);
+        m
+    };
+    let mut straight = build();
+    straight.run_frame(crate::Input::new());
+    let state = straight.save_state();
+    let mut loaded = machine();
+    let result = loaded.load_state(&state);
+    straight.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
+    assert_eq!(
+        (
+            result,
+            loaded.audio() == straight.audio(),
+            loaded.save_state() == straight.save_state()
+        ),
+        (Ok(()), true, true)
+    );
+}
+
+#[test]
 fn given_a_loaded_state_when_a_frame_runs_then_the_audio_buffer_keeps_its_reserved_capacity() {
     let mut saver = machine();
     saver.run_frame(crate::Input::new());

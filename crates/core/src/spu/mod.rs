@@ -14,11 +14,13 @@
 // TODO(phase6): the capture writes replace the capture's lazy end time with a real position (#46).
 
 mod adpcm;
+mod psg;
 
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 pub use adpcm::Adpcm;
+pub use psg::Noise;
 
 /// SOUND0CNT, the first register of the window, at `0400_0400h` (`sound-registers.md`, "The
 /// channels").
@@ -67,6 +69,10 @@ const CNT_FORMAT_MASK: u32 = 0b11;
 const FORMAT_PCM8: u32 = 0;
 const FORMAT_PCM16: u32 = 1;
 const FORMAT_ADPCM: u32 = 2;
+/// PSG on channels 8-13, noise on 14-15 (`spu.md`, "PSG", "Noise").
+const FORMAT_PSG: u32 = 3;
+const PSG_CHANNELS: std::ops::RangeInclusive<u8> = 8..=13;
+const NOISE_CHANNELS: std::ops::RangeInclusive<u8> = 14..=15;
 /// SOUNDxCNT bit 15: keep the last sample after a one-shot ends (`spu.md`, "Position").
 const CNT_HOLD: u32 = 1 << 15;
 /// SOUNDxCNT bits 0-6, 8-9 and 16-22: volume, divider, panning.
@@ -138,6 +144,14 @@ enum Position {
     Last(u64),
 }
 
+/// The generators a channel advances with the sample clock: the IMA-ADPCM decoder and the noise
+/// register. A channel uses at most one, by its format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Decoders {
+    adpcm: Adpcm,
+    noise: Noise,
+}
+
 /// What a channel latches when it starts: the registers that decide where each sample comes from.
 /// A write to them while the sound plays does not move it (`spu.md`, "Model"). Volume, divider,
 /// panning, hold and duty are not here: they are read live from SOUNDxCNT.
@@ -147,6 +161,8 @@ struct Latched {
     pnt: u32,
     len: u32,
     format: u32,
+    /// The channel's number, which decides what format 3 is.
+    channel: u8,
     one_shot: bool,
     /// Master cycles per sample.
     period: u64,
@@ -163,8 +179,9 @@ pub struct Channel {
     /// Master time of the write that started the sound; 0 while stopped.
     start: u64,
     latched: Latched,
-    /// The IMA-ADPCM decoder, advanced as the sample clock runs; unused by the other formats.
-    adpcm: Adpcm,
+    /// The IMA-ADPCM decoder and the noise register, advanced as the sample clock runs; each is
+    /// unused by the other formats.
+    decoders: Decoders,
     /// Master time the busy bit clears, [`NEVER`] if it does not, 0 while stopped. Computed once at
     /// the start from the latched registers, so the busy bit and the output share one position.
     end: u64,
@@ -272,10 +289,26 @@ impl Channel {
         Some((now - self.start) / self.latched.period)
     }
 
+    /// Whether the latched channel is one that makes format 3 sound: PSG on 8-13, noise on 14-15
+    /// (`spu.md`, "Format 3 on channels 0-7").
+    // TODO(hw-unverified): format 3 on channels 0-7 is silent and busy (`spu.md`, "Unverified").
+    fn generates(&self) -> bool {
+        PSG_CHANNELS.contains(&self.latched.channel)
+            || NOISE_CHANNELS.contains(&self.latched.channel)
+    }
+
     /// Where the data position is after `elapsed` samples of the sample clock (`spu.md`,
     /// "Position"). The sizes come from the format; the loop part is what follows the PNT part.
     fn position(&self, elapsed: u64) -> Position {
         let latched = &self.latched;
+        // PSG and noise have no length: the repeat mode, PNT and LEN are ignored (`spu.md`, "PSG").
+        if latched.format == FORMAT_PSG {
+            return if self.generates() {
+                Position::At(elapsed)
+            } else {
+                Position::Silent
+            };
+        }
         let words = u64::from(latched.pnt) + u64::from(latched.len);
         // Below the minimum length nothing plays (`spu.md`, "Position").
         // TODO(hw-unverified): GBATEK gives this for a one-shot; a loop below it is silent here too
@@ -324,10 +357,9 @@ impl Channel {
     /// it is silent. `read` is the ARM7's side-effect-free byte read of the source data.
     ///
     /// PCM is a pure function of the start time, the latched registers and `now`; nothing is
-    /// stepped. IMA-ADPCM is the value its decoder holds, so [`Channel::advanced`] must have caught
-    /// up to `now` first. After a one-shot ends the sample is 0, or the last one with Hold set
+    /// stepped. IMA-ADPCM and noise are the value their generator holds, so [`Channel::advanced`]
+    /// must have caught up to `now` first. After a one-shot ends the sample is 0, or the last one with Hold set
     /// (`spu.md`, "Position").
-    // TODO(phase6): PSG and noise are silent until their own step of #45 lands.
     pub fn sample(&self, now: u64, read: impl Fn(u32) -> u8) -> i32 {
         let Some(elapsed) = self.elapsed(now) else {
             return 0;
@@ -335,6 +367,13 @@ impl Channel {
         let (Position::At(index) | Position::Last(index)) = self.position(elapsed) else {
             return 0;
         };
+        if self.latched.format == FORMAT_PSG {
+            return if PSG_CHANNELS.contains(&self.latched.channel) {
+                psg::duty_level(elapsed, self.duty())
+            } else {
+                self.decoders.noise.level()
+            };
+        }
         let sad = self.latched.sad;
         // TODO(hw-unverified): a source address the ARM7 bus does not map reads what the bus's read
         // gives there (`spu.md`, "Unverified").
@@ -344,30 +383,41 @@ impl Channel {
                 let at = sad.wrapping_add((index * 2) as u32);
                 i32::from(i16::from_le_bytes([read(at), read(at.wrapping_add(1))]))
             }
-            FORMAT_ADPCM => self.adpcm.pcm(),
+            FORMAT_ADPCM => self.decoders.adpcm.pcm(),
             _ => 0,
         }
     }
 
-    /// The IMA-ADPCM decoder state after catching up with the sample clock at master time `now`:
-    /// one decode per elapsed sample, the header read at the first (`spu.md`, "IMA-ADPCM"). A
+    /// The generators after catching up with the sample clock at master time `now`: the IMA-ADPCM
+    /// decoder takes one decode per elapsed sample, the header read at the first (`spu.md`,
+    /// "IMA-ADPCM"), and the noise register one step per elapsed sample (`spu.md`, "Noise"). A
     /// channel of another format, or one not playing, returns its state as it is. Pure: the caller
-    /// stores the result ([`Spu::set_adpcm`]), so the read of memory and the write of the state do
-    /// not overlap.
+    /// stores the result ([`Spu::set_decoders`]), so the read of memory and the write of the state
+    /// do not overlap.
     ///
     /// The cost is the samples elapsed since the last call, at most a few hundred between two
     /// output samples; no allocation.
-    // TODO(hw-unverified): the header is read when the first output sample after the start catches
-    // up, not at the start, and what an ADPCM loop whose start is the header does (`spu.md`,
-    // "Unverified").
-    pub fn advanced(&self, now: u64, read: impl Fn(u32) -> u8) -> Adpcm {
-        let mut state = self.adpcm;
-        let Some(elapsed) = self
-            .elapsed(now)
-            .filter(|_| self.latched.format == FORMAT_ADPCM)
-        else {
-            return state;
+    // TODO(hw-unverified): the ADPCM header is read when the first output sample after the start
+    // catches up, not at the start, and what an ADPCM loop whose start is the header does
+    // (`spu.md`, "Unverified").
+    pub fn advanced(&self, now: u64, read: impl Fn(u32) -> u8) -> Decoders {
+        let mut decoders = self.decoders;
+        let Some(elapsed) = self.elapsed(now) else {
+            return decoders;
         };
+        match self.latched.format {
+            FORMAT_ADPCM => decoders.adpcm = self.advance_adpcm(decoders.adpcm, elapsed, read),
+            FORMAT_PSG if NOISE_CHANNELS.contains(&self.latched.channel) => {
+                while decoders.noise.ticks <= elapsed {
+                    decoders.noise.step();
+                }
+            }
+            _ => {}
+        }
+        decoders
+    }
+
+    fn advance_adpcm(&self, mut state: Adpcm, elapsed: u64, read: impl Fn(u32) -> u8) -> Adpcm {
         let sad = self.latched.sad;
         let loop_start = ADPCM_PER_WORD * u64::from(self.latched.pnt).saturating_sub(1);
         while state.ticks <= elapsed {
@@ -387,9 +437,14 @@ impl Channel {
         state
     }
 
-    /// The decoder state (`spu.md`, "IMA-ADPCM"), for the debugger.
+    /// The IMA-ADPCM decoder state (`spu.md`, "IMA-ADPCM"), for the debugger.
     pub const fn adpcm(&self) -> &Adpcm {
-        &self.adpcm
+        &self.decoders.adpcm
+    }
+
+    /// The noise register (`spu.md`, "Noise"), for the debugger.
+    pub const fn noise(&self) -> &Noise {
+        &self.decoders.noise
     }
 
     /// The end time of a sound that starts at `now` with the registers as they are.
@@ -415,14 +470,15 @@ impl Channel {
     /// Latches the registers a started sound reads from, at master time `now`.
     // TODO(hw-unverified): SAD, PNT, LEN, TMR, the format and the repeat mode are read at the start
     // and a write while the sound plays does not move it (`spu.md`, "Unverified").
-    fn latch(&mut self, now: u64) {
+    fn latch(&mut self, now: u64, channel: u8) {
         self.start = now;
-        self.adpcm = Adpcm::default();
+        self.decoders = Decoders::default();
         self.latched = Latched {
             sad: self.sad,
             pnt: u32::from(self.pnt),
             len: self.len,
             format: self.format(),
+            channel,
             one_shot: self.repeat_mode() == REPEAT_ONE_SHOT,
             period: ticks_per_sample(self.tmr),
         };
@@ -520,12 +576,12 @@ impl Spu {
         Self::default()
     }
 
-    /// Stores the IMA-ADPCM decoder states [`Channel::advanced`] returned, one per channel.
-    pub(crate) fn set_adpcm(&mut self, states: [Adpcm; CHANNELS]) {
+    /// Stores the generator states [`Channel::advanced`] returned, one per channel.
+    pub(crate) fn set_decoders(&mut self, states: [Decoders; CHANNELS]) {
         self.channels
             .iter_mut()
             .zip(states)
-            .for_each(|(channel, state)| channel.adpcm = state);
+            .for_each(|(channel, state)| channel.decoders = state);
     }
 
     /// Channel `index` (0-15).
@@ -621,14 +677,14 @@ impl Spu {
                 // (`spu.md`, "Unverified").
                 match (was_busy, started) {
                     (false, true) => {
-                        channel.latch(now);
+                        channel.latch(now, (offset >> CHANNEL_STRIDE_SHIFT) as u8);
                         channel.end = channel.end_from(now);
                     }
                     (true, true) => {}
                     (_, false) => {
                         channel.start = 0;
                         channel.latched = Latched::default();
-                        channel.adpcm = Adpcm::default();
+                        channel.decoders = Decoders::default();
                         channel.end = 0;
                     }
                 }
@@ -670,7 +726,8 @@ impl Checked for Spu {
                 && c.sad & !SAD_MASK == 0
                 && c.len & !LEN_MASK == 0
                 && (c.cnt & CNT_START != 0 || (c.end == 0 && c.start == 0))
-                && c.adpcm.well_formed()
+                && c.decoders.adpcm.well_formed()
+                && c.decoders.noise.well_formed()
         });
         let captures = self.captures.iter().all(|c| {
             c.cnt & !CAP_MASK == 0

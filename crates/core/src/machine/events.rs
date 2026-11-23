@@ -102,7 +102,7 @@ impl Machine {
         let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
         let decoders = std::array::from_fn(|x| io.spu().channel(x).advanced(time, read));
-        self.io.spu_mut().set_adpcm(decoders);
+        self.io.spu_mut().set_decoders(decoders);
         let spu = self.io.spu();
         let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];

@@ -14,6 +14,7 @@
 // TODO(phase6): the capture writes replace the capture's lazy end time with a real position (#46).
 
 mod adpcm;
+mod mixer;
 mod psg;
 
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
@@ -73,6 +74,23 @@ const FORMAT_ADPCM: u32 = 2;
 const FORMAT_PSG: u32 = 3;
 const PSG_CHANNELS: std::ops::RangeInclusive<u8> = 8..=13;
 const NOISE_CHANNELS: std::ops::RangeInclusive<u8> = 14..=15;
+/// SOUNDCNT bits 0-6: the master volume; 8-9 and 10-11: where the left and the right output come
+/// from; 12 and 13: channel 1 and channel 3 are not sent to the mixer; 15: master enable
+/// (`spu.md`, "The mixer", "The gates").
+const SOUNDCNT_VOLUME_MASK: u16 = 0x7F;
+const SOUNDCNT_LEFT_SHIFT: u16 = 8;
+const SOUNDCNT_RIGHT_SHIFT: u16 = 10;
+const SOUNDCNT_SOURCE_MASK: u16 = 0b11;
+const SOUNDCNT_CH1_NOT_MIXED: u16 = 1 << 12;
+const SOUNDCNT_CH3_NOT_MIXED: u16 = 1 << 13;
+const SOUNDCNT_ENABLE: u16 = 1 << 15;
+/// The output sources of bits 8-11: the mixer, channel 1, channel 3, or both of them.
+const SOURCE_CH1: u16 = 1;
+const SOURCE_CH3: u16 = 2;
+const SOURCE_BOTH: u16 = 3;
+/// The channels SOUNDCNT can route around the mixer.
+const CHANNEL_1: usize = 1;
+const CHANNEL_3: usize = 3;
 /// SOUNDxCNT bit 15: keep the last sample after a one-shot ends (`spu.md`, "Position").
 const CNT_HOLD: u32 = 1 << 15;
 /// SOUNDxCNT bits 0-6, 8-9 and 16-22: volume, divider, panning.
@@ -592,6 +610,62 @@ impl Spu {
     /// Capture unit `index` (0 or 1).
     pub fn capture(&self, index: usize) -> &Capture {
         &self.captures[index % CAPTURES]
+    }
+
+    /// The stereo output sample for the channels' PCM16 values `samples` (`spu.md`, "The mixer"):
+    /// `[left, right]` as `i16`, the medium level at zero. `audible` is the digital gates outside
+    /// the unit, the speakers (POWCNT2) and the amplifier, both on; with it off the output is 0.
+    /// With the master enable off the mixer is not used and the level is the bias alone.
+    ///
+    /// Pure and allocation-free: this runs once per output sample.
+    // TODO(hw-unverified): a silenced output is 0, and the master-enable-off output is the bias
+    // alone (`spu.md`, "Unverified").
+    pub fn output(&self, samples: &[i32; CHANNELS], audible: bool) -> [i16; 2] {
+        if !audible {
+            return [0, 0];
+        }
+        let bias = self.bias;
+        if self.cnt & SOUNDCNT_ENABLE == 0 {
+            let silent = mixer::to_i16(mixer::level(0, bias));
+            return [silent, silent];
+        }
+        let mut mixed = [0i64; 2];
+        let mut routed = [(0i64, 0i64); CHANNELS];
+        self.channels
+            .iter()
+            .zip(samples)
+            .enumerate()
+            .for_each(|(x, (channel, &sample))| {
+                let (left, right) = mixer::channel(
+                    sample,
+                    channel.divider(),
+                    channel.volume(),
+                    channel.panning(),
+                );
+                routed[x] = (left, right);
+                let not_mixed = match x {
+                    CHANNEL_1 => self.cnt & SOUNDCNT_CH1_NOT_MIXED != 0,
+                    CHANNEL_3 => self.cnt & SOUNDCNT_CH3_NOT_MIXED != 0,
+                    _ => false,
+                };
+                if !not_mixed {
+                    mixed[0] += left;
+                    mixed[1] += right;
+                }
+            });
+        let pick = |shift: u16, side: fn((i64, i64)) -> i64, mix: i64| {
+            let (ch1, ch3) = (side(routed[CHANNEL_1]), side(routed[CHANNEL_3]));
+            match (self.cnt >> shift) & SOUNDCNT_SOURCE_MASK {
+                SOURCE_CH1 => ch1,
+                SOURCE_CH3 => ch3,
+                SOURCE_BOTH => ch1 + ch3,
+                _ => mix,
+            }
+        };
+        let master = u32::from(self.cnt & SOUNDCNT_VOLUME_MASK);
+        let left = pick(SOUNDCNT_LEFT_SHIFT, |pair| pair.0, mixed[0]);
+        let right = pick(SOUNDCNT_RIGHT_SHIFT, |pair| pair.1, mixed[1]);
+        [left, right].map(|signal| mixer::to_i16(mixer::level(mixer::master(signal, master), bias)))
     }
 
     /// SOUNDCNT as stored.

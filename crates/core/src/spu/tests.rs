@@ -948,3 +948,163 @@ fn given_a_noise_register_wider_than_15_bits_when_checked_then_the_device_is_not
     spu.channels[14].decoders.noise.x = 0x8000;
     assert!(!spu.well_formed(0));
 }
+
+// ------------------------------------------------------------------------------------- the mixer
+//
+// `Spu::output` from the per-field arithmetic of `spu/mixer/tests.rs`. With volume 127, panning 0,
+// master 127 and bias 200h, a PCM16 sample `s` on the left comes out as `(s >> 6) * 64`: the 10-bit
+// level is `s >> 6` and the `i16` scales it by 64 (`spu.md`, "Output samples").
+
+/// SOUNDCNT with the master enable and master volume 127.
+const MASTER_ON: u32 = 1 << 15 | 0x7F;
+
+/// A device with SOUNDCNT `soundcnt`, SOUNDBIAS `bias` and channel `x`'s SOUNDxCNT (volume, divider
+/// and panning bits only) set from `cnts`.
+fn mixer(soundcnt: u32, bias: u32, cnts: &[(u32, u32)]) -> Spu {
+    let mut spu = Spu::new();
+    write(&mut spu, SOUNDCNT_OFFSET, Width::Half, soundcnt, 0);
+    write(&mut spu, SOUNDBIAS_OFFSET, Width::Half, bias, 0);
+    cnts.iter()
+        .for_each(|&(x, cnt)| write(&mut spu, ch(x, CNT_OFFSET), Width::Word, cnt, 0));
+    spu
+}
+
+/// Full volume, panning 0 (all left).
+const LEFT: u32 = 0x7F;
+/// Full volume, panning 127 (all right).
+const RIGHT: u32 = 0x7F | 127 << 16;
+
+/// The channels' samples with `values` at the listed channels and 0 elsewhere.
+fn samples(values: &[(usize, i32)]) -> [i32; CHANNELS] {
+    let mut all = [0; CHANNELS];
+    values.iter().for_each(|&(x, v)| all[x] = v);
+    all
+}
+
+#[test]
+fn given_a_full_left_channel_when_mixed_then_the_left_carries_the_sample_to_a_multiple_of_64() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, LEFT)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x4000, 0]);
+}
+
+#[test]
+fn given_a_full_right_channel_when_mixed_then_the_right_carries_the_sample() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, RIGHT)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0, 0x4000]);
+}
+
+#[test]
+fn given_a_centered_channel_when_mixed_then_each_side_has_half() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, 0x7F | 64 << 16)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x2000, 0x2000]);
+}
+
+#[test]
+fn given_a_channel_divider_of_16_when_mixed_then_the_level_is_a_sixteenth() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, LEFT | 3 << 8)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x400, 0]);
+}
+
+#[test]
+fn given_a_channel_volume_of_half_when_mixed_then_the_level_is_half() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, 64)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x2000, 0]);
+}
+
+#[test]
+fn given_a_master_volume_of_half_when_mixed_then_the_level_is_half() {
+    let spu = mixer(1 << 15 | 64, 0x200, &[(0, LEFT)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x2000, 0]);
+}
+
+#[test]
+fn given_two_channels_when_mixed_then_they_add_before_the_master_volume() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, LEFT), (2, LEFT)]);
+    assert_eq!(
+        spu.output(&samples(&[(0, 0x2000), (2, 0x1000)]), true),
+        [0x3000, 0]
+    );
+}
+
+#[test]
+fn given_a_sum_beyond_the_range_when_mixed_then_the_level_clips_at_both_ends() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, LEFT), (2, LEFT)]);
+    let high = spu.output(&samples(&[(0, 0x7FFF), (2, 0x7FFF)]), true);
+    let low = spu.output(&samples(&[(0, -0x8000), (2, -0x8000)]), true);
+    assert_eq!((high[0], low[0]), (0x7FC0, -0x8000));
+}
+
+#[test]
+fn given_a_bias_off_the_medium_when_mixed_then_the_level_shifts_by_it() {
+    let spu = mixer(MASTER_ON, 0x280, &[(0, LEFT)]);
+    // 80h above the medium is 128 * 64 = 2000h on both sides, plus the signal on the left.
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x6000, 0x2000]);
+}
+
+#[test]
+fn given_the_master_enable_off_when_mixed_then_the_output_is_the_bias_alone() {
+    let spu = mixer(0x7F, 0x280, &[(0, LEFT)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x4000)]), true), [0x2000, 0x2000]);
+}
+
+#[test]
+fn given_a_gate_closed_when_mixed_then_the_output_is_zero_even_with_the_master_enable_off() {
+    let on = mixer(MASTER_ON, 0x280, &[(0, LEFT)]);
+    let off = mixer(0, 0x280, &[]);
+    assert_eq!(
+        (
+            on.output(&samples(&[(0, 0x4000)]), false),
+            off.output(&samples(&[]), false)
+        ),
+        ([0, 0], [0, 0])
+    );
+}
+
+#[test]
+fn given_the_left_source_set_to_channel_1_when_mixed_then_only_channel_1_reaches_the_left() {
+    let spu = mixer(MASTER_ON | 1 << 8, 0x200, &[(0, LEFT), (1, LEFT)]);
+    assert_eq!(
+        spu.output(&samples(&[(0, 0x2000), (1, 0x1000)]), true),
+        [0x1000, 0]
+    );
+}
+
+#[test]
+fn given_the_sources_channel_3_and_both_when_mixed_then_left_and_right_pick_independently() {
+    // Left from channel 3, right from channels 1 and 3 (both at full right).
+    let spu = mixer(
+        MASTER_ON | 2 << 8 | 3 << 10,
+        0x200,
+        &[(1, RIGHT), (3, RIGHT)],
+    );
+    // Channel 3 at panning 127 is all right: its left is 0 and its right 0x1000; channel 1 right
+    // 0x2000. Left source ch3 -> 0; right source ch1 + ch3 -> 0x3000.
+    assert_eq!(
+        spu.output(&samples(&[(1, 0x2000), (3, 0x1000)]), true),
+        [0, 0x3000]
+    );
+}
+
+#[test]
+fn given_channel_1_not_sent_to_the_mixer_when_mixed_then_the_mixer_omits_it() {
+    let spu = mixer(MASTER_ON | 1 << 12, 0x200, &[(0, LEFT), (1, LEFT)]);
+    assert_eq!(
+        spu.output(&samples(&[(0, 0x2000), (1, 0x1000)]), true),
+        [0x2000, 0]
+    );
+}
+
+#[test]
+fn given_channel_3_not_sent_but_selected_when_mixed_then_the_output_still_has_it() {
+    let spu = mixer(MASTER_ON | 1 << 13 | 2 << 8, 0x200, &[(0, LEFT), (3, LEFT)]);
+    assert_eq!(
+        spu.output(&samples(&[(0, 0x2000), (3, 0x1000)]), true),
+        [0x1000, 0]
+    );
+}
+
+#[test]
+fn given_a_channel_that_is_silent_when_mixed_then_it_adds_nothing() {
+    let spu = mixer(MASTER_ON, 0x200, &[(0, LEFT), (5, LEFT)]);
+    assert_eq!(spu.output(&samples(&[(0, 0x2000)]), true), [0x2000, 0]);
+}

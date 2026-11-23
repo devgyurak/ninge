@@ -181,7 +181,8 @@ channel is not documented.
 - **The end is computed once, at the start.** When bit 31 goes from 0 to 1 the model records
   `end = now + samples * 4 * (10000h - TMR)`, with `now` the master time of the write. A read of
   the register reports busy while the channel has started and `now < end`. No scheduler event and
-  no timer are involved. `TODO(phase6)`: the mixer replaces this with the real playback position.
+  no timer are involved. The playback of a channel (`spu.md`, "Position") uses the same end, so
+  the busy bit and the output agree; a capture keeps this lazy end (`TODO(phase6)`, #46).
 - **A capture is the same**, with the sample rate of channel 1 (capture 0) or channel 3
   (capture 1) taken from their TMR at the moment the capture starts.
 - **The busy bit never clears** for: loop mode, PSG and noise (format 3), the manual (0) and

@@ -55,3 +55,15 @@ fn given_haltcnt_when_read_then_it_reads_zero() {
     let power = written(1, Width::Byte, 0x80);
     assert_eq!(power.peek(1, Width::Byte, cx_at(0)), 0);
 }
+
+#[test]
+fn given_powcnt2_when_bit_0_is_written_then_the_speakers_follow_it() {
+    // Bit 0 is the internal speakers, on at power-on (`spu.md`, "The gates").
+    let speakers = [
+        Power::new().speakers_on(),
+        written(4, Width::Half, 0).speakers_on(),
+        written(4, Width::Half, 2).speakers_on(),
+        written(4, Width::Half, 3).speakers_on(),
+    ];
+    assert_eq!(speakers, [true, false, false, true]);
+}

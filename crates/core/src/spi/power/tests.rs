@@ -223,3 +223,23 @@ fn given_each_backlight_bit_written_alone_when_asked_then_only_that_backlight_is
         ((true, false), (false, true))
     );
 }
+
+#[test]
+fn given_the_amplifier_bits_when_the_register_is_written_then_only_enabled_and_not_muted_is_audible()
+ {
+    // Register 0 bit 0 enables, bit 1 mutes (`spu.md`, "The gates").
+    let audible: Vec<bool> = [0b00, 0b01, 0b10, 0b11]
+        .iter()
+        .map(|&bits| {
+            let mut pm = PowerManagement::new();
+            write_reg(&mut pm, 0, bits);
+            pm.amplifier_audible()
+        })
+        .collect();
+    assert_eq!(audible, vec![false, true, false, false]);
+}
+
+#[test]
+fn given_a_fresh_device_when_asked_then_the_amplifier_is_audible() {
+    assert!(PowerManagement::new().amplifier_audible());
+}

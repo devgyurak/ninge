@@ -158,9 +158,9 @@ These are choices of the emulator. They do not describe a part.
   time of `spi.md` passes.
 - **The microphone is a blow key** ("The microphone", below). Channel 6 returns the middle of the
   range unless the host says the player is blowing and the amplifier is on.
-- **The power register's amplifier bits are stored, not acted on.** They are kept and read back
-  (and shown in the debugger); the sound amplifier is Phase 6 work, and the code site carries
-  `TODO(phase6)`. The shutdown and backlight bits act as the next section says.
+- **The sound amplifier bits gate the sound output.** Bit 0 clear, or bit 1 (mute) set, silences it;
+  the microphone amplifier bits are kept and read back (`spu.md`, "The gates"). The shutdown and
+  backlight bits act as the next section says.
 - **Register 0 starts at `0Dh`.** Direct boot skips the firmware boot, and a program that starts
   after it finds the sound amplifier and both backlights on (`direct-boot.md`, "Devices at entry").
   Registers 2 and 3 start at zero.

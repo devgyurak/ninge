@@ -31,9 +31,13 @@ const GAIN_MASK: u8 = 0b11;
 // TODO(hw-unverified): the bit is sticky and the rest of its frame runs (`touch-power.md`,
 // "Unverified").
 pub const CONTROL_SHUTDOWN: u8 = 1 << 6;
-/// Register 0 bit 0: sound amplifier enable. Stored, not acted on.
-// TODO(phase6): the amplifier decides how audible the sound is (`touch-power.md`).
+/// Register 0 bit 0: sound amplifier enable. With it clear the sound is silent (`spu.md`, "The
+/// gates").
+// TODO(hw-unverified): the original DS is "very silent, but still audible" with it clear; here it
+// is silent (`spu.md`, "Unverified").
 pub const CONTROL_AMP: u8 = 1 << 0;
+/// Register 0 bit 1: sound amplifier mute (original DS); with the amplifier on, muted is silent.
+pub const CONTROL_AMP_MUTE: u8 = 1 << 1;
 /// Register 0 bit 2: lower backlight; 0 = off, 1 = on. The host draws an unlit screen black.
 pub const CONTROL_LOWER_BACKLIGHT: u8 = 1 << 2;
 /// Register 0 bit 3: upper backlight; 0 = off, 1 = on.
@@ -80,6 +84,12 @@ impl PowerManagement {
     /// Register 0 as stored.
     pub const fn control(&self) -> u8 {
         self.control
+    }
+
+    /// Whether the sound amplifier lets the sound through: enabled and not muted (`spu.md`, "The
+    /// gates").
+    pub const fn amplifier_audible(&self) -> bool {
+        self.control & CONTROL_AMP != 0 && self.control & CONTROL_AMP_MUTE == 0
     }
 
     /// Whether the program asked the console to shut down: register 0 bit 6, which no later write

@@ -392,7 +392,6 @@ impl Machine {
     ///
     /// The output rate is one sample per [`OUTPUT_SAMPLE_CYCLES`] master cycles
     /// (`docs/hw/spu.md`, "Output samples"); resampling to a device is the host's (#47).
-    // TODO(phase6): the mixer (#45) makes this the mixed, gated output; for now it is a plain sum.
     pub fn audio(&self) -> &[i16] {
         &self.audio
     }

@@ -1,6 +1,6 @@
 # Device kinds and the rayon exception
 
-Reference detail behind `AGENTS.md` §4 (per-CPU devices) and §2 rule 1 (`rayon`).
+Longer form of `AGENTS.md` §4 (per-CPU devices) and the `rayon` rationale of §2 rule 1.
 
 ## Per-CPU devices
 

@@ -65,8 +65,13 @@ ninge-runner ────┘                        nothing depends on the front
 
 Inside ninge-core, `machine/` holds the one struct that owns all state, `io/` the register
 devices behind one `Device` interface, and each hardware model its own top-level module. The
-module map and where a new device goes (placement) are in
-[docs/contributing/core-layout.md](docs/contributing/core-layout.md).
+full module map is in [docs/contributing/core-layout.md](docs/contributing/core-layout.md).
+
+**Placement.** A hardware model apart from its register window (`cart/`, `gpu2d/`, later `spu/` `gpu3d/`
+`spi/`) is top-level; the registers the bus reaches are its entrance, `io/<device>/`
+(`io/cart/`). A device whose registers are its state (`divsqrt` `keypad` `power` `timers` `ipc`
+`irq` `dma` `timing`) lives wholly in `io/`. A model whose registers are its state may skip the
+entrance and register directly (`gpu2d`).
 
 ### Rules you must keep (plan §4.2, §8)
 
@@ -248,10 +253,16 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
 - **Comments explain why.** Emulator code is full of deliberate oddities (open bus,
   mirroring, an off-by-one that the hardware really has). Cite the `docs/hw/` note so the next
   person does not "fix" it into a regression.
-- **Per-CPU devices.** A device is a per-CPU copy (`Device<const ARM9: bool>`), one instance seen
-  by both CPUs (`fn x<const ARM9: bool>`), or a plain type for one CPU; every device returns the IF
-  bits it raises as an `irq::Requests`, and only `Io::request_irq` hands them to a controller. Which
-  device is which: [docs/contributing/device-kinds.md](docs/contributing/device-kinds.md).
+- **Per-CPU devices.** A device is one of three kinds, by who sees it:
+  - *An independent copy for each CPU*: two instances of `Device<const ARM9: bool>`.
+    `InterruptController` and `Timers`; DMA too.
+  - *Seen by both CPUs*: one instance, with `fn x<const ARM9: bool>` accessors, even when
+    per-CPU registers sit inside it. `Ipc`, and `Timing` (DISPSTAT is per CPU, VCOUNT shared).
+  - *Seen by one CPU*: a plain type, no const generic. `Gpu2d` (ARM9 only); SPI, RTC and SPU
+    (ARM7 only) will be too.
+
+  Every device returns the IF bits it raises as an `irq::Requests` (`Requests::for_cpu::<ARM9>`
+  for a one-CPU device); only `Io::request_irq` hands them to a controller.
 - Visibility is `pub(crate)` by default; `pub` items carry a doc comment.
 - **One module-file style: `mod.rs`.** A module with child modules is a directory with a
   `mod.rs`; a module without children is a single file. Clippy's `self_named_module_files`

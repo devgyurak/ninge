@@ -71,3 +71,42 @@ fn given_a_failed_run_with_no_note_when_the_outcome_is_made_then_the_error_is_un
     let error = outcome(Err(anyhow::anyhow!("draw failed")), None).expect_err("failed");
     assert_eq!(format!("{error:#}"), "draw failed");
 }
+
+#[test]
+fn given_a_refused_device_when_the_sound_note_is_made_then_it_says_why_there_is_no_sound() {
+    assert_eq!(
+        sound_note(Some("no sound output device"), false),
+        Some("no sound: no sound output device".to_string())
+    );
+}
+
+#[test]
+fn given_a_device_that_failed_when_the_sound_note_is_made_then_it_says_the_run_went_on_silent() {
+    assert_eq!(
+        sound_note(None, true),
+        Some("the sound device reported an error; ran without sound".to_string())
+    );
+}
+
+#[test]
+fn given_a_working_device_or_none_wanted_when_the_sound_note_is_made_then_there_is_none() {
+    assert_eq!(sound_note(None, false), None);
+}
+
+#[test]
+fn given_two_notes_when_joined_then_they_are_on_two_lines_and_one_alone_is_kept() {
+    assert_eq!(
+        (
+            join_notes(Some("a".into()), Some("b".into())),
+            join_notes(None, Some("b".into())),
+            join_notes(Some("a".into()), None),
+            join_notes(None, None)
+        ),
+        (
+            Some("a\nb".to_string()),
+            Some("b".to_string()),
+            Some("a".to_string()),
+            None
+        )
+    );
+}

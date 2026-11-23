@@ -34,11 +34,12 @@ in [`docs/STATUS.md`](docs/STATUS.md).
 
 | Works today | Not yet |
 |---|---|
-| Both CPUs (ARMv5TE and ARMv4T) on a deterministic event scheduler | Sound: the registers answer, nothing is played |
-| Both screens in 2D: backgrounds, sprites, windows, blending, display capture | 3D: geometry commands are accepted, nothing is drawn |
-| Keyboard, gamepad and mouse input; the touch screen, the microphone and the lid | Performance work: it is the last phase |
-| Cartridge reads, save chips (EEPROM, FLASH, FRAM) and save files | The debugger |
-| The real-time clock, set from the host's clock | Layouts other than one screen above the other |
+| Both CPUs (ARMv5TE and ARMv4T) on a deterministic event scheduler | 3D: geometry commands are accepted, nothing is drawn |
+| Both screens in 2D: backgrounds, sprites, windows, blending, display capture | Performance work: it is the last phase |
+| Sound: 16 channels (PCM, ADPCM, PSG, noise) and capture, played through the default output device, which also sets the speed | The debugger |
+| Keyboard, gamepad and mouse input; the touch screen, the microphone and the lid | Layouts other than one screen above the other |
+| Cartridge reads, save chips (EEPROM, FLASH, FRAM) and save files | |
+| The real-time clock, set from the host's clock | |
 | HLE BIOS calls, direct boot and synthetic firmware: no dump needed | |
 
 The table describes the `develop` branch. A published release can be older: what each one
@@ -60,8 +61,8 @@ cargo install --locked --path crates/frontend
 ```
 
 macOS (Apple Silicon first) and Linux are supported; Windows is planned. On Linux the gamepad
-support needs the libudev headers to build: install `libudev-dev` and `pkg-config` (Debian and
-Ubuntu names) first.
+support needs the libudev headers to build and the sound output needs the ALSA headers: install
+`libudev-dev`, `libasound2-dev` and `pkg-config` (Debian and Ubuntu names) first.
 
 ## Run
 
@@ -70,7 +71,12 @@ Open Ghostty or kitty, then:
 ```sh
 ninge path/to/program.nds   # run a ROM
 ninge                       # no ROM: show a test pattern
+ninge --no-audio program.nds   # run without opening a sound device
 ```
+
+Sound plays through the default output device, and the device's clock keeps the speed. With
+`--no-audio`, or when no device can be opened, ninge keeps the machine's own frame rate (about
+59.83 Hz) instead and plays nothing.
 
 Quit with `Ctrl-C` or `Ctrl-Q`. ninge runs programs you have the right to run, such as
 homebrew you built yourself; it ships no ROMs and never needs a BIOS or firmware file.

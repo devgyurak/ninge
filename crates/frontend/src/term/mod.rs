@@ -7,12 +7,12 @@
 //! (AGENTS.md §2).
 
 use crate::app::App;
-use crate::audio::sink::NoAudio;
+use crate::audio::device::{Device, use_audio};
+use crate::audio::paced;
 use crate::gamepad::Gamepads;
 use crate::handoff::Handoff;
 use crate::kitty;
 use crate::layout::TermSize;
-use crate::pacing::FramePacer;
 use crate::pen::Unit;
 use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
@@ -34,6 +34,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
@@ -180,8 +181,16 @@ pub fn size() -> io::Result<TermSize> {
     Ok(TermSize::from_window(w.columns, w.rows, w.width, w.height))
 }
 
-/// Runs the TUI until the user quits, showing frames from `source`.
-pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<String>> {
+/// Runs the TUI until the user quits, showing frames from `source`. With `audio` and a ROM it opens
+/// the default sound device and keeps time by it; with no device, or without either, it keeps
+/// time by the machine's frame period.
+pub fn run(source: Source, save: Option<SaveFile>, audio: bool) -> anyhow::Result<Option<String>> {
+    // Before the terminal changes mode: a sound library may print to stderr while it looks for a
+    // device, and that should land on the normal screen.
+    let mut refused = None;
+    let device = use_audio(audio, matches!(source, Source::Machine(_)), || {
+        Device::open().inspect_err(|error| refused = Some(error.to_string()))
+    });
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -221,8 +230,39 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
     app = app.with_gamepads(pads.available(), pads.connected());
     // The save file is written by the emu thread, last and even when render or input failed, so a
     // game's save is not lost; a write failure shows once the terminal is restored.
-    let result = run_threads(&mut app, &mut renderer, &mut terminal, &mut gfx, pads);
-    outcome(result, app.save_note())
+    let result = run_threads(
+        &mut app,
+        &mut renderer,
+        &mut terminal,
+        &mut gfx,
+        pads,
+        device.as_ref(),
+    );
+    let failed = device
+        .as_ref()
+        .is_some_and(|device| device.failed.load(Ordering::Acquire));
+    outcome(
+        result,
+        join_notes(sound_note(refused.as_deref(), failed), app.save_note()),
+    )
+}
+
+/// What to tell the user about the sound once the terminal is restored: why no device was used, or
+/// that the one in use reported an error and the run went on without sound.
+fn sound_note(refused: Option<&str>, failed: bool) -> Option<String> {
+    match (refused, failed) {
+        (Some(why), _) => Some(format!("no sound: {why}")),
+        (None, true) => Some("the sound device reported an error; ran without sound".to_string()),
+        (None, false) => None,
+    }
+}
+
+/// Two notes as one, one per line.
+fn join_notes(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}\n{second}")),
+        (first, second) => first.or(second),
+    }
 }
 
 /// The run's result with the save note: on success the note is handed back to print; on failure it
@@ -256,7 +296,8 @@ fn input_loop(
     Ok(())
 }
 
-/// Runs the emu, render and input threads until one of them ends, then joins all three.
+/// Runs the emu, render and input threads until one of them ends, then joins all three. The emu
+/// thread keeps time by `device`'s ring when there is one; the device's own thread is `cpal`'s.
 ///
 /// A thread that returns, fails or panics sets `stop` through its [`StopGuard`], so the other two
 /// end too; the emu thread still writes the save first. The first failure of render, input and
@@ -267,11 +308,21 @@ fn run_threads<S: ShmSink + Send>(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     gfx: &mut io::Stdout,
     mut pads: Gamepads,
+    device: Option<&Device>,
 ) -> anyhow::Result<()> {
     let stop = AtomicBool::new(false);
     let handoff = Handoff::new(Snapshot::default);
     let (tx, rx) = mpsc::channel();
-    let mut pacer = FramePacer::new(Instant::now());
+    let (mut pacer, mut sink) = paced(
+        device.map(|device| {
+            (
+                Arc::clone(&device.ring),
+                Arc::clone(&device.failed),
+                device.rate,
+            )
+        }),
+        Instant::now(),
+    );
     let joined = |handle: thread::ScopedJoinHandle<'_, anyhow::Result<()>>, name: &str| {
         handle
             .join()
@@ -288,7 +339,7 @@ fn run_threads<S: ShmSink + Send>(
                 &handoff,
                 &mut Pace {
                     pacer: &mut pacer,
-                    sink: &mut NoAudio,
+                    sink: &mut sink,
                 },
                 &stop,
                 Instant::now,

@@ -90,11 +90,12 @@ These are choices of the emulator, made so that capture, busy bit and the mixer 
   event of its own. When that event has computed the 16 channel samples and the mixer output, each
   running capture writes **every slot whose time has passed since the previous output sample**,
   and each of those slots gets the source value of **this** output sample. The slot index is a pure
-  function of the start time, the latched period and `now`; the busy bit uses the same formula, so
-  the two always agree.
+  function of the start time, the latched period and `now`; the busy bit uses the same formula, but
+  the memory is written only at the output-sample event, so a slot can reach memory up to one
+  output sample (2048 master cycles) after the bit says it is done (see "Unverified").
 - **A slot is written when the shared clock completes it**: slot `i` is due once
-  `(i + 1) * period` cycles have passed since the start. A one-shot's busy bit therefore clears at
-  the moment its last slot is written.
+  `(i + 1) * period` cycles have passed since the start. A one-shot's busy bit clears when its last
+  slot is completed; that slot reaches memory at the next output-sample event.
 - **One sample of delay.** A capture written in an output-sample event is read by channel 1 or 3 at
   the next one at the earliest. A program that plays the capture buffer back with channel 1 or 3
   hears it one output sample (2048 master cycles) late. This is the model.
@@ -144,12 +145,19 @@ oracle.
 - **FIFO granularity and timing.** The diagram shows a FIFO between the capture and memory; its
   depth and the moment of the memory write are not given. Samples are written one at a time and at
   once here. — `spu/`, `machine/events.rs`.
+- **When the last slot reaches memory.** The busy bit of a one-shot clears when the shared clock
+  completes the last slot; the write happens at the next output-sample event, up to 2048 master
+  cycles later, so a program that polls the bit and then reads the buffer can see the last slot's
+  old value. Hardware timing is not given. — `machine/events.rs`, `spu/`.
 - **A capture rate faster than the output rate.** The slots between two output samples all get one
   value. — `machine/events.rs`.
 - **The mixer source while the master enable is off, or the speakers are gated.** The capture reads
   the sum regardless here. — `spu/`.
 - **The fraction of a negative PCM8 value.** The model rounds on the two's complement fraction, so
   -5.5 steps gives -5 and -5.50002 gives -6; the rule could instead read the magnitude. — `spu/mixer/`.
+- **The clip keeps the fraction.** The mixer value is clipped to `-8000h.00` .. `7FFF.FFh`; GBATEK
+  names the range without the fraction. — `spu/mixer/`.
+- **The value of a channel `a` that is not playing** is 0 here. — `spu/`.
 - **PCM16 rounding.** The rule for PCM8 is stated; PCM16 drops the fraction by flooring here. —
   `spu/`.
 - **What "channel `a` disabled" means** for the addition. The model uses "not busy"; the SOUNDCNT

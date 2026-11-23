@@ -92,6 +92,9 @@ These are choices of the emulator, made so that capture, busy bit and the mixer 
   and each of those slots gets the source value of **this** output sample. The slot index is a pure
   function of the start time, the latched period and `now`; the busy bit uses the same formula, so
   the two always agree.
+- **A slot is written when the shared clock completes it**: slot `i` is due once
+  `(i + 1) * period` cycles have passed since the start. A one-shot's busy bit therefore clears at
+  the moment its last slot is written.
 - **One sample of delay.** A capture written in an output-sample event is read by channel 1 or 3 at
   the next one at the earliest. A program that plays the capture buffer back with channel 1 or 3
   hears it one output sample (2048 master cycles) late. This is the model.
@@ -103,6 +106,9 @@ These are choices of the emulator, made so that capture, busy bit and the mixer 
   The 8-word FIFO of the diagram is not modeled.
 - **A rate faster than the output rate** (a TMR near `FFFFh`) has several slots to fill in one
   output sample; all of them get the same value.
+- **The mixer source ignores SOUNDCNT bit 15 and the speaker gates.** The capture reads the sum
+  before the master stage, whether or not the master enable is set (`spu.md`, "The gates").
+- **The clip keeps the fraction**: a 16.8 value is clipped to `-8000h.00` .. `7FFF.FFh`.
 - **Disabled** for "ch(a) disabled" means "not busy" in the model: the channel is not playing.
 - **A write of 1 to bit 7 while the capture is busy** keeps the current run (the existing
   behavior of the busy bit).
@@ -131,6 +137,10 @@ oracle.
   once here. — `spu/`, `machine/events.rs`.
 - **A capture rate faster than the output rate.** The slots between two output samples all get one
   value. — `machine/events.rs`.
+- **The mixer source while the master enable is off, or the speakers are gated.** The capture reads
+  the sum regardless here. — `spu/`.
+- **The fraction of a negative PCM8 value.** The model rounds on the two's complement fraction, so
+  -5.5 steps gives -5 and -5.50002 gives -6; the rule could instead read the magnitude. — `spu/mixer/`.
 - **PCM16 rounding.** The rule for PCM8 is stated; PCM16 drops the fraction by flooring here. —
   `spu/`.
 - **What "channel `a` disabled" means** for the addition. The model uses "not busy"; the SOUNDCNT

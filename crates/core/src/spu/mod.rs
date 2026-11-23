@@ -6,17 +6,19 @@
 //! the start and the time of the query (`docs/hw/spu.md`, "Position"): how many samples have
 //! elapsed, and so which sample of the data is playing. The busy bit uses the same elapsed count (an
 //! end time computed once at the start), so the bit and the output cannot disagree, and a savestate
-//! taken mid-playback plays on exactly as an uninterrupted run. Capture units keep the lazy end time.
+//! taken mid-playback plays on exactly as an uninterrupted run. A capture unit is the same: its busy bit
+//! and the slots it has written are one pure function of its start time and what it latched
+//! (`docs/hw/sound-capture.md`, "Model").
 //!
 //! Only the ARM7 sees these registers, so [`Spu`] is a plain type implementing `Device<false>`
 //! (`AGENTS.md` §4, "Per-CPU devices"): the "seen by one CPU" class. It registers directly with
 //! its own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
-// TODO(phase6): the capture writes replace the capture's lazy end time with a real position (#46).
 
 mod adpcm;
 mod mixer;
 mod psg;
 
+use crate::cpu::Bus;
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +127,10 @@ pub const SOUNDCNT_MASK: u16 = 0xBF7F;
 pub const SOUNDBIAS_MASK: u16 = 0x03FF;
 /// SNDCAPxCNT bit 7: start / busy.
 pub const CAP_START: u8 = 1 << 7;
+/// SNDCAPxCNT bit 0: add channel 1 or 3 to channel 0 or 2 (needs bit 7 as well).
+const CAP_ADD: u8 = 1;
+/// SNDCAPxCNT bit 1: 0 = the mixer, 1 = channel 0 or 2.
+const CAP_SOURCE_CHANNEL: u8 = 1 << 1;
 /// SNDCAPxCNT bit 2: 0 = loop, 1 = one-shot.
 const CAP_ONE_SHOT: u8 = 1 << 2;
 /// SNDCAPxCNT bit 3: 0 = PCM16, 1 = PCM8.
@@ -508,13 +514,29 @@ fn ticks_per_sample(tmr: u16) -> u64 {
     TICKS_PER_TMR_STEP * (TMR_PERIOD - u64::from(tmr))
 }
 
-/// One capture unit's registers and the end time of its capture.
+/// What a capture latches when it starts (`sound-capture.md`, "Model"): where it writes, how many
+/// samples the buffer holds, the format and the repeat mode, and the sample period from the shared
+/// TMR. Bit 0 and bit 1 of SNDCAPxCNT are read live, not here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct CaptureLatched {
+    dad: u32,
+    /// Samples the buffer holds: `LEN` words (0 counts as 1) of two PCM16 or four PCM8 samples.
+    samples: u64,
+    pcm8: bool,
+    one_shot: bool,
+    /// Master cycles per sample; 0 while stopped.
+    period: u64,
+}
+
+/// One capture unit's registers, the master time it started and what it latched then.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capture {
     cnt: u8,
     dad: u32,
     len: u16,
-    end: u64,
+    /// Master time of the write that started the capture; 0 while stopped.
+    start: u64,
+    latched: CaptureLatched,
 }
 
 impl Capture {
@@ -544,31 +566,127 @@ impl Capture {
 
     /// The master time the capture ends: `u64::MAX` for a loop, 0 while stopped.
     pub const fn end(&self) -> u64 {
-        self.end
-    }
-
-    /// Whether the capture is busy at master time `now`.
-    pub const fn busy(&self, now: u64) -> bool {
-        self.cnt & CAP_START != 0 && now < self.end
-    }
-
-    /// The end time of a capture that starts at `now`, at the sample rate `tmr` of the shared
-    /// channel.
-    // TODO(hw-unverified): the capture starts at once and reads the rate when it starts
-    // (`sound-registers.md`, "Unverified").
-    fn end_from(&self, now: u64, tmr: u16) -> u64 {
-        if self.cnt & CAP_ONE_SHOT == 0 {
-            return NEVER;
+        if self.cnt & CAP_START == 0 {
+            0
+        } else if !self.latched.one_shot {
+            NEVER
+        } else {
+            self.start
+                .saturating_add(self.latched.samples * self.latched.period)
         }
-        // A length of 0 acts as 1.
-        let words = u64::from(self.len.max(1));
+    }
+
+    /// Whether the capture is busy at master time `now`. A one-shot is busy until every slot of
+    /// its buffer has been written, which is the moment [`Self::written`] reaches the buffer size.
+    pub const fn busy(&self, now: u64) -> bool {
+        self.cnt & CAP_START != 0 && now < self.end()
+    }
+
+    /// The slots written by master time `now`: the samples the shared clock has completed since
+    /// the start, at most the whole buffer for a one-shot. Zero while stopped or before the start
+    /// (the ARM7 can write at a time past the master clock). This is the one formula the busy bit
+    /// and the writes share (`sound-capture.md`, "Model").
+    // TODO(hw-unverified): a capture starts at once, with none of the start delay a channel has
+    // (`sound-capture.md`, "Unverified").
+    pub const fn written(&self, now: u64) -> u64 {
+        if self.cnt & CAP_START == 0 || self.latched.period == 0 || now < self.start {
+            return 0;
+        }
+        let done = (now - self.start) / self.latched.period;
+        if self.latched.one_shot && done > self.latched.samples {
+            self.latched.samples
+        } else {
+            done
+        }
+    }
+
+    /// The slot the next sample goes to at master time `now`, inside the buffer: 0 when stopped.
+    pub const fn position(&self, now: u64) -> u64 {
+        if self.latched.samples == 0 {
+            return 0;
+        }
+        self.written(now) % self.latched.samples
+    }
+
+    /// The address the next sample is written to at master time `now`: `DAD` when stopped.
+    // The debugger's sound panel (#47) will show the position and this address.
+    pub const fn next_address(&self, now: u64) -> u32 {
+        if self.latched.samples == 0 {
+            return self.dad;
+        }
+        self.latched.address(self.position(now))
+    }
+
+    /// Latches the registers a started capture reads from, at master time `now`, with the TMR of
+    /// the channel it shares a timer with.
+    // TODO(hw-unverified): TMR, LEN, DAD and the format are read at the start and a write while the
+    // capture runs does not move it (`sound-capture.md`, "Unverified").
+    fn latch(&mut self, now: u64, tmr: u16) {
         let per_word = if self.cnt & CAP_PCM8 != 0 {
             CAP_SAMPLES_PCM8
         } else {
             CAP_SAMPLES_PCM16
         };
-        now.saturating_add(words * per_word * ticks_per_sample(tmr))
+        self.start = now;
+        self.latched = CaptureLatched {
+            dad: self.dad,
+            // A length of 0 acts as 1.
+            samples: u64::from(self.len.max(1)) * per_word,
+            pcm8: self.cnt & CAP_PCM8 != 0,
+            one_shot: self.cnt & CAP_ONE_SHOT != 0,
+            period: ticks_per_sample(tmr),
+        };
     }
+}
+
+impl CaptureLatched {
+    /// The address of slot `index` of the buffer: a halfword apart for PCM16, a byte for PCM8.
+    const fn address(&self, index: u64) -> u32 {
+        let size = if self.pcm8 { 1 } else { 2 };
+        self.dad.wrapping_add((index as u32).wrapping_mul(size))
+    }
+}
+
+/// What one capture writes at an output sample: `count` slots from `first` with the same `value`
+/// (`sound-capture.md`, "Model"). Plain data computed from `&Spu`, run afterwards against the
+/// ARM7's view of memory, so the device is never borrowed while the bus is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CaptureWrites {
+    latched: CaptureLatched,
+    first: u64,
+    count: u64,
+    /// The PCM16 or PCM8 sample, sign-extended.
+    value: i32,
+}
+
+impl CaptureWrites {
+    /// The address of slot `index`; the buffer wraps to `DAD`.
+    fn address(&self, index: u64) -> u32 {
+        self.latched.address(index % self.latched.samples)
+    }
+
+    /// Writes the slots through `bus`, a sample at a time as a DMA unit would
+    /// (`sound-capture.md`, "Model").
+    // TODO(hw-unverified): the FIFO between the capture and memory is not modeled; the samples are
+    // written one at a time and at once (`sound-capture.md`, "Unverified").
+    pub(crate) fn run<B: Bus>(&self, bus: &mut B) {
+        for slot in self.first..self.first + self.count {
+            let address = self.address(slot);
+            if self.latched.pcm8 {
+                bus.write8(address, self.value as u8);
+            } else {
+                bus.write16(address, self.value as u16);
+            }
+        }
+    }
+}
+
+/// The 16 channels panned and summed: each channel's `(left, right)` and the two mixer sums
+/// before the master stage, in 1/256 units.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Mix {
+    routed: [(i64, i64); CHANNELS],
+    sum: [i64; 2],
 }
 
 /// The ARM7's sound registers.
@@ -612,25 +730,11 @@ impl Spu {
         &self.captures[index % CAPTURES]
     }
 
-    /// The stereo output sample for the channels' PCM16 values `samples` (`spu.md`, "The mixer"):
-    /// `[left, right]` as `i16`, the medium level at zero. `audible` is the digital gates outside
-    /// the unit, the speakers (POWCNT2) and the amplifier, both on; with it off the output is 0.
-    /// With the master enable off the mixer is not used and the level is the bias alone.
-    ///
-    /// Pure and allocation-free: this runs once per output sample.
-    // TODO(hw-unverified): a silenced output is 0, and the master-enable-off output is the bias
-    // alone (`spu.md`, "Unverified").
-    pub fn output(&self, samples: &[i32; CHANNELS], audible: bool) -> [i16; 2] {
-        if !audible {
-            return [0, 0];
-        }
-        let bias = self.bias;
-        if self.cnt & SOUNDCNT_ENABLE == 0 {
-            let silent = mixer::to_i16(mixer::level(0, bias));
-            return [silent, silent];
-        }
-        let mut mixed = [0i64; 2];
-        let mut routed = [(0i64, 0i64); CHANNELS];
+    /// The 16 channels panned and summed into the two mixers, before the master stage
+    /// (`spu.md`, "The mixer"). Channel 1 and 3 drop out of the sum when SOUNDCNT bit 12 or 13 says
+    /// so. Pure and allocation-free: this runs once per output sample.
+    pub(crate) fn mix(&self, samples: &[i32; CHANNELS]) -> Mix {
+        let mut mix = Mix::default();
         self.channels
             .iter()
             .zip(samples)
@@ -642,30 +746,110 @@ impl Spu {
                     channel.volume(),
                     channel.panning(),
                 );
-                routed[x] = (left, right);
+                mix.routed[x] = (left, right);
                 let not_mixed = match x {
                     CHANNEL_1 => self.cnt & SOUNDCNT_CH1_NOT_MIXED != 0,
                     CHANNEL_3 => self.cnt & SOUNDCNT_CH3_NOT_MIXED != 0,
                     _ => false,
                 };
                 if !not_mixed {
-                    mixed[0] += left;
-                    mixed[1] += right;
+                    mix.sum[0] += left;
+                    mix.sum[1] += right;
                 }
             });
-        let pick = |shift: u16, side: fn((i64, i64)) -> i64, mix: i64| {
+        mix
+    }
+
+    /// The stereo output sample for the channels' PCM16 values `samples` (`spu.md`, "The mixer"):
+    /// `[left, right]` as `i16`, the medium level at zero. `audible` is the digital gates outside
+    /// the unit, the speakers (POWCNT2) and the amplifier, both on; with it off the output is 0.
+    /// With the master enable off the mixer is not used and the level is the bias alone.
+    ///
+    /// Pure and allocation-free: this runs once per output sample.
+    // TODO(hw-unverified): a silenced output is 0, and the master-enable-off output is the bias
+    // alone (`spu.md`, "Unverified").
+    pub fn output(&self, samples: &[i32; CHANNELS], audible: bool) -> [i16; 2] {
+        self.output_mixed(&self.mix(samples), audible)
+    }
+
+    /// [`Self::output`] for a mix already made, so the capture units and the speakers read one.
+    pub(crate) fn output_mixed(&self, mix: &Mix, audible: bool) -> [i16; 2] {
+        if !audible {
+            return [0, 0];
+        }
+        let bias = self.bias;
+        if self.cnt & SOUNDCNT_ENABLE == 0 {
+            let silent = mixer::to_i16(mixer::level(0, bias));
+            return [silent, silent];
+        }
+        let routed = &mix.routed;
+        let pick = |shift: u16, side: fn((i64, i64)) -> i64, mixed: i64| {
             let (ch1, ch3) = (side(routed[CHANNEL_1]), side(routed[CHANNEL_3]));
             match (self.cnt >> shift) & SOUNDCNT_SOURCE_MASK {
                 SOURCE_CH1 => ch1,
                 SOURCE_CH3 => ch3,
                 SOURCE_BOTH => ch1 + ch3,
-                _ => mix,
+                _ => mixed,
             }
         };
         let master = u32::from(self.cnt & SOUNDCNT_VOLUME_MASK);
-        let left = pick(SOUNDCNT_LEFT_SHIFT, |pair| pair.0, mixed[0]);
-        let right = pick(SOUNDCNT_RIGHT_SHIFT, |pair| pair.1, mixed[1]);
+        let left = pick(SOUNDCNT_LEFT_SHIFT, |pair| pair.0, mix.sum[0]);
+        let right = pick(SOUNDCNT_RIGHT_SHIFT, |pair| pair.1, mix.sum[1]);
         [left, right].map(|signal| mixer::to_i16(mixer::level(mixer::master(signal, master), bias)))
+    }
+
+    /// The value capture `x` takes at an output sample, in 1/256 units (`sound-capture.md`,
+    /// "Sources" and "The two bugs"): the clipped mixer sum, or channel `a` before its panning.
+    fn capture_source(&self, x: usize, mix: &Mix, samples: &[i32; CHANNELS]) -> i64 {
+        if self.captures[x].cnt & CAP_SOURCE_CHANNEL == 0 {
+            return mixer::clip_capture(mix.sum[x]);
+        }
+        let before_pan = |channel: usize| {
+            let c = &self.channels[channel];
+            mixer::volumed(samples[channel], c.divider(), c.volume())
+        };
+        let (a, b) = (before_pan(2 * x), before_pan(2 * x + 1));
+        // TODO(phase6): the addition of channel `b` and the overflow bug (#46, the next PR).
+        // The both-negative bug: channel `b` is not added, yet it still turns the value into -8000h
+        // when both are below 0.
+        if self.captures[x].cnt & CAP_ADD == 0 && a < 0 && b < 0 {
+            mixer::CAPTURE_BUG
+        } else {
+            a
+        }
+    }
+
+    /// What each running capture writes at the output sample at master time `time`: every slot the
+    /// shared clock completed since the previous output sample, all with this sample's source value
+    /// (`sound-capture.md`, "Model"). `None` for a capture with nothing to write. Pure and
+    /// allocation-free; the previous event is one grid step back, so no cursor is kept.
+    pub(crate) fn capture_writes(
+        &self,
+        mix: &Mix,
+        samples: &[i32; CHANNELS],
+        time: u64,
+    ) -> [Option<CaptureWrites>; CAPTURES] {
+        let before = time.saturating_sub(OUTPUT_SAMPLE_CYCLES);
+        std::array::from_fn(|x| {
+            let capture = &self.captures[x];
+            let (first, last) = (capture.written(before), capture.written(time));
+            if last <= first {
+                return None;
+            }
+            let value = self.capture_source(x, mix, samples);
+            let latched = capture.latched;
+            let value = if latched.pcm8 {
+                mixer::capture_pcm8(value)
+            } else {
+                mixer::capture_pcm16(value)
+            };
+            Some(CaptureWrites {
+                latched,
+                first,
+                count: last - first,
+                value: value as i32,
+            })
+        })
     }
 
     /// SOUNDCNT as stored.
@@ -782,11 +966,17 @@ impl Spu {
         let was_busy = capture.busy(now);
         capture.cnt = byte & CAP_MASK;
         let started = capture.cnt & CAP_START != 0;
-        capture.end = match (was_busy, started) {
-            (false, true) => capture.end_from(now, tmr),
-            (true, true) => capture.end,
-            (_, false) => 0,
-        };
+        // Writing 1 while busy keeps the current run, as a channel does.
+        // TODO(hw-unverified): what a write of 1 to bit 7 of a running capture does
+        // (`sound-capture.md`, "Unverified").
+        match (was_busy, started) {
+            (false, true) => capture.latch(now, tmr),
+            (true, true) => {}
+            (_, false) => {
+                capture.start = 0;
+                capture.latched = CaptureLatched::default();
+            }
+        }
     }
 }
 
@@ -806,7 +996,8 @@ impl Checked for Spu {
         let captures = self.captures.iter().all(|c| {
             c.cnt & !CAP_MASK == 0
                 && c.dad & !CAP_DAD_MASK == 0
-                && (c.cnt & CAP_START != 0 || c.end == 0)
+                && (c.cnt & CAP_START != 0
+                    || (c.start == 0 && c.latched == CaptureLatched::default()))
         });
         channels && captures && self.cnt & !SOUNDCNT_MASK == 0 && self.bias & !SOUNDBIAS_MASK == 0
     }

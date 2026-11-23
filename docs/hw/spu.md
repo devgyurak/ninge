@@ -200,8 +200,8 @@ the first gate is `(bias - 200h) * 64`.
 
 - **Capture** (#46): the capture units read the output of the mixer or of channel 0 or 2, and
   can add channel 1 or 3 (SNDCAPxCNT bits 0 and 7), which also changes the mixer. The behavior
-  is specified in `sound-capture.md`; it is not modeled by #45, and `TODO(phase6)` stays at the
-  capture's code site until #46 lands.
+  is specified in `sound-capture.md`; the writes to memory are modeled there (#46). This note's
+  mixer does not change for the addition mode until that part lands.
 - **BIOS table SWIs** (sine, pitch and volume tables): BIOS data, see `sound-registers.md`.
 - **The 15 ms rule**: GBATEK says no sound is to be output during the first 15 ms after the sound
   circuit is powered. That is a rule for the program, not a behavior to model.

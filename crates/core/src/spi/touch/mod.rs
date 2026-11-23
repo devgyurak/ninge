@@ -58,9 +58,19 @@ const Z2_RELEASED: u16 = FULL_SCALE;
 // 142 counts between them into about 297 K (`touch-power.md`, "Unverified").
 const TEMP0: u16 = 0x0600;
 const TEMP1: u16 = 0x068E;
-// TODO(#44): the microphone brings real samples with the blow key; until then it is silent.
-// TODO(hw-unverified): the silence value, the middle of the range (`touch-power.md`, "Unverified").
+// TODO(hw-unverified): the silence value, the middle of the range, and what AUX reads with the
+// amplifier off (`touch-power.md`, "Unverified").
 const AUX_SILENCE: u16 = 0x0800;
+// TODO(hw-unverified): the blow signal is noise of our own, `AUX_BLOW_BASE + (state & AUX_BLOW_MASK)`
+// from a 16-bit LFSR, stepped once per AUX conversion; the gain is not applied (`touch-power.md`,
+// "The microphone" and "Unverified").
+const AUX_BLOW_BASE: u16 = 0x0400;
+const AUX_BLOW_MASK: u16 = 0x07FF;
+/// The noise generator's seed. Any non-zero value works; zero would lock the register.
+const NOISE_SEED: u16 = 0xACE1;
+/// The feedback taps of the 16-bit Galois LFSR (x^16 + x^14 + x^13 + x^11 + 1), which cycles through
+/// all 65535 non-zero states.
+const NOISE_TAPS: u16 = 0xB400;
 
 /// The touch-screen controller. Plain data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +85,8 @@ pub struct Tsc {
     reply: u16,
     /// How many of the two reply bytes are still on the wire: 2, 1 or 0.
     left: u8,
+    /// The microphone's noise generator, a 16-bit LFSR. Never zero.
+    noise: u16,
 }
 
 impl Tsc {
@@ -86,6 +98,7 @@ impl Tsc {
             command: 0,
             reply: 0,
             left: 0,
+            noise: NOISE_SEED,
         }
     }
 
@@ -114,13 +127,14 @@ impl Tsc {
         self.mode & 1 == 0
     }
 
-    /// One byte exchanged with the chip while the panel is `panel`: the byte that comes back. A
-    /// control byte starts a conversion; `hold` false ends the session and with it a reply still
-    /// on the wire.
+    /// One byte exchanged with the chip while the panel is `panel` and the microphone delivers a
+    /// signal if `blow` (the player blows and the amplifier is on; the bus decides, so a device
+    /// never reaches another): the byte that comes back. A control byte starts a conversion;
+    /// `hold` false ends the session and with it a reply still on the wire.
     // TODO(hw-unverified): deselect drops the rest of the reply but keeps the mode; a control byte
     // before the reply is done replaces it; the byte that carries a control byte gets the old
     // reply's tail or zero (`touch-power.md`, "Unverified").
-    pub fn transfer(&mut self, byte: u8, hold: bool, panel: Option<Touch>) -> u8 {
+    pub fn transfer(&mut self, byte: u8, hold: bool, panel: Option<Touch>, blow: bool) -> u8 {
         let out = match self.left {
             2 => (self.reply >> 8) as u8,
             1 => self.reply as u8,
@@ -139,7 +153,7 @@ impl Tsc {
             self.command = byte;
             self.mode = byte & MODE_MASK;
             // TODO(hw-unverified): a conversion is instant (`touch-power.md`, "Unverified").
-            let result = convert(byte, panel);
+            let result = self.convert(byte, panel, blow);
             // TODO(hw-unverified): the 8-bit result is the top eight bits of the 12-bit one
             // (`touch-power.md`, "Unverified").
             self.reply = if byte & EIGHT_BIT != 0 {
@@ -159,8 +173,10 @@ impl Tsc {
     /// Whether the state is one the chip can be in: a mode that is the last command's, and a reply that holds only
     /// what is still on the wire.
     pub fn well_formed(&self) -> bool {
-        // The mode is the low two bits of the last control byte, and 0 before any.
-        self.mode == self.command & MODE_MASK
+        // A shift register that reached zero would stay there.
+        self.noise != 0
+            // The mode is the low two bits of the last control byte, and 0 before any.
+            && self.mode == self.command & MODE_MASK
             // The dummy bit on top and the three bits under a 12-bit result are zero.
             && self.reply & 0x8007 == 0
             && match self.left {
@@ -178,25 +194,39 @@ impl Default for Tsc {
     }
 }
 
-/// The 12-bit result of the conversion `command` asks for, with the panel at `panel`.
-// TODO(hw-unverified): a differential conversion of a channel that exists only single-ended reads
-// zero, and X, Y, Z1 and Z2 read the same in both reference modes (`touch-power.md`,
-// "Unverified").
-fn convert(command: u8, panel: Option<Touch>) -> u16 {
-    let channel = (command >> CHANNEL_SHIFT) & CHANNEL_MASK;
-    let single = command & SINGLE_ENDED != 0;
-    let pixel = |p: u8| u16::from(p) * ADC_PER_PIXEL;
-    match channel {
-        CH_Y => panel.map_or(FULL_SCALE, |t| pixel(t.y)),
-        CH_X => panel.map_or(0, |t| pixel(t.x)),
-        CH_Z1 => panel.map_or(Z1_RELEASED, |_| Z1_TOUCHED),
-        CH_Z2 => panel.map_or(Z2_RELEASED, |_| Z2_TOUCHED),
-        _ if !single => 0,
-        CH_TEMP0 => TEMP0,
-        CH_BATTERY => 0,
-        CH_AUX => AUX_SILENCE,
-        // Channel 7, temperature 1: the only one left of the three-bit channel.
-        _ => TEMP1,
+impl Tsc {
+    /// The 12-bit result of the conversion `command` asks for, with the panel at `panel` and the
+    /// microphone delivering a signal if `blow`.
+    // TODO(hw-unverified): a differential conversion of a channel that exists only single-ended
+    // reads zero, and X, Y, Z1 and Z2 read the same in both reference modes (`touch-power.md`,
+    // "Unverified").
+    fn convert(&mut self, command: u8, panel: Option<Touch>, blow: bool) -> u16 {
+        let channel = (command >> CHANNEL_SHIFT) & CHANNEL_MASK;
+        let single = command & SINGLE_ENDED != 0;
+        let pixel = |p: u8| u16::from(p) * ADC_PER_PIXEL;
+        match channel {
+            CH_Y => panel.map_or(FULL_SCALE, |t| pixel(t.y)),
+            CH_X => panel.map_or(0, |t| pixel(t.x)),
+            CH_Z1 => panel.map_or(Z1_RELEASED, |_| Z1_TOUCHED),
+            CH_Z2 => panel.map_or(Z2_RELEASED, |_| Z2_TOUCHED),
+            _ if !single => 0,
+            CH_TEMP0 => TEMP0,
+            CH_BATTERY => 0,
+            CH_AUX if blow => AUX_BLOW_BASE + (self.step_noise() & AUX_BLOW_MASK),
+            CH_AUX => AUX_SILENCE,
+            // Channel 7, temperature 1: the only one left of the three-bit channel.
+            _ => TEMP1,
+        }
+    }
+
+    /// One step of the noise generator: the new state.
+    fn step_noise(&mut self) -> u16 {
+        let lsb = self.noise & 1;
+        self.noise >>= 1;
+        if lsb != 0 {
+            self.noise ^= NOISE_TAPS;
+        }
+        self.noise
     }
 }
 

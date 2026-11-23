@@ -199,6 +199,72 @@ fn given_the_pen_output_disabled_when_the_state_is_saved_and_loaded_then_the_pen
     assert_eq!((result, extkeyin(&mut loaded)), (Ok(()), 0x7F));
 }
 
+// ---------------------------------------------------------------------------- the microphone
+
+/// AUX, 12-bit, single-ended, power-down mode 1.
+const AUX: u8 = 0xE5;
+
+/// One AUX conversion as the ARM7 reads it.
+fn aux(m: &mut Machine) -> u16 {
+    let r = session(m, TOUCH, &[AUX, 0, 0]);
+    rebuild(r[1], r[2])
+}
+
+/// A machine whose program switched the microphone amplifier on (power register 2).
+fn amplified() -> Machine {
+    let mut m = machine();
+    session(&mut m, POWER, &[0x02, 1]);
+    m
+}
+
+#[test]
+fn given_a_blowing_frame_and_the_amplifier_on_when_the_arm7_reads_aux_then_it_is_loud_noise() {
+    let mut m = amplified();
+    m.run_frame(Input::new().with_mic(true));
+    let readings = [aux(&mut m), aux(&mut m), aux(&mut m)];
+    let loud = readings.iter().all(|r| (0x0400..=0x0BFF).contains(r));
+    assert_eq!((loud, readings[0] != readings[1]), (true, true));
+}
+
+#[test]
+fn given_a_blowing_frame_then_a_quiet_one_when_the_arm7_reads_aux_then_silence_returns() {
+    let mut m = amplified();
+    m.run_frame(Input::new().with_mic(true));
+    let blown = aux(&mut m);
+    m.run_frame(Input::new());
+    assert_eq!((blown != 0x0800, aux(&mut m)), (true, 0x0800));
+}
+
+#[test]
+fn given_a_blowing_frame_without_the_amplifier_when_the_arm7_reads_aux_then_it_is_silence() {
+    let mut m = machine();
+    m.run_frame(Input::new().with_mic(true));
+    assert_eq!(aux(&mut m), 0x0800);
+}
+
+#[test]
+fn given_a_blow_interrupted_by_a_savestate_when_it_continues_then_it_matches_an_uninterrupted_one()
+{
+    let start = |m: &mut Machine| {
+        m.run_frame(Input::new().with_mic(true));
+        aux(m);
+        aux(m);
+        // The clock moves past the last unit, as it would for a real program.
+        m.run_frame(Input::new().with_mic(true));
+    };
+    let mut whole = amplified();
+    start(&mut whole);
+    let whole_next = (aux(&mut whole), aux(&mut whole));
+
+    let mut saved = amplified();
+    start(&mut saved);
+    let state = saved.save_state();
+    let mut loaded = machine();
+    let loaded_ok = loaded.load_state(&state);
+    let next = (aux(&mut loaded), aux(&mut loaded));
+    assert_eq!((loaded_ok, next), (Ok(()), whole_next));
+}
+
 // ------------------------------------------------------------------- shutdown and backlights
 
 /// `add r1, r1, #1` and `b` back to it: a counter the ARM9 keeps running.

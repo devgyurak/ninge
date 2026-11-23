@@ -13,7 +13,7 @@
 //! `Io` reads its pen output to hand to the keypad, so no device reaches another.
 
 use crate::cart::save::{SaveChip, SaveType};
-use crate::input::Touch;
+use crate::input::Input;
 use crate::io::device::{Checked, Cx, Device, Effect, Fired, Width, read_bytes, write_bytes};
 use crate::io::irq::{Requests, SPI_IRQ};
 use crate::spi::{FIRMWARE_LEN, FirmwareSettings, PowerManagement, Tsc, build};
@@ -25,6 +25,9 @@ pub(crate) const SPICNT_ADDR: u32 = 0x0400_01C0;
 pub(crate) const BLOCK_BYTES: u32 = 4;
 /// The byte offset of SPIDATA's low byte, the one whose write starts a transfer.
 const SPIDATA_OFFSET: u32 = 2;
+
+/// Power-management register 2 bit 0: the microphone amplifier enable (`touch-power.md`, "Registers").
+const MIC_AMP_ON: u8 = 1;
 
 /// SPICNT bits 0-1: the baud rate, 4 MHz, 2 MHz, 1 MHz, 512 kHz.
 const BAUD_MASK: u16 = 0b11;
@@ -179,13 +182,20 @@ impl Spi {
         self.touch.pen_irq_enabled()
     }
 
-    /// One byte exchanged with the device `select` names while the panel is `panel`: what comes
-    /// back. Select 3 is unconnected.
-    fn exchange(&mut self, select: u16, byte: u8, hold: bool, panel: Option<Touch>) -> u8 {
+    /// One byte exchanged with the device `select` names while the host is `host`: what comes
+    /// back. Select 3 is unconnected. The microphone delivers a signal while the player blows and
+    /// the power-management device's amplifier is on; the bus works that out so the touch
+    /// controller never reaches the power device (`touch-power.md`, "The microphone").
+    fn exchange(&mut self, select: u16, byte: u8, hold: bool, host: &Input) -> u8 {
         match select {
             DEVICE_POWER => self.power.transfer(byte, hold),
             DEVICE_FIRMWARE => self.firmware.transfer(byte, hold),
-            DEVICE_TOUCH => self.touch.transfer(byte, hold, panel),
+            DEVICE_TOUCH => {
+                // TODO(hw-unverified): the frame's blow bit applies to every conversion in the frame
+                // (`touch-power.md`, "Unverified").
+                let blow = host.mic && self.power.amp() & MIC_AMP_ON != 0;
+                self.touch.transfer(byte, hold, host.touch, blow)
+            }
             _ => FLOATING,
         }
     }
@@ -195,7 +205,7 @@ impl Spi {
     /// a unit is on the wire is dropped.
     // TODO(hw-unverified): SPIDATA written with the bus disabled or while busy (`spi.md`,
     // "Unverified").
-    fn start(&mut self, byte: u8, now: u64, panel: Option<Touch>) -> Effect {
+    fn start(&mut self, byte: u8, now: u64, host: &Input) -> Effect {
         if self.spicnt & ENABLE == 0 || self.busy(now) {
             return Effect::default();
         }
@@ -207,10 +217,10 @@ impl Spi {
         self.data = if wide {
             // TODO(hw-unverified): the bugged 16-bit mode sends the byte and then a zero, and
             // SPIDATA keeps the second reply, for every device (`spi.md`, "Unverified").
-            self.exchange(select, byte, true, panel);
-            self.exchange(select, 0, hold, panel)
+            self.exchange(select, byte, true, host);
+            self.exchange(select, 0, hold, host)
         } else {
-            self.exchange(select, byte, hold, panel)
+            self.exchange(select, byte, hold, host)
         };
         let baud = u32::from(self.spicnt & BAUD_MASK) + u32::from(wide);
         self.done_at = now.saturating_add(UNIT_CYCLES << baud);
@@ -239,7 +249,7 @@ impl Spi {
     }
 
     /// A write of one byte at `offset`.
-    fn write_byte(&mut self, offset: u32, byte: u8, now: u64, panel: Option<Touch>) -> Effect {
+    fn write_byte(&mut self, offset: u32, byte: u8, now: u64, host: &Input) -> Effect {
         match offset {
             0 => {
                 self.spicnt = (self.spicnt & 0xFF00) | u16::from(byte) & (SPICNT_MASK & 0xFF);
@@ -249,7 +259,7 @@ impl Spi {
                 self.spicnt = (self.spicnt & 0x00FF) | (u16::from(byte) << 8 & SPICNT_MASK);
                 Effect::default()
             }
-            SPIDATA_OFFSET => self.start(byte, now, panel),
+            SPIDATA_OFFSET => self.start(byte, now, host),
             _ => Effect::default(),
         }
     }
@@ -284,7 +294,7 @@ impl Device<false> for Spi {
     /// A byte write to SPIDATA starts a transfer; a wider write that covers it uses its low byte.
     fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         write_bytes(offset, width, value, |at, byte| {
-            self.write_byte(at, byte, cx.now, cx.host.touch)
+            self.write_byte(at, byte, cx.now, cx.host)
         })
     }
 

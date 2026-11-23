@@ -408,7 +408,11 @@ fn write_with(spi: &mut Spi, now: u64, offset: u32, value: u32, input: &Input) {
 /// Sends `bytes` as one session at `cnt` while the host's panel is `panel`, hold on for every
 /// byte but the last, and returns the reply of each.
 fn session_with(spi: &mut Spi, cnt: u16, bytes: &[u8], panel: Option<Touch>) -> Vec<u8> {
-    let input = Input::new().with_touch(panel);
+    session_input(spi, cnt, bytes, &Input::new().with_touch(panel))
+}
+
+/// The same with the host's whole `input`.
+fn session_input(spi: &mut Spi, cnt: u16, bytes: &[u8], input: &Input) -> Vec<u8> {
     let last = bytes.len() - 1;
     bytes
         .iter()
@@ -416,8 +420,8 @@ fn session_with(spi: &mut Spi, cnt: u16, bytes: &[u8], panel: Option<Touch>) -> 
         .map(|(i, &byte)| {
             let now = spi.done_at() + GAP;
             let hold = if i == last { 0 } else { HOLD };
-            write_with(spi, now, SPICNT, u32::from(cnt | hold), &input);
-            write_with(spi, now, SPIDATA, u32::from(byte), &input);
+            write_with(spi, now, SPICNT, u32::from(cnt | hold), input);
+            write_with(spi, now, SPIDATA, u32::from(byte), input);
             peek(spi, now + GAP - 1, SPIDATA, Width::Byte) as u8
         })
         .collect()
@@ -627,4 +631,55 @@ fn given_a_written_firmware_when_a_rom_is_loaded_then_the_image_is_rebuilt_from_
         ),
         (0xA5, true)
     );
+}
+
+// ---------------------------------------------------------------------------- the microphone
+
+/// A touch control byte: AUX, 12-bit, single-ended, power-down mode 1.
+const TOUCH_AUX: u8 = 0xE5;
+/// The power device's index byte that writes register 2 (microphone amplifier).
+const POWER_WRITE_REG2: u8 = 0x02;
+
+/// The 12-bit value of one AUX conversion with the host's `input`.
+fn aux_with(spi: &mut Spi, input: &Input) -> u16 {
+    let reply = session_input(spi, TOUCH, &[TOUCH_AUX, 0, 0], input);
+    ((u16::from(reply[1]) << 8) | u16::from(reply[2])) >> 3
+}
+
+/// `spi` with the microphone amplifier register written as `value`.
+fn amplifier(value: u8) -> Spi {
+    let mut spi = Spi::new();
+    session_input(&mut spi, POWER, &[POWER_WRITE_REG2, value], &Input::new());
+    spi
+}
+
+#[test]
+fn given_the_amplifier_off_when_the_player_blows_then_aux_reads_silence() {
+    let mut spi = amplifier(0);
+    assert_eq!(aux_with(&mut spi, &Input::new().with_mic(true)), 0x0800);
+}
+
+#[test]
+fn given_the_amplifier_on_when_the_player_does_not_blow_then_aux_reads_silence() {
+    let mut spi = amplifier(1);
+    assert_eq!(aux_with(&mut spi, &Input::new()), 0x0800);
+}
+
+#[test]
+fn given_the_amplifier_on_when_the_player_blows_then_aux_reads_the_loud_band_and_varies() {
+    let mut spi = amplifier(1);
+    let blow = Input::new().with_mic(true);
+    let readings: Vec<u16> = (0..8).map(|_| aux_with(&mut spi, &blow)).collect();
+    let loud = readings.iter().all(|r| (0x0400..=0x0BFF).contains(r));
+    let varies = readings.windows(2).any(|w| w[0] != w[1]);
+    assert_eq!((loud, varies), (true, true));
+}
+
+#[test]
+fn given_the_amplifier_on_and_a_blow_when_gain_is_written_then_the_samples_do_not_change() {
+    let blow = Input::new().with_mic(true);
+    let mut plain = amplifier(1);
+    let mut gained = amplifier(1);
+    session_input(&mut gained, POWER, &[0x03, 3], &Input::new());
+    assert_eq!(aux_with(&mut plain, &blow), aux_with(&mut gained, &blow));
 }

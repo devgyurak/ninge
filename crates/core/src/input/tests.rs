@@ -11,6 +11,7 @@ fn given_the_default_input_when_inspected_then_nothing_is_held_and_the_hinge_is_
             buttons: Buttons::empty(),
             touch: None,
             hinge_closed: false,
+            mic: false,
             wall_time: 0,
         }
     );
@@ -48,11 +49,13 @@ fn given_the_builder_methods_when_chained_then_each_sets_its_own_field() {
             .with_buttons(Buttons::A)
             .with_touch(Some(touch))
             .with_hinge_closed(true)
+            .with_mic(true)
             .with_wall_time(5),
         Input {
             buttons: Buttons::A,
             touch: Some(touch),
             hinge_closed: true,
+            mic: true,
             wall_time: 5,
         }
     );

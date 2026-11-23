@@ -446,19 +446,18 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   their tests need the repository's `testroms/`, and publishing would put their command line
   and report format under SemVer while both still change. macOS arm64 and Linux x86_64
   binaries on GitHub Releases and a Homebrew tap come later.
-- **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS, its
-  tests in shards (`NINGE_TEST_SHARD`); each OS's `verify` job merges their coverage and
-  checks the floor.
+- **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS: for a
+  PR, a push to `main`, and a `develop` merge that changes dependencies (`cache.yml`).
+  Tests run in shards (`NINGE_TEST_SHARD`), the floor checked over all of them.
 - **BlocksDS is required** (decided). Built test ROMs are never committed (§3.1), so the
   golden tests, and so the 90% coverage floor, need the SDK. It comes from the official
   BlocksDS Docker image **pinned by digest**, the same locally and in CI. Code reads the digest
   only from `scripts/build_testroms.sh`; `docs/STATUS.md` records it and
   `check_agent_config.py` keeps the two equal. Bumping it is an `UPT:` PR, and every golden
-  hash it changes needs its reason. macOS runners cannot run Docker, so CI builds the ROMs
-  once on ubuntu (`testroms` job). The ubuntu verify job rebuilds from source and must match
-  that artifact's `SHA256SUMS`; the macOS job checks the artifact against it
-  (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only). Without Docker and without that
-  variable `verify.sh` fails; it never skips the step.
+  hash it changes needs its reason. macOS runners cannot run Docker, so the `testroms`
+  job builds them once on ubuntu. Ubuntu rebuilds from source and must match its
+  `SHA256SUMS`; macOS checks the artifact against it (`NINGE_PREBUILT_TESTROMS=1`, set in
+  `ci.yml` only). Without both Docker and that variable `verify.sh` fails, never skips.
 - **The coverage floor is not CI-only and is never disabled.** `check_agent_config.py` fails
   if the floor in §5.9 and the one in `scripts/verify.sh` differ.
 - **Agent config** (`.github/workflows/agents.yml`) runs `scripts/check_agent_config.py` and

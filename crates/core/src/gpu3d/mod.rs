@@ -442,8 +442,8 @@ impl Device<true> for Gpu3d {
     }
 
     /// The FIFO IRQ is a level: IF bit 21 is held up while the mode is 1 (less than half full) or 2
-    /// (empty), a condition the stub's always-empty FIFO keeps true. A write to this block or to the
-    /// interrupt controller asks `Io` to recheck, which raises the bit again after an acknowledge,
+    /// (empty), a condition the stub's always-empty FIFO keeps true. A write to this block or to
+    /// the interrupt controller asks `Io` to recheck, which raises the bit again after an acknowledge,
     /// so an acknowledge has no effect while the condition holds. No other path can make the
     /// condition true or clear an IF bit (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
     // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is

@@ -219,7 +219,7 @@ macro_rules! registry {
             }
 
             /// The signals every device the CPU `ARM9` reaches holds as a level, merged
-            /// ([`Device::held_signals`]). A device only the other CPU sees holds none for this one.
+            /// ([`Device::held_signals`]). A device only the other CPU sees holds none for it.
             pub(crate) fn held_signals<const ARM9: bool>(&self) -> Signals {
                 Signals::default()
                     $( .merge(Device::<ARM9>::held_signals(&self.$sf)) )*
@@ -229,7 +229,7 @@ macro_rules! registry {
             }
 
             /// The IF bits every device the CPU `ARM9` reaches holds up as a level, merged
-            /// ([`Device::held_requests`]). A device only the other CPU sees holds none for this one.
+            /// ([`Device::held_requests`]). A device only the other CPU sees holds none for it.
             pub(crate) fn held_requests<const ARM9: bool>(&self) -> Requests {
                 Requests::default()
                     $( .merge(Device::<ARM9>::held_requests(&self.$sf)) )*

@@ -185,11 +185,14 @@ The emulator has no real microphone. The host reports one bit per frame, "the pl
   whether the player blows or not.
 - **Amplifier on, not blowing:** the silence value.
 - **Amplifier on, blowing:** each AUX conversion returns the next value of a noise generator. The
-  generator is a 16-bit linear-feedback shift register with a fixed seed (`ACE1h`), stepped once
-  per AUX conversion, never per frame, so a program's sampling rate sets the stream it sees and
-  the stream is a pure function of the number of conversions. The 12-bit result is
-  `0400h + (state & 07FFh)`: a swing of about plus or minus half the range around the silence
-  value, a loud signal. The 8-bit result is the usual top eight bits (above).
+  generator is a 16-bit linear-feedback shift register of the Galois form with a fixed seed
+  (`ACE1h`). One step shifts the state right by one bit and, if the bit shifted out was 1,
+  exclusive-ors the taps `B400h` into the result; the new state is the value used. It is stepped
+  once per AUX conversion, never per frame, so a program's sampling rate sets the stream it sees
+  and the stream is a pure function of the number of conversions. The 12-bit result is
+  `0400h + (new state & 07FFh)`: it lies between `0400h` and `0BFFh`, a swing of plus or minus a
+  quarter of the range around the silence value, a loud signal. The first blown conversion after
+  power-up therefore reads `0670h`. The 8-bit result is the usual top eight bits (above).
 - **The gain is not applied.** Register 3 is stored and read back; the amplitude does not change
   with it.
 
@@ -238,8 +241,8 @@ hardware, or a comparison with the reference emulator used as an oracle.
   off. GBATEK describes no value for either; the model returns the silence value, blown into or
   not. `spi/touch/`.
 - **The blow waveform and its amplitude.** A real microphone gives a signal that follows the
-  sound; the model's noise (`0400h + (state & 07FFh)`, a 16-bit LFSR seeded `ACE1h`) is ours, and
-  so is "large". `spi/touch/`.
+  sound; the model's noise (`0400h + (state & 07FFh)`, a 16-bit Galois LFSR with taps `B400h`,
+  seeded `ACE1h`) is ours, and so is "large". `spi/touch/`.
 - **The stepping.** One generator step per AUX conversion is ours; so is the decision that the
   frame's blow bit applies to every conversion in the frame. `spi/touch/`.
 - **The gain is not applied** to the amplitude. `spi/touch/`, `spi/power/`.

@@ -2,8 +2,9 @@
 //! The keypad stub, from `docs/hw/keypad.md`.
 
 use super::*;
-use crate::input::Buttons;
-use crate::io::device::cx_at;
+use crate::input::{Buttons, Touch};
+use crate::io::device::{Lines, cx_at};
+use crate::io::irq::Requests;
 
 /// A read with no key held: the context carries the default input.
 fn peek9(pad: &Keypad<true>, offset: u32, width: Width) -> u32 {
@@ -23,6 +24,11 @@ fn peek9_with(pad: &Keypad<true>, input: &Input, offset: u32, width: Width) -> u
         Cx {
             now: 0,
             host: input,
+            rom: &[],
+            lines: Lines {
+                pen_irq_enabled: true,
+                ..Lines::default()
+            },
         },
     )
 }
@@ -35,6 +41,11 @@ fn peek7_with(pad: &Keypad<false>, input: &Input, offset: u32, width: Width) -> 
         Cx {
             now: 0,
             host: input,
+            rom: &[],
+            lines: Lines {
+                pen_irq_enabled: true,
+                ..Lines::default()
+            },
         },
     )
 }
@@ -159,4 +170,326 @@ fn given_a_keycnt_when_a_key_is_held_in_the_context_then_keycnt_is_unchanged() {
 
 fn held(buttons: Buttons) -> Input {
     Input::new().with_buttons(buttons)
+}
+
+/// EXTKEYIN as the ARM7 reads it with the panel at `touch` and the touch controller's pen output
+/// enabled or not, as `Io` hands both over.
+fn extkeyin_with(touch: Option<Touch>, pen_irq_enabled: bool) -> u32 {
+    let input = Input::new().with_touch(touch);
+    Device::<false>::peek(
+        &Keypad::<false>::new(),
+        6,
+        Width::Half,
+        Cx {
+            now: 0,
+            host: &input,
+            rom: &[],
+            lines: Lines {
+                pen_irq_enabled,
+                ..Lines::default()
+            },
+        },
+    )
+}
+
+#[test]
+fn given_a_touched_panel_and_the_pen_output_enabled_when_extkeyin_is_read_then_the_pen_bit_is_zero()
+{
+    assert_eq!(extkeyin_with(Some(Touch { x: 1, y: 2 }), true), 0x003F);
+}
+
+#[test]
+fn given_a_touched_panel_and_the_pen_output_disabled_when_extkeyin_is_read_then_the_pen_bit_is_one()
+{
+    assert_eq!(extkeyin_with(Some(Touch { x: 1, y: 2 }), false), 0x007F);
+}
+
+#[test]
+fn given_an_untouched_panel_and_the_pen_output_enabled_when_extkeyin_is_read_then_the_pen_bit_is_one()
+ {
+    assert_eq!(extkeyin_with(None, true), 0x007F);
+}
+
+#[test]
+fn given_a_touched_panel_with_x_held_and_the_hinge_closed_when_extkeyin_is_read_then_each_bit_is_its_own()
+ {
+    // X held (bit 0 clear), pen down (bit 6 clear), hinge closed (bit 7 set).
+    let input = Input::new()
+        .with_touch(Some(Touch { x: 1, y: 2 }))
+        .with_buttons(Buttons::X)
+        .with_hinge_closed(true);
+    let value = Device::<false>::peek(
+        &Keypad::<false>::new(),
+        6,
+        Width::Half,
+        Cx {
+            now: 0,
+            host: &input,
+            rom: &[],
+            lines: Lines {
+                pen_irq_enabled: true,
+                ..Lines::default()
+            },
+        },
+    );
+    assert_eq!(value, 0x00BE);
+}
+
+#[test]
+fn given_a_touched_panel_when_the_arm9_reads_its_keypad_then_no_pen_bit_reaches_it() {
+    let input = Input::new().with_touch(Some(Touch { x: 1, y: 2 }));
+    assert_eq!(
+        peek9_with(&Keypad::<true>::new(), &input, 6, Width::Half),
+        0
+    );
+}
+
+// ------------------------------------------------------------------------------- interrupts
+
+/// KEYCNT with the IRQ enable (bit 14) set and `keys` selected, in OR mode.
+const fn or_of(keys: u16) -> u16 {
+    0x4000 | keys
+}
+
+/// KEYCNT with the IRQ enable and the AND condition (bit 15) set and `keys` selected.
+const fn and_of(keys: u16) -> u16 {
+    0xC000 | keys
+}
+
+const A_B: u16 = 0b11;
+
+/// An ARM9 keypad whose KEYCNT was written with `keycnt`.
+fn pad9(keycnt: u16) -> Keypad<true> {
+    let mut pad = Keypad::<true>::new();
+    Device::<true>::write(
+        &mut pad,
+        KEYCNT_OFFSET,
+        Width::Half,
+        u32::from(keycnt),
+        cx_at(0),
+    );
+    pad
+}
+
+fn pad7(keycnt: u16) -> Keypad<false> {
+    let mut pad = Keypad::<false>::new();
+    Device::<false>::write(
+        &mut pad,
+        KEYCNT_OFFSET,
+        Width::Half,
+        u32::from(keycnt),
+        cx_at(0),
+    );
+    pad
+}
+
+/// The cases whose condition differs from the expectation: (KEYCNT, buttons held).
+fn condition_failures(cases: &[(u16, Buttons, bool)]) -> Vec<(u16, Buttons, bool)> {
+    cases
+        .iter()
+        .copied()
+        .filter(|&(keycnt, buttons, expected)| {
+            pad9(keycnt).condition_met(&held(buttons)) != expected
+        })
+        .collect()
+}
+
+#[test]
+fn given_or_mode_when_selected_keys_are_held_then_the_condition_needs_any_one_of_them() {
+    let failures = condition_failures(&[
+        (or_of(A_B), Buttons::A, true),
+        (or_of(A_B), Buttons::B, true),
+        (or_of(A_B), Buttons::A | Buttons::B, true),
+        (or_of(A_B), Buttons::START, false),
+        (or_of(A_B), Buttons::empty(), false),
+    ]);
+    assert_eq!(failures, vec![]);
+}
+
+#[test]
+fn given_and_mode_when_selected_keys_are_held_then_the_condition_needs_every_one_of_them() {
+    let failures = condition_failures(&[
+        (and_of(A_B), Buttons::A, false),
+        (and_of(A_B), Buttons::A | Buttons::B, true),
+        (and_of(A_B), Buttons::A | Buttons::B | Buttons::START, true),
+        (and_of(A_B), Buttons::START, false),
+    ]);
+    assert_eq!(failures, vec![]);
+}
+
+#[test]
+fn given_no_key_selected_when_keys_are_held_then_neither_mode_meets_the_condition() {
+    let failures = condition_failures(&[
+        (or_of(0), Buttons::A, false),
+        (and_of(0), Buttons::A, false),
+        (and_of(0), Buttons::empty(), false),
+    ]);
+    assert_eq!(failures, vec![]);
+}
+
+#[test]
+fn given_x_and_y_held_when_every_key_bit_is_selected_then_the_condition_is_not_met() {
+    let failures = condition_failures(&[
+        (or_of(0x03FF), Buttons::X | Buttons::Y, false),
+        (and_of(0x03FF), Buttons::X | Buttons::Y, false),
+    ]);
+    assert_eq!(failures, vec![]);
+}
+
+#[test]
+fn given_the_irq_enable_clear_when_the_condition_holds_then_a_latch_requests_nothing() {
+    let requests = pad9(A_B).latch_requests(&Input::new(), &held(Buttons::A));
+    assert_eq!(requests, Requests::default());
+}
+
+#[test]
+fn given_the_irq_enable_set_when_the_condition_holds_at_a_latch_then_the_arm9_requests_bit_12() {
+    let requests = pad9(or_of(A_B)).latch_requests(&Input::new(), &held(Buttons::A));
+    assert_eq!(
+        requests,
+        Requests {
+            arm9: 1 << 12,
+            arm7: 0
+        }
+    );
+}
+
+#[test]
+fn given_the_irq_enable_set_when_the_condition_holds_at_a_latch_then_the_arm7_requests_bit_12() {
+    let requests = pad7(or_of(A_B)).latch_requests(&Input::new(), &held(Buttons::A));
+    assert_eq!(
+        requests,
+        Requests {
+            arm9: 0,
+            arm7: 1 << 12
+        }
+    );
+}
+
+#[test]
+fn given_each_cpu_selecting_its_own_key_when_a_is_held_then_only_the_cpu_that_selected_it_requests()
+{
+    let input = held(Buttons::A);
+    let requests = pad9(or_of(0b01))
+        .latch_requests(&Input::new(), &input)
+        .merge(pad7(or_of(0b10)).latch_requests(&Input::new(), &input));
+    assert_eq!(
+        requests,
+        Requests {
+            arm9: 1 << 12,
+            arm7: 0
+        }
+    );
+}
+
+#[test]
+fn given_a_key_held_across_two_latches_when_the_second_latches_then_it_requests_again() {
+    let input = held(Buttons::A);
+    let requests = pad9(or_of(A_B)).latch_requests(&input, &input);
+    assert_eq!(
+        requests,
+        Requests {
+            arm9: 1 << 12,
+            arm7: 0
+        }
+    );
+}
+
+#[test]
+fn given_the_hinge_closed_when_it_opens_at_a_latch_then_the_arm7_requests_bit_22_with_keycnt_clear()
+{
+    let requests =
+        Keypad::<false>::new().latch_requests(&Input::new().with_hinge_closed(true), &Input::new());
+    assert_eq!(
+        requests,
+        Requests {
+            arm9: 0,
+            arm7: 1 << 22
+        }
+    );
+}
+
+#[test]
+fn given_the_hinge_closed_when_it_opens_at_a_latch_then_the_arm9_requests_nothing() {
+    let requests =
+        Keypad::<true>::new().latch_requests(&Input::new().with_hinge_closed(true), &Input::new());
+    assert_eq!(requests, Requests::default());
+}
+
+#[test]
+fn given_the_hinge_when_it_closes_or_stays_put_then_the_arm7_requests_nothing() {
+    let (open, closed) = (Input::new(), Input::new().with_hinge_closed(true));
+    let pad = Keypad::<false>::new();
+    assert_eq!(
+        [
+            pad.latch_requests(&open, &closed),
+            pad.latch_requests(&open, &open),
+            pad.latch_requests(&closed, &closed),
+        ],
+        [Requests::default(); 3]
+    );
+}
+
+/// The effect of a write of `value` at `offset` with `input` latched.
+fn write_effect(pad: &mut Keypad<true>, offset: u32, value: u32, input: &Input) -> Effect {
+    Device::<true>::write(
+        pad,
+        offset,
+        Width::Half,
+        value,
+        Cx {
+            host: input,
+            ..cx_at(0)
+        },
+    )
+}
+
+#[test]
+fn given_a_held_selected_key_when_keycnt_is_written_with_the_irq_enabled_then_bit_12_is_requested()
+{
+    let effect = write_effect(
+        &mut Keypad::<true>::new(),
+        KEYCNT_OFFSET,
+        u32::from(or_of(A_B)),
+        &held(Buttons::A),
+    );
+    assert_eq!(
+        effect.requests,
+        Requests {
+            arm9: 1 << 12,
+            arm7: 0
+        }
+    );
+}
+
+#[test]
+fn given_no_key_held_when_keycnt_is_written_with_the_irq_enabled_then_nothing_is_requested() {
+    let effect = write_effect(
+        &mut Keypad::<true>::new(),
+        KEYCNT_OFFSET,
+        u32::from(or_of(A_B)),
+        &Input::new(),
+    );
+    assert_eq!(effect.requests, Requests::default());
+}
+
+#[test]
+fn given_a_held_selected_key_when_keyinput_is_written_then_nothing_is_requested() {
+    let mut pad = pad9(or_of(A_B));
+    let effect = write_effect(&mut pad, 0, 0, &held(Buttons::A));
+    assert_eq!(effect.requests, Requests::default());
+}
+
+#[test]
+fn given_the_hinge_opening_with_a_met_keypad_condition_when_latched_then_the_arm7_requests_both_bits()
+ {
+    let requests =
+        pad7(or_of(A_B)).latch_requests(&Input::new().with_hinge_closed(true), &held(Buttons::A));
+    assert_eq!(
+        requests,
+        Requests {
+            arm9: 0,
+            arm7: (1 << 12) | (1 << 22)
+        }
+    );
 }

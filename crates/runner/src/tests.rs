@@ -230,3 +230,285 @@ fn given_a_suite_error_when_converted_then_it_displays_and_exposes_its_source() 
         ("bad suite data at byte 3: bad".to_string(), true)
     );
 }
+
+// ------------------------------------------------------------------------------- save files
+
+fn temp_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("ninge-runner-save-{}-{name}", std::process::id()))
+}
+
+/// A path under the temp dir that does not exist yet.
+fn fresh_path(name: &str) -> PathBuf {
+    let path = temp_path(name);
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+fn smoke_rom() -> Vec<u8> {
+    load_rom_file(&testrom_path("smoke")).expect("smoke ROM is built")
+}
+
+#[test]
+fn given_save_flags_when_parsing_args_then_the_setup_has_the_path_and_the_type() {
+    let args = parse(&["g.nds", "--save", "x.bin", "--save-type", "flash-512k"]).expect("valid");
+    assert_eq!(
+        args.save_setup(),
+        SaveSetup {
+            path: PathBuf::from("x.bin"),
+            kind: Some(SaveType::Flash512K)
+        }
+    );
+}
+
+#[test]
+fn given_no_save_flags_when_parsing_args_then_the_file_sits_beside_the_rom_and_the_type_is_open() {
+    let args = parse(&["dir/g.nds"]).expect("valid");
+    assert_eq!(
+        args.save_setup(),
+        SaveSetup {
+            path: PathBuf::from("dir/g.sav"),
+            kind: None
+        }
+    );
+}
+
+#[test]
+fn given_an_unknown_save_type_when_parsing_args_then_the_usage_error_lists_the_types() {
+    let message = parse(&["g.nds", "--save-type", "flash-3m"])
+        .expect_err("unknown type")
+        .to_string();
+    assert!(message.contains("flash-3m") && message.contains("eeprom-8k"));
+}
+
+#[test]
+fn given_a_save_flag_without_a_value_when_parsing_args_then_usage_error() {
+    assert!(matches!(
+        parse(&["g.nds", "--save"]),
+        Err(RunnerError::Usage(_))
+    ));
+}
+
+#[test]
+fn given_a_save_type_flag_without_a_value_when_parsing_args_then_usage_error() {
+    assert!(matches!(
+        parse(&["g.nds", "--save-type"]),
+        Err(RunnerError::Usage(_))
+    ));
+}
+
+#[test]
+fn given_a_repeated_save_flag_when_parsing_args_then_usage_error() {
+    assert!(matches!(
+        parse(&["g.nds", "--save", "a", "--save", "b"]),
+        Err(RunnerError::Usage(_))
+    ));
+}
+
+#[test]
+fn given_a_rom_path_without_an_extension_when_the_default_save_is_named_then_sav_is_added() {
+    assert_eq!(
+        default_save_path(Path::new("dir/game")),
+        PathBuf::from("dir/game.sav")
+    );
+}
+
+#[test]
+fn given_no_file_when_a_save_is_read_then_it_is_none_not_an_error() {
+    assert!(matches!(
+        read_save_file(&fresh_path("absent.bin")),
+        Ok(None)
+    ));
+}
+
+#[test]
+fn given_a_file_when_a_save_is_read_then_the_bytes_come_back() {
+    let path = write_temp("present.bin", &[1, 2, 3]);
+    assert_eq!(
+        read_save_file(&path).expect("readable"),
+        Some(vec![1, 2, 3])
+    );
+}
+
+#[test]
+fn given_a_directory_when_a_save_is_read_then_it_is_an_io_error() {
+    assert!(matches!(
+        read_save_file(&std::env::temp_dir()),
+        Err(RunnerError::Io { .. })
+    ));
+}
+
+#[test]
+fn given_bytes_when_a_save_is_written_then_the_file_has_them_and_no_temp_file_is_left() {
+    let path = fresh_path("atomic.bin");
+    write_save_file(&path, &[9, 8, 7]).expect("temp dir is writable");
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    assert_eq!(
+        (
+            std::fs::read(&path).expect("written"),
+            Path::new(&temp).exists()
+        ),
+        (vec![9, 8, 7], false)
+    );
+}
+
+#[test]
+fn given_an_existing_file_when_a_save_is_written_then_it_is_replaced() {
+    let path = write_temp("replace.bin", &[1, 1, 1, 1]);
+    write_save_file(&path, &[2, 2]).expect("temp dir is writable");
+    assert_eq!(std::fs::read(&path).expect("written"), vec![2, 2]);
+}
+
+#[test]
+fn given_a_missing_directory_when_a_save_is_written_then_it_is_a_write_error_naming_the_path() {
+    let error = write_save_file(Path::new("/nonexistent/ninge/save.bin"), &[1])
+        .expect_err("no such directory");
+    assert!(error.to_string().contains("save.bin"));
+}
+
+#[test]
+fn given_a_write_error_when_displayed_then_it_says_cannot_write() {
+    let error = write_save_file(Path::new("/nonexistent/ninge/save.bin"), &[1])
+        .expect_err("no such directory");
+    assert!(
+        error
+            .to_string()
+            .starts_with("cannot write /nonexistent/ninge/save.bin: ")
+    );
+}
+
+#[test]
+fn given_a_write_error_when_asking_for_source_then_the_io_error_is_present() {
+    let error = write_save_file(Path::new("/nonexistent/ninge/save.bin"), &[1])
+        .expect_err("no such directory");
+    assert!(error.source().is_some());
+}
+
+#[test]
+fn given_a_refused_save_when_displayed_then_it_says_so_and_exposes_its_source() {
+    let error = RunnerError::Save(SaveError::UnknownSize { len: 5 });
+    assert_eq!(
+        (
+            error.to_string().starts_with("the save was refused: "),
+            error.source().is_some()
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_a_machine_whose_save_changed_when_flushed_then_the_file_is_written_once() {
+    let mut machine = Machine::new();
+    machine.load_rom(smoke_rom()).expect("smoke ROM");
+    machine
+        .insert_save(SaveType::Eeprom512, vec![0xAB; 512])
+        .expect("512 bytes fit");
+    let baseline = machine.save_generation();
+    // A savestate load raises the generation: the host must treat the memory as changed.
+    let state = machine.save_state();
+    machine.load_state(&state).expect("same ROM");
+    let path = fresh_path("flush.bin");
+    let first = flush_save(&machine, baseline, &path).expect("writable");
+    let again = flush_save(&machine, machine.save_generation(), &path).expect("writable");
+    assert_eq!(
+        (first, again, std::fs::read(&path).expect("written")),
+        (true, false, vec![0xAB; 512])
+    );
+}
+
+#[test]
+fn given_an_undecided_chip_when_flushed_then_nothing_is_written() {
+    let mut machine = Machine::new();
+    machine.load_rom(smoke_rom()).expect("smoke ROM");
+    machine
+        .insert_save(SaveType::Auto, Vec::new())
+        .expect("auto");
+    let state = machine.save_state();
+    machine.load_state(&state).expect("same ROM");
+    let path = fresh_path("undecided.bin");
+    assert_eq!(
+        (flush_save(&machine, 0, &path).expect("ok"), path.exists()),
+        (false, false)
+    );
+}
+
+#[test]
+fn given_a_save_file_of_a_chip_size_when_a_run_does_not_write_then_the_file_is_untouched() {
+    let path = write_temp("untouched.bin", &[0x5A; 8192]);
+    let setup = SaveSetup {
+        path: path.clone(),
+        kind: None,
+    };
+    run_with_save(smoke_rom(), 1, &setup).expect("run");
+    assert_eq!(std::fs::read(&path).expect("kept"), vec![0x5A; 8192]);
+}
+
+#[test]
+fn given_a_save_file_of_no_chip_size_when_run_then_the_save_is_refused() {
+    let path = write_temp("oddsize.bin", &[0; 1000]);
+    let setup = SaveSetup { path, kind: None };
+    assert!(matches!(
+        run_with_save(smoke_rom(), 1, &setup),
+        Err(RunnerError::Save(SaveError::UnknownSize { len: 1000 }))
+    ));
+}
+
+#[test]
+fn given_a_save_type_and_a_file_of_another_size_when_run_then_the_save_is_refused() {
+    let path = write_temp("mismatch.bin", &[0; 8192]);
+    let setup = SaveSetup {
+        path,
+        kind: Some(SaveType::Flash256K),
+    };
+    assert!(matches!(
+        run_with_save(smoke_rom(), 1, &setup),
+        Err(RunnerError::Save(SaveError::BadLength { .. }))
+    ));
+}
+
+#[test]
+fn given_a_save_type_and_no_file_when_a_run_does_not_write_then_no_file_is_created() {
+    let path = fresh_path("nocreate.bin");
+    let setup = SaveSetup {
+        path: path.clone(),
+        kind: Some(SaveType::Eeprom8K),
+    };
+    run_with_save(smoke_rom(), 1, &setup).expect("run");
+    assert!(!path.exists());
+}
+
+#[test]
+fn given_a_save_outcome_when_displayed_then_it_names_the_chip_and_whether_the_file_was_written() {
+    let written = SaveOutcome {
+        kind: SaveType::Eeprom64K,
+        written: true,
+    };
+    let kept = SaveOutcome {
+        kind: SaveType::Auto,
+        written: false,
+    };
+    assert_eq!(
+        (written.to_string(), kept.to_string()),
+        (
+            "save chip eeprom-64k, file written".to_string(),
+            "save chip auto".to_string()
+        )
+    );
+}
+
+#[test]
+fn given_a_run_that_writes_nothing_when_it_ends_then_the_outcome_has_the_chip_and_no_write() {
+    let path = fresh_path("outcome.bin");
+    let setup = SaveSetup {
+        path,
+        kind: Some(SaveType::Eeprom8K),
+    };
+    let (_, outcome) = run_with_save(smoke_rom(), 1, &setup).expect("run");
+    assert_eq!(
+        outcome,
+        SaveOutcome {
+            kind: SaveType::Eeprom8K,
+            written: false
+        }
+    );
+}

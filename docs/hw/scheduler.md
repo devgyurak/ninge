@@ -79,10 +79,14 @@ is:
 
 1. Line start
 2. HBlank start
-3. Timer overflow, ARM9 timers 0-3, then ARM7 timers 0-3
-4. DMA start, ARM9 channels 0-3, then ARM7 channels 0-3
+3. Card word ready (`cart-protocol.md`): the card slot is seen by both CPUs, so it sorts in the first
+   registry group, before the per-CPU timers
+4. SPI bus unit done (`spi.md`): an ARM7-only device, so it sorts in the third registry group,
+   before the per-CPU timers
+5. Timer overflow, ARM9 timers 0-3, then ARM7 timers 0-3
+6. DMA start, ARM9 channels 0-3, then ARM7 channels 0-3
 
-The timer and DMA entries are not kinds of their own in the model: each is one event slot of a
+The card, SPI, timer and DMA entries are not kinds of their own in the model: each is one event slot of a
 registered device. Events of one time sort by the device's place in the registry, whose groups
 come first (devices both CPUs see, then the ARM9's own, then the ARM7's own, then the per-CPU
 copies: the interrupt controllers, the timers, DMA, the keypad), then the ARM9's copy before the
@@ -90,6 +94,11 @@ ARM7's, then the lower slot. So a device registered later does not necessarily s
 timers and DMA: an ARM7-only device would sort before them. The reasoning below (transfers go
 last) holds because DMA is the last device with event slots, and a test pins that; a device with
 events registered after DMA must revisit the order and this note.
+
+The card slot has one event, and it is the ARM9's whichever CPU's access queued it: a device both
+CPUs see has one event, so the CPU that starts or takes a word replaces the same one. A word of the
+card that becomes ready at some time therefore comes before a DMA channel that waits for it at that
+time, and a test pins that order.
 
 Why this order: the order in which the events raise their IF bits changes nothing, because IF
 is only read between rounds. A tie matters only where one event's effect is seen by another,
@@ -111,10 +120,12 @@ other events due at the same time wait for the next round too. That round is zer
 and fires them in the same order, so nothing observable changes. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Four events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
+Six events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
 line, 3,212 master cycles after it; see `display-timing.md`), the timer overflow (one per
 started, clock-driven timer of either CPU, so at most eight; see `timers.md`) and the DMA start (one
-per channel whose transfer is waiting to run, at most eight; see `dma.md`). A pending event of
+per channel whose transfer is waiting to run, at most eight; see `dma.md`) and the card word (one,
+for the next word of a cartridge transfer; see `cart-protocol.md`) and the SPI bus's completion interrupt (one, only
+for a unit that started with SPICNT bit 14 set; see `spi.md`). A pending event of
 a kind can be cancelled, which a timer write uses to replace its overflow: the bus view holds the
 scheduler, so the write schedules at once, never before the end of the writing instruction
 (`timers.md`, "Model"). Each line start of a visible line draws that line (`bg-text.md`, "Lines"); the one that begins
@@ -222,7 +233,8 @@ A saved machine is refused on load when:
   instructions and cache effects. — `crates/core/src/cpu/mod.rs`
   (`ARM9_INSTRUCTION_COST`, `ARM7_INSTRUCTION_COST`) — verify against a test ROM timing a
   fixed loop against a hardware timer (Phase 8), or by trace comparison with the oracle.
-- **The tie order of same-time events** (line, HBlank, timers, DMA; ARM9 before ARM7) is a model
+- **The tie order of same-time events** (line, HBlank, the card word, timers, DMA; ARM9 before ARM7;
+  the card's one event counts as the ARM9's) is a model
   choice. IF is read only between rounds, so only a DMA transfer can see another event's effect,
   and the real order on hardware is not known. — `crates/core/src/scheduler/mod.rs`
   (`EventKind::priority`) — revisit if a test ROM or the oracle shows two same-time events

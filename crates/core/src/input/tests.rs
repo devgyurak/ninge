@@ -11,6 +11,8 @@ fn given_the_default_input_when_inspected_then_nothing_is_held_and_the_hinge_is_
             buttons: Buttons::empty(),
             touch: None,
             hinge_closed: false,
+            mic: false,
+            wall_time: 0,
         }
     );
 }
@@ -46,11 +48,15 @@ fn given_the_builder_methods_when_chained_then_each_sets_its_own_field() {
         Input::new()
             .with_buttons(Buttons::A)
             .with_touch(Some(touch))
-            .with_hinge_closed(true),
+            .with_hinge_closed(true)
+            .with_mic(true)
+            .with_wall_time(5),
         Input {
             buttons: Buttons::A,
             touch: Some(touch),
             hinge_closed: true,
+            mic: true,
+            wall_time: 5,
         }
     );
 }
@@ -58,4 +64,15 @@ fn given_the_builder_methods_when_chained_then_each_sets_its_own_field() {
 #[test]
 fn given_a_new_input_when_compared_with_the_default_then_they_are_equal() {
     assert_eq!(Input::new(), Input::default());
+}
+
+#[test]
+fn given_a_wall_time_when_set_with_the_builder_then_the_field_holds_it_and_the_rest_is_unchanged() {
+    assert_eq!(
+        Input::new().with_wall_time(86_400),
+        Input {
+            wall_time: 86_400,
+            ..Input::default()
+        }
+    );
 }

@@ -6,8 +6,10 @@
 //! `crates/runner/tests/vramdisp.rs`).
 
 use ninge::app::App;
+use ninge::cli::Options;
 use ninge::kitty::rgb24;
 use ninge::layout::TermSize;
+use ninge::render::{Renderer, Snapshot};
 use ninge::source::{Source, boot, load};
 use ninge::transfer::{ShmSink, Transfer};
 use ninge_core::{Machine, Screen};
@@ -44,11 +46,35 @@ impl ShmSink for Recorder {
 
 type Puts = Rc<RefCell<Vec<Vec<u8>>>>;
 
-fn app_with(size: TermSize) -> (App<Recorder>, Puts) {
+/// The model and the renderer of a run, and the frames the renderer put into shared memory.
+struct Run {
+    app: App,
+    renderer: Renderer<Recorder>,
+    snapshot: Snapshot,
+}
+
+impl Run {
+    /// One tick: the model's frame, then what the renderer sends for it.
+    fn tick(&mut self) -> Vec<u8> {
+        self.app.step();
+        self.app.fill(&mut self.snapshot);
+        self.renderer.graphics(&self.snapshot)
+    }
+}
+
+fn app_with(size: TermSize) -> (Run, Puts) {
     let puts = Puts::default();
-    let app = App::with_transfer(size, Recorder(Rc::clone(&puts)), Transfer::Shm)
-        .with_source(load(rom_path()).expect("vramdisp ROM is built"));
-    (app, puts)
+    let app = App::new(size).with_source(
+        load(rom_path(), &Options::default())
+            .expect("vramdisp ROM is built")
+            .0,
+    );
+    let run = Run {
+        app,
+        renderer: Renderer::new(Recorder(Rc::clone(&puts)), Transfer::Shm),
+        snapshot: Snapshot::default(),
+    };
+    (run, puts)
 }
 
 fn reference(frames: u64) -> Machine {
@@ -58,38 +84,38 @@ fn reference(frames: u64) -> Machine {
     machine
 }
 
-fn run_ticks(app: &mut App<Recorder>, ticks: u64) {
+fn run_ticks(run: &mut Run, ticks: u64) {
     (0..ticks).for_each(|_| {
-        let _ = app.graphics();
+        let _ = run.tick();
     });
 }
 
-fn frames_run(app: &App<Recorder>) -> Option<u64> {
-    app.machine().map(Machine::frame_count)
+fn frames_run(run: &Run) -> Option<u64> {
+    run.app.machine().map(Machine::frame_count)
 }
 
 #[test]
 fn given_a_machine_source_when_taking_graphics_once_then_one_frame_ran() {
-    let (mut app, _) = app_with(size());
-    let _ = app.graphics();
-    assert_eq!(frames_run(&app), Some(1));
+    let (mut run, _) = app_with(size());
+    let _ = run.tick();
+    assert_eq!(frames_run(&run), Some(1));
 }
 
 #[test]
 fn given_a_too_small_terminal_when_taking_graphics_then_nothing_is_sent_but_the_machine_ran() {
-    let (mut app, _) = app_with(TermSize {
+    let (mut run, _) = app_with(TermSize {
         cols: 2,
         rows: 1,
         ..size()
     });
-    let out = app.graphics();
-    assert_eq!((out, frames_run(&app)), (Vec::<u8>::new(), Some(1)));
+    let out = run.tick();
+    assert_eq!((out, frames_run(&run)), (Vec::<u8>::new(), Some(1)));
 }
 
 #[test]
 fn given_a_machine_source_over_shm_when_taking_graphics_then_the_sink_gets_the_machines_screens() {
-    let (mut app, puts) = app_with(size());
-    let _ = app.graphics();
+    let (mut run, puts) = app_with(size());
+    let _ = run.tick();
     let machine = reference(1);
     let expected = vec![
         rgb24(machine.frame(Screen::Top)),
@@ -100,8 +126,8 @@ fn given_a_machine_source_over_shm_when_taking_graphics_then_the_sink_gets_the_m
 
 #[test]
 fn given_vramdisp_when_three_frames_run_then_the_bottom_screens_first_pixel_is_white() {
-    let (mut app, puts) = app_with(size());
-    run_ticks(&mut app, FRAMES);
+    let (mut run, puts) = app_with(size());
+    run_ticks(&mut run, FRAMES);
     let first_pixel: Vec<u8> = puts.borrow().last().expect("frames were sent")[..3].to_vec();
     assert_eq!(first_pixel, vec![0xFF, 0xFF, 0xFF]);
 }

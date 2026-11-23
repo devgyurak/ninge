@@ -67,9 +67,9 @@ ARM9 (bits 27-29):
 | 2 | HBlank start | 3 (#26) |
 | 3 | Start of display (line 0; how often is Unverified, `display-capture.md`) | 4 (#36) |
 | 4 | Main-memory display (`display-capture.md`) | 4 (#36) |
-| 5 | DS cartridge slot | `TODO(phase5)` (#37) |
+| 5 | DS cartridge slot: one unit per word the card makes ready (`cart-protocol.md`, "DMA start") | 5 (#37) |
 | 6 | GBA cartridge slot | no phase plans it |
-| 7 | Geometry command FIFO | `TODO(phase7)` (#48) |
+| 7 | Geometry command FIFO: starts when the FIFO is less than half full, 112 words a burst; the stub's FIFO is always empty, so it starts when the channel is enabled and moves the whole count (`gx-stub.md`, "ARM9 DMA start mode 7") | 5 (#43); the real FIFO is `TODO(phase7)` (#48) |
 
 ARM7 (bits 28-29):
 
@@ -77,7 +77,7 @@ ARM7 (bits 28-29):
 |---|---|---|
 | 0 | Immediately | 3 (#26) |
 | 1 | VBlank start | 3 (#26) |
-| 2 | DS cartridge slot | `TODO(phase5)` (#37) |
+| 2 | DS cartridge slot: one unit per word the card makes ready (`cart-protocol.md`, "DMA start") | 5 (#37) |
 | 3 | Channels 0 and 2: wireless interrupt; channels 1 and 3: GBA cartridge slot | no phase plans it |
 
 The ARM7 has no HBlank start. A channel set to a start timing that is not implemented is enabled
@@ -104,6 +104,8 @@ that polls it waits for the transfer to finish.
 ### Starting
 
 - **Immediately:** the transfer starts when the enable write retires.
+- **Geometry command FIFO (ARM9 mode 7):** the same, in the stub: the FIFO condition already holds
+  when the channel is enabled (`gx-stub.md`). Repeat does not start it again.
 - **VBlank start:** the transfer starts at the start of VBlank, line 192 (`display-timing.md`,
   "Hooks for later features"). Enabling during VBlank waits for the next one.
 - **HBlank start:** the transfer starts at the start of HBlank in each visible line, 0-191. See
@@ -114,6 +116,13 @@ that polls it waits for the transfer to finish.
   each visible line but the last, and in the last line of the frame, for the line after it; a channel
   enabled during a frame waits for the last line of that frame. See `display-capture.md`, "The
   main-memory display".
+- **Cartridge slot (ARM9 mode 5, ARM7 mode 2):** each word the card makes ready is one request, and
+  a request moves **one unit**. Only the CPU that owns the slot (EXMEMCNT bit 11) sees the request.
+  The channel stays enabled with its addresses moved between requests; its count is used up one unit
+  at a time, and the end of the transfer below applies when the last unit has moved. A channel
+  enabled while a word already waits takes it at once. GBATEK's recipe
+  (fixed source `0410_0010h`, length 1, 32-bit, repeat on) therefore takes one word for each
+  request and re-arms itself. `cart-protocol.md`, "DMA start".
 
 When several channels of one CPU start at the same time, channel 0 goes first, then 1, 2, 3. When
 both CPUs have channels waiting for the same trigger, the ARM9's go before the ARM7's (the tie
@@ -189,6 +198,19 @@ hardware behavior.
 
 ## Unverified
 
+- **Geometry FIFO start with repeat.** A repeating ARM9 mode 7 channel stays enabled after its count
+  and is not started again: the model looks at the FIFO level only when the channel is enabled
+  (`gx-stub.md`, "Unverified") — `crates/core/src/io/dma/mod.rs` (`Dma::write_control`) — verify with
+  a test ROM that repeats a mode 7 channel on hardware.
+- **A unit for each cartridge request.** GBATEK gives the recipe with length 1 and repeat on and does
+  not say what a longer count does. The model paces any count one unit for each word, which equals the
+  recipe's behavior for count 1 — `crates/core/src/io/dma/mod.rs` (`Dma::begin`, `Dma::finish`) —
+  verify with a test ROM that uses a count above 1 on hardware.
+- **Edge or level.** GBATEK calls ROMCTRL bit 23 "Ready/DRQ", which reads like a level that stays up
+  while a word is ready. The model raises a request when a word becomes ready, and also when a
+  channel set to start on the slot is enabled while a word already waits for its CPU, so the transfer
+  never stalls on the order of the two writes — `crates/core/src/io/mod.rs` (`Io::apply`,
+  `Io::route`), `crates/core/src/io/cart/mod.rs` (`Cart::levels`) — verify with a test ROM that enables the channel late.
 - **Cost and CPU stall.** A real transfer takes cycles and holds the bus; the model takes none
   and stops no CPU — `crates/core/src/io/dma/mod.rs`, `crates/core/src/machine/mod.rs` — revisit with the
   Phase 8 timing work, verify with a cycle-count test ROM on hardware.

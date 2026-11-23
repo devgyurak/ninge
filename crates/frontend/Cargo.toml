@@ -12,8 +12,10 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 crossterm = "0.29.0"
 flate2 = "1.1.10"
+gilrs = "0.11.2"
 ninge-core.workspace = true
 ratatui = "0.30.2"
 

@@ -46,3 +46,28 @@ fn given_answer_in_two_writes_when_reading_then_it_waits_for_the_da1() {
     late.join().expect("writer thread");
     assert_eq!(got, b"\x1b_Gi=31;OK\x1b\\\x1b[?62c".to_vec());
 }
+
+#[test]
+fn given_a_successful_run_when_the_outcome_is_made_then_the_note_is_handed_back() {
+    let outcome = outcome(Ok(()), Some("save chip eeprom-8k".to_string()));
+    assert_eq!(
+        outcome.expect("ok"),
+        Some("save chip eeprom-8k".to_string())
+    );
+}
+
+#[test]
+fn given_a_failed_run_with_a_note_when_the_outcome_is_made_then_the_error_carries_the_note() {
+    let error = outcome(
+        Err(anyhow::anyhow!("draw failed")),
+        Some("save chip x".to_string()),
+    )
+    .expect_err("failed");
+    assert_eq!(format!("{error:#}"), "save chip x: draw failed");
+}
+
+#[test]
+fn given_a_failed_run_with_no_note_when_the_outcome_is_made_then_the_error_is_unchanged() {
+    let error = outcome(Err(anyhow::anyhow!("draw failed")), None).expect_err("failed");
+    assert_eq!(format!("{error:#}"), "draw failed");
+}

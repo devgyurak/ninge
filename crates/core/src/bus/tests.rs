@@ -2164,7 +2164,7 @@ const FAR_FLOOR: u64 = 5000;
 /// whose floor is `FAR_FLOOR`. Unfloored, the event is at 32 (16 ticks of 2 cycles).
 fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
     let mut m = Bench::new();
-    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, plain());
+    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, &[], plain());
     v.begin_step(0, FAR_FLOOR);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
@@ -2174,7 +2174,7 @@ fn arm9_event_after_start_with_far_floor() -> Vec<u64> {
 /// The same through the ARM7's view.
 fn arm7_event_after_start_with_far_floor() -> Vec<u64> {
     let mut m = Bench::new();
-    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0);
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, &[], 0);
     v.begin_step(0, FAR_FLOOR);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
@@ -2198,7 +2198,7 @@ fn given_an_arm7_view_with_a_floor_above_the_due_time_when_a_timer_starts_then_t
 fn arm9_event_after_start_on_a_fresh_view() -> Vec<u64> {
     let mut m = Bench::new();
     m.scheduler.advance(FAR_FLOOR);
-    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, plain());
+    let mut v = Arm9View::new(&mut m.memory, &mut m.io, &mut m.scheduler, &[], plain());
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
     timer_event_times(&m, true, 0)
@@ -2208,7 +2208,7 @@ fn arm9_event_after_start_on_a_fresh_view() -> Vec<u64> {
 fn arm7_event_after_start_on_a_fresh_view() -> Vec<u64> {
     let mut m = Bench::new();
     m.scheduler.advance(FAR_FLOOR);
-    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, 0);
+    let mut v = Arm7View::new(&mut m.memory, &mut m.io, &mut m.scheduler, &[], 0);
     v.write16(TM0CNT_L, RELOAD_16_TICKS);
     v.write16(TM0CNT_H, START);
     timer_event_times(&m, false, 0)

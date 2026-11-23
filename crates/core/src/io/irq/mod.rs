@@ -40,6 +40,26 @@ pub const TIMER3_IRQ: u32 = 1 << 6;
 /// IF bits"; `dma.md`, "IF bits").
 pub const DMA0_IRQ: u32 = 1 << 8;
 
+/// IF bit 19: card slot transfer complete (`interrupts.md`, "IE and IF bits"; `cart-protocol.md`,
+/// "Interrupt").
+pub const CARD_TRANSFER_IRQ: u32 = 1 << 19;
+
+/// IF bit 23: the SPI bus finished a unit, ARM7 only (`interrupts.md`, "IE and IF bits"; `spi.md`,
+/// "A transfer").
+pub const SPI_IRQ: u32 = 1 << 23;
+
+/// IF bit 12: the keypad condition of the CPU's own KEYCNT holds (`interrupts.md`, "IE and IF
+/// bits"; `keypad.md`, "The keypad IRQ").
+pub const KEYPAD_IRQ: u32 = 1 << 12;
+
+/// IF bit 22: the screens unfolded (the hinge opened), ARM7 only (`interrupts.md`, "IE and IF
+/// bits"; `keypad.md`, "The hinge IRQ").
+pub const UNFOLD_IRQ: u32 = 1 << 22;
+
+/// IF bit 21: the geometry command FIFO, ARM9 only; level driven, held up while GXSTAT's FIFO IRQ
+/// condition is true (`interrupts.md`, "IE and IF bits"; `gx-stub.md`, "GXSTAT and the FIFO IRQ").
+pub const GXFIFO_IRQ: u32 = 1 << 21;
+
 /// IF bit 16: IPC sync, from the other CPU's IPCSYNC bit 13 (`ipc.md`, "Behavior").
 pub const IPCSYNC_IRQ: u32 = 1 << 16;
 /// IF bit 17: IPC send FIFO empty (`ipc.md`, "Interrupts").

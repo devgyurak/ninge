@@ -118,10 +118,20 @@ fn started_by<const A: bool>(
     dma.begin(ch as usize).expect("the trigger queued a start")
 }
 
+/// The effect of a channel write that queues a start on channel `ch`: a write to the channel
+/// registers always asks for the levels to be rechecked ([`Effect::recheck_levels`]).
 fn slot_effect(ch: u32) -> Effect {
     Effect {
-        requests: Requests::default(),
         reschedule: 1 << ch,
+        ..rechecked()
+    }
+}
+
+/// The effect of a channel write that changes no schedule.
+fn rechecked() -> Effect {
+    Effect {
+        recheck_levels: true,
+        ..Effect::default()
     }
 }
 
@@ -422,6 +432,56 @@ fn given_a_register_read_when_done_through_the_device_read_then_it_has_no_effect
 // ---------------------------------------------------------------------- the enable edge
 
 #[test]
+fn given_an_arm9_geometry_fifo_channel_when_enable_is_written_then_a_start_is_queued_on_its_own_slot()
+ {
+    let mut dma = Arm9Dma::new();
+    let effect = arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    assert_eq!(
+        (effect, dma.pending(2), dma.pending(0)),
+        (slot_effect(2), true, false)
+    );
+}
+
+#[test]
+fn given_an_arm9_geometry_fifo_channel_when_it_starts_then_the_transfer_moves_its_whole_count() {
+    let mut dma = Arm9Dma::new();
+    let transfer = started(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
+    assert_eq!(transfer.count, 300);
+}
+
+#[test]
+fn given_an_arm7_channel_with_the_same_start_bits_when_enable_is_written_then_no_start_is_queued() {
+    // Bit 27 does not exist on the ARM7, so timing bits 27-29 = 7 leave 3 in bits 28-29: the
+    // wireless / GBA-slot start, which no phase implements.
+    let mut dma = Arm7Dma::new();
+    let effect = arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    assert_eq!((effect, dma.pending(0)), (rechecked(), false));
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_without_repeat_when_it_finishes_then_enable_clears_and_the_irq_is_raised()
+ {
+    let mut dma = Arm9Dma::new();
+    let control = ENABLE | IRQ | WORD | timing9(7) | 4;
+    let t = started(&mut dma, 1, MAIN, OTHER, control);
+    let effect = dma.finish(&t, END);
+    assert_eq!(
+        (read32(&dma, cnt(1)) >> 31, effect.requests.arm9),
+        (0, 1 << 9)
+    );
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_with_repeat_when_it_finishes_then_it_stays_enabled_and_is_not_restarted()
+ {
+    let mut dma = Arm9Dma::new();
+    let control = ENABLE | REPEAT | WORD | timing9(7) | 4;
+    let t = started(&mut dma, 0, MAIN, OTHER, control);
+    dma.finish(&t, END);
+    assert_eq!((read32(&dma, cnt(0)) >> 31, dma.pending(0)), (1, false));
+}
+
+#[test]
 fn given_an_immediate_channel_when_enable_is_written_then_a_start_is_queued_on_its_own_slot() {
     let mut dma = Arm9Dma::new();
     let effect = arm(&mut dma, 3, MAIN, OTHER, ENABLE | 4);
@@ -459,7 +519,7 @@ fn given_a_channel_with_a_start_timing_when_enable_is_written_then_it_waits_with
     let effect = arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | 4);
     assert_eq!(
         (effect, dma.pending(0), read32(&dma, cnt(0)) >> 31),
-        (Effect::default(), false, 1)
+        (rechecked(), false, 1)
     );
 }
 
@@ -476,7 +536,7 @@ fn given_the_four_control_bytes_written_in_turn_when_the_top_byte_lands_then_onl
     let top = write8(&mut dma, cnt(2) + 3, 0x80);
     assert_eq!(
         (early, pending_before, top, dma.pending(2)),
-        ([Effect::default(); 3], false, slot_effect(2), true)
+        ([rechecked(); 3], false, slot_effect(2), true)
     );
 }
 
@@ -488,7 +548,7 @@ fn given_halfword_writes_to_a_control_register_when_the_high_half_sets_enable_th
     let high = write16(&mut dma, cnt(1) + 2, 0x8000);
     assert_eq!(
         (low, high, dma.pending(1)),
-        (Effect::default(), slot_effect(1), true)
+        (rechecked(), slot_effect(1), true)
     );
 }
 
@@ -497,7 +557,7 @@ fn given_a_queued_immediate_start_when_enable_is_written_again_as_1_then_nothing
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | 4);
     let again = write32(&mut dma, cnt(0), ENABLE | 9);
-    assert_eq!((again, dma.pending(0)), (Effect::default(), true));
+    assert_eq!((again, dma.pending(0)), (rechecked(), true));
 }
 
 #[test]
@@ -603,10 +663,7 @@ fn given_a_channel_waiting_for_its_trigger_when_enable_is_cleared_then_the_trigg
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | 4);
     let effect = write32(&mut dma, cnt(0), timing9(1) | 4);
-    assert_eq!(
-        (effect, dma.trigger(Trigger::VBlank)),
-        (Effect::default(), 0)
-    );
+    assert_eq!((effect, dma.trigger(Trigger::VBlank)), (rechecked(), 0));
 }
 
 // ------------------------------------------------------------------------------ triggers
@@ -638,9 +695,9 @@ fn trigger_failures<const A: bool>(
 
 #[test]
 fn given_arm9_start_timings_when_vblank_and_hblank_are_raised_then_only_1_and_2_start_a_channel() {
-    // Timing 1 is VBlank, 2 is HBlank; 3-7 (display start, main-memory display, cartridge
-    // slots, geometry FIFO) are not implemented: the channel is enabled and never starts
-    // (`dma.md`, "Start timing").
+    // Timing 1 is VBlank, 2 is HBlank; the others are not started by these two triggers: 3-5
+    // wait for their own, 6 (GBA slot) is not implemented, and 7 (geometry FIFO) starts when the
+    // channel is enabled, not on a trigger (`dma.md`, "Start timing").
     let want = [
         (1, 1, 0),
         (2, 0, 1),
@@ -663,8 +720,9 @@ fn given_arm7_start_timings_when_vblank_and_hblank_are_raised_then_only_timing_1
 
 #[test]
 fn given_an_arm9_channel_with_an_unimplemented_timing_when_read_then_it_is_enabled_and_busy() {
+    // Timing 6 is the GBA slot, which no phase plans.
     let mut dma = Arm9Dma::new();
-    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(6) | 4);
     assert_eq!(
         (read32(&dma, cnt(0)) >> 31, dma.pending(0), dma.slot_due(0)),
         (1, false, None)
@@ -1564,4 +1622,178 @@ fn given_arm7_start_timings_3_and_4_when_the_display_starts_are_raised_then_noth
         ),
         (0, 0)
     );
+}
+
+// ------------------------------------------------------------------- the cartridge slot start
+
+const CARD9: u32 = 5 << 27;
+const CARD7: u32 = 2 << 28;
+
+/// Arms channel 0 and raises `trigger`; the slot mask of the channels it queued.
+fn queued_by<const A: bool>(control: u32, trigger: Trigger) -> SlotMask {
+    let mut dma = Dma::<A>::new();
+    arm(&mut dma, 0, MAIN, OTHER, control);
+    dma.trigger(trigger)
+}
+
+#[test]
+fn given_an_arm9_channel_with_start_mode_5_when_the_owner_is_the_arm9_then_a_word_queues_it() {
+    assert_eq!(
+        queued_by::<true>(ENABLE | WORD | CARD9 | 1, Trigger::CardWord { arm9: true }),
+        0b1
+    );
+}
+
+#[test]
+fn given_an_arm7_channel_with_start_mode_2_when_a_word_is_ready_then_it_queues_it() {
+    assert_eq!(
+        queued_by::<false>(ENABLE | WORD | CARD7 | 1, Trigger::CardWord { arm9: false }),
+        0b1
+    );
+}
+
+#[test]
+fn given_an_arm9_channel_with_the_hblank_start_when_a_word_is_ready_then_it_is_not_queued() {
+    assert_eq!(
+        queued_by::<true>(
+            ENABLE | WORD | timing9(2) | 1,
+            Trigger::CardWord { arm9: true }
+        ),
+        0
+    );
+}
+
+#[test]
+fn given_a_card_channel_when_a_vblank_comes_then_it_is_not_queued() {
+    assert_eq!(
+        queued_by::<true>(ENABLE | WORD | CARD9 | 1, Trigger::VBlank),
+        0
+    );
+}
+
+#[test]
+fn given_a_card_channel_with_a_count_of_128_when_its_transfer_begins_then_it_moves_one_unit() {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | CARD9 | 128,
+        Trigger::CardWord { arm9: true },
+    );
+    assert_eq!(t.count, 1);
+}
+
+/// Requests a card channel of `count` units takes to finish, the IF bits requested by every
+/// request but the last (they must be none) and by the last one.
+fn requests_to_finish(count: u32, extra: u32) -> (u32, u32, u32) {
+    let control = ENABLE | WORD | CARD9 | extra | count;
+    let mut dma = Dma::<true>::new();
+    arm(&mut dma, 0, MAIN, OTHER, control);
+    let (mut requests, mut early, mut last) = (0, 0, 0);
+    for _ in 0..count + 2 {
+        if dma.trigger(Trigger::CardWord { arm9: true }) == 0 {
+            break;
+        }
+        let t = dma.begin(0).expect("the trigger queued a start");
+        let effect = dma.finish(
+            &t,
+            End {
+                source: t.source,
+                destination: t.destination.wrapping_add(4),
+            },
+        );
+        requests += 1;
+        early |= last;
+        last = effect.requests.arm9;
+    }
+    (requests, early, last)
+}
+
+#[test]
+fn given_a_card_channel_of_4_units_when_words_arrive_then_it_takes_4_requests_and_raises_its_irq_once_at_the_end()
+ {
+    assert_eq!(requests_to_finish(4, IRQ), (4, 0, IF_DMA0));
+}
+
+#[test]
+fn given_a_card_channel_of_1_unit_when_a_word_arrives_then_it_finishes_on_that_request() {
+    assert_eq!(requests_to_finish(1, IRQ), (1, 0, IF_DMA0));
+}
+
+#[test]
+fn given_a_card_channel_with_units_left_when_a_unit_finishes_then_it_stays_enabled_with_its_addresses_moved()
+ {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | CARD9 | 3,
+        Trigger::CardWord { arm9: true },
+    );
+    dma.finish(
+        &t,
+        End {
+            source: MAIN + 4,
+            destination: OTHER + 4,
+        },
+    );
+    dma.trigger(Trigger::CardWord { arm9: true });
+    let next = dma.begin(0).expect("the second word queued a start");
+    assert_eq!(
+        (dma.control(0) >> 31, next.source, next.destination),
+        (1, MAIN + 4, OTHER + 4)
+    );
+}
+
+#[test]
+fn given_a_repeating_card_channel_when_its_last_unit_finishes_then_it_waits_for_the_next_word() {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | REPEAT | CARD9 | 1,
+        Trigger::CardWord { arm9: true },
+    );
+    dma.finish(&t, END);
+    assert_eq!(dma.trigger(Trigger::CardWord { arm9: true }), 0b1);
+}
+
+#[test]
+fn given_a_card_channel_without_repeat_when_its_last_unit_finishes_then_it_is_disabled() {
+    let mut dma = Dma::<true>::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | CARD9 | 1,
+        Trigger::CardWord { arm9: true },
+    );
+    dma.finish(&t, END);
+    assert_eq!(dma.control(0) >> 31, 0);
+}
+
+#[test]
+fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_levels_to_be_rechecked()
+{
+    let mut dma = Dma::<true>::new();
+    assert_eq!(
+        (
+            write32(&mut dma, 0, 0x0200_0000).recheck_levels,
+            write32(&mut dma, cnt(1), 1).recheck_levels
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_a_write_to_a_fill_register_when_it_returns_then_it_does_not_ask_for_a_recheck() {
+    let mut dma = Dma::<true>::new();
+    assert!(!write32(&mut dma, fill(0), 0xDEAD_BEEF).recheck_levels);
 }

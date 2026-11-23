@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::bus::{Region, VramBankState, VramMapping};
+use crate::cart::save::{SaveChip, SaveType};
 use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::io::DeviceId;
@@ -18,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_215_001;
-const PINNED_HASH: u64 = 0x9d01afb8aaaa9976;
+const PINNED_LEN: usize = 5_477_332;
+const PINNED_HASH: u64 = 0xf92942303dccc03f;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -70,8 +71,31 @@ const PINNED_HASH: u64 = 0x9d01afb8aaaa9976;
 /// default `Input` is three one-byte fields, so both lengths shrank by 3 and both hashes moved.
 /// Version 32 (#186) moved the latched input out of both keypads (3 bytes each) into one copy in `Io`
 /// (3 bytes), so both lengths shrank by 3 again and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 5_804_916;
-const PINNED_BOOTED_HASH: u64 = 0x99cf12a568f77be2;
+/// Version 33 (#37) added the cartridge slot's registers and transfer state: 20 bytes of one-byte
+/// varints, bytes and the 8 command bytes while they are zero (the booted pin also has RESB set,
+/// which is a varint of 5 bytes, so its length grew by 24), and both hashes moved.
+/// Direct boot now leaves the cartridge's chip ID in main RAM (#37): the booted state's content
+/// changed, not its layout, so only the booted hash moved and the version stayed.
+/// Version 34 (#37) added the transfer's total size and the time of the next word (two one-byte
+/// fields while idle), so both lengths grew by 2 and both hashes moved.
+/// Version 35 (#38) added the save chip: its type, an empty memory, the idle session, three flags,
+/// the byte AUXSPIDATA reads and the time of the SPI byte in flight (eight one-byte fields with no
+/// chip fitted), so both lengths grew by 8 and both hashes moved.
+/// Version 36 (#38) added the bytes a chip of unknown type records of its open session; with no
+/// session open they take no space, so only the version in the header changed and both hashes moved.
+/// Version 37 (#39) added the SPI bus and the firmware chip: SPICNT, SPIDATA, the time the unit on
+/// the wire is done and the interrupt's due time (four one-byte fields while idle), and the chip's
+/// own fields with its 256 KiB image behind a three-byte length, so both lengths grew by 262,156 and
+/// both hashes moved.
+/// Version 38 (#40) added the clock chip and the host's time in the input: RTCCNT, the chip's offset,
+/// weekday base, two status bytes, two three-byte alarms, the adjust and free bytes and the idle
+/// session (fourteen fields, each a one-byte varint at power-on) and the input's `wall_time` (one byte while zero),
+/// so both lengths grew by 15 and both hashes moved.
+/// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
+/// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
+/// being zero) and the version stayed.
+const PINNED_BOOTED_LEN: usize = 6_067_253;
+const PINNED_BOOTED_HASH: u64 = 0xaf9c5a462368f1d3;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -245,6 +269,48 @@ fn given_a_state_with_another_format_version_when_loaded_then_it_is_refused_with
         result,
         Err(SavestateError::VersionMismatch {
             found: 10,
+            expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
+fn given_a_version_41_state_from_before_the_microphone_when_loaded_then_it_is_refused() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &41u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 41,
+            expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
+fn given_a_version_40_state_from_before_the_3d_stub_when_loaded_then_it_is_refused() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &40u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 40,
+            expected: FORMAT_VERSION
+        })
+    );
+}
+
+#[test]
+fn given_a_version_39_state_from_before_the_sound_registers_when_loaded_then_it_is_refused() {
+    let rom = counter_rom();
+    let bytes = patched(&booted(&rom, 0).save_state(), 8, &39u32.to_le_bytes());
+    let result = booted(&rom, 0).load_state(&bytes);
+    assert_eq!(
+        result,
+        Err(SavestateError::VersionMismatch {
+            found: 39,
             expected: FORMAT_VERSION
         })
     );
@@ -581,6 +647,8 @@ fn input_for(frame: u32) -> Input {
         buttons: Buttons::from_bits_truncate(0x0111_u16.rotate_left(frame)),
         touch: None,
         hinge_closed: frame % 2 == 1,
+        mic: frame % 3 == 1,
+        wall_time: frame * 3_600,
     }
 }
 
@@ -649,6 +717,160 @@ fn given_the_input_a_when_hashed_with_fnv1a64_then_it_matches_the_published_vect
 #[test]
 fn given_the_input_foobar_when_hashed_with_fnv1a64_then_it_matches_the_published_vector() {
     assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+}
+
+// ------------------------------------------------------------------------- the SPI bus (#39)
+
+/// SPICNT, SPIDATA and the bits the tests set (`docs/hw/spi.md`).
+const SPICNT_ADDR: u32 = 0x0400_01C0;
+const SPIDATA_ADDR: u32 = 0x0400_01C2;
+/// Enabled, firmware selected, hold, IRQ, at baud 3 so the byte is long on the wire.
+const SPI_ON: u16 = 0x8000 | 0x4000 | 0x0800 | 0x0100 | 0x0003;
+const RDID: u8 = 0x9F;
+const IF_SPI: u32 = 1 << 23;
+
+/// A machine that booted the counter program, ran a frame, and whose ARM7 then writes the first
+/// byte of RDID and has IE for the SPI interrupt set, so the unit is on the wire when it returns.
+fn with_a_byte_in_flight() -> Machine {
+    let mut machine = booted(&counter_rom(), 1);
+    let now = machine.arm7_clock;
+    {
+        let mut bus = machine.bus7(now);
+        bus.write32(0x0400_0210, IF_SPI);
+        bus.write16(SPICNT_ADDR, SPI_ON);
+        bus.write8(SPIDATA_ADDR, RDID);
+    }
+    machine
+}
+
+/// Sends each session to the firmware through the ARM7's bus, hold on for every byte but the last.
+/// A frame runs after each byte, so the next finds the bus idle and the ARM7 where a CPU would be.
+fn write_firmware(machine: &mut Machine, sessions: &[&[u8]]) {
+    let units = sessions.iter().flat_map(|bytes| {
+        let last = bytes.len() - 1;
+        bytes
+            .iter()
+            .enumerate()
+            .map(move |(i, &byte)| (byte, [0x0800u16, 0][usize::from(i == last)]))
+    });
+    units.for_each(|(byte, hold)| {
+        let now = machine.arm7_clock;
+        let mut bus = machine.bus7(now);
+        bus.write16(SPICNT_ADDR, 0x8100 | hold);
+        bus.write8(SPIDATA_ADDR, byte);
+        run_frames(machine, 1);
+    });
+}
+
+#[test]
+fn given_a_byte_in_flight_when_saved_loaded_and_continued_then_it_equals_an_uninterrupted_run() {
+    let rom = counter_rom();
+    let bytes = with_a_byte_in_flight().save_state();
+    let mut resumed = booted(&rom, 0);
+    let result = resumed.load_state(&bytes);
+    run_frames(&mut resumed, 1);
+
+    let mut straight = with_a_byte_in_flight();
+    run_frames(&mut straight, 1);
+    assert_eq!(
+        (result, resumed.save_state() == straight.save_state()),
+        (Ok(()), true)
+    );
+}
+
+#[test]
+fn given_a_byte_in_flight_when_the_frame_runs_then_the_interrupt_is_raised_on_the_arm7_only() {
+    let mut machine = with_a_byte_in_flight();
+    let before = machine.inspect().irq7().if_() & IF_SPI;
+    run_frames(&mut machine, 1);
+    let view = machine.inspect();
+    assert_eq!(
+        (
+            before,
+            view.irq7().if_() & IF_SPI,
+            view.irq9().if_() & IF_SPI
+        ),
+        (0, IF_SPI, 0)
+    );
+}
+
+#[test]
+fn given_a_byte_in_flight_when_loaded_then_the_firmware_session_and_the_busy_time_are_kept() {
+    let saved = with_a_byte_in_flight();
+    let mut loaded = booted(&counter_rom(), 0);
+    let result = loaded.load_state(&saved.save_state());
+    let (a, b) = (saved.inspect(), loaded.inspect());
+    assert_eq!(
+        (
+            result,
+            b.spi().firmware().command(),
+            b.spi().done_at() == a.spi().done_at(),
+            b.spi().spicnt() == a.spi().spicnt(),
+        ),
+        (Ok(()), Some(RDID), true, true)
+    );
+}
+
+#[test]
+fn given_a_byte_written_to_the_firmware_when_saved_and_loaded_then_the_image_keeps_it() {
+    let mut machine = booted(&counter_rom(), 1);
+    // WREN, then a page program of one byte at 10000h.
+    write_firmware(&mut machine, &[&[0x06], &[0x02, 0x01, 0x00, 0x00, 0xA5]]);
+    let mut loaded = booted(&counter_rom(), 0);
+    let result = loaded.load_state(&machine.save_state());
+    assert_eq!(
+        (result, loaded.inspect().spi().firmware().data()[0x1_0000]),
+        (Ok(()), 0xA5)
+    );
+}
+
+#[test]
+fn given_the_same_rom_and_the_same_spi_traffic_when_run_twice_then_the_savestate_bytes_are_identical()
+ {
+    let run = || {
+        let mut machine = with_a_byte_in_flight();
+        run_frames(&mut machine, 2);
+        machine.save_state()
+    };
+    assert_eq!(run(), run());
+}
+
+#[test]
+fn given_a_state_whose_firmware_image_is_short_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let mut saver = booted(&counter_rom(), 1);
+    let wrong_chip = SaveChip::blank(SaveType::Flash512K);
+    saver
+        .io
+        .replace_spi_for_test(crate::io::spi::Spi::with_firmware_for_test(wrong_chip));
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let before = target.save_state();
+    let result = target.load_state(&bytes);
+    assert_eq!(
+        (result, target.save_state() == before),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_whose_clock_chip_is_in_a_session_that_cannot_exist_when_loaded_then_it_is_corrupt()
+{
+    let mut saver = booted(&counter_rom(), 1);
+    let session = crate::rtc::Session::Command { byte: 0, bits: 9 };
+    saver
+        .io
+        .replace_rtc_for_test(crate::io::rtc::Rtc::with_chip_for_test(
+            crate::rtc::Chip::with_session_for_test(session),
+        ));
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let before = target.save_state();
+    let result = target.load_state(&bytes);
+    assert_eq!(
+        (result, target.save_state() == before),
+        (Err(SavestateError::Corrupt), true)
+    );
 }
 
 // ------------------------------------------------------------------------------- pinned layout
@@ -1566,4 +1788,36 @@ fn given_oam_when_loaded_and_saved_again_then_the_bytes_are_identical() {
     let mut target = booted(&counter_rom(), 0);
     let result = target.load_state(&first);
     assert_eq!((result, target.save_state() == first), (Ok(()), true));
+}
+
+/// A saved state whose SPI bus is `spi`, loaded into a booted machine: the load result and whether
+/// the target stayed as it was.
+fn load_with_spi(spi: crate::io::spi::Spi) -> (Result<(), SavestateError>, bool) {
+    let mut saver = booted(&counter_rom(), 1);
+    saver.io.replace_spi_for_test(spi);
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let before = target.save_state();
+    let result = target.load_state(&bytes);
+    (result, target.save_state() == before)
+}
+
+#[test]
+fn given_a_state_whose_touch_controller_has_a_power_down_mode_that_cannot_exist_when_loaded_then_it_is_corrupt()
+ {
+    let spi = crate::io::spi::Spi::with_devices_for_test(
+        crate::spi::PowerManagement::new(),
+        crate::spi::Tsc::with_mode_for_test(4),
+    );
+    assert_eq!(load_with_spi(spi), (Err(SavestateError::Corrupt), true));
+}
+
+#[test]
+fn given_a_state_whose_power_register_holds_a_bit_that_cannot_exist_when_loaded_then_it_is_corrupt()
+{
+    let spi = crate::io::spi::Spi::with_devices_for_test(
+        crate::spi::PowerManagement::with_control_for_test(0x80),
+        crate::spi::Tsc::new(),
+    );
+    assert_eq!(load_with_spi(spi), (Err(SavestateError::Corrupt), true));
 }

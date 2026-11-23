@@ -363,10 +363,10 @@ fn given_frame_cycles_when_computed_from_the_display_timing_then_it_is_1120380()
 }
 
 #[test]
-fn given_the_line_events_and_every_device_slot_when_the_queue_is_sized_then_it_holds_2_plus_16() {
+fn given_the_line_events_and_every_device_slot_when_the_queue_is_sized_then_it_holds_2_plus_18() {
     assert_eq!(
         (LineEvent::ALL.len(), crate::io::EVENT_SLOTS, EVENT_CAPACITY),
-        (2, 16, 18)
+        (2, 18, 20)
     );
 }
 
@@ -391,6 +391,28 @@ fn given_the_registry_when_the_devices_after_dma_are_listed_then_none_has_event_
 #[test]
 fn given_the_registered_devices_when_ordered_then_timers_come_before_dma() {
     assert!(DeviceId::Timers < DeviceId::Dma);
+}
+
+#[test]
+fn given_the_registered_devices_when_ordered_then_the_card_comes_before_dma() {
+    // A word of the card that is ready at some time must be there before a DMA channel that waits
+    // for it fires at that time (`scheduler.md`, "Events").
+    assert!(DeviceId::Cart < DeviceId::Dma);
+}
+
+#[test]
+fn given_a_card_event_and_a_dma_event_at_one_time_when_ordered_then_the_card_event_sorts_first() {
+    let card = EventKind::Slot {
+        device: DeviceId::Cart,
+        arm9: true,
+        slot: 0,
+    };
+    let dma = |arm9| EventKind::Slot {
+        device: DeviceId::Dma,
+        arm9,
+        slot: 0,
+    };
+    assert!(card.priority() < dma(true).priority() && card.priority() < dma(false).priority());
 }
 
 #[test]

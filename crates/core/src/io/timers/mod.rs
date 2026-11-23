@@ -238,8 +238,8 @@ impl<const ARM9: bool> Timers<ARM9> {
                 0
             };
             return settled.merge(Effect {
-                requests: Requests::default(),
                 reschedule: retimed,
+                ..Effect::default()
             });
         }
         if let Some(timer) = self.timers.get_mut(index) {

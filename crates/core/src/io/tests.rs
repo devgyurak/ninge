@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests of `Io`, the address map and the device interface.
 
-use super::device::{Effect, Width, read_bytes, write_bytes};
+use super::device::{Effect, Signal, Signals, Width, read_bytes, write_bytes};
 use super::map::{ARM7_PORTS, ARM9_PORTS, Owner, Port, PortEntry, decode};
 use super::*;
 use crate::bus::VRAMCNT_A_ADDR;
@@ -147,7 +147,6 @@ fn given_each_arm7_register_address_when_decoded_then_the_expected_port_and_offs
 fn given_arm9_only_registers_when_the_arm7_decodes_them_then_no_port_owns_them() {
     let expected = [
         (DISPCNT_A_ADDR, None),
-        (POWCNT1_ADDR, None),
         (WRAMCNT, None),
         (VRAMCNT_G, None),
         (VRAMCNT_H, None),
@@ -163,8 +162,36 @@ fn given_the_postflg_and_haltcnt_block_when_decoded_then_only_the_arm7_owns_it()
         (0x0400_0300, Some(Owner::Io(Port::Power, 0))),
         (0x0400_0301, Some(Owner::Io(Port::Power, 1))),
         (0x0400_0303, Some(Owner::Io(Port::Power, 3))),
+        // POWCNT2, at the address the ARM9 knows as POWCNT1.
+        (0x0400_0304, Some(Owner::Io(Port::Power, 4))),
+        (0x0400_0307, Some(Owner::Io(Port::Power, 7))),
     ];
     let arm9 = [(0x0400_0300, None), (0x0400_0301, None)];
+    assert_eq!(
+        (
+            decode_failures::<false>(&arm7),
+            decode_failures::<true>(&arm9)
+        ),
+        (vec![], vec![])
+    );
+}
+
+#[test]
+fn given_the_sound_window_when_decoded_then_only_the_arm7_owns_it() {
+    let arm7 = [
+        (0x0400_0400, Some(Owner::Io(Port::Spu, 0))),
+        (0x0400_0504, Some(Owner::Io(Port::Spu, 0x104))),
+        (0x0400_051F, Some(Owner::Io(Port::Spu, 0x11F))),
+        (0x0400_03FF, None),
+        (0x0400_0520, None),
+    ];
+    // The ARM9 has the geometry engine's registers at these addresses, not the sound registers:
+    // offsets from DISP3DCNT (`0400_0060h`).
+    let arm9 = [
+        (0x0400_0400, Some(Owner::Io(Port::Gpu3d, 0x3A0))),
+        (0x0400_0500, Some(Owner::Io(Port::Gpu3d, 0x4A0))),
+        (0x0400_051F, Some(Owner::Io(Port::Gpu3d, 0x4BF))),
+    ];
     assert_eq!(
         (
             decode_failures::<false>(&arm7),
@@ -278,7 +305,11 @@ fn given_addresses_next_to_the_blocks_when_decoded_then_no_port_owns_them() {
     // Just below and above IME/IE/IF (208-217), the timers (100-10F), IPCSYNC..SEND
     // (180-18B), the 2D registers and the cart-side neighbour of IPCFIFORECV.
     let expected = [
-        (0x0400_0207, None),
+        (0x0400_0203, None),
+        // The slot's registers (`01A0h`-`01AFh`), then the seed registers, which are not modeled.
+        (0x0400_019F, None),
+        (0x0400_01B0, None),
+        (0x0410_0014, None),
         (0x0400_0218, None),
         (0x0400_021B, None),
         (0x0400_0200, None),
@@ -351,16 +382,19 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
     let merged = Effect {
         requests: Requests { arm9: 1, arm7: 0 },
         reschedule: 0b01,
+        ..Effect::default()
     }
     .merge(Effect {
         requests: Requests { arm9: 2, arm7: 4 },
         reschedule: 0b10,
+        ..Effect::default()
     });
     assert_eq!(
         merged,
         Effect {
             requests: Requests { arm9: 3, arm7: 4 },
             reschedule: 0b11,
+            ..Effect::default()
         }
     );
 }
@@ -368,19 +402,20 @@ fn given_two_effects_when_merged_then_requests_and_reschedule_are_ored() {
 #[test]
 fn given_slots_above_bit_7_when_effects_merged_then_the_high_bits_are_kept() {
     let merged = Effect {
-        requests: Requests::default(),
         reschedule: 1 << 9,
+        ..Effect::default()
     }
     .merge(Effect {
-        requests: Requests::default(),
         reschedule: 1 << 31,
+        ..Effect::default()
     });
     assert_eq!(merged.reschedule, (1 << 9) | (1 << 31));
 }
 
 #[test]
-fn given_timers_and_dma_of_both_cpus_when_event_slots_counted_then_there_are_sixteen() {
-    assert_eq!(EVENT_SLOTS, 16);
+fn given_timers_dma_the_card_and_spi_when_event_slots_counted_then_there_are_eighteen() {
+    // Eight timers, eight DMA channels, the one card slot both CPUs share and the ARM7's SPI bus.
+    assert_eq!(EVENT_SLOTS, 18);
 }
 
 /// The kinds queued after each CPU's timer 0 is started through `Io` (TM0CNT_H, START).
@@ -388,7 +423,11 @@ fn kinds_after_both_cpus_start_timer_0() -> Vec<EventKind> {
     const START: u32 = 1 << 7;
     let mut io = Io::new();
     let mut scheduler = Scheduler::new();
-    let at = At { now: 0, floor: 0 };
+    let at = At {
+        now: 0,
+        floor: 0,
+        rom: &[],
+    };
     io.write::<true>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
     io.write::<false>(&mut scheduler, at, Port::Timers, 2, Width::Half, START);
     scheduler.pending().iter().map(|event| event.kind).collect()
@@ -487,6 +526,7 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
     let at = At {
         now,
         floor: now + 1,
+        rom: &[],
     };
     io.write::<true>(
         &mut scheduler,
@@ -508,6 +548,115 @@ fn vblank_start_times(now: u64, time: u64) -> Vec<u64> {
         .filter(|event| event.kind == kind)
         .map(|event| event.time)
         .collect()
+}
+
+#[test]
+fn given_two_effects_with_signals_and_a_recheck_when_merged_then_both_are_kept() {
+    let merged = Effect {
+        signals: Signals::of(Signal::CardWordArm9),
+        ..Effect::default()
+    }
+    .merge(Effect {
+        signals: Signals::of(Signal::CardWordArm7),
+        recheck_levels: true,
+        ..Effect::default()
+    });
+    assert_eq!(
+        (
+            merged.signals.contains(Signal::CardWordArm9),
+            merged.signals.contains(Signal::CardWordArm7),
+            merged.recheck_levels
+        ),
+        (true, true, true)
+    );
+}
+
+#[test]
+fn given_every_signal_when_the_routing_order_is_listed_then_none_is_missing() {
+    let all = Signal::ALL
+        .into_iter()
+        .fold(Signals::default(), |set, signal| {
+            set.merge(Signals::of(signal))
+        });
+    assert_eq!(
+        (
+            all.contains(Signal::CardWordArm9),
+            all.contains(Signal::CardWordArm7),
+            Signal::ALL.len()
+        ),
+        (true, true, 2)
+    );
+}
+
+/// The DMA start events queued, as `(arm9, channel)`, after both CPUs' channel 0 was set to start
+/// on the card slot and `signals` were routed.
+fn card_start_events(signals: Signals) -> Vec<(bool, u8)> {
+    const ENABLE: u32 = 1 << 31;
+    const ARM9_CARD: u32 = 5 << 27;
+    const ARM7_CARD: u32 = 2 << 28;
+    let mut io = Io::new();
+    let mut scheduler = Scheduler::new();
+    let at = At {
+        now: 0,
+        floor: 1,
+        rom: &[],
+    };
+    io.write::<true>(
+        &mut scheduler,
+        at,
+        Port::Dma,
+        8,
+        Width::Word,
+        ENABLE | ARM9_CARD | 1,
+    );
+    io.write::<false>(
+        &mut scheduler,
+        at,
+        Port::Dma,
+        8,
+        Width::Word,
+        ENABLE | ARM7_CARD | 1,
+    );
+    io.route(&mut scheduler, signals, 1);
+    scheduler
+        .pending()
+        .iter()
+        .filter_map(|event| match event.kind {
+            EventKind::Slot {
+                device: DeviceId::Dma,
+                arm9,
+                slot,
+            } => Some((arm9, slot)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_card_word_for_the_arm9_when_routed_then_only_the_arm9_channel_starts() {
+    assert_eq!(
+        card_start_events(Signals::of(Signal::CardWordArm9)),
+        vec![(true, 0)]
+    );
+}
+
+#[test]
+fn given_a_card_word_for_the_arm7_when_routed_then_only_the_arm7_channel_starts() {
+    assert_eq!(
+        card_start_events(Signals::of(Signal::CardWordArm7)),
+        vec![(false, 0)]
+    );
+}
+
+#[test]
+fn given_both_card_signals_when_routed_then_both_channels_start() {
+    let both = Signals::of(Signal::CardWordArm9).merge(Signals::of(Signal::CardWordArm7));
+    assert_eq!(card_start_events(both), vec![(true, 0), (false, 0)]);
+}
+
+#[test]
+fn given_no_signal_when_routed_then_no_channel_starts() {
+    assert_eq!(card_start_events(Signals::default()), vec![]);
 }
 
 #[test]

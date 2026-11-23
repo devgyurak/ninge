@@ -12,12 +12,15 @@ mod misc;
 use super::bios::{SwiRecord, flag_address};
 use crate::cpu::{Bus, Cpu};
 use crate::io::irq::IME_ADDR;
+use crate::spu::{SOUNDBIAS_ADDR, SOUNDBIAS_MASK};
 
 /// The SWI numbers of the wait routines (`hle-swi.md`, "The wait SWIs").
 const WAIT_BY_LOOP: u8 = 0x03;
 const INTR_WAIT: u8 = 0x04;
 const VBLANK_INTR_WAIT: u8 = 0x05;
 const HALT: u8 = 0x06;
+/// SoundBias, ARM7 only (`hle-swi.md`, "The copy, math and decompression SWIs").
+const SOUND_BIAS: u8 = 0x08;
 /// The data routines (`hle-swi.md`, "The copy, math and decompression SWIs").
 const DIV: u8 = 0x09;
 const CPU_SET: u8 = 0x0B;
@@ -27,6 +30,8 @@ const GET_CRC16: u8 = 0x0E;
 const IS_DEBUGGER: u8 = 0x0F;
 const LZ77_WRAM: u8 = 0x11;
 const LZ77_VRAM: u8 = 0x12;
+/// SOUNDBIAS level 200h, the medium level.
+const BIAS_MID: u32 = 0x200;
 /// The V-blank bit of IE, IF and the IRQ check flags.
 const VBLANK: u32 = 1;
 
@@ -41,8 +46,8 @@ pub(super) enum Next {
 
 /// Runs SWI `number` for `cpu`. A number no routine implements has no effect and is recorded
 /// (`hle-swi.md`, "Unimplemented number").
-// TODO(phase5): Sleep (07h) powers down the hardware; TODO(phase6): SoundBias (08h) belongs to the
-// sound registers. Both, and the numbers nothing implements, are the unimplemented path.
+// TODO(phase5): Sleep (07h) powers down the hardware; it and the numbers nothing implements are the
+// unimplemented path.
 // TODO(hw-unverified): WaitByLoop does not delay; the SWI costs one instruction
 // (`hle-swi.md`, "Unverified").
 pub(super) fn run<const ARM9: bool, B: Bus>(
@@ -67,6 +72,10 @@ pub(super) fn run<const ARM9: bool, B: Bus>(
             cpu.regs_mut().set(1, VBLANK);
             intr_wait(cpu, bus);
             Next::IntrWait
+        }
+        SOUND_BIAS if !ARM9 => {
+            sound_bias(cpu, bus);
+            Next::Return
         }
         DIV | CPU_SET | CPU_FAST_SET | SQRT | GET_CRC16 | IS_DEBUGGER | LZ77_WRAM | LZ77_VRAM => {
             data_routine(number, cpu, bus);
@@ -109,6 +118,15 @@ fn data_routine<const ARM9: bool, B: Bus>(number: u8, cpu: &mut Cpu<ARM9>, bus: 
         // `run` sends only the numbers in its data arm, each matched above.
         _ => unreachable!("`run` sends data_routine only the numbers it matches itself"),
     }
+}
+
+/// SoundBias: SOUNDBIAS bits 0-9 become `000h` for `R0 = 0` and `200h` otherwise, the bits above
+/// kept (`hle-swi.md`). The BIOS's stepping and delay (`R1`) are not modeled.
+// TODO(hw-unverified): the register lands on the target at once (`hle-swi.md`, "Unverified").
+fn sound_bias<const ARM9: bool, B: Bus>(cpu: &Cpu<ARM9>, bus: &mut B) {
+    let level = if cpu.regs().get(0) == 0 { 0 } else { BIAS_MID };
+    let kept = bus.read32(SOUNDBIAS_ADDR) & !u32::from(SOUNDBIAS_MASK);
+    bus.write32(SOUNDBIAS_ADDR, kept | level);
 }
 
 /// The start of IntrWait: IME = 1, and with `R0` not zero the old flags of `R1` are discarded

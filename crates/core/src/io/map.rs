@@ -11,14 +11,23 @@ use crate::gpu2d::{
     MASTER_BRIGHT_ADDR, MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, MOSAIC_ADDR, MOSAIC_B_ADDR,
     MOSAIC_BYTES, POWCNT1_ADDR, WINDOW_REGS_ADDR, WINDOW_REGS_B_ADDR, WINDOW_REGS_BYTES,
 };
+use crate::gpu3d::{
+    DISP3DCNT_ADDR, DISP3DCNT_BYTES, GEOMETRY_ADDR, GEOMETRY_BYTES, RENDER_ADDR, RENDER_BYTES,
+};
+use crate::io::cart::{
+    AUXSPICNT_ADDR, BLOCK_LEN as CART_BYTES, DATA_ADDR as CART_DATA_ADDR, EXMEMCNT_ADDR,
+};
 use crate::io::divsqrt::{BLOCK_BYTES as DIVSQRT_BYTES, DIVCNT_ADDR};
 use crate::io::dma::{CHANNELS_BYTES, DMA0FILL_ADDR, DMA0SAD_ADDR, FILL_BYTES};
 use crate::io::ipc::{IPCFIFORECV_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::IME_ADDR;
 use crate::io::keypad::{ARM7_BYTES as KEYPAD7_BYTES, ARM9_BYTES as KEYPAD9_BYTES, KEYINPUT_ADDR};
 use crate::io::power::{BLOCK_BYTES as POWER_BYTES, POSTFLG_ADDR};
+use crate::io::rtc::{BLOCK_BYTES as RTC_BYTES, RTCCNT_ADDR};
+use crate::io::spi::{BLOCK_BYTES as SPI_BYTES, SPICNT_ADDR};
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::DISPSTAT_ADDR;
+use crate::spu::{BLOCK_BYTES as SPU_BYTES, SOUND_REGS_ADDR};
 
 /// Who owns an address, and where in its register space: the memory-control block (VRAMCNT_A..I,
 /// WRAMCNT, WRAMSTAT) stays in `Memory` because the page tables derive from it (#109), every
@@ -57,8 +66,25 @@ pub(crate) enum Port {
     Keypad,
     /// DIVCNT to SQRT_PARAM, ARM9 only.
     DivSqrt,
-    /// HALTCNT, ARM7 only.
+    /// DISP3DCNT, the 3D rendering block and the geometry block, ARM9 only (three table entries,
+    /// one device).
+    Gpu3d,
+    /// HALTCNT and POWCNT2, ARM7 only.
     Power,
+    /// The sound channels, SOUNDCNT, SOUNDBIAS and the capture registers, ARM7 only.
+    Spu,
+    /// SPICNT and SPIDATA, ARM7 only.
+    Spi,
+    /// RTCCNT, ARM7 only.
+    Rtc,
+    /// AUXSPICNT, AUXSPIDATA, ROMCTRL and the command registers of the cartridge slot.
+    Cart,
+    /// EXMEMCNT / EXMEMSTAT: its own entry, because it lives in a different block, but the same
+    /// device as [`Port::Cart`].
+    CartExmem,
+    /// The cartridge data port: its own entry, in a different block, the same device as
+    /// [`Port::Cart`].
+    CartData,
 }
 
 impl Port {
@@ -74,8 +100,13 @@ impl Port {
             Self::Timers => TM0CNT_L_ADDR,
             Self::Dma | Self::DmaFill => DMA0SAD_ADDR,
             Self::DivSqrt => DIVCNT_ADDR,
+            Self::Gpu3d => DISP3DCNT_ADDR,
             Self::Keypad => KEYINPUT_ADDR,
             Self::Power => POSTFLG_ADDR,
+            Self::Spu => SOUND_REGS_ADDR,
+            Self::Spi => SPICNT_ADDR,
+            Self::Rtc => RTCCNT_ADDR,
+            Self::Cart | Self::CartExmem | Self::CartData => AUXSPICNT_ADDR,
         }
     }
 }
@@ -89,7 +120,7 @@ pub(crate) type PortEntry = (u32, u32, Option<Port>);
 /// entry belong to its device, which reads them 0 and drops writes to them.
 // TODO(hw-unverified): the I/O block is not mirrored (`arm9-memory-map.md`, "Unverified").
 // TODO(phase3): the I/O registers of the other blocks arrive with their issues.
-pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
+pub(crate) const ARM9_PORTS: [PortEntry; 33] = [
     (DISPCNT_A_ADDR, 4, Some(Port::Gpu2d)),
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     // BG0CNT-BG3CNT and the scroll registers of BG0-BG3, in the same device as DISPCNT.
@@ -102,6 +133,8 @@ pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
     (MOSAIC_ADDR, MOSAIC_BYTES, Some(Port::Gpu2d)),
     // BLDCNT, BLDALPHA and BLDY, the colour special effects.
     (BLD_REGS_ADDR, BLD_REGS_BYTES, Some(Port::Gpu2d)),
+    // DISP3DCNT, a halfword and two unused bytes.
+    (DISP3DCNT_ADDR, DISP3DCNT_BYTES, Some(Port::Gpu3d)),
     // DISPCAPCNT, the display capture control register.
     (DISPCAPCNT_ADDR, DISPCAPCNT_BYTES, Some(Port::Gpu2d)),
     // DISP_MMEM_FIFO, the main-memory display FIFO.
@@ -124,6 +157,12 @@ pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
     // holds (the block stays on the 4-byte grid).
     (VRAMCNT_A_ADDR, 12, None),
     (POWCNT1_ADDR, 4, Some(Port::Gpu2d)),
+    // The 3D rendering registers, RDLINES_COUNT to TOON_TABLE, and the geometry engine's GXFIFO,
+    // command ports, GXSTAT and result registers.
+    (RENDER_ADDR, RENDER_BYTES, Some(Port::Gpu3d)),
+    // TODO(hw-unverified): GXFIFO mirrors every 4 bytes up to `0400_043Fh`, and the addresses no
+    // register uses read 0 (`gx-stub.md`, "Unverified").
+    (GEOMETRY_ADDR, GEOMETRY_BYTES, Some(Port::Gpu3d)),
     // Engine B's block, the same layout 1000h on: DISPCNT, then the BG control and scroll registers.
     (DISPCNT_B_ADDR, 4, Some(Port::Gpu2d)),
     (BG_REGS_B_ADDR, BG_REGS_BYTES, Some(Port::Gpu2d)),
@@ -133,23 +172,37 @@ pub(crate) const ARM9_PORTS: [PortEntry; 27] = [
     (BLD_REGS_B_ADDR, BLD_REGS_BYTES, Some(Port::Gpu2d)),
     (MASTER_BRIGHT_B_ADDR, MASTER_BRIGHT_BYTES, Some(Port::Gpu2d)),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
+    // AUXSPICNT, AUXSPIDATA, ROMCTRL and the command registers; EXMEMCNT; the data port.
+    (AUXSPICNT_ADDR, CART_BYTES, Some(Port::Cart)),
+    (EXMEMCNT_ADDR, 4, Some(Port::CartExmem)),
+    (CART_DATA_ADDR, 4, Some(Port::CartData)),
 ];
 
 /// What the ARM7 sees: the same blocks, without the 2D engines, and WRAMSTAT in place of the ARM9's
 /// memory-control block.
-pub(crate) const ARM7_PORTS: [PortEntry; 9] = [
+pub(crate) const ARM7_PORTS: [PortEntry; 15] = [
     (DISPSTAT_ADDR, 4, Some(Port::Timing)),
     (DMA0SAD_ADDR, CHANNELS_BYTES, Some(Port::Dma)),
     (TM0CNT_L_ADDR, 16, Some(Port::Timers)),
     // KEYINPUT, KEYCNT, a hole (RCNT) and EXTKEYIN.
     (KEYINPUT_ADDR, KEYPAD7_BYTES, Some(Port::Keypad)),
+    // RTCCNT, right after EXTKEYIN.
+    (RTCCNT_ADDR, RTC_BYTES, Some(Port::Rtc)),
     (IPCSYNC_ADDR, 12, Some(Port::Ipc)),
     (IME_ADDR, 16, Some(Port::Irq)),
-    // POSTFLG and HALTCNT.
+    // POSTFLG, HALTCNT and POWCNT2.
     (POSTFLG_ADDR, POWER_BYTES, Some(Port::Power)),
+    // The sound registers. The list is not strictly ascending: the entries keep the places of
+    // the blocks they belong to.
+    (SOUND_REGS_ADDR, SPU_BYTES, Some(Port::Spu)),
     // WRAMSTAT sits in the second byte.
     (VRAMCNT_A_ADDR, 4, None),
     (IPCFIFORECV_ADDR, 4, Some(Port::IpcRecv)),
+    (AUXSPICNT_ADDR, CART_BYTES, Some(Port::Cart)),
+    // SPICNT and SPIDATA, after the cartridge block.
+    (SPICNT_ADDR, SPI_BYTES, Some(Port::Spi)),
+    (EXMEMCNT_ADDR, 4, Some(Port::CartExmem)),
+    (CART_DATA_ADDR, 4, Some(Port::CartData)),
 ];
 
 /// The owner of `addr` for CPU `ARM9` and its offset there, or `None` when nothing holds it (it

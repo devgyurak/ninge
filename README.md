@@ -34,13 +34,15 @@ in [`docs/STATUS.md`](docs/STATUS.md).
 
 | Works today | Not yet |
 |---|---|
-| Both CPUs (ARMv5TE and ARMv4T) on a deterministic event scheduler | The bottom screen (2D engine B) |
-| Shared work RAM, video RAM bank A, IPC, interrupts, timers, DMA | Input: the keypad always reads "nothing pressed" |
-| HLE BIOS calls and direct boot: no dump needed | Touch screen, cartridge reads and its file system |
-| Text backgrounds on the top screen | Sprites, 3D and sound |
-| A homebrew program's console output on the top screen | The real-time clock (reads 0) |
+| Both CPUs (ARMv5TE and ARMv4T) on a deterministic event scheduler | Sound: the registers answer, nothing is played |
+| Both screens in 2D: backgrounds, sprites, windows, blending, display capture | 3D: geometry commands are accepted, nothing is drawn |
+| Keyboard, gamepad and mouse input; the touch screen, the microphone and the lid | Performance work: it is the last phase |
+| Cartridge reads, save chips (EEPROM, FLASH, FRAM) and save files | The debugger |
+| The real-time clock, set from the host's clock | Layouts other than one screen above the other |
+| HLE BIOS calls, direct boot and synthetic firmware: no dump needed | |
 
-The limits of each release are in [`docs/release-notes/`](docs/release-notes/).
+The table describes the `develop` branch. A published release can be older: what each one
+can and cannot do is in [`docs/release-notes/`](docs/release-notes/).
 
 ## Install
 
@@ -57,7 +59,9 @@ From a clone of this repository:
 cargo install --locked --path crates/frontend
 ```
 
-macOS (Apple Silicon first) and Linux are supported; Windows is planned.
+macOS (Apple Silicon first) and Linux are supported; Windows is planned. On Linux the gamepad
+support needs the libudev headers to build: install `libudev-dev` and `pkg-config` (Debian and
+Ubuntu names) first.
 
 ## Run
 
@@ -68,8 +72,23 @@ ninge path/to/program.nds   # run a ROM
 ninge                       # no ROM: show a test pattern
 ```
 
-Quit with `q`, `Esc` or `Ctrl-C`. ninge runs programs you have the right to run, such as
+Quit with `Ctrl-C` or `Ctrl-Q`. ninge runs programs you have the right to run, such as
 homebrew you built yourself; it ships no ROMs and never needs a BIOS or firmware file.
+
+| Console | Keyboard | Gamepad |
+|---|---|---|
+| D-pad | Arrow keys | D-pad or left stick |
+| A, B | `X`, `Z` | East, South (by position, not by label) |
+| X, Y | `S`, `A` | North, West |
+| L, R | `Q`, `W` | Shoulder buttons |
+| Start, Select | Enter, Backspace | Start, Select |
+| Touch screen | Mouse: the left button is the pen. Or `Tab` for a cursor: `h` `j` `k` `l` move it, Space presses, `d` toggles a drag | |
+| Microphone | `M`, held, is blowing into it | |
+| Lid | `` ` `` closes and opens it | |
+
+A cartridge's save is kept in a file beside the ROM, with the extension `.sav`; `--save PATH`
+names another file, and `--save-type TYPE` names the save chip when detecting it gets it
+wrong.
 
 ## Build and test
 
@@ -154,3 +173,6 @@ requests go to `develop`.
 ## License
 
 [Apache License 2.0](LICENSE).
+
+ninge is not affiliated with, endorsed by or sponsored by Nintendo. Nintendo DS is a
+trademark of Nintendo, named here only to say which hardware ninge is compatible with.

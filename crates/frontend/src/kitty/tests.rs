@@ -143,14 +143,14 @@ fn given_shm_name_when_transmitting_shm_then_payload_decodes_to_the_name_in_one_
 #[test]
 fn given_name_when_building_probe_query_then_query_keys_payload_and_da1_follow_in_order() {
     let query = probe_query("/ninge-1-2");
-    let (graphics, da1) = query.split_at(query.len() - 3);
+    let (graphics, tail) = query.split_at(query.len() - 16);
     let seqs = seqs(graphics);
     assert_eq!(
-        (seqs[0].0.as_str(), STANDARD.decode(&seqs[0].1).ok(), da1),
+        (seqs[0].0.as_str(), STANDARD.decode(&seqs[0].1).ok(), tail),
         (
             "a=q,i=31,t=s,f=24,s=1,v=1,S=3,q=0",
             Some(b"/ninge-1-2".to_vec()),
-            b"\x1b[c".as_slice()
+            b"\x1b[?u\x1b[?1016$p\x1b[c".as_slice()
         )
     );
 }
@@ -220,4 +220,87 @@ fn given_private_csi_before_da1_when_checking_completeness_then_the_da1_still_co
 #[test]
 fn given_csi_that_is_not_da1_when_checking_completeness_then_it_is_not_complete() {
     assert_eq!(first_complete(b"\x1b[?25h"), None);
+}
+
+/// The cases of `parse_keyboard_reply` whose answer is not the expected one.
+fn keyboard_failures(cases: &[(&str, Vec<u8>, bool)]) -> Vec<String> {
+    cases
+        .iter()
+        .filter(|(_, bytes, want)| parse_keyboard_reply(bytes) != *want)
+        .map(|(name, ..)| (*name).to_string())
+        .collect()
+}
+
+#[test]
+fn given_assorted_replies_when_parsing_the_keyboard_answer_then_only_a_flags_reply_counts() {
+    let ok = reply("i=31;OK");
+    let cases = [
+        ("flags 0", b"\x1b[?0u".to_vec(), true),
+        ("flags 11", b"\x1b[?11u".to_vec(), true),
+        ("before da1", joined(&[b"\x1b[?0u", DA1_ANSWER]), true),
+        (
+            "after graphics",
+            joined(&[&ok, b"\x1b[?0u", DA1_ANSWER]),
+            true,
+        ),
+        ("da1 only", DA1_ANSWER.to_vec(), false),
+        ("graphics only", ok.clone(), false),
+        ("no flags", b"\x1b[?u".to_vec(), false),
+        ("cut before the final byte", b"\x1b[?11".to_vec(), false),
+        ("another private mode", b"\x1b[?2026;2$y".to_vec(), false),
+        ("nothing", Vec::new(), false),
+    ];
+    assert_eq!(keyboard_failures(&cases), Vec::<String>::new());
+}
+
+/// The cases of `parse_pixels_reply` whose answer is not the expected one.
+fn pixels_failures(cases: &[(&str, Vec<u8>, bool)]) -> Vec<String> {
+    cases
+        .iter()
+        .filter(|(_, bytes, want)| parse_pixels_reply(bytes) != *want)
+        .map(|(name, ..)| (*name).to_string())
+        .collect()
+}
+
+#[test]
+fn given_assorted_replies_when_parsing_the_pixels_answer_then_only_a_known_mode_counts() {
+    let cases = [
+        ("reset", b"\x1b[?1016;2$y".to_vec(), true),
+        ("set", b"\x1b[?1016;1$y".to_vec(), true),
+        ("before da1", joined(&[b"\x1b[?1016;2$y", DA1_ANSWER]), true),
+        (
+            "after keyboard",
+            joined(&[b"\x1b[?0u", b"\x1b[?1016;2$y", DA1_ANSWER]),
+            true,
+        ),
+        ("not recognized", b"\x1b[?1016;0$y".to_vec(), false),
+        ("permanently set", b"\x1b[?1016;3$y".to_vec(), false),
+        ("permanently reset", b"\x1b[?1016;4$y".to_vec(), false),
+        ("another mode", b"\x1b[?2026;2$y".to_vec(), false),
+        ("cut before the end", b"\x1b[?1016;2$".to_vec(), false),
+        ("da1 only", DA1_ANSWER.to_vec(), false),
+        ("nothing", Vec::new(), false),
+    ];
+    assert_eq!(pixels_failures(&cases), Vec::<String>::new());
+}
+
+#[test]
+fn given_pixels_off_when_enabling_the_mouse_then_button_drag_and_sgr_are_asked_for() {
+    assert_eq!(mouse_enable(false), b"\x1b[?1002h\x1b[?1006h".to_vec());
+}
+
+#[test]
+fn given_pixels_on_when_enabling_the_mouse_then_sgr_pixels_follows_sgr() {
+    assert_eq!(
+        mouse_enable(true),
+        b"\x1b[?1002h\x1b[?1006h\x1b[?1016h".to_vec()
+    );
+}
+
+#[test]
+fn given_the_enable_bytes_when_disabling_then_every_mode_turned_on_is_turned_off() {
+    assert_eq!(
+        mouse_disable(),
+        b"\x1b[?1016l\x1b[?1006l\x1b[?1002l".as_slice()
+    );
 }

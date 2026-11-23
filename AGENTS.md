@@ -38,12 +38,11 @@ says plainly that it skipped the cargo gates — do not report those as passed.
 
 Do not route around a failure with `#[allow(...)]`, `#[ignore]`, `--no-verify`, or by
 editing a gate. When a lint exception is genuinely right, use
-`#[expect(clippy::<lint>, reason = "<why>")]` so the reason is on the item and the exception
-disappears when it stops being needed. A skipped test carries
-`#[ignore = "<why>"]`.
+`#[expect(clippy::<lint>, reason = "<why>")]`: the reason sits on the item and the exception
+disappears when it stops being needed. A skipped test carries `#[ignore = "<why>"]`.
 
-The hook scripts are Python, standard library only, and must run on Python 3.9 (macOS's
-`/usr/bin/python3`); `scripts/check_agent_config.py` needs 3.11+ (`tomllib`).
+Hook scripts are standard-library Python that runs on 3.9 (macOS's `/usr/bin/python3`);
+`scripts/check_agent_config.py` needs 3.11+ (`tomllib`).
 
 ---
 
@@ -75,11 +74,17 @@ ninge-runner ────┘                        nothing depends on the front
 
 Inside ninge-core: `machine/` (`Machine`, the one struct that owns all state) · `cpu/` (shared
 ARMv4T/v5TE interpreter) · `bus/` (ARM9 view, ARM7 view, shared memory) · `io/` (the register
-devices: `irq/` `ipc/` `timers/` `dma/` `timing/`; the address map `io/map.rs`; the one device
-interface `io/device.rs`) · `savestate/` · `scheduler/` · `gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/`
-(protocol, AUXSPI saves) · `spi/` (synthetic firmware, touch, power) · `hle/` (HLE BIOS SWIs,
-direct boot) · `debug/` (the read-only inspect API, `Machine::inspect`; breakpoint and trace
-hooks come later).
+devices: `irq/` `ipc/` `timers/` `dma/` `timing/` `cart/` `divsqrt/` `keypad/` `power/`; the
+address map `io/map.rs`; the one device interface `io/device.rs`) · `savestate/` · `scheduler/` ·
+`gpu2d/` (engines A/B) · `gpu3d/` · `spu/` · `cart/` (protocol, AUXSPI saves) · `spi/`
+(synthetic firmware, touch, power) · `rtc/` · `hle/` (HLE BIOS SWIs, direct boot) · `debug/` (the
+read-only inspect API, `Machine::inspect`; breakpoint/trace hooks come later).
+
+**Placement.** A hardware model apart from its register window (`cart/`, `gpu2d/`, later `spu/` `gpu3d/`
+`spi/`) is top-level; the registers the bus reaches are its entrance, `io/<device>/`
+(`io/cart/`). A device whose registers are its state (`divsqrt` `keypad` `power` `timers` `ipc`
+`irq` `dma` `timing`) lives wholly in `io/`. A model whose registers are its state may skip the
+entrance and register directly (`gpu2d`).
 
 ### Rules you must keep (plan §4.2, §8)
 
@@ -88,13 +93,13 @@ hooks come later).
    `thread` / `env`, no `SystemTime` / `Instant`, no `print!` / `dbg!`, no randomness. IO
    belongs to ninge-runner and the frontend, which hand bytes in and take frames out.
    **Forbidden crates in `ninge-core`:** `anyhow` · `base64` · `chrono` · `cpal` · `crossbeam` · `crossterm` · `fastrand` · `flate2` · `getrandom` · `gilrs` · `libc` · `memmap2` · `mio` · `nix` · `parking_lot` · `rand` · `ratatui` · `rayon` · `time` · `tokio`.
-   `rayon` is on that list although plan §3.2 names it for the Phase 7 rasterizer (decided,
+   `rayon` is listed although plan §3.2 names it for the Phase 7 rasterizer (decided,
    `docs/STATUS.md`): the rasterizer is a pure per-scanline function in ninge-core, driven
-   through a `ScanlineExecutor` trait that ninge-core defines with a sequential
-   implementation. The `rayon` executor lives outside core and is passed in as a generic
-   parameter — static dispatch, no thread dependency in core. Each scanline reads only an
-   immutable snapshot and writes only its own line, so the result cannot depend on
-   scheduling, and a test pins parallel output = sequential output.
+   through a `ScanlineExecutor` trait that core defines with a sequential implementation. The
+   `rayon` executor lives outside core and is passed in as a generic parameter (static
+   dispatch, no thread dependency in core). Each scanline reads only an immutable snapshot and
+   writes only its own line, so scheduling cannot change the result; a test pins parallel
+   output = sequential output.
 
 2. **Single ownership.** One top-level struct owns all emulator state and everything is
    reached through `&mut self`. Plan §4.2 names it `Nds`; plan §8 rule 10 keeps trademarks
@@ -153,11 +158,10 @@ hooks come later).
     (`t=d`, `o=z`) otherwise. The choice is made at startup by a `t=s` query, never by the
     terminal's name, and a failed shm write switches to zlib for good.
 
-**Platforms** (decided): macOS is first-class (Apple Silicon is the target machine); Linux is
-guaranteed to pass CI; **Windows support is planned**, not yet provided. Nothing needs a
-Windows code path today, but do not close the door: ninge-core is platform-independent by
-construction, and the frontend keeps OS-specific pieces (shared memory, raw terminal setup,
-paths) behind a small module of its own, so a Windows backend is an addition, not a rewrite.
+**Platforms** (decided): macOS is first-class (Apple Silicon is the target); Linux is
+guaranteed to pass CI; **Windows is planned**, not provided. No Windows code path is needed
+yet, but keep the door open: ninge-core is platform-independent by construction, and the
+frontend keeps OS-specific pieces (shared memory, raw terminal, paths) in a small module.
 
 `check_architecture.py` (edit hook and CI) enforces rules 1, 2, 3, 5, and 10 mechanically.
 For a justified exception, put `// PURITY-OK: <reason>` on the line or the line above; the
@@ -287,7 +291,6 @@ ninge is licensed under **Apache-2.0** (`LICENSE`; decided, `docs/STATUS.md`).
 - `#[inline]` / `#[inline(always)]` on the hot path only with a measurement.
 - **Adding a dependency** asks first (`cargo add` is an `ask` permission). It must be
   permissively licensed (§3.7), and ninge-core's list in §2 rule 1 still applies.
-- **Comments and docs are English** (§9).
 
 ---
 
@@ -379,15 +382,14 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 ### 5.9 Coverage floor is 90%
 
 **Coverage floor:** `90%` line coverage across the workspace, measured by `cargo-llvm-cov` in
-`./scripts/verify.sh` and CI (`--fail-under-lines 90`). Falling below fails the gate.
+`./scripts/verify.sh` and CI (`--fail-under-lines 90`).
 
 - Raise coverage by writing tests that assert hardware behavior — never by lowering the
   floor, excluding files (`--ignore-filename-regex`, `#[coverage(off)]`), or writing tests
   that only execute code (§5.4).
-- The frontend (`ninge`) is included. Keep terminal IO behind thin adapters so the logic around them
-  (layout, input mapping, pacing, the kitty encoder) is testable without a terminal.
-- Coverage is necessary, not sufficient: a covered line whose behavior no test checks is
-  still untested.
+- The frontend (`ninge`) is included. Keep terminal IO behind thin adapters so the logic
+  around them (layout, input mapping, pacing, the kitty encoder) is testable without one.
+- Coverage is necessary, not sufficient: a covered line no test checks is still untested.
 
 ---
 
@@ -415,12 +417,12 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 - **Debugger exposure** (plan §7.1 step 4): new state is visible in a debugger panel, or
   the PR says which panel will show it and when.
 - **Design decisions are GitHub issues**, not files in the repo. A decision that is expensive
-  to reverse or that someone will later want to "tidy" (the crate graph, the savestate
-  format, the scheduler model, what may use `unsafe`) gets an issue labeled `decision` from
+  to reverse or that someone will want to "tidy" (the crate graph, the savestate format, the
+  scheduler model, what may use `unsafe`) gets an issue labeled `decision` from
   `.github/ISSUE_TEMPLATE/decision.md`: context, decision, consequences, alternatives. The PR
   that acts on it links the issue, and code that exists because of it cites it
-  (`// Decided in #42.`). An agent may draft such an issue only when asked (`gh issue create`
-  is an `ask` permission); deciding and closing it is a human's call.
+  (`// Decided in #42.`). An agent drafts one only when asked (`gh issue create` is an `ask`
+  permission); deciding and closing it is a human's call.
 - Markers: `TODO(hw-unverified)` (spec unsure, §3.4), `TODO(phaseN)` (deferred to phase N),
   `PURITY-OK:` (§2 exception), `SAFETY:` (§2 rule 10).
 
@@ -441,41 +443,39 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   runs `.github/workflows/release.yml`: one `cargo publish` of **ninge-core and ninge**
   (`cargo install ninge`), after a reviewer approves the `crates-io` environment that holds
   the token. **ninge-runner and ninge-tracediff are not published** (decided 2026-11-11):
-  their tests and golden frames need the repository's `testroms/`, and publishing would put
-  their command line and report format under SemVer while both still change; publishing one
-  later is a one-line change. macOS arm64 and Linux x86_64 binaries on GitHub Releases and a
-  Homebrew tap come later.
+  their tests need the repository's `testroms/`, and publishing would put their command line
+  and report format under SemVer while both still change. macOS arm64 and Linux x86_64
+  binaries on GitHub Releases and a Homebrew tap come later.
 - **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS. The
   Rust toolchain, `cargo-nextest`, and `cargo-llvm-cov` steps switch on the moment
   `Cargo.toml` exists.
 - **BlocksDS is required** (decided). Built test ROMs are never committed (§3.1), so the
-  golden tests — and therefore the 90% coverage floor — need the SDK. It comes from the
-  official BlocksDS Docker image **pinned by digest**, the same image locally and in CI.
-  Code reads the digest only from `scripts/build_testroms.sh`; `docs/STATUS.md` records it
-  and `check_agent_config.py` keeps the two equal. Bumping it is an `UPT:` PR, and
-  every golden hash it changes needs its reason. macOS runners cannot run Docker, so CI
-  builds the ROMs once on ubuntu (`testroms` job). The ubuntu verify job rebuilds from source
-  and must match that artifact's `SHA256SUMS`; the macOS job checks the artifact against it
-  (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only).
-  Without Docker and without that variable `verify.sh` fails — it never skips the step.
+  golden tests, and so the 90% coverage floor, need the SDK. It comes from the official
+  BlocksDS Docker image **pinned by digest**, the same locally and in CI. Code reads the digest
+  only from `scripts/build_testroms.sh`; `docs/STATUS.md` records it and
+  `check_agent_config.py` keeps the two equal. Bumping it is an `UPT:` PR, and every golden
+  hash it changes needs its reason. macOS runners cannot run Docker, so CI builds the ROMs
+  once on ubuntu (`testroms` job). The ubuntu verify job rebuilds from source and must match
+  that artifact's `SHA256SUMS`; the macOS job checks the artifact against it
+  (`NINGE_PREBUILT_TESTROMS=1`, set in `ci.yml` only). Without Docker and without that
+  variable `verify.sh` fails; it never skips the step.
 - **The coverage floor is not CI-only and is never disabled.** `check_agent_config.py` fails
   if the floor in §5.9 and the one in `scripts/verify.sh` differ.
 - **Agent config** (`.github/workflows/agents.yml`) runs `scripts/check_agent_config.py` and
-  the hook self-test, so a broken pointer or hook fails in the PR, not on a contributor's
-  machine.
-- **Local hooks are best-effort; CI is the real gate.** A file changed by `Bash`/`sed`, or by
-  a harness whose hook is not wired, skips the edit hooks. Every rule that matters has a
-  whole-repo mode (`--all`, `--scan-tracked`) that verify.sh and CI run.
-- **One implementation of each gate.** Decision logic lives only in `scripts/agent_hooks/`.
-  The CI modes and the tool adapters call it; nothing copies it. `check_agent_config.py`
-  imports the hooks' lists to prove §2 and §3.3 state the same ones.
+  the hook self-test, so a broken pointer or hook fails in the PR.
+- **Local hooks are best-effort; CI is the real gate.** A file changed by `Bash`/`sed`, or by a
+  harness with no wired hook, skips the edit hooks. Every rule that matters has a whole-repo
+  mode (`--all`, `--scan-tracked`) that verify.sh and CI run.
+- **One implementation of each gate.** Decision logic lives only in `scripts/agent_hooks/`;
+  CI modes and tool adapters call it, nothing copies it. `check_agent_config.py` imports the
+  hooks' lists to prove §2 and §3.3 state the same ones.
 - **One permission policy across harnesses.** Allow read-only verification
   (`cargo fmt|clippy|check|test|nextest|llvm-cov|tree|doc`, `python3 scripts/…`, `./scripts/verify.sh`,
-  `git status|diff|log|show`) and `git add|commit|push` — an agent still commits or pushes
-  only when the user asks (§8), so a prompt adds nothing; **ask** for dependency and
-  outward-facing commands (`cargo add`, `cargo install`, `cargo update`, `gh issue create`,
-  `gh pr create`); **deny** destructive ones (`rm -rf`, force-push). Wired in `.claude/settings.json` and `.opencode/opencode.json`; Pi
-  and Codex follow their own settings, and the shared guard still runs.
+  `git status|diff|log|show`) and `git add|commit|push` (an agent still commits or pushes only
+  when the user asks, §8); **ask** for dependency and outward-facing commands (`cargo add`,
+  `cargo install`, `cargo update`, `gh issue create`, `gh pr create`); **deny** destructive
+  ones (`rm -rf`, force-push). Wired in `.claude/settings.json` and `.opencode/opencode.json`;
+  Pi and Codex follow their own settings, and the shared guard still runs.
 
 ---
 
@@ -488,7 +488,7 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 4. `./scripts/verify.sh`, all green.
 5. Report factually what changed and what you verified. If something failed or was skipped,
    say so.
-6. **Commit and push only when the user asks.** The permissions do not prompt for
+6. **Commit and push only when the user asks.** Permissions do not prompt for
    `git commit` / `git push`; the user's request is the approval.
 
 ### Commit · PR · branch names
@@ -509,8 +509,8 @@ always `DOCS:`. `scripts/` and `.github/workflows/` are code — they run.
 
 **One PR = one hardware feature or one bug** (plan §7.3). Branches are
 `<prefix lowercase>/<summary-kebab>` (`add/ipc-fifo`, `fix/ldm-writeback-base-in-list`),
-cut from `develop`. Full guidance and the pre-commit checklist live in the `commit` skill
-(`.claude/skills/commit/SKILL.md`). Read it before committing.
+cut from `develop`. The pre-commit checklist lives in the `commit` skill
+(`.claude/skills/commit/SKILL.md`); read it before committing.
 
 ---
 

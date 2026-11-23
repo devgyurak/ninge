@@ -41,6 +41,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [DMA](dma.md)
 - [Hardware divider and square root](divsqrt.md)
 - [Keypad](keypad.md)
+- [Sound registers, capture registers and POWCNT2](sound-registers.md)
 
 **Video**
 
@@ -54,10 +55,17 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Windows: WIN0, WIN1, the OBJ window and the outside region (both engines)](windows.md)
 - [Colour special effects and master brightness (both engines)](blending.md)
 - [Display capture and the main-memory display (engine A)](display-capture.md)
+- [The 3D engine stub: command ports, GXSTAT, stack pointers, DMA start mode 7](gx-stub.md)
 
 **Boot and BIOS**
 
 - [Cartridge header](cart-header.md)
+- [Cartridge protocol: reading the ROM (B7, B8, ROMCTRL, the data port, DMA, IRQ)](cart-protocol.md)
+- [Cartridge save chips: the AUXSPI bus (EEPROM, FLASH, FRAM)](auxspi-saves.md)
+- [The SPI bus (SPICNT, SPIDATA)](spi.md)
+- [The real-time clock (RTCCNT)](rtc.md)
+- [The touch-screen controller and the power-management device](touch-power.md)
+- [Firmware: the flash chip and our synthetic image](firmware.md)
 - [Direct boot (ARM9)](direct-boot.md)
 - [HLE BIOS: the BIOS area, the vectors, SWI entry and the IRQ dispatcher](hle-swi.md)
 

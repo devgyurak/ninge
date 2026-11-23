@@ -13,6 +13,8 @@ use crate::cpu::Bank;
 const RAM: u32 = 0x0200_0000;
 const RAM_END: u32 = 0x0240_0000;
 const HEADER_COPY: u32 = 0x027F_FE00;
+/// The chip ID the BIOS leaves, twice, and the firmware's copy of both (`direct-boot.md`).
+const CHIP_IDS: [u32; 4] = [0x027F_F800, 0x027F_F804, 0x027F_FC00, 0x027F_FC04];
 /// `add r0, r0, #1`.
 const ADD_R0_1: u32 = 0xE280_0001;
 /// `b` to the instruction before it (offset -12 from the branch plus pipeline 8 = -3 words).
@@ -171,6 +173,13 @@ fn given_valid_image_when_loading_then_all_other_main_ram_is_zero() {
         (RAM, 0x100),
         (0x0238_0000, 0x80),
         (HEADER_COPY & 0x023F_FFFF, HEADER_LEN as u32),
+        (CHIP_IDS[0] & 0x023F_FFFF, 8),
+        (CHIP_IDS[2] & 0x023F_FFFF, 8),
+        // The values the BIOS and firmware leave, and the user-settings copy (`direct-boot.md`,
+        // "Boot-time values in main RAM"); `machine::tests::boot` pins each one.
+        (0x027F_F800 & 0x023F_FFFF, 0x94),
+        (0x027F_FC00 & 0x023F_FFFF, 0x42),
+        (0x027F_FC80 & 0x023F_FFFF, 0x70),
     ];
     assert_eq!(stray_nonzero_words(&machine, &allowed), Vec::<u32>::new());
 }
@@ -189,7 +198,17 @@ fn given_arm7_in_the_wram_range_when_loading_then_nothing_else_in_main_ram_chang
     image.arm7.ram_address = 0x037F_8000;
     image.arm7.entry = 0x037F_8000;
     let machine = booted(&image);
-    let allowed = [(RAM, 0x100), (HEADER_COPY & 0x023F_FFFF, HEADER_LEN as u32)];
+    let allowed = [
+        (RAM, 0x100),
+        (HEADER_COPY & 0x023F_FFFF, HEADER_LEN as u32),
+        (CHIP_IDS[0] & 0x023F_FFFF, 8),
+        (CHIP_IDS[2] & 0x023F_FFFF, 8),
+        // The values the BIOS and firmware leave, and the user-settings copy (`direct-boot.md`,
+        // "Boot-time values in main RAM"); `machine::tests::boot` pins each one.
+        (0x027F_F800 & 0x023F_FFFF, 0x94),
+        (0x027F_FC00 & 0x023F_FFFF, 0x42),
+        (0x027F_FC80 & 0x023F_FFFF, 0x70),
+    ];
     assert_eq!(stray_nonzero_words(&machine, &allowed), Vec::<u32>::new());
 }
 
@@ -601,4 +620,96 @@ fn trap_table_failures() -> Vec<u32> {
 #[test]
 fn given_the_vector_addresses_plus_eight_when_looked_up_then_each_cpu_traps_only_in_its_own_bios() {
     assert_eq!(trap_table_failures(), Vec::<u32>::new());
+}
+
+/// The four words the BIOS and firmware leave the chip ID in, after booting a header whose device
+/// capacity byte (`014h`) is `n`.
+fn chip_id_words_for_capacity(n: u8) -> Vec<u32> {
+    let mut rom = Image::valid().build();
+    rom[0x14] = n;
+    let mut machine = Machine::new();
+    machine.load_rom(rom).expect("valid image");
+    CHIP_IDS
+        .iter()
+        .map(|&address| machine.inspect().arm9_peek32(address))
+        .collect()
+}
+
+#[test]
+fn given_a_16_mib_header_when_loading_then_the_chip_id_is_left_in_all_four_places() {
+    // `cart-protocol.md`, "The chip ID": capacity 128 KiB << 7 is 16 MiB, size byte 0Fh.
+    assert_eq!(chip_id_words_for_capacity(7), vec![0x0000_0FC2; 4]);
+}
+
+#[test]
+fn given_a_header_naming_a_128_mib_chip_when_loading_then_the_chip_id_carries_the_variant_bit() {
+    assert_eq!(chip_id_words_for_capacity(10), vec![0x8000_7FC2; 4]);
+}
+
+// ---- Boot-time values: the pure part (`direct-boot.md`, "Boot-time values in main RAM") ----
+
+/// `boot_values` for `Image::valid()` and a firmware image of `firmware`.
+fn values_for(firmware: &[u8]) -> (Vec<super::direct_boot::BootValue>, Vec<u8>) {
+    let rom = Image::valid().build();
+    let header = crate::cart::parse(&rom).expect("valid image");
+    super::direct_boot::boot_values(&rom, &header, firmware)
+}
+
+/// The value listed for `address`, or `None` when it is not written (zero).
+fn listed(values: &[super::direct_boot::BootValue], address: u32) -> Option<u32> {
+    values
+        .iter()
+        .find(|v| v.address == address)
+        .map(|v| v.value)
+}
+
+#[test]
+fn given_a_firmware_with_no_valid_settings_area_when_the_values_are_built_then_the_bad_flag_is_one_and_there_is_no_copy()
+ {
+    let blank = vec![0xFF; crate::spi::FIRMWARE_LEN];
+    let (values, copy) = values_for(&blank);
+    assert_eq!(
+        (listed(&values, 0x027F_F864), copy),
+        (Some(1), Vec::<u8>::new())
+    );
+}
+
+#[test]
+fn given_the_synthetic_firmware_when_the_values_are_built_then_the_flag_is_not_listed_and_the_copy_is_70h_bytes()
+ {
+    let firmware = crate::spi::build(&crate::spi::FirmwareSettings::default());
+    let (values, copy) = values_for(&firmware);
+    assert_eq!((listed(&values, 0x027F_F864), copy.len()), (None, 0x70));
+}
+
+#[test]
+fn given_a_firmware_whose_header_moves_the_settings_when_the_values_are_built_then_the_address_follows_it()
+ {
+    let mut firmware = crate::spi::build(&crate::spi::FirmwareSettings::default());
+    firmware[0x20..0x22].copy_from_slice(&0x1000u16.to_le_bytes());
+    firmware[0x26..0x28].copy_from_slice(&0xBEEFu16.to_le_bytes());
+    let (values, _) = values_for(&firmware);
+    assert_eq!(
+        (listed(&values, 0x027F_F868), listed(&values, 0x027F_F874)),
+        (Some(0x8000), Some(0xBEEF))
+    );
+}
+
+/// The synthetic firmware with the counters swapped (area 0 newest) and byte `0Ah` of area 0 set to
+/// `77h`, its CRC recomputed.
+fn firmware_with_area_0_newest() -> Vec<u8> {
+    let mut firmware = crate::spi::build(&crate::spi::FirmwareSettings::default());
+    firmware[0x3_FE00 + 0x70..0x3_FE00 + 0x72].copy_from_slice(&1u16.to_le_bytes());
+    firmware[0x3_FF00 + 0x70..0x3_FF00 + 0x72].copy_from_slice(&0u16.to_le_bytes());
+    firmware[0x3_FE00 + 0x0A] = 0x77;
+    let crc = crate::cart::crc16(&firmware[0x3_FE00..0x3_FE00 + 0x70]);
+    firmware[0x3_FE00 + 0x72..0x3_FE00 + 0x74].copy_from_slice(&crc.to_le_bytes());
+    firmware
+}
+
+#[test]
+fn given_a_firmware_whose_areas_are_in_the_other_order_when_the_values_are_built_then_the_copy_is_the_newer_area()
+ {
+    let (_, copy) = values_for(&firmware_with_area_0_newest());
+    assert_eq!(copy[0x0A], 0x77);
 }

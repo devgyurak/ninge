@@ -2,7 +2,7 @@
 //! The whole emulated machine: [`Machine`], the one struct that owns all emulator state.
 
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
-use crate::cart::Header;
+use crate::cart::{Header, SaveError, SaveType};
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
@@ -225,6 +225,33 @@ impl Machine {
         self.header.as_ref()
     }
 
+    /// Fits the cartridge with a save chip of `kind` holding `data`, as a save file holds it.
+    ///
+    /// Call it after [`Machine::load_rom`], which resets the machine and with it the chip. An image
+    /// that is not as long as the chip's memory is refused and the chip stays as it was
+    /// (`docs/hw/auxspi-saves.md`, "Save files").
+    pub fn insert_save(&mut self, kind: SaveType, data: Vec<u8>) -> Result<(), SaveError> {
+        self.io.cart_mut().insert_save(kind, data)
+    }
+
+    /// The save chip's memory, as a save file holds it; empty with no chip.
+    pub fn save_data(&self) -> &[u8] {
+        self.io.cart().save().data()
+    }
+
+    /// The type of the fitted save chip.
+    pub fn save_type(&self) -> SaveType {
+        self.io.cart().save().kind()
+    }
+
+    /// Counts the changes to the save memory. A host writes the save file when it differs from the
+    /// value it saw at its last write. A savestate load raises it, since the memory may have changed
+    /// (`docs/hw/auxspi-saves.md`, "Save files"). [`Machine::load_rom`] starts it again at 0, so a host
+    /// that resets the machine takes a new baseline after it fits the save.
+    pub fn save_generation(&self) -> u64 {
+        self.io.cart().save().generation()
+    }
+
     /// Returns the loaded ROM image; empty until [`Machine::load_rom`] is called.
     pub fn rom(&self) -> &[u8] {
         &self.rom
@@ -247,7 +274,11 @@ impl Machine {
     // (`docs/hw/keypad.md`, "Unverified").
     pub fn run_frame(&mut self, input: Input) {
         self.io.latch_input(input);
-        if self.header.is_none() {
+        // A machine that was shut down runs nothing, as with no program: the frame only counts
+        // (`touch-power.md`, "What the power register does").
+        // TODO(hw-unverified): the frozen frames after shutdown are the model's (`touch-power.md`,
+        // "Unverified").
+        if self.header.is_none() || self.is_shut_down() {
             self.frame_count = self.frame_count.wrapping_add(1);
             return;
         }
@@ -317,6 +348,7 @@ impl Machine {
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
+            &self.rom,
             TcmConfig::from_cp15(self.arm9.cp15()),
         );
         arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
@@ -330,6 +362,7 @@ impl Machine {
             &mut self.memory,
             &mut self.io,
             &mut self.scheduler,
+            &self.rom,
             self.arm7_clock,
         );
         arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
@@ -346,6 +379,27 @@ impl Machine {
     // `docs/hw/` note yet; until then no sound is made and it is empty.
     pub fn audio(&self) -> &[i16] {
         &[]
+    }
+
+    /// Whether the program shut the console down through the power-management device. A host ends
+    /// its run when this turns true: every later [`Machine::run_frame`] runs nothing
+    /// (`docs/hw/touch-power.md`, "What the power register does").
+    pub fn is_shut_down(&self) -> bool {
+        self.io.spi().power().is_shut_down()
+    }
+
+    /// Whether `screen`'s backlight is on. The frame buffers are not dimmed: an unlit screen is
+    /// the host's to draw black (`docs/hw/touch-power.md`, "What the power register does").
+    /// `Screen::Top` is the upper backlight and `Screen::Bottom` the lower, the physical screens
+    /// [`Machine::frame`] returns.
+    // TODO(hw-unverified): what an unlit screen shows is the host's choice (`touch-power.md`,
+    // "Unverified").
+    pub fn backlight(&self, screen: Screen) -> bool {
+        let power = self.io.spi().power();
+        match screen {
+            Screen::Top => power.upper_backlight(),
+            Screen::Bottom => power.lower_backlight(),
+        }
     }
 
     /// Returns the pixels of one screen, row by row, as xRGB8888.

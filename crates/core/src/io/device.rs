@@ -54,9 +54,52 @@ impl Width {
 /// a `u8` was already the cap for two devices.
 pub(crate) type SlotMask = u32;
 
-/// What a register access asks of its caller: the IF bits to raise, and which of the device's
-/// event slots must be replaced. Every device returns this one type, so the caller handles an
-/// access the same way whatever it reached.
+/// One thing a device tells the others: an edge or a level that another device waits for. A
+/// device raises it in its [`Effect`] and never names the device that listens; `Io` holds the one
+/// table that says who does (`Io::route`), so a device that sends a signal registers it once
+/// (`cart-protocol.md`, "DMA start").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Signal {
+    /// A word of the cartridge slot is ready for the ARM9.
+    CardWordArm9,
+    /// A word of the cartridge slot is ready for the ARM7.
+    CardWordArm7,
+}
+
+impl Signal {
+    /// Every signal, in the fixed order `Io` routes a set of them: the bit order of [`Signals`].
+    pub(crate) const ALL: [Self; 2] = [Self::CardWordArm9, Self::CardWordArm7];
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// A set of [`Signal`]s, one bit each: plain, `Copy` and allocation-free. It lives only inside an
+/// [`Effect`], never in a savestate, so it needs no serde and no format version.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Signals(u8);
+
+impl Signals {
+    /// The set holding only `signal`.
+    pub(crate) const fn of(signal: Signal) -> Self {
+        Self(signal.bit())
+    }
+
+    /// Whether `signal` is in the set.
+    pub(crate) const fn contains(self, signal: Signal) -> bool {
+        self.0 & signal.bit() != 0
+    }
+
+    /// Both sets in one.
+    pub(crate) const fn merge(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+/// What a register access asks of its caller: the IF bits to raise, which of the device's
+/// event slots must be replaced, and what it tells the other devices. Every device returns this
+/// one type, so the caller handles an access the same way whatever it reached.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Effect {
     /// The IF bits to raise.
@@ -64,6 +107,12 @@ pub(crate) struct Effect {
     /// Bit n: the device's event slot n changed and its scheduler event must be replaced. The
     /// four timers are slots 0-3 of their device, and so are the four DMA channels.
     pub(crate) reschedule: SlotMask,
+    /// What the device tells the others; `Io` routes it after the IF bits and the slots.
+    pub(crate) signals: Signals,
+    /// The access changed what a device waits for, so `Io` asks every device of the CPU that wrote
+    /// for its [`Device::levels`] and routes them: a DMA write may enable a channel whose start
+    /// condition already holds (`dma.md`, "Starting").
+    pub(crate) recheck_levels: bool,
 }
 
 impl Effect {
@@ -71,41 +120,84 @@ impl Effect {
     pub(crate) fn raising(requests: Requests) -> Self {
         Self {
             requests,
-            reschedule: 0,
+            ..Self::default()
         }
     }
 
-    /// Both effects in one: the requests and the slots to reschedule of each.
+    /// Both effects in one: the requests, the slots to reschedule and the signals of each.
     pub(crate) fn merge(self, other: Self) -> Self {
         Self {
             requests: self.requests.merge(other.requests),
             reschedule: self.reschedule | other.reschedule,
+            signals: self.signals.merge(other.signals),
+            recheck_levels: self.recheck_levels || other.recheck_levels,
         }
     }
 }
 
-/// What an access carries besides its address: the master time of the access and the host's data.
+/// What an access carries besides its address: the master time of the access, the host's data, the
+/// cartridge ROM and the pen output of the touch controller.
 ///
 /// `host` is the [`Input`] `Io` latched as the frame began: stored once, in `Io`, and handed to
 /// whichever device an access reaches. This is the path a device takes host data in: the keypad
-/// reads its buttons here, and the touch controller (#44) and the RTC will read the touch point and
-/// the host's time here too, with no copy of their own and no latch call. `Copy`, and built
-/// per access on the I/O slow path only.
+/// reads its buttons here, and the RTC reads the host's time here (`wall_time`), and the touch controller
+/// reads the touch point, with no copy of their own and no latch call. `rom` is the image the
+/// machine was loaded with, handed over the same way: the cartridge device reads it here and keeps
+/// no copy, so the savestate stays free of ROM bytes (`cart-protocol.md`, "Savestate"). `Copy`, and
+/// built per access on the I/O slow path only.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cx<'a> {
     /// Master time of the access, as the CPU's own clock has it.
     pub(crate) now: u64,
     /// The host's data, as latched when the frame began.
     pub(crate) host: &'a Input,
+    /// The cartridge image, empty before a ROM is loaded.
+    pub(crate) rom: &'a [u8],
+    /// The levels one device presents to another, read by `Io` when the access began.
+    pub(crate) lines: Lines,
 }
 
-/// The context of an access at master time `now` with no host input held, for device tests.
+/// The current state of one device that another device reads: wires between them, as opposed to
+/// events (`Signal`). A device never reaches another, so `Io` reads each wire from its source and
+/// hands it over here; a new pair adds a field, not a field on [`Cx`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lines {
+    /// The touch controller's `/PENIRQ` output is enabled: the keypad's EXTKEYIN bit 6 needs it
+    /// (`touch-power.md`, "The pen bit").
+    pub(crate) pen_irq_enabled: bool,
+    /// POWCNT1 bit 3 powers the geometry engine: with it clear its ports (`0400_0400h`-`0400_06FFh`)
+    /// are read-only (`gx-stub.md`, "Power control"). The bit 2 of the rendering engine gates ports
+    /// that hold no state in the stub, so it has no line.
+    pub(crate) geometry_powered: bool,
+}
+
+/// The wires at power-on: the touch controller starts in power-down mode 0, so the pen output is
+/// enabled (`touch-power.md`, "Unverified").
+impl Default for Lines {
+    fn default() -> Self {
+        Self {
+            pen_irq_enabled: true,
+            geometry_powered: true,
+        }
+    }
+}
+
+/// The context of an access at master time `now` with no host input held and no ROM, for device
+/// tests.
 #[cfg(test)]
 pub(crate) fn cx_at(now: u64) -> Cx<'static> {
+    cx_with_rom(now, &[])
+}
+
+/// The context of an access at master time `now` with no host input held and `rom` loaded.
+#[cfg(test)]
+pub(crate) fn cx_with_rom(now: u64, rom: &[u8]) -> Cx<'_> {
     const NOTHING_HELD: Input = Input::new();
     Cx {
         now,
         host: &NOTHING_HELD,
+        rom,
+        lines: Lines::default(),
     }
 }
 
@@ -139,6 +231,14 @@ pub(crate) trait Device<const ARM9: bool> {
         None
     }
 
+    /// The signals the device holds as a level right now, for the CPU `ARM9` that just wrote a
+    /// register: a condition that stays true until something takes it, as a word waiting in the
+    /// cartridge slot. `Io` asks only when an [`Effect`] sets [`Effect::recheck_levels`]. A device
+    /// with no level has none.
+    fn levels(&self) -> Signals {
+        Signals::default()
+    }
+
     /// Slot `slot`'s event fired at master time `now`. Whatever it changes comes back in the
     /// [`Fired`], the slot's own event included: `Io` does not assume it is replaced.
     fn slot_fire(&mut self, _slot: u8, _now: u64) -> Fired {
@@ -157,9 +257,11 @@ pub(crate) trait Checked {
 
 /// What a fired event asks of its caller: an [`Effect`], like a register access, and for DMA the
 /// transfer the machine must now move through the owning CPU's bus, which a device cannot reach.
+/// The transfer is not a [`Signal`]: it is a move of bytes over a bus the device does not own, so
+/// it comes back whole and the machine runs it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Fired {
-    /// The IF bits to raise and the slots to reschedule.
+    /// The IF bits to raise, the slots to reschedule and the signals to route.
     pub(crate) effect: Effect,
     /// A transfer to run, from a DMA start.
     pub(crate) transfer: Option<Transfer>,

@@ -8,6 +8,10 @@
 //! is a debugger call, not the hot path). The device types are re-exported here so a host can
 //! name what `Inspect` returns; their mutating methods are `pub(crate)`.
 //!
+//! **Unstable until 1.0.** The names and structure of what is re-exported here may change in a
+//! minor release, [`Inspect`] and [`Machine::inspect`] included. The debugger panels (#56-#59)
+//! decide what becomes stable.
+//!
 //! Breakpoint and trace hooks (plan §4.1) are not here yet: the debugger is a parallel track, and
 //! they join this module with its stepping and trace panels (#56, #60).
 
@@ -21,17 +25,23 @@ pub use crate::gpu2d::{
     AffineBg, AffineFormat, BrightnessMode, EffectMode, Effects, EngineId, Gpu2d, LayerSet,
     MasterBrightness, Mosaic, OBJ_COUNT, ObjAttrs, Targets, TextBg, WindowRect, Windows,
 };
+pub use crate::gpu3d::Gpu3d;
 pub use crate::hle::SwiRecord;
 pub use crate::io::DeviceId;
+pub use crate::io::cart::Cart;
 pub use crate::io::divsqrt::DivSqrt;
 pub use crate::io::dma::Dma;
 pub use crate::io::ipc::Ipc;
 pub use crate::io::irq::InterruptController;
 pub use crate::io::keypad::Keypad;
 pub use crate::io::power::Power;
+pub use crate::io::rtc::Rtc;
+pub use crate::io::spi::Spi;
 pub use crate::io::timers::Timers;
 pub use crate::io::timing::Timing;
+pub use crate::rtc::{Chip, Register, Session};
 pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
+pub use crate::spu::{Capture, Channel, Spu};
 
 /// A read-only view of one [`Machine`], from [`Machine::inspect`]. It borrows the machine, so the
 /// machine cannot run while a view of it is alive.
@@ -148,6 +158,31 @@ impl<'a> Inspect<'a> {
         self.machine.io.ipc()
     }
 
+    /// The cartridge slot: EXMEMCNT, AUXSPICNT, ROMCTRL, the command and the transfer in progress.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows ROMCTRL, AUXSPICNT,
+    // the current command, address and remaining bytes, and which CPU owns the slot; #57 adds the
+    // memory view that the data comes through.
+    pub fn cart(&self) -> &'a Cart {
+        self.machine.io.cart()
+    }
+
+    /// The ARM7's SPI bus: SPICNT, the selected device, busy and the firmware chip's command,
+    /// address and status.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows SPICNT, the selected
+    // device, whether a unit is on the wire (`done_at`) and the firmware chip's command, address
+    // and status; #57's memory view shows the firmware image through it.
+    pub fn spi(&self) -> &'a Spi {
+        self.machine.io.spi()
+    }
+
+    /// The ARM7's RTCCNT and the clock chip behind its pins.
+    // The debugger's IO register panel (#56 CPU panel until one exists) shows RTCCNT, the chip's
+    // transfer in progress, its status and alarm registers, and the clock as the host's time plus
+    // the program's offset.
+    pub fn rtc(&self) -> &'a Rtc {
+        self.machine.io.rtc()
+    }
+
     /// The ARM9's four timers.
     // The debugger's IO register panel (#56 CPU panel until one exists) shows each timer's
     // counter, reload and control; the scheduler timeline (#59) shows their overflow events.
@@ -182,8 +217,8 @@ impl<'a> Inspect<'a> {
     }
 
     /// The ARM9's KEYCNT.
-    // The debugger's IO register panel shows it with the other devices'; the key bits are
-    // constants until input exists (`keypad.md`, #44).
+    // The debugger's IO register panel shows it with the other devices'; the key bits come from the
+    // latched input (`Inspect::input`).
     pub fn keypad9(&self) -> &'a Keypad<true> {
         self.machine.io.keypad9()
     }
@@ -198,6 +233,21 @@ impl<'a> Inspect<'a> {
     // The debugger's CPU panel (#56) will show whether the ARM7 asked to halt.
     pub fn power(&self) -> &'a Power {
         self.machine.io.power()
+    }
+
+    /// The ARM7's sound registers: every channel's registers and end time, SOUNDCNT, SOUNDBIAS and
+    /// the capture units.
+    // No panel shows them yet: the debugger's sound panel comes with the mixer in Phase 6 (#47).
+    pub fn spu(&self) -> &'a Spu {
+        self.machine.io.spu()
+    }
+
+    /// The 3D engine stub: DISP3DCNT, the matrix mode, the three stack pointers, the error flag and
+    /// the command decoder's state.
+    // No panel shows them yet: the debugger's 3D panels come with the geometry engine in Phase 7
+    // (#53).
+    pub fn gpu3d(&self) -> &'a Gpu3d {
+        self.machine.io.gpu3d()
     }
 
     /// VRAMCNT_A as decoded.
@@ -232,6 +282,7 @@ impl<'a> Inspect<'a> {
             &self.machine.memory,
             &self.machine.io,
             &TcmConfig::from_cp15(self.machine.arm9.cp15()),
+            &self.machine.rom,
             self.machine.scheduler.now(),
             addr,
         )
@@ -244,6 +295,7 @@ impl<'a> Inspect<'a> {
             &self.machine.memory,
             &self.machine.io,
             &TcmConfig::NONE,
+            &self.machine.rom,
             now,
             addr,
         )

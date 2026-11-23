@@ -6,17 +6,24 @@ use serde::de::value::{Error, MapDeserializer};
 
 mod arm9;
 mod bios;
+mod boot;
+mod cart;
 mod dma;
+mod gx;
 mod halt;
 mod input;
 mod ipc;
 mod irq;
 mod mmdisp;
 mod rebuild;
+mod rtc;
+mod save;
 mod scheduler;
+mod sound;
 mod swi_data;
 mod timers;
 mod timing;
+mod touch;
 
 fn run_frames(machine: &mut Machine, frames: u32) {
     (0..frames).for_each(|_| machine.run_frame(crate::Input::new()));

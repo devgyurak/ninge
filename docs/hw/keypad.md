@@ -3,8 +3,9 @@
 Sources: GBATEK "GBA Keypad Input" (KEYINPUT, KEYCNT) and "DS Keypad" (the DS additions,
 EXTKEYIN).
 Used by: `crates/core/src/io/keypad/`, `crates/core/src/input/`   Phase: 3 (the "nothing
-pressed" stub); host buttons and the hinge are wired in Phase 4 (#177); the keypad IRQ, the pen
-and the touch controller are Phase 5 (#44)
+pressed" stub); host buttons and the hinge are wired in Phase 4 (#177); the pen bit and the touch
+controller are Phase 5 (#41, `touch-power.md`); the keypad and hinge IRQs are Phase 5 (#231,
+"The keypad IRQ")
 
 ## Registers
 
@@ -76,12 +77,52 @@ keys; bits 10-15 read 0 as before. EXTKEYIN bit 0 follows X and bit 1 follows Y 
 bit 7 follows the hinge (1 = closed, 0 = open). With the default `Input` (nothing held, hinge
 open) both registers read what the "nothing pressed" stub read.
 
+### The pen bit
+
+The pen bit (EXTKEYIN bit 6) reads 0 while the latched `Input` has the panel touched **and** the
+touch controller's pen output is enabled by the power-down mode of its last control byte, and 1
+otherwise (`touch-power.md`, "The pen bit"). The keypad does not look at the controller: `Io` reads
+the pen output from the SPI bus and hands it over with the access. The bit follows the latched
+touch state, not the analog line (`touch-power.md`, "Unverified").
+
+### The keypad IRQ
+
+Each CPU's KEYCNT chooses the condition for its own copy of IF bit 12. Bits 0-9 select keys in
+KEYINPUT order. With bit 15 clear (OR) the condition holds while **any** selected key is held; with
+bit 15 set (AND) it holds while **every** selected key is held. X and Y are not in KEYCNT, so
+they never take part, whichever other keys are selected. Bit 14 enables the IRQ: with it clear
+nothing is requested. IE and IME decide, as for any source, whether the CPU takes it
+(`interrupts.md`).
+
+The model checks the condition at two points and at no other:
+
+- **every frame-boundary latch**, when `run_frame` latches the frame's `Input`, and
+- **every write to KEYCNT**, with the buttons of the latched input.
+
+At either point, if the IRQ enable is set and the condition holds, the CPU's IF bit 12 is
+requested. A key held across several frames therefore requests once per frame, and an
+acknowledge of IF bit 12 does not request again until the next check: the request is not level
+driven (contrast the geometry FIFO's bit, `gx-stub.md`). When the condition is checked, and the
+re-request behavior, are the model's choice ("Unverified").
+
+With **no key selected** (bits 0-9 all clear) the condition is never met, in OR or in AND mode
+(the model's choice, "Unverified").
+
+### The hinge IRQ
+
+IF bit 22 exists on the ARM7 only. GBATEK says the hinge generates it when the screens unfold and
+that there seems to be no way to disable the request;
+IE (with IME and the CPU's I flag, as for any source) decides whether the ARM7 takes it.
+The model compares the previously latched `Input` with the new one at each frame-boundary latch:
+a change from closed to open requests ARM7 IF bit 22, whatever KEYCNT, its enable and IE say.
+Closing the lid requests nothing, and a frame whose hinge state equals the last one requests
+nothing. The first frame compares with the reset input, whose hinge is open, so a machine that
+starts with the lid open raises nothing. That closing raises nothing is the model's choice
+("Unverified").
+
 ### What is still a stub
 
-The pen bit (EXTKEYIN bit 6) reads released whatever the touch position is: the touch point is
-carried in the `Input` and latched, but nothing reads it until the touch controller exists
-(Phase 5). The debug button reads released, and the unknown bits read as before. The keypad
-interrupt condition is never met, so no IRQ is raised, and the hinge IRQ is not raised either.
+The debug button reads released, and the unknown bits read as before.
 
 KEYCNT stores the bits it defines (0-9, 14, 15) and reads them back; the other bits read 0. Each
 CPU has its own copy.
@@ -111,10 +152,17 @@ modeled and reads 0.
   zero"), and that the debug button reads released — same site.
 - Whether KEYCNT bits 10-13 are writable — same site.
 
-Not modeled, so no code site: the keypad IRQ condition with an empty selection mask in AND mode,
-the hinge IRQ (GBATEK: it cannot be disabled), and whether EXTKEYIN's pen bit follows the touch
-controller's pen-IRQ enable. All three arrive with the keypad IRQ and the touch SPI (Phase 5,
-#44).
+- **When the keypad condition is sampled, and that it is an edge or a level.** GBATEK says neither.
+  The model samples at each frame-boundary latch and each KEYCNT write, requests every time the
+  condition holds, and never re-raises after an acknowledge — `crates/core/src/io/keypad/mod.rs`
+  (`Keypad::latch_requests`, `Keypad::write`) — verify by a test ROM that holds a key across an
+  acknowledge on hardware.
+- **The empty selection.** Neither OR nor AND is ever met with no key selected; GBATEK does not
+  say what an AND over an empty set does — `crates/core/src/io/keypad/mod.rs`
+  (`Keypad::condition_met`) — verify likewise.
+- **Whether closing the lid raises IF bit 22.** The register's name says "unfolding" only; the
+  model raises it on opening and not on closing — `crates/core/src/io/keypad/mod.rs`
+  (`Keypad::latch_requests`) — verify by a test ROM that closes the lid on hardware.
 
 - That a button change reaches the registers at a frame boundary only is a choice of the model:
   on hardware the key matrix is read when the CPU reads the register — `crates/core/src/input/`

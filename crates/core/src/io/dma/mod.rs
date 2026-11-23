@@ -60,9 +60,16 @@ enum Start {
     Display,
     /// The ARM9's main-memory display, mode 4: the display FIFO's requests for a line.
     MainMemory,
-    /// A start timing no phase implements yet: the channel is enabled and busy but never starts.
-    // TODO(phase5): the DS cartridge slot start of both CPUs (#37).
-    // TODO(phase7): the ARM9's geometry command FIFO start (#48).
+    /// The DS cartridge slot, ARM9 mode 5 and ARM7 mode 2: one unit for each word the card makes
+    /// ready (`cart-protocol.md`, "DMA start").
+    Card,
+    /// The ARM9's geometry command FIFO, mode 7: the FIFO is less than half full, a condition the
+    /// stub's always-empty FIFO keeps true, so the channel starts when it is enabled
+    /// (`gx-stub.md`, "ARM9 DMA start mode 7").
+    // TODO(phase7): the geometry engine (#48) has a real FIFO that fills, and the start waits for
+    // it to drain below half, 112 words a burst.
+    GeometryFifo,
+    /// A start timing no phase implements: the channel is enabled and busy but never starts.
     // The GBA slot and the ARM7's wireless start have no phase.
     Unimplemented,
 }
@@ -82,6 +89,9 @@ pub(crate) enum Trigger {
     /// visible line but the last, each for the line after it (`display-capture.md`, "The
     /// main-memory display").
     MainMemory { frame_start: bool },
+    /// The cartridge slot has a word ready for the CPU that owns the slot (`arm9`): only that
+    /// CPU's channels see it (`cart-protocol.md`, "DMA start").
+    CardWord { arm9: bool },
 }
 
 impl Trigger {
@@ -91,6 +101,7 @@ impl Trigger {
             Self::HBlank => Start::HBlank,
             Self::StartOfDisplay => Start::Display,
             Self::MainMemory { .. } => Start::MainMemory,
+            Self::CardWord { .. } => Start::Card,
         }
     }
 }
@@ -277,6 +288,8 @@ impl<const ARM9: bool> Dma<ARM9> {
             (2, true) => Start::HBlank,
             (3, true) => Start::Display,
             (4, true) => Start::MainMemory,
+            (5, true) | (2, false) => Start::Card,
+            (7, true) => Start::GeometryFifo,
             _ => Start::Unimplemented,
         }
     }
@@ -325,10 +338,12 @@ impl<const ARM9: bool> Dma<ARM9> {
         // one event: it stalls, it does not panic.
         // TODO(hw-unverified): without repeat the transfer is still 32 requests and raises one IRQ per
         // line (`display-capture.md`, "Unverified").
-        let count = if Self::start_of(channel.control) == Start::MainMemory {
-            channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS)
-        } else {
-            channel.count_now
+        // A cartridge start moves one unit for each word the card makes ready (`dma.md`, "Starting").
+        // TODO(hw-unverified): a count above 1 is paced one unit for each word (`dma.md`, "Unverified").
+        let count = match Self::start_of(channel.control) {
+            Start::MainMemory => channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS),
+            Start::Card => channel.count_now.min(1),
+            _ => channel.count_now,
         };
         // Addresses are aligned down to the unit (`dma.md`, "Transferring").
         let align = !(if word { 3 } else { 1 });
@@ -371,6 +386,16 @@ impl<const ARM9: bool> Dma<ARM9> {
         let rearmed = channel.rearmed;
         channel.running = false;
         channel.rearmed = false;
+        // TODO(hw-unverified): a cartridge count above 1 is paced one unit for each word
+        // (`dma.md`, "Unverified").
+        // A cartridge request moves one unit. With units left the channel keeps its place and
+        // waits for the next word; the last unit ends the transfer as any other does.
+        if !rearmed && Self::start_of(control) == Start::Card && channel.count_now > 1 {
+            channel.count_now -= 1;
+            channel.source_now = end.source;
+            channel.destination_now = end.destination;
+            return Effect::default();
+        }
         // TODO(hw-unverified): repeat is ignored for an Immediate start (`dma.md`, "Unverified").
         let repeats = control & CONTROL_REPEAT != 0
             && control & CONTROL_ENABLE != 0
@@ -477,8 +502,8 @@ impl<const ARM9: bool> Dma<ARM9> {
             return Effect::default();
         }
         let slot = Effect {
-            requests: Requests::default(),
             reschedule: 1 << index,
+            ..Effect::default()
         };
         match (old & CONTROL_ENABLE != 0, new & CONTROL_ENABLE != 0) {
             (false, true) => {
@@ -487,7 +512,13 @@ impl<const ARM9: bool> Dma<ARM9> {
                 channel.destination_now = channel.destination;
                 channel.count_now = Self::count_of(new, index);
                 channel.frame_wait = true;
-                if Self::start_of(new) == Start::Immediate {
+                // The geometry FIFO start is a level that already holds when the channel is
+                // enabled, so it is queued like an Immediate one.
+                // TODO(hw-unverified): a repeating mode 7 channel is not started again: no trigger
+                // follows the first start (`gx-stub.md`, "Unverified").
+                // TODO(phase7): with the real FIFO (#48) a repeating channel restarts when the FIFO
+                // drains below half again.
+                if matches!(Self::start_of(new), Start::Immediate | Start::GeometryFifo) {
                     channel.pending = true;
                     slot
                 } else {
@@ -530,8 +561,16 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
+    /// A write to a channel's registers asks `Io` to recheck the levels: a channel set to start on
+    /// a condition that already holds takes it at once (`dma.md`, "Starting"). The fill registers
+    /// do not start anything.
+    // TODO(hw-unverified): the request is held while the word is ready (`dma.md`, "Unverified").
     fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
-        write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte))
+        let effect = write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte));
+        Effect {
+            recheck_levels: offset < CHANNELS_BYTES,
+            ..effect
+        }
     }
 
     const SLOTS: u8 = CHANNEL_COUNT as u8;

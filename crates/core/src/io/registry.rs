@@ -119,6 +119,18 @@ macro_rules! registry {
                 }
             }
 
+            /// Whether both CPUs reach the one instance of the device. Its events do not belong to
+            /// a CPU, so they are all queued as the ARM9's: whichever CPU's access changes a slot
+            /// replaces the same event.
+            pub(crate) fn is_shared(self) -> bool {
+                match self {
+                    $( Self::$st => true, )*
+                    $( Self::$at => false, )*
+                    $( Self::$bt => false, )*
+                    $( Self::$et => false, )*
+                }
+            }
+
             /// How many event slots the device has ([`Device::SLOTS`]); the same for both CPUs'
             /// copies of a per-CPU device.
             pub(crate) fn slots(self) -> u8 {
@@ -204,6 +216,16 @@ macro_rules! registry {
                     $( && Checked::well_formed(&self.$af, now) )*
                     $( && Checked::well_formed(&self.$bf, now) )*
                     $( && Checked::well_formed(&self.$ef9, now) && Checked::well_formed(&self.$ef7, now) )*
+            }
+
+            /// The signals every device the CPU `ARM9` reaches holds as a level, merged
+            /// ([`Device::levels`]). A device only the other CPU sees holds none for this one.
+            pub(crate) fn levels<const ARM9: bool>(&self) -> Signals {
+                Signals::default()
+                    $( .merge(Device::<ARM9>::levels(&self.$sf)) )*
+                    $( .merge(if ARM9 { Device::<true>::levels(&self.$af) } else { Signals::default() }) )*
+                    $( .merge(if ARM9 { Signals::default() } else { Device::<false>::levels(&self.$bf) }) )*
+                    $( .merge(if ARM9 { Device::<true>::levels(&self.$ef9) } else { Device::<false>::levels(&self.$ef7) }) )*
             }
 
             /// Queues the event of every slot of every device, as at `now`. A load calls it on

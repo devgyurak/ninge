@@ -731,3 +731,23 @@ fn arm7_halted_by_dma() -> (bool, bool) {
 fn given_a_dma_unit_writing_haltcnt_when_the_transfer_ends_then_the_arm7_is_halted_at_once() {
     assert_eq!(arm7_halted_by_dma(), (true, false));
 }
+
+#[test]
+fn given_a_halted_arm9_when_a_frame_latch_meets_the_keypad_condition_then_it_wakes_and_runs_on() {
+    let mut m = arm9_running(&[WFI_C0_4, MOV_R1, SPIN]);
+    m.arm9.regs_mut().set_cpsr(0x9F);
+    step9(&mut m, 1);
+    m.bus9().write32(IE, 1 << 12);
+    // KEYCNT: IRQ enable, OR mode, A selected. Nothing is held yet, so nothing is requested.
+    m.bus9().write16(0x0400_0132, 0x4001);
+    // A request at the frame latch, outside any CPU access, takes the events' path.
+    m.io.latch_input(crate::input::Input::new().with_buttons(crate::input::Buttons::A));
+    step9(&mut m, 1);
+    assert_eq!(
+        (
+            m.inspect().arm9().halted(),
+            m.inspect().arm9().regs().get(1)
+        ),
+        (false, 0x66)
+    );
+}

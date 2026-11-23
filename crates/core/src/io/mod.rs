@@ -16,6 +16,7 @@
 
 #[macro_use]
 mod registry;
+pub mod cart;
 pub(crate) mod device;
 pub mod divsqrt;
 pub mod dma;
@@ -24,15 +25,20 @@ pub mod irq;
 pub mod keypad;
 pub(crate) mod map;
 pub mod power;
+pub mod rtc;
+pub mod spi;
 #[cfg(test)]
 mod tests;
 pub mod timers;
 pub mod timing;
 
 use crate::gpu2d::Gpu2d;
+use crate::gpu3d::Gpu3d;
 use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
-use device::{Checked, Cx, Device, Effect, Fired, SlotMask, Width};
+use crate::spu::Spu;
+use cart::Cart;
+use device::{Checked, Cx, Device, Effect, Fired, Lines, Signal, Signals, SlotMask, Width};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -40,19 +46,23 @@ use irq::{InterruptController, Requests};
 use keypad::Keypad;
 use map::Port;
 use power::Power;
+use rtc::Rtc;
 use serde::{Deserialize, Serialize};
+use spi::Spi;
 use timers::Timers;
 use timing::Timing;
 
-/// When an access happens: the clock of the CPU making it, and the earliest time an event it
-/// schedules may fire.
+/// When an access happens and what it reaches: the clock of the CPU making it, the earliest time an
+/// event it schedules may fire, and the cartridge image (`device::Cx::rom`).
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct At {
+pub(crate) struct At<'a> {
     /// Master time of the access, as the CPU's own clock has it.
     pub(crate) now: u64,
     /// An event never lies before the end of the instruction that scheduled it (`timers.md`,
     /// "Model"; `dma.md`, "Model").
     pub(crate) floor: u64,
+    /// The cartridge image the machine was loaded with, empty before a ROM is loaded.
+    pub(crate) rom: &'a [u8],
 }
 
 registry! {
@@ -62,16 +72,27 @@ registry! {
         timing / timing_mut: Timing = Timing::new() => [Port::Timing],
         /// IPCSYNC and the two IPC FIFOs (`ipc.md`), for the debugger.
         ipc: Ipc = Ipc::new() => [Port::Ipc, Port::IpcRecv],
+        /// The cartridge slot's ROM interface (`cart-protocol.md`).
+        cart / cart_mut: Cart = Cart::new() => [Port::Cart, Port::CartExmem, Port::CartData],
     }
     arm9 {
         /// Both 2D engines' display registers and POWCNT1.
         gpu2d / gpu2d_mut: Gpu2d = Gpu2d::new() => [Port::Gpu2d],
         /// The ARM9's divider and square-root unit (`divsqrt.md`).
         divsqrt: DivSqrt = DivSqrt::new() => [Port::DivSqrt],
+        /// The ARM9's 3D engine stub: DISP3DCNT, the geometry command decoder and GXSTAT
+        /// (`gx-stub.md`).
+        gpu3d: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
     }
     arm7 {
         /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
         power / power_mut: Power = Power::new() => [Port::Power],
+        /// The ARM7's SPI bus and the firmware chip on it (`spi.md`).
+        spi: Spi = Spi::new() => [Port::Spi],
+        /// The ARM7's RTCCNT and the clock chip on its pins (`rtc.md`).
+        rtc: Rtc = Rtc::new() => [Port::Rtc],
+        /// The ARM7's sound and capture registers (`sound-registers.md`).
+        spu: Spu = Spu::new() => [Port::Spu],
     }
     each {
         /// Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).
@@ -88,10 +109,25 @@ registry! {
 impl Io {
     /// Latches `input` as a frame begins (`keypad.md`, "Where the bits come from"). The one copy
     /// of the host's data: every device reads it through the access's [`Cx`].
-    // TODO(phase5): a device that must react when the input changes (the keypad IRQ, the hinge
-    // IRQ) needs a change hook here; the keypad only reads it for now.
+    ///
+    /// The keypad IRQ and the hinge IRQ are checked here, against the input latched before this one
+    /// (`keypad.md`, "The keypad IRQ"); a request raised outside a CPU access takes the same
+    /// [`Io::request_irq`] path as the events.
     pub(crate) fn latch_input(&mut self, input: Input) {
-        self.input = input;
+        let previous = std::mem::replace(&mut self.input, input);
+        let requests = self
+            .keypad9
+            .latch_requests(&previous, &input)
+            .merge(self.keypad7.latch_requests(&previous, &input));
+        self.request_irq(requests);
+    }
+
+    /// The wires between devices as they stand now (`device::Lines`).
+    fn lines(&self) -> Lines {
+        Lines {
+            pen_irq_enabled: self.spi.pen_irq_enabled(),
+            geometry_powered: self.gpu2d.geometry_engine_on(),
+        }
     }
 
     /// The input latched when the frame began, for the debugger.
@@ -115,10 +151,13 @@ impl Io {
         offset: u32,
         width: Width,
         now: u64,
+        rom: &[u8],
     ) -> u32 {
         let cx = Cx {
             now,
             host: &self.input,
+            rom,
+            lines: self.lines(),
         };
         device_call!(self, ARM9, port, ref, peek(offset, width, cx), 0)
     }
@@ -128,7 +167,7 @@ impl Io {
     pub(crate) fn read<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
-        at: At,
+        at: At<'_>,
         port: Port,
         offset: u32,
         width: Width,
@@ -136,6 +175,8 @@ impl Io {
         let cx = Cx {
             now: at.now,
             host: &self.input,
+            rom: at.rom,
+            lines: self.lines(),
         };
         let (value, effect) = device_call!(
             self,
@@ -155,7 +196,7 @@ impl Io {
     pub(crate) fn write<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
-        at: At,
+        at: At<'_>,
         port: Port,
         offset: u32,
         width: Width,
@@ -164,6 +205,8 @@ impl Io {
         let cx = Cx {
             now: at.now,
             host: &self.input,
+            rom: at.rom,
+            lines: self.lines(),
         };
         let effect = device_call!(
             self,
@@ -174,14 +217,25 @@ impl Io {
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
+        // The FIFO IRQ is level driven: IF bit 21 is held up while the condition holds, so a write
+        // that sets the mode, and any write by the ARM9 to the interrupt controller (IF, an
+        // acknowledge; IE and IME too, which the match cannot tell apart and which are harmless),
+        // re-raises it. No other path can make the condition true or clear an IF bit
+        // (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
+        // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is
+        // acknowledged (`gx-stub.md`, "Unverified").
+        if ARM9 && matches!(port, Port::Gpu3d | Port::Irq) {
+            self.request_irq(self.gpu3d.fifo_irq_asserted());
+        }
     }
 
-    /// Hands an access's effect on: its IF bits to the controllers, and the event slots it names
-    /// to the scheduler.
+    /// Hands an access's effect on: its IF bits to the controllers, the event slots it names to
+    /// the scheduler, then its signals and the levels it asks to recheck to the devices that wait
+    /// for them, never earlier than `at.floor`.
     fn apply<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
-        at: At,
+        at: At<'_>,
         port: Port,
         effect: Effect,
     ) {
@@ -189,6 +243,31 @@ impl Io {
         if effect.reschedule != 0 {
             self.schedule_slots::<ARM9>(scheduler, port, effect.reschedule, at.floor);
         }
+        self.route(scheduler, effect.signals, at.floor);
+        // A signal that is a level: the device that waits for it may have been enabled while it
+        // already holds, and takes it now. One already queued is not queued twice.
+        if effect.recheck_levels {
+            self.route(scheduler, self.levels::<ARM9>(), at.floor);
+        }
+    }
+
+    /// Delivers `signals` at master time `time`, one signal at a time in the order of
+    /// [`Signal::ALL`] so that the result does not depend on how they were collected. This is the
+    /// one table of who listens to what: a device raises a signal and never names its listener.
+    // TODO(hw-unverified): whether the other CPU's channels ever see a card request
+    // (`cart-protocol.md`, "Unverified"). The channel order is in `start_dma`.
+    fn route(&mut self, scheduler: &mut Scheduler, signals: Signals, time: u64) {
+        Signal::ALL
+            .into_iter()
+            .filter(|&signal| signals.contains(signal))
+            .for_each(|signal| {
+                // A word of the cartridge slot goes to the DMA of the CPU that owns it.
+                let (arm9, arm7) = match signal {
+                    Signal::CardWordArm9 => (Some(Trigger::CardWord { arm9: true }), None),
+                    Signal::CardWordArm7 => (None, Some(Trigger::CardWord { arm9: false })),
+                };
+                self.start_dma(scheduler, arm9, arm7, time);
+            });
     }
 
     /// Replaces the event of each slot of `port`'s device in `mask` (bit n = slot n) with one at
@@ -210,7 +289,7 @@ impl Io {
             .for_each(|slot| {
                 let kind = EventKind::Slot {
                     device,
-                    arm9: ARM9,
+                    arm9: ARM9 || device.is_shared(),
                     slot,
                 };
                 scheduler.cancel(kind);
@@ -256,20 +335,44 @@ impl Io {
             slot_fire(slot, now),
             Fired::default()
         );
-        self.apply::<ARM9>(scheduler, At { now, floor: now }, port, fired.effect);
+        self.apply::<ARM9>(
+            scheduler,
+            At {
+                now,
+                floor: now,
+                // The ROM is read when a word is taken, never when an event fires; a slot that
+                // needs it at fire time must be handed it here (`cart-protocol.md`, "Savestate").
+                rom: &[],
+            },
+            port,
+            fired.effect,
+        );
         fired.transfer
     }
 
     /// `trigger` happened at master time `time`: every channel of both CPUs that waits for it is
     /// queued to start, the ARM9's first, each in channel order. The event is never before the
-    /// master clock (`scheduler.md`, "Savestate checks").
-    // TODO(hw-unverified): the ARM9's channels go before the ARM7's (`dma.md`, "Unverified").
+    /// master clock (`scheduler.md`, "Savestate checks"). The line events (VBlank, HBlank, the
+    /// start of a frame, the main-memory display) call this directly: they come from the
+    /// scheduler's own line events, not from a device, so they are not a [`Signal`].
     pub(crate) fn trigger_dma(&mut self, scheduler: &mut Scheduler, trigger: Trigger, time: u64) {
+        self.start_dma(scheduler, Some(trigger), Some(trigger), time);
+    }
+
+    /// Queues the channels of each CPU that wait for its trigger, if it has one, the ARM9's first.
+    // TODO(hw-unverified): the ARM9's channels go before the ARM7's (`dma.md`, "Unverified").
+    fn start_dma(
+        &mut self,
+        scheduler: &mut Scheduler,
+        arm9: Option<Trigger>,
+        arm7: Option<Trigger>,
+        time: u64,
+    ) {
         let floor = time.max(scheduler.now());
-        let arm9 = self.dma9.trigger(trigger);
-        let arm7 = self.dma7.trigger(trigger);
-        self.schedule_slots::<true>(scheduler, Port::Dma, arm9, floor);
-        self.schedule_slots::<false>(scheduler, Port::Dma, arm7, floor);
+        let queued9 = arm9.map_or(0, |trigger| self.dma9.trigger(trigger));
+        let queued7 = arm7.map_or(0, |trigger| self.dma7.trigger(trigger));
+        self.schedule_slots::<true>(scheduler, Port::Dma, queued9, floor);
+        self.schedule_slots::<false>(scheduler, Port::Dma, queued7, floor);
     }
 
     /// The transfer of a CPU's channel ended at `end`: the channel repeats or is disabled, and
@@ -281,6 +384,18 @@ impl Io {
             self.dma7.finish(transfer, end)
         };
         self.request_irq(effect.requests);
+    }
+
+    /// Replaces the SPI bus, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn replace_spi_for_test(&mut self, spi: Spi) {
+        self.spi = spi;
+    }
+
+    /// Replaces the RTC, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn replace_rtc_for_test(&mut self, rtc: Rtc) {
+        self.rtc = rtc;
     }
 
     /// Replaces the IPC block, to build a corrupt state in a test.

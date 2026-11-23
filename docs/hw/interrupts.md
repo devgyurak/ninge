@@ -56,16 +56,16 @@ CPU:
 | 3-6 | Timer 0-3 overflow | yes | yes |
 | 7 | Serial port / RCNT / RTC | no | yes |
 | 8-11 | DMA 0-3 | yes | yes |
-| 12 | Keypad | yes | yes |
+| 12 | Keypad: each CPU's own KEYCNT condition, checked at frame latches and KEYCNT writes (`keypad.md`, "The keypad IRQ") | yes | yes |
 | 13 | GBA slot (external IRQ source) | yes | yes |
 | 14-15 | Not used | no | no |
 | 16 | IPC sync | yes | yes |
 | 17 | IPC send FIFO empty | yes | yes |
 | 18 | IPC receive FIFO not empty | yes | yes |
-| 19 | Card slot transfer complete | yes | yes |
+| 19 | Card slot transfer complete (requested on the CPU that owns the slot, when AUXSPICNT bit 14 is set; `cart-protocol.md`) | yes | yes |
 | 20 | Card slot IREQ_MC | yes | yes |
-| 21 | Geometry command FIFO | yes | no |
-| 22 | Screens unfolding | no | yes |
+| 21 | Geometry command FIFO: level driven, set while GXSTAT's FIFO IRQ condition holds, so an acknowledge has no effect until the condition ends (`gx-stub.md`, "GXSTAT and the FIFO IRQ") | yes | no |
+| 22 | Screens unfolding: requested when the hinge goes from closed to open, whatever IE says (`keypad.md`, "The hinge IRQ") | no | yes |
 | 23 | SPI bus | no | yes |
 | 24 | Wi-Fi | no | yes |
 | 25-31 | Not used | no | no |

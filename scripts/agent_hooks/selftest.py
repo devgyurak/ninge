@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test for the ninge agent hooks and the agent-config checker.
+"""Self-test for the ninge agent hooks, the agent-config checker and the change-scope check.
 
 CI (`.github/workflows/agents.yml`) and ./scripts/verify.sh run this; run it locally with:
 
@@ -522,6 +522,93 @@ def test_config_drift_helpers() -> None:
     _checked("config: a missing script pin is reported", unpinned is not None and "SUITE_COMMIT" in unpinned, str(unpinned))
 
 
+def test_docs_only() -> None:
+    import docs_only
+
+    _checked("scope: a hardware note is documentation", docs_only.docs_only(["docs/hw/ipc.md"]))
+    _checked(
+        "scope: notes, agent settings and Markdown outside crates/ are documentation",
+        docs_only.docs_only(["AGENTS.md", "README-KO.md", ".claude/settings.json", "docs/logo/a.svg", "tests/golden/README.md"]),
+    )
+    _checked("scope: no change at all is not documentation only", not docs_only.docs_only([]))
+    for path in (
+        "crates/core/src/lib.rs",
+        "crates/core/README.md",
+        "tests/golden/touch.txt",
+        "Cargo.toml",
+        "Cargo.lock",
+        "deny.toml",
+        "rust-toolchain.toml",
+        "scripts/verify.sh",
+        ".github/workflows/ci.yml",
+        "testroms/touch/arm7.s",
+        "LICENSE",
+    ):
+        _checked(f"scope: {path} beside a note is not documentation only", not docs_only.docs_only(["docs/hw/ipc.md", path]))
+
+    def git(root: Path, *args: str) -> None:
+        identity = ("-c", "user.name=selftest", "-c", "user.email=selftest@example.invalid", "-c", "commit.gpgsign=false")
+        subprocess.run(["git", "-C", str(root), *identity, *args], check=True, capture_output=True)
+
+    def cli(root: Path, base: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(root / "scripts" / "docs_only.py"), base], capture_output=True, text=True, check=False
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        _write(root, "scripts/docs_only.py", (REPO_ROOT / "scripts" / "docs_only.py").read_text())
+        _write(root, "docs/hw/ipc.md", "one\n")
+        _write(root, "crates/core/src/lib.rs", "pub fn f() {}\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "base")
+
+        unchanged = cli(root, "HEAD")
+        _checked("scope: an unchanged tree runs the whole gate", unchanged.returncode == 1, unchanged.stdout)
+
+        _write(root, "docs/hw/ipc.md", "two\n")
+        git(root, "commit", "-q", "-am", "note")
+        note = cli(root, "HEAD~1")
+        _checked("scope: a committed note change is documentation only", note.returncode == 0, note.stdout + note.stderr)
+
+        _write(root, "docs/hw/new.md", "new\n")
+        untracked_note = cli(root, "HEAD~1")
+        _checked("scope: an untracked note keeps it documentation only", untracked_note.returncode == 0, untracked_note.stdout)
+
+        _write(root, "crates/core/src/new.rs", "pub fn g() {}\n")
+        untracked_code = cli(root, "HEAD~1")
+        _checked(
+            "scope: an untracked source file runs the whole gate",
+            untracked_code.returncode == 1 and "new.rs" in untracked_code.stdout,
+            untracked_code.stdout,
+        )
+        (root / "crates/core/src/new.rs").unlink()
+
+        _write(root, "crates/core/src/lib.rs", "pub fn f() -> u8 { 1 }\n")
+        unstaged = cli(root, "HEAD~1")
+        _checked(
+            "scope: an uncommitted source edit runs the whole gate",
+            unstaged.returncode == 1 and "lib.rs" in unstaged.stdout,
+            unstaged.stdout,
+        )
+        git(root, "checkout", "-q", "--", "crates/core/src/lib.rs")
+
+        git(root, "mv", "crates/core/src/lib.rs", "docs/hw/lib.md")
+        git(root, "commit", "-q", "-m", "move a source file under docs")
+        moved = cli(root, "HEAD~1")
+        _checked(
+            "scope: a source file moved under docs/ runs the whole gate",
+            moved.returncode == 1 and "lib.rs" in moved.stdout,
+            moved.stdout,
+        )
+
+        unknown = cli(root, "0" * 40)
+        _checked("scope: a base git cannot resolve runs the whole gate", unknown.returncode == 1, unknown.stdout)
+        no_base = cli(root, "")
+        _checked("scope: an empty base runs the whole gate", no_base.returncode == 1, no_base.stdout)
+
+
 def main() -> int:
     test_guard_cleanroom()
     test_guard_scan_tracked()
@@ -534,6 +621,7 @@ def main() -> int:
     test_session_context()
     test_hooks_survive_old_python()
     test_config_drift_helpers()
+    test_docs_only()
 
     if FAILURES:
         print("hook selftest FAILED:", file=sys.stderr)

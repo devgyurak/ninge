@@ -2,6 +2,11 @@ name: ci
 
 # Runs ./scripts/verify.sh — the same gate an agent or a contributor runs locally. Until
 # Phase 0 adds Cargo.toml, the Rust steps are skipped and only the Python gates run.
+#
+# A documentation-only change (scripts/docs_only.py decides) builds no test ROMs and installs
+# no Rust tools: verify.sh runs its Python gates and skips the cargo steps. The verify jobs
+# still run, because the branch rulesets require their checks by name and a workflow that does
+# not start, or a matrix job skipped as a whole, never reports them.
 
 on:
   push:
@@ -17,11 +22,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Whether the change is documentation only, and the commit it was compared with. A pull
+  # request is checked out as its merge commit, whose first parent is the base branch, so the
+  # comparison is the whole pull request and not its last commit; a push is compared with the
+  # commit the branch pointed at before. The step cannot fail: anything docs_only.py is not
+  # sure of is a full run.
+  scope:
+    name: scope
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      base: ${{ steps.scope.outputs.base }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Change scope
+        id: scope
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          if python3 scripts/docs_only.py "$BASE"; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
   # Builds the test ROMs once, on ubuntu where Docker runs, with the BlocksDS image pinned by
   # digest inside scripts/build_testroms.sh (the only place the digest lives). macOS runners
   # cannot run Docker, so the verify jobs download this artifact instead. Decided in #65.
   testroms:
     name: testroms
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -45,28 +80,45 @@ jobs:
 
   verify:
     name: verify (${{ matrix.os }})
-    needs: testroms
+    needs: [scope, testroms]
+    # testroms is skipped for a documentation-only change and verify must run all the same.
+    # Without a status function a job is skipped when a job it needs was, so the condition is
+    # spelled out: scope succeeded, and testroms succeeded or was skipped. A failed scope or
+    # testroms still skips verify, and its required checks then block the merge.
+    if: ${{ !cancelled() && needs.scope.result == 'success' && (needs.testroms.result == 'success' || needs.testroms.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
+    env:
+      DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
     strategy:
       fail-fast: false
       matrix:
         # macOS is included on purpose: Apple Silicon is the target machine (plan §5, Phase 8).
         os: [ubuntu-latest, macos-latest]
     steps:
+      # verify.sh compares with the same commit as the scope job, so a documentation-only run
+      # needs the history; a full run does not. The depths are strings because a bare 0 is
+      # false in an expression and `&& 0 || 1` would always give 1.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: ${{ needs.scope.outputs.docs_only == 'true' && '0' || '1' }}
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
+      # gilrs (gamepads, the frontend) links libudev on Linux.
+      - name: libudev (Linux)
+        if: env.DOCS_ONLY != 'true' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
       # rustup installs the exact version and components pinned in rust-toolchain.toml
       # (AGENTS.md §4) — never a floating `stable`.
       - name: Rust toolchain (pinned)
-        if: hashFiles('Cargo.toml') != ''
+        if: env.DOCS_ONLY != 'true' && hashFiles('Cargo.toml') != ''
         run: rustup toolchain install
 
       - name: cargo-nextest · cargo-llvm-cov · cargo-deny
-        if: hashFiles('Cargo.toml') != ''
+        if: env.DOCS_ONLY != 'true' && hashFiles('Cargo.toml') != ''
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny
@@ -77,7 +129,7 @@ jobs:
       # It is keyed by Cargo.lock and the toolchain, and only develop saves it, so pull requests
       # restore develop's cache without filling the repository's cache quota with their own.
       - name: Cache cargo dependencies
-        if: hashFiles('Cargo.toml') != ''
+        if: env.DOCS_ONLY != 'true' && hashFiles('Cargo.toml') != ''
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/develop' }}
@@ -86,14 +138,14 @@ jobs:
       # macOS cannot run Docker: it verifies the artifact in place. Ubuntu keeps the artifact
       # outside testroms/build/ so verify.sh rebuilds from source and compares the two.
       - name: Download test ROMs (macOS, verified in place)
-        if: runner.os == 'macOS'
+        if: env.DOCS_ONLY != 'true' && runner.os == 'macOS'
         uses: actions/download-artifact@v4
         with:
           name: testroms
           path: testroms/build/
 
       - name: Download test ROMs (Linux, compared with the rebuild)
-        if: runner.os != 'macOS'
+        if: env.DOCS_ONLY != 'true' && runner.os != 'macOS'
         uses: actions/download-artifact@v4
         with:
           name: testroms
@@ -102,6 +154,7 @@ jobs:
       # The ARM7TDMI JSON suite (about 900 MB) is fetched by verify.sh. The cache is keyed by
       # the tracked checksums, so it is reused until the pinned suite changes.
       - name: Cache CPU test suite
+        if: env.DOCS_ONLY != 'true'
         uses: actions/cache@v4
         with:
           path: tests/data/arm7tdmi
@@ -109,9 +162,11 @@ jobs:
 
       # Decided in #65. Ubuntu has Docker: it rebuilds the ROMs and must match the artifact.
       # macOS only verifies the artifact's checksums. The prebuilt variable is set for macOS
-      # alone, so a runner without Docker cannot silently skip the build.
+      # alone, so a runner without Docker cannot silently skip the build. A documentation-only
+      # run hands verify.sh the commit to compare with; verify.sh checks the change again itself.
       - name: Verify
         env:
+          NINGE_DOCS_ONLY_BASE: ${{ needs.scope.outputs.docs_only == 'true' && needs.scope.outputs.base || '' }}
           NINGE_PREBUILT_TESTROMS: ${{ runner.os == 'macOS' && '1' || '' }}
           NINGE_EXPECTED_TESTROM_SUMS: ${{ runner.os != 'macOS' && format('{0}/testroms/SHA256SUMS', runner.temp) || '' }}
         run: ./scripts/verify.sh

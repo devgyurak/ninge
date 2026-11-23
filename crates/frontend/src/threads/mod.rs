@@ -109,6 +109,7 @@ pub fn run_emu<P: Pacer, S: AudioSink>(
 ) {
     loop {
         pace.pacer.frame_started(now());
+        pace.sink.frame_started();
         // A closed channel (the input thread is gone) ends nothing by itself: its guard has set
         // `stop`.
         while let Ok(event) = events.try_recv() {

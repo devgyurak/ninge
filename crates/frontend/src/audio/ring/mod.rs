@@ -15,7 +15,9 @@
 //! before the count that exposes it, and a slot is free before the count that reuses it. The slot
 //! accesses themselves are `Relaxed`, ordered by those counts.
 //!
-//! One producer and one consumer only: two of either would race on the counts.
+//! One producer and one consumer only: two of either would race on the counts. `push` is the
+//! producer's call and `pop_into` the consumer's; the rest (`fill`, `pulled`, the counters) may be
+//! called from either side. The type does not enforce it, so a caller keeps to it.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
@@ -117,6 +119,15 @@ impl AudioRing {
         self.tail.store(tail.wrapping_add(taken), Ordering::Release);
         let missed = pairs.len() - taken;
         self.underruns.fetch_add(missed as u64, Ordering::Relaxed);
+    }
+
+    /// Pairs the consumer has asked for since the ring was made, the stored ones it took and the
+    /// missing ones it found ([`AudioRing::underruns`]) together. It grows whenever the device
+    /// runs a callback, even on an empty ring, so a pacer can tell a device that stopped from
+    /// one that is merely kept waiting.
+    pub fn pulled(&self) -> u64 {
+        let taken = self.tail.load(Ordering::Acquire) as u64;
+        taken.wrapping_add(self.underruns.load(Ordering::Relaxed))
     }
 
     /// Pairs the consumer found missing since the ring was made.

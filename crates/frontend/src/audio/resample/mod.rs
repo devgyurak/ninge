@@ -7,8 +7,8 @@
 //! output samples, in input samples, is a rational too. The resampler keeps its position as an
 //! integer numerator over a fixed denominator and steps it by an integer numerator, so a rate
 //! that divides exactly never accumulates an error, however long it runs. Only the trim, which
-//! changes the step a little while the ring is off target, rounds, and by less than a billionth
-//! of a sample per step.
+//! changes the step a little while the ring is off target, rounds, and by at most about a
+//! millionth of a sample per step.
 //!
 //! The conversion is linear interpolation between the two input pairs around each output
 //! instant. It carries the last input pair across calls so a frame boundary is not audible, and
@@ -55,7 +55,8 @@ impl Resampler {
         let mut resampler = Self {
             source_num,
             // One input pair is `source_den * dest_hz * PPM` units, so that a step of
-            // `source_num / (source_den * dest_hz)` input pairs is the whole number `source_num * PPM`.
+            // `source_num / (source_den * dest_hz)` input pairs is the whole number
+            // `source_num * PPM`.
             scale: source_den * u64::from(dest_hz) * PPM,
             step: 0,
             phase: 0,

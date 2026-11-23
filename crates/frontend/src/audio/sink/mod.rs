@@ -7,6 +7,10 @@ use std::sync::Arc;
 
 /// Takes the audio of one machine frame: interleaved stereo `i16` at the machine's output rate.
 pub trait AudioSink {
+    /// A frame is about to run. The emulation takes a good part of a frame's time, in which the
+    /// device keeps playing, so a sink that wants the ring's level reads it here.
+    fn frame_started(&mut self) {}
+
     /// Handles one frame's samples. Never called with an empty slice.
     fn push(&mut self, samples: &[i16]);
 }
@@ -20,35 +24,40 @@ impl AudioSink for NoAudio {
 }
 
 /// Resamples a frame's audio to the device's rate and stores it in the ring the device callback
-/// reads. Before each frame it sets the resampler's trim from how far the ring is from its target
-/// ([`trim_for_fill`]), so the two clocks stay together without a click.
+/// reads. It sets the resampler's trim from how far the ring was from its target when the frame
+/// started ([`trim_for_fill`]; read at the end of the frame the ring would be a frame's worth
+/// emptier and the trim would lean slow), so the two clocks stay together without a click.
 #[derive(Debug)]
 pub struct RingSink {
     ring: Arc<AudioRing>,
     resampler: Resampler,
     target: usize,
+    /// The ring's fill when the frame started; the target before the first.
+    level: usize,
     scratch: Vec<i16>,
 }
 
 impl RingSink {
-    /// A sink for `ring`, drained at `device_hz`, kept near `target` pairs. It starts the ring
-    /// with `target` pairs of silence, so the device's first callbacks have something to play
-    /// while the first frames are made.
+    /// A sink for `ring`, drained at `device_hz`, kept near `target` pairs.
     pub fn new(ring: Arc<AudioRing>, device_hz: u32, target: usize) -> Self {
-        ring.push(&vec![0; target * 2]);
         Self {
             ring,
             resampler: Resampler::for_machine(device_hz),
             target,
+            level: target,
             scratch: Vec::new(),
         }
     }
 }
 
 impl AudioSink for RingSink {
+    fn frame_started(&mut self) {
+        self.level = self.ring.fill();
+    }
+
     fn push(&mut self, samples: &[i16]) {
         self.resampler
-            .set_trim_ppm(trim_for_fill(self.ring.fill(), self.target));
+            .set_trim_ppm(trim_for_fill(self.level, self.target));
         self.scratch.clear();
         self.resampler.process(samples, &mut self.scratch);
         self.ring.push(&self.scratch);

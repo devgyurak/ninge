@@ -6,8 +6,10 @@
 //! Values between the stages are integers in units of 1/256 of a PCM16 step (8 fraction bits), the
 //! width the table gives after the channel's rounding. All shifts are arithmetic, so a negative
 //! value rounds toward minus infinity, "rounding down" in the table's words.
-// TODO(phase6): the capture units (#46) read the mixer's output and can add channel 1 or 3 into
-// channel 0 or 2; none of it is modeled here (`spu.md`, "What this note does not cover").
+//!
+//! The capture units read a value before the master stage and make it PCM16 or PCM8
+//! (`docs/hw/sound-capture.md`); [`volumed`], [`clip_capture`], [`capture_pcm16`] and
+//! [`capture_pcm8`] are those steps.
 
 /// A 7-bit volume or pan register means `N` = 0-126 as written, and 128 for 127 (GBATEK, "7bit
 /// Volume and Panning Values"); the factor is `N / 128`.
@@ -49,6 +51,54 @@ pub(super) fn channel(sample: i32, divider: u32, volume: u32, panning: u32) -> (
         (with_volume * (128 - pan)) >> CHANNEL_DROP,
         (with_volume * pan) >> CHANNEL_DROP,
     )
+}
+
+/// Fraction bits the divider and volume steps leave (4 + 7) and the 8 a capture keeps.
+const VOLUMED_DROP: u32 = DIVIDER_BITS + FACTOR_BITS - 8;
+
+/// A channel's value before its panning, in 1/256 units: the divider and the volume factor
+/// applied and the fraction cut to 8 bits (`sound-capture.md`, "Sources"). It is what the capture
+/// reads as `ch(a)` and `ch(b)`, and it is not clipped.
+// TODO(hw-unverified): where the fraction is dropped between the volume factor and the capture
+// (`sound-capture.md`, "Unverified").
+pub(super) fn volumed(sample: i32, divider: u32, volume: u32) -> i64 {
+    let divided = (i64::from(sample) << DIVIDER_BITS) >> DIVIDER_SHIFT[(divider & 3) as usize];
+    (divided * factor(volume)) >> VOLUMED_DROP
+}
+
+/// The bounds of a capture value, `-8000h` and `7FFFh` with the 8 fraction bits kept.
+const CAPTURE_MIN: i64 = -0x80_0000;
+const CAPTURE_MAX: i64 = 0x7F_FFFF;
+/// The value a capture of a channel writes in the both-negative bug (`sound-capture.md`, "The two
+/// bugs"): `-8000h`.
+pub(super) const CAPTURE_BUG: i64 = CAPTURE_MIN;
+
+/// A 16.8 value clipped to the range a capture holds (`sound-capture.md`, "Sources").
+pub(super) fn clip_capture(value: i64) -> i64 {
+    value.clamp(CAPTURE_MIN, CAPTURE_MAX)
+}
+
+/// A 16.8 capture value as PCM16: the 8 fraction bits are dropped by flooring.
+// TODO(hw-unverified): GBATEK states the rounding for PCM8 only; PCM16 floors here
+// (`sound-capture.md`, "Unverified").
+pub(super) const fn capture_pcm16(value: i64) -> i64 {
+    value >> 8
+}
+
+/// Fraction bits of the 8.16 value a PCM8 capture makes from the 16.8 one, and the most significant
+/// of them.
+const PCM8_FRACTION_BITS: u32 = 16;
+const PCM8_FRACTION_MSB: i64 = 1 << (PCM8_FRACTION_BITS - 1);
+
+/// A 16.8 capture value as PCM8: divided by `100h` into 8.16; with the fraction's most significant
+/// bit set the value is rounded toward zero (a negative one rounds up, a positive one down), and the
+/// fraction is dropped (`sound-capture.md`, "Format").
+// TODO(hw-unverified): the fraction is the two's complement one, so -5.5 steps becomes -5 and
+// -5.50002 becomes -6 (`sound-capture.md`, "Unverified").
+pub(super) const fn capture_pcm8(value: i64) -> i64 {
+    let whole = value >> PCM8_FRACTION_BITS;
+    let rounds_up = value < 0 && value & PCM8_FRACTION_MSB != 0;
+    whole + rounds_up as i64
 }
 
 /// The master stage: `sum` (1/256 units) times `N / 128 / 64`, fraction dropped.

@@ -104,3 +104,66 @@ fn given_the_levels_when_converted_then_the_medium_is_zero_and_the_range_is_minu
         [-0x8000, 0, 0x7FC0, 64]
     );
 }
+
+// ------------------------------------------------------------------------------- the capture
+//
+// Expected values come from `docs/hw/sound-capture.md` ("Format", "Sources"): a capture value is
+// 16.8, so PCM16 drops 8 fraction bits and PCM8 divides by 100h into 8.16.
+
+/// The cases `(name, got, want)` of a conversion table that differ.
+fn wrong<T: PartialEq + Copy>(rows: &[(&'static str, T, T)]) -> Vec<&'static str> {
+    rows.iter().filter(|r| r.1 != r.2).map(|r| r.0).collect()
+}
+
+#[test]
+fn given_a_channel_before_its_panning_when_volume_is_full_then_the_value_is_the_sample_times_256() {
+    assert_eq!(volumed(S, 0, 127), i64::from(S) * 256);
+}
+
+#[test]
+fn given_a_channel_before_its_panning_when_the_divider_and_volume_scale_it_then_both_apply() {
+    // Divider 2 (divide by 4) and volume 64 (half): S / 8, in 1/256 units.
+    assert_eq!(volumed(S, 2, 64), i64::from(S) * 256 / 8);
+}
+
+#[test]
+fn given_a_16_8_value_when_clipped_for_a_capture_then_both_ends_stop_at_the_16_bit_range() {
+    let rows = [
+        ("above", clip_capture(0x1000_0000), 0x7F_FFFF),
+        ("below", clip_capture(-0x1000_0000), -0x80_0000),
+        ("inside", clip_capture(0x1234), 0x1234),
+        ("top edge", clip_capture(0x7F_FFFF), 0x7F_FFFF),
+        ("bottom edge", clip_capture(-0x80_0000), -0x80_0000),
+    ];
+    assert_eq!(wrong(&rows), Vec::<&str>::new());
+}
+
+#[test]
+fn given_a_16_8_value_when_made_pcm16_then_the_fraction_is_dropped_by_flooring() {
+    let rows = [
+        ("whole", capture_pcm16(0x1200), 0x12),
+        ("positive fraction", capture_pcm16(0x12FF), 0x12),
+        ("negative fraction", capture_pcm16(-0x1201), -0x13),
+        ("negative whole", capture_pcm16(-0x1200), -0x12),
+        ("top", capture_pcm16(0x7F_FFFF), 0x7FFF),
+        ("bottom", capture_pcm16(-0x80_0000), -0x8000),
+    ];
+    assert_eq!(wrong(&rows), Vec::<&str>::new());
+}
+
+#[test]
+fn given_a_16_8_value_when_made_pcm8_then_a_set_fraction_msb_rounds_toward_zero() {
+    // 8.16 values: 5.5 is `5_8000h`, 5.25 is `5_4000h`; the negatives are their two's complement.
+    let rows = [
+        ("positive msb set", capture_pcm8(0x5_8000), 5),
+        ("positive msb clear", capture_pcm8(0x5_7FFF), 5),
+        ("negative msb set", capture_pcm8(-0x5_8000), -5),
+        ("negative msb clear", capture_pcm8(-0x5_C000), -6),
+        ("just below the half", capture_pcm8(-0x5_8001), -6),
+        ("zero", capture_pcm8(0), 0),
+        ("minus one", capture_pcm8(-0x1_0000), -1),
+        ("top", capture_pcm8(0x7F_FFFF), 127),
+        ("bottom", capture_pcm8(-0x80_0000), -128),
+    ];
+    assert_eq!(wrong(&rows), Vec::<&str>::new());
+}

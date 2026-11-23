@@ -9,7 +9,7 @@ use crate::bus::{Arm7View, Arm9View, TcmConfig, peek};
 use crate::io::dma::Trigger;
 use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
-use crate::spu::OUTPUT_SAMPLE_CYCLES;
+use crate::spu::{CAPTURES, CaptureWrites, OUTPUT_SAMPLE_CYCLES};
 
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
@@ -106,14 +106,44 @@ impl Machine {
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
         let spu = io.spu();
         let samples = std::array::from_fn(|x| spu.channel(x).sample(time, read));
+        let mix = spu.mix(&samples);
         // The gates outside the unit: the speakers and the sound amplifier (`spu.md`, "The gates").
         let audible = io.power().speakers_on() && io.spi().power().amplifier_audible();
-        let pair = spu.output(&samples, audible);
+        let pair = spu.output_mixed(&mix, audible);
+        // What the capture units write, worked out from the same samples and the same mix; the
+        // writes themselves come after, so the one-sample delay of a capture played back by channel
+        // 1 or 3 is the model (`docs/hw/sound-capture.md`, "Model").
+        let captures = spu.capture_writes(&mix, &samples, time);
         if self.audio.len() < AUDIO_CAPACITY {
             self.audio.extend(pair);
         }
+        self.write_captures(captures);
         self.scheduler
             .schedule(time.saturating_add(OUTPUT_SAMPLE_CYCLES), EventKind::Sample);
+    }
+
+    /// Writes what the capture units captured, through the ARM7's bus view as a DMA write would
+    /// go (`docs/hw/sound-capture.md`, "Model"): the shared WRAM split, the mirrors and the I/O
+    /// window behave as for a DMA. Nothing is built when no capture runs.
+    fn write_captures(&mut self, captures: [Option<CaptureWrites>; CAPTURES]) {
+        if captures.iter().all(Option::is_none) {
+            return;
+        }
+        let mut view = Arm7View::new(
+            &mut self.memory,
+            &mut self.io,
+            &mut self.scheduler,
+            &self.rom,
+            self.arm7_clock,
+        );
+        captures
+            .iter()
+            .flatten()
+            .for_each(|writes| writes.run(&mut view));
+        // As for a DMA unit, a write may reach HALTCNT: the ARM7 halts at once.
+        if self.io.power_mut().take_halt() {
+            self.arm7.set_halted(true);
+        }
     }
 
     /// Runs a DMA transfer through the owning CPU's bus view with the TCM switched off: DMA

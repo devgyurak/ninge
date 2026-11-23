@@ -20,8 +20,9 @@ registers, the busy bits of channels and captures, POWCNT2, and the SoundBias SW
 
 The mixer, the volume and panning, the PSG and noise generation, reading the sample data (PCM8,
 PCM16, ADPCM) and the gates (SOUNDCNT, POWCNT2, the sound amplifier of the power-management device)
-are in `spu.md` (#45). Not implemented (`TODO(phase6)`): the capture writing to memory and feeding
-channels 1 and 3 (#46, specified in `sound-capture.md`), and the BIOS table SWIs (sine, pitch and
+are in `spu.md` (#45), and what the capture units write to memory is in `sound-capture.md` (#46).
+Not implemented (`TODO(phase6)`): the addition of channel 1 or 3 into channel 0 or 2 (#46, the
+last part of `sound-capture.md`), and the BIOS table SWIs (sine, pitch and
 volume tables, which are BIOS data and need a plan of their own).
 
 ## Who sees them
@@ -183,7 +184,8 @@ channel is not documented.
   `end = now + samples * 4 * (10000h - TMR)`, with `now` the master time of the write. A read of
   the register reports busy while the channel has started and `now < end`. No scheduler event and
   no timer are involved. The playback of a channel (`spu.md`, "Position") uses the same end, so
-  the busy bit and the output agree; a capture keeps this lazy end (`TODO(phase6)`, #46).
+  the busy bit and the output agree. A capture is the same, with a start time and the slots written
+  so far instead of an end (`sound-capture.md`, "Model").
 - **A capture is the same**, with the sample rate of channel 1 (capture 0) or channel 3
   (capture 1) taken from their TMR at the moment the capture starts.
 - **The busy bit never clears** for: loop mode, PSG and noise (format 3), the manual (0) and

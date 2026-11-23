@@ -396,3 +396,127 @@ fn given_a_loaded_state_when_a_frame_runs_then_the_audio_buffer_keeps_its_reserv
         (Ok(()), true, true)
     );
 }
+
+// ------------------------------------------------------------------------------ the capture
+//
+// Expected values come from `docs/hw/sound-capture.md` ("Sources", "Format", "Model"). TMR `FE00h`
+// makes a capture sample `4 * 200h = 2048` master cycles, one per output sample, so each output
+// sample event completes exactly one slot. Channel 0 plays `4000h` at full volume, so capture 0
+// from channel 0 writes `4000h` (PCM16) or `40h` (PCM8).
+
+const SNDCAP0CNT: u32 = 0x0400_0508;
+const SNDCAP0DAD: u32 = 0x0400_0510;
+const SNDCAP0LEN: u32 = 0x0400_0514;
+const SOUND1TMR: u32 = 0x0400_0418;
+/// Where the captures land: main RAM, away from the channel's data.
+const CAPTURE_ADDR: u32 = 0x0200_2000;
+/// The bytes the buffer holds before the capture writes it.
+const SEED: u32 = 0xAAAA_AAAA;
+/// Source = channel 0, loop, PCM16 / one-shot, PCM8; with bit 7 set.
+const CAP_LOOP_CHANNEL: u32 = 1 << 7 | 1 << 1;
+const CAP_ONE_SHOT_PCM8_CHANNEL: u32 = 1 << 7 | 1 << 3 | 1 << 2 | 1 << 1;
+
+/// A machine with [`looping`] on channel 0 and capture 0 started at `at` with `cnt`, `len` words at
+/// `dad`, one slot per output sample, the buffer at [`CAPTURE_ADDR`] seeded.
+fn capturing(at: u64, cnt: u32, len: u16, dad: u32) -> Machine {
+    let mut m = looping(at);
+    super::dma::poke_words(&mut m, CAPTURE_ADDR, &[SEED; 4]);
+    m.bus7(at).write16(SOUND1TMR, 0xFE00);
+    m.bus7(at).write32(SNDCAP0DAD, dad);
+    m.bus7(at).write16(SNDCAP0LEN, len);
+    m.bus7(at)
+        .write8(SNDCAP0CNT, u8::try_from(cnt).expect("one byte"));
+    m
+}
+
+fn halves(m: &mut Machine, addr: u32, n: u32) -> Vec<u16> {
+    (0..n).map(|i| m.bus9().read16(addr + 2 * i)).collect()
+}
+
+fn bytes(m: &mut Machine, addr: u32, n: u32) -> Vec<u8> {
+    (0..n).map(|i| m.bus9().read8(addr + i)).collect()
+}
+
+#[test]
+fn given_a_loop_capture_of_a_playing_channel_when_a_frame_runs_then_main_ram_holds_its_samples() {
+    // 2 words: 4 halfword slots, all filled by the 547 events of the frame.
+    let mut m = capturing(3_000, CAP_LOOP_CHANNEL, 2, CAPTURE_ADDR);
+    m.run_frame(crate::Input::new());
+    assert_eq!(halves(&mut m, CAPTURE_ADDR, 4), vec![0x4000; 4]);
+}
+
+#[test]
+fn given_a_one_shot_pcm8_capture_when_a_frame_runs_then_only_its_buffer_is_written_and_busy_clears()
+{
+    // 1 word: 4 byte slots; the fifth byte keeps the seed.
+    let mut m = capturing(3_000, CAP_ONE_SHOT_PCM8_CHANNEL, 1, CAPTURE_ADDR);
+    m.run_frame(crate::Input::new());
+    let busy = m.bus7(1_200_000).read8(SNDCAP0CNT) & 0x80 != 0;
+    assert_eq!(
+        (bytes(&mut m, CAPTURE_ADDR, 5), busy),
+        (vec![0x40, 0x40, 0x40, 0x40, 0xAA], false)
+    );
+}
+
+#[test]
+fn given_a_capture_into_arm7_wram_when_a_frame_runs_then_the_arm7_reads_the_samples_and_the_arm9_does_not()
+ {
+    // The ARM7-only WRAM at 0380_0000h is reachable through the ARM7's view alone.
+    let mut m = capturing(3_000, CAP_LOOP_CHANNEL, 2, 0x0380_0000);
+    m.run_frame(crate::Input::new());
+    let arm7 = m.bus7(1_200_000).read16(0x0380_0000);
+    let arm9 = m.bus9().read16(0x0380_0000);
+    assert_eq!((arm7, arm9), (0x4000, 0));
+}
+
+#[test]
+fn given_a_savestate_taken_mid_capture_when_loaded_then_the_next_frame_matches_an_uninterrupted_run()
+ {
+    let mut straight = capturing(3_000, CAP_LOOP_CHANNEL, 3, CAPTURE_ADDR);
+    straight.run_frame(crate::Input::new());
+    let state = straight.save_state();
+    let mut loaded = machine();
+    let result = loaded.load_state(&state);
+    straight.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
+    let ram = [&mut straight, &mut loaded].map(|m| halves(m, CAPTURE_ADDR, 6));
+    assert_eq!(
+        (
+            result,
+            ram[0] == ram[1],
+            loaded.audio() == straight.audio(),
+            loaded.save_state() == straight.save_state()
+        ),
+        (Ok(()), true, true, true)
+    );
+}
+
+#[test]
+fn given_two_machines_with_the_same_capture_when_each_runs_a_frame_then_memory_audio_and_state_match()
+ {
+    let mut a = capturing(3_000, CAP_LOOP_CHANNEL, 3, CAPTURE_ADDR);
+    let mut b = capturing(3_000, CAP_LOOP_CHANNEL, 3, CAPTURE_ADDR);
+    a.run_frame(crate::Input::new());
+    b.run_frame(crate::Input::new());
+    let ram = [&mut a, &mut b].map(|m| halves(m, CAPTURE_ADDR, 6));
+    assert_eq!(
+        (
+            ram[0] == ram[1],
+            a.audio() == b.audio(),
+            a.save_state() == b.save_state()
+        ),
+        (true, true, true)
+    );
+}
+
+#[test]
+fn given_a_running_capture_when_inspected_then_the_position_and_next_address_are_visible() {
+    // Started at 3,000 with a period of 2,048: after 3 periods three slots are written.
+    let m = capturing(3_000, CAP_LOOP_CHANNEL, 2, CAPTURE_ADDR);
+    let at = 3_000 + 3 * 2_048;
+    let capture = m.inspect().spu().capture(0);
+    assert_eq!(
+        (capture.position(at), capture.next_address(at)),
+        (3, CAPTURE_ADDR + 6)
+    );
+}

@@ -243,6 +243,58 @@ fn given_debug_steps_far_past_a_frame_when_no_frame_runs_then_the_audio_stays_wi
 }
 
 #[test]
+fn given_an_adpcm_loop_at_one_sample_per_output_when_a_frame_runs_then_the_audio_follows_the_decoder()
+ {
+    // TMR FE00h is 4 * 512 = 2,048 master cycles a sample, so each output sample is one decode.
+    // The header is 0 and the nibbles 1, 2, 3, 4, 0, 0, 0, 0 give 1, 4, 8, 15, 16, 17, 17, 17
+    // (the hand table of `spu/tests.rs`); the first output sample is at 2048, the start.
+    let mut m = machine();
+    super::dma::poke_words(&mut m, DATA_ADDR, &[0, 0x0000_4321, 0, 0]);
+    m.bus7(2_048).write32(SOUND0SAD, DATA_ADDR);
+    m.bus7(2_048).write16(SOUND0TMR, 0xFE00);
+    m.bus7(2_048).write16(SOUND0CNT + 0xA, 1);
+    m.bus7(2_048).write32(SOUND0LEN, 3);
+    m.bus7(2_048)
+        .write32(SOUND0CNT, 1 << 31 | 1 << 27 | 2 << 29);
+    m.run_frame(crate::Input::new());
+    assert_eq!(
+        &m.audio()[..16],
+        &[1, 1, 4, 4, 8, 8, 15, 15, 16, 16, 17, 17, 17, 17, 17, 17]
+    );
+}
+
+#[test]
+fn given_an_adpcm_savestate_mid_playback_when_loaded_then_the_next_frame_matches_an_uninterrupted_run()
+ {
+    let build = || {
+        let mut m = machine();
+        super::dma::poke_words(&mut m, DATA_ADDR, &[0, 0x0000_4321, 0x5555_0000, 0]);
+        m.bus7(2_048).write32(SOUND0SAD, DATA_ADDR);
+        m.bus7(2_048).write16(SOUND0TMR, 0xFE00);
+        m.bus7(2_048).write16(SOUND0CNT + 0xA, 1);
+        m.bus7(2_048).write32(SOUND0LEN, 3);
+        m.bus7(2_048)
+            .write32(SOUND0CNT, 1 << 31 | 1 << 27 | 2 << 29);
+        m
+    };
+    let mut straight = build();
+    straight.run_frame(crate::Input::new());
+    let state = straight.save_state();
+    let mut loaded = machine();
+    let result = loaded.load_state(&state);
+    straight.run_frame(crate::Input::new());
+    loaded.run_frame(crate::Input::new());
+    assert_eq!(
+        (
+            result,
+            loaded.audio() == straight.audio(),
+            loaded.save_state() == straight.save_state()
+        ),
+        (Ok(()), true, true)
+    );
+}
+
+#[test]
 fn given_a_loaded_state_when_a_frame_runs_then_the_audio_buffer_keeps_its_reserved_capacity() {
     let mut saver = machine();
     saver.run_frame(crate::Input::new());

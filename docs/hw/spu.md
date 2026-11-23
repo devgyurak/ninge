@@ -265,5 +265,8 @@ oracle.
   to a running channel does is not stated, and here it does not restart. — `spu/`.
 - **Whether the header's initial `Pcm16` is itself output.** GBATEK counts `8 * (N - 1)` ADPCM
   samples, which leaves the header out; the model outputs the first decoded value first. — `spu/`.
+- **When the ADPCM header is read.** The model reads it when the first output sample after the start
+  catches the decoder up, not at the start, so a program that rewrites the header within one output
+  sample (2048 master cycles) of starting is read late. — `spu/`.
 - **An ADPCM loop whose start is the header** (PNT = 0 or 1). GBATEK says to put it at the data. — `spu/`.
 - **What a channel reads from an address the ARM7 bus does not map.** — `spu/`.

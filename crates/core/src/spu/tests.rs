@@ -655,3 +655,127 @@ fn given_a_time_before_the_start_when_sampled_then_the_channel_is_silent_and_has
         (0, None)
     );
 }
+
+// ------------------------------------------------------------------------------------ IMA-ADPCM
+//
+// Four words (a header and three of data): 24 samples. The header is `0` (value 0, index 0); the
+// data bytes are `21h 43h` (nibbles 1, 2, 3, 4), two zero bytes (four nibbles of 0), `55h` four
+// times (eight nibbles of 5) and four zero bytes. Worked out by hand from the formula of
+// `docs/hw/spu.md` ("IMA-ADPCM") and the step table:
+//
+// | sample | nibble | step | diff | value | index |
+// |---|---|---|---|---|---|
+// | 0-3 | 1 2 3 4 | 7 | 1 3 4 7 | 1 4 8 15 | 0 0 0 2 |
+// | 4-7 | 0 0 0 0 | 9 8 7 7 | 1 1 0 0 | 16 17 17 17 | 1 0 0 0 |
+// | 8-15 | 5 x 8 | 7 11 16 23 34 50 73 107 | 8 14 22 30 46 68 100 146 | 25 39 61 91 137 205 305 451 | 4 8 12 16 20 24 28 32 |
+// | 16-23 | 0 x 8 | 157 143 130 118 107 97 88 80 | 19 17 16 14 13 12 11 10 | 470 487 503 517 530 542 553 563 | 31 30 29 28 27 26 25 24 |
+
+const ADPCM_DATA: [u8; 16] = [
+    0, 0, 0, 0, 0x21, 0x43, 0, 0, 0x55, 0x55, 0x55, 0x55, 0, 0, 0, 0,
+];
+fn adpcm_memory(addr: u32) -> u8 {
+    ADPCM_DATA.get(addr as usize).copied().unwrap_or(0xEE)
+}
+
+/// The channel's sample at each of `times`, with the decoder advanced to each time in turn, as the
+/// machine does at every output sample.
+fn adpcm_run(spu: &Spu, times: &[u64]) -> Vec<i32> {
+    let mut channel = *spu.channel(0);
+    times
+        .iter()
+        .map(|&time| {
+            channel.adpcm = channel.advanced(time, adpcm_memory);
+            channel.sample(time, adpcm_memory)
+        })
+        .collect()
+}
+
+/// The times of samples `first..first + count` of a channel started at [`STARTED_AT`].
+fn sample_times(first: u64, count: u64) -> Vec<u64> {
+    (first..first + count).map(at_sample).collect()
+}
+
+#[test]
+fn given_an_adpcm_one_shot_when_the_sample_clock_runs_then_the_values_follow_the_hand_table() {
+    let spu = started(0, start(ONE_SHOT, ADPCM), 0, 4, STARTED_AT);
+    assert_eq!(
+        adpcm_run(&spu, &sample_times(0, 16)),
+        vec![
+            1, 4, 8, 15, 16, 17, 17, 17, 25, 39, 61, 91, 137, 205, 305, 451
+        ]
+    );
+}
+
+#[test]
+fn given_an_adpcm_one_shot_when_the_decoder_catches_up_in_one_jump_then_it_matches_stepping() {
+    let spu = started(0, start(ONE_SHOT, ADPCM), 0, 4, STARTED_AT);
+    assert_eq!(adpcm_run(&spu, &[at_sample(23)]), vec![563]);
+}
+
+#[test]
+fn given_an_adpcm_one_shot_when_it_ends_then_the_output_is_zero_or_the_last_value_with_hold() {
+    let plain = started(0, start(ONE_SHOT, ADPCM), 0, 4, STARTED_AT);
+    let held = started(0, start(ONE_SHOT, ADPCM) | CNT_HOLD, 0, 4, STARTED_AT);
+    let times = [at_sample(23), at_sample(24), at_sample(500)];
+    assert_eq!(
+        (adpcm_run(&plain, &times), adpcm_run(&held, &times)),
+        (vec![563, 0, 0], vec![563, 563, 563])
+    );
+}
+
+#[test]
+fn given_an_adpcm_loop_when_it_wraps_then_the_state_at_the_loop_start_is_put_back() {
+    // PNT 2 words puts the loop start at data sample 8, where the state is 17, index 0. Sample 24
+    // wraps to it and decodes nibble 5 again (25, 39, ...) instead of going on from 563.
+    let spu = started(0, start(LOOP, ADPCM), 2, 2, STARTED_AT);
+    assert_eq!(
+        adpcm_run(&spu, &sample_times(22, 6)),
+        vec![553, 563, 25, 39, 61, 91]
+    );
+}
+
+#[test]
+fn given_an_adpcm_loop_with_pnt_one_when_it_wraps_then_the_header_state_is_put_back() {
+    let spu = started(0, start(LOOP, ADPCM), 1, 3, STARTED_AT);
+    assert_eq!(adpcm_run(&spu, &sample_times(23, 3)), vec![563, 1, 4]);
+}
+
+#[test]
+fn given_an_adpcm_sound_shorter_than_the_minimum_when_played_then_it_is_silent() {
+    let spu = started(0, start(ONE_SHOT, ADPCM), 0, 3, STARTED_AT);
+    assert_eq!(adpcm_run(&spu, &sample_times(0, 3)), vec![0, 0, 0]);
+}
+
+#[test]
+fn given_a_pcm_channel_when_advanced_then_the_decoder_state_does_not_change() {
+    let spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
+    assert_eq!(
+        spu.channel(0).advanced(at_sample(9), memory),
+        *spu.channel(0).adpcm()
+    );
+}
+
+#[test]
+fn given_an_adpcm_channel_when_stopped_then_the_decoder_state_is_cleared() {
+    let mut spu = started(0, start(LOOP, ADPCM), 1, 3, STARTED_AT);
+    let state = spu.channel(0).advanced(at_sample(5), adpcm_memory);
+    spu.set_adpcm(std::array::from_fn(|_| state));
+    write(
+        &mut spu,
+        ch(0, CNT_OFFSET) + 3,
+        Width::Byte,
+        0,
+        at_sample(6),
+    );
+    assert_eq!(*spu.channel(0).adpcm(), Adpcm::default());
+}
+
+#[test]
+fn given_a_decoder_state_with_a_wide_index_when_checked_then_the_device_is_not_well_formed() {
+    let mut spu = Spu::new();
+    spu.channels[0].adpcm = Adpcm {
+        index: 200,
+        ..Adpcm::default()
+    };
+    assert!(!spu.well_formed(0));
+}

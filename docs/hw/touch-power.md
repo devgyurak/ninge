@@ -5,7 +5,7 @@ modes, the reply, the overlapped command, the calibration formula, the pen inter
 Power Management Device" (the index register and registers 0-4, the mirrors); GBATEK "DS Keypad"
 (EXTKEYIN bit 6, the pen); GBATEK "DS Serial Peripheral Interface Bus (SPI)" (device select, hold).
 Used by: `crates/core/src/spi/touch/`, `crates/core/src/spi/power/`, `crates/core/src/io/spi/`,
-`crates/core/src/io/keypad/`, `crates/core/src/machine/`   Phase: 5 (#41; the power register's effects #231)
+`crates/core/src/io/keypad/`, `crates/core/src/machine/`   Phase: 5 (#41; the power register's effects #231; the microphone #44)
 
 Two of the three chips on the internal serial bus (`spi.md`): the power-management device on device
 select 0 and the touch-screen controller (TSC) on device select 2. Only the ARM7 reaches them,
@@ -23,7 +23,8 @@ Implemented (#231): the shutdown bit and the two backlight bits of register 0 re
 
 Not implemented: the DS-Lite and DSi chips (the Asahi Kasei touch controller and its changed
 channels and power-down modes, the Mitsumi 3205B and its register 4, the DSi's registers), the
-sound amplifier, the microphone data (#44), sleep mode (HALTCNT).
+sound amplifier, sleep mode (HALTCNT). The microphone data is a model, not hardware (#44; "The
+microphone").
 
 ## The touch-screen controller
 
@@ -155,8 +156,8 @@ These are choices of the emulator. They do not describe a part.
   exactly. The 8-bit result is the 12-bit result shifted right by four.
 - **A conversion is instant.** The reply is known when the control byte arrives; only the SPI unit
   time of `spi.md` passes.
-- **The microphone is silent.** Channel 6 returns a fixed value, the middle of the range, whatever
-  the amplifier registers say. The blow key (#44) brings real data; the code site says so.
+- **The microphone is a blow key** ("The microphone", below). Channel 6 returns the middle of the
+  range unless the host says the player is blowing and the amplifier is on.
 - **The power register's amplifier bits are stored, not acted on.** They are kept and read back
   (and shown in the debugger); the sound amplifier is Phase 6 work, and the code site carries
   `TODO(phase6)`. The shutdown and backlight bits act as the next section says.
@@ -168,6 +169,35 @@ These are choices of the emulator. They do not describe a part.
   the host's touch state.
 - **Fixed values.** The values GBATEK leaves open (below) are fixed numbers of ours; no value is
   random.
+
+## The microphone
+
+On the hardware the microphone signal reaches the program through the touch controller's AUX
+channel (6), a single-ended conversion. The power-management device (`spi/power/`) conditions it:
+register 2 bit 0 turns the amplifier on (it is off after power-up) and register 3 bits 0-1 pick the
+gain, 20, 40, 80 or 160 times. A program that wants sound turns the amplifier on, then reads AUX
+at its sample rate with single-ended conversions.
+
+The emulator has no real microphone. The host reports one bit per frame, "the player is blowing"
+(a held key, #44), and the core turns it into samples:
+
+- **Amplifier off:** AUX returns the silence value, the middle of the 12-bit range (`0800h`),
+  whether the player blows or not.
+- **Amplifier on, not blowing:** the silence value.
+- **Amplifier on, blowing:** each AUX conversion returns the next value of a noise generator. The
+  generator is a 16-bit linear-feedback shift register of the Galois form with a fixed seed
+  (`ACE1h`). One step shifts the state right by one bit and, if the bit shifted out was 1,
+  exclusive-ors the taps `B400h` into the result; the new state is the value used. It is stepped
+  once per AUX conversion, never per frame, so a program's sampling rate sets the stream it sees
+  and the stream is a pure function of the number of conversions. The 12-bit result is
+  `0400h + (new state & 07FFh)`: it lies between `0400h` and `0BFFh`, a swing of plus or minus a
+  quarter of the range around the silence value, a loud signal. The first blown conversion after
+  power-up therefore reads `0670h`. The 8-bit result is the usual top eight bits (above).
+- **The gain is not applied.** Register 3 is stored and read back; the amplitude does not change
+  with it.
+
+The state of the generator is part of the savestate, so a replay that blows at the same moments
+reads the same samples. No clock and no randomness are involved.
 
 ## What the power register does
 
@@ -207,7 +237,15 @@ hardware, or a comparison with the reference emulator used as an oracle.
   Z2 `0A00h`) and Z1 `000h`, Z2 `FFFh` when released. `spi/touch/`.
 - **The temperature channels.** Fixed values of ours: TP0 `0600h`, TP1 `068Eh`, which GBATEK's
   difference formula turns into about 297 K. `spi/touch/`.
-- **The microphone channel's value** (`0800h`, mid-range). `spi/touch/`.
+- **The microphone's silence value** (`0800h`, mid-range), and what AUX reads with the amplifier
+  off. GBATEK describes no value for either; the model returns the silence value, blown into or
+  not. `spi/touch/`.
+- **The blow waveform and its amplitude.** A real microphone gives a signal that follows the
+  sound; the model's noise (`0400h + (state & 07FFh)`, a 16-bit Galois LFSR with taps `B400h`,
+  seeded `ACE1h`) is ours, and so is "large". `spi/touch/`.
+- **The stepping.** One generator step per AUX conversion is ours; so is the decision that the
+  frame's blow bit applies to every conversion in the frame. `spi/touch/`.
+- **The gain is not applied** to the amplitude. `spi/touch/`, `spi/power/`.
 - **A differential conversion on a channel that only exists single-ended** returns zero here;
   GBATEK says the channel "can only be accessed" in the other mode. A single-ended conversion of
   X, Y, Z1 or Z2 returns the same value as the differential one. `spi/touch/`.

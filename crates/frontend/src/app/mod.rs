@@ -21,12 +21,13 @@ use crate::input::{FALLBACK_HOLD_FRAMES, Keys};
 use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
+use crate::pen::{Pen, Target, Unit};
 use crate::placeholder::ScreenImage;
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::transfer::{NoShm, ShmSink, Transfer};
 use anyhow::anyhow;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
 use ratatui::Frame;
@@ -53,6 +54,8 @@ pub enum Action {
     Resized,
     /// A key event for the console's keys.
     Key(KeyEvent),
+    /// A mouse report: the left button is the touch pen.
+    Mouse(MouseEvent),
     /// The terminal lost focus: every key lets go, since a release sent after it would never
     /// arrive.
     ReleaseAll,
@@ -72,6 +75,7 @@ pub fn map_event(event: &Event) -> Action {
     match event {
         Event::Key(key) if is_quit(key) => Action::Quit,
         Event::Key(key) => Action::Key(*key),
+        Event::Mouse(mouse) => Action::Mouse(*mouse),
         Event::Resize(..) => Action::Resized,
         Event::FocusLost => Action::ReleaseAll,
         _ => Action::None,
@@ -104,6 +108,10 @@ pub struct App<S = NoShm> {
     clock: fn() -> u32,
     /// The keys held, from which each frame's input is built.
     keys: Keys,
+    /// Where the mouse holds the touch pen.
+    pen: Pen,
+    /// What a mouse report's column and row count.
+    mouse_unit: Unit,
 }
 
 impl App<NoShm> {
@@ -128,7 +136,16 @@ impl<S: ShmSink> App<S> {
             sink,
             clock: local_wall_time,
             keys: Keys::new(false),
+            pen: Pen::new(),
+            mouse_unit: Unit::Cells,
         }
+    }
+
+    /// Tells the app whether mouse reports count cells or pixels (SGR-Pixels is on).
+    #[must_use]
+    pub fn with_mouse_unit(mut self, unit: Unit) -> Self {
+        self.mouse_unit = unit;
+        self
     }
 
     /// Tells the app whether the terminal reports key release (the kitty keyboard protocol is on);
@@ -196,6 +213,8 @@ impl<S: ShmSink> App<S> {
     pub fn resize(&mut self, size: TermSize) {
         self.size = size;
         self.areas = compute(size);
+        // The bottom screen moved under the pen.
+        self.pen.lift();
     }
 
     /// Applies an [`Action`]; `Resized` is handled by the caller through [`App::resize`].
@@ -203,7 +222,24 @@ impl<S: ShmSink> App<S> {
         match action {
             Action::Quit => self.quit = true,
             Action::Key(key) => self.keys.handle(&key),
-            Action::ReleaseAll => self.keys.release_all(),
+            Action::Mouse(mouse) => {
+                let bottom = self.areas.map(|areas| areas.bottom);
+                match bottom {
+                    Some(bottom) => self.pen.handle(
+                        &mouse,
+                        &Target {
+                            unit: self.mouse_unit,
+                            bottom,
+                            cell: (self.size.cell_w, self.size.cell_h),
+                        },
+                    ),
+                    None => self.pen.lift(),
+                }
+            }
+            Action::ReleaseAll => {
+                self.keys.release_all();
+                self.pen.lift();
+            }
             Action::None | Action::Resized => {}
         }
     }
@@ -227,7 +263,11 @@ impl<S: ShmSink> App<S> {
         if let Source::Machine(machine) = &mut self.source {
             // The keys held make the buttons, the microphone and the lid; the host's local time
             // feeds the clock chip (`rtc.md`).
-            let input: Input = self.keys.input().with_wall_time((self.clock)());
+            let input: Input = self
+                .keys
+                .input()
+                .with_touch(self.pen.touch())
+                .with_wall_time((self.clock)());
             machine.run_frame(input);
             if let Some(save) = &mut self.save {
                 save.after_frame(machine);

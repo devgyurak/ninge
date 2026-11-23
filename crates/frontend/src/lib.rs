@@ -20,6 +20,7 @@ pub mod layout;
 pub mod pattern;
 pub mod pen;
 pub mod placeholder;
+pub mod render;
 pub mod savefile;
 #[cfg(unix)]
 pub mod shm;

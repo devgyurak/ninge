@@ -2,8 +2,9 @@
 //! Tests of `app`.
 
 use super::*;
+use crate::render::{Renderer, Snapshot};
+use crate::transfer::{NoShm, Transfer};
 use crossterm::event::{KeyEventState, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::backend::TestBackend;
 
 fn size() -> TermSize {
     TermSize {
@@ -127,71 +128,6 @@ fn given_resized_action_when_applied_then_app_keeps_running() {
 }
 
 #[test]
-fn given_frames_when_taking_graphics_then_every_frame_places_both_images_in_order() {
-    let mut app = App::new(size());
-    let areas = app.areas().expect("fits");
-    let place = |id: u32, a: ratatui::layout::Rect| {
-        format!(
-            "a=T,U=1,c={},r={},f=24,s=256,v=192,i={id},t=d",
-            a.width, a.height
-        )
-    };
-    let frames: Vec<String> = (0..3)
-        .map(|_| String::from_utf8_lossy(&app.graphics()).into_owned())
-        .collect();
-    let bad: Vec<usize> = frames
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| {
-            let top = f.find(&place(TOP_IMAGE_ID, areas.top));
-            let bottom = f.find(&place(BOTTOM_IMAGE_ID, areas.bottom));
-            !top.zip(bottom).is_some_and(|(t, b)| t < b)
-        })
-        .map(|(i, _)| i)
-        .collect();
-    assert_eq!(bad, Vec::<usize>::new());
-}
-
-#[test]
-fn given_resize_when_taking_graphics_then_placement_uses_the_new_size() {
-    let mut app = App::new(size());
-    app.resize(TermSize {
-        cols: 100,
-        rows: 40,
-        ..size()
-    });
-    let a = app.areas().expect("fits");
-    let out = String::from_utf8_lossy(&app.graphics()).into_owned();
-    assert!(out.contains(&format!("a=T,U=1,c={},r={},", a.top.width, a.top.height)));
-}
-
-#[test]
-fn given_too_small_terminal_when_taking_graphics_then_nothing_is_sent() {
-    let mut app = App::new(TermSize {
-        cols: 2,
-        rows: 1,
-        ..size()
-    });
-    assert_eq!(app.graphics(), Vec::<u8>::new());
-}
-
-#[test]
-fn given_frame_step_when_run_then_graphics_reach_the_writer_and_cells_are_drawn() {
-    let mut app = App::new(size());
-    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
-    let mut gfx = Vec::new();
-    frame_step(&mut app, &mut terminal, &mut gfx).expect("step");
-    let a = app.areas().expect("fits");
-    let cell = terminal.backend().buffer()[(a.top.x, a.top.y)]
-        .symbol()
-        .to_string();
-    assert_eq!(
-        (gfx.starts_with(b"\x1b_Ga=T,U=1"), cell),
-        (true, "\u{10EEEE}\u{305}\u{305}".to_string())
-    );
-}
-
-#[test]
 fn given_time_left_when_choosing_poll_timeout_then_it_is_the_remainder() {
     let now = Instant::now();
     assert_eq!(
@@ -207,128 +143,6 @@ fn given_deadline_passed_when_choosing_poll_timeout_then_it_is_zero() {
         poll_timeout(now, now + Duration::from_millis(20)),
         Duration::ZERO
     );
-}
-
-#[test]
-fn given_too_small_terminal_when_drawing_then_it_says_so() {
-    let mut app = App::new(TermSize {
-        cols: 20,
-        rows: 1,
-        ..size()
-    });
-    let mut terminal = Terminal::new(TestBackend::new(20, 1)).expect("test backend");
-    frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
-    let row: String = (0..18)
-        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
-        .collect();
-    assert_eq!(row, "terminal too small");
-}
-
-#[test]
-fn given_unknown_cell_size_when_drawing_then_registers_panel_warns() {
-    let mut app = App::new(TermSize {
-        px_known: false,
-        ..size()
-    });
-    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
-    frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
-    let text = format!("{}", terminal.backend());
-    assert!(text.contains("cell size unknown"));
-}
-
-/// Hands out `/fake-<n>` names, or fails every put.
-struct FakeSink {
-    puts: Vec<Vec<u8>>,
-    fail: bool,
-}
-
-impl ShmSink for FakeSink {
-    fn put(&mut self, data: &[u8]) -> std::io::Result<String> {
-        self.puts.push(data.to_vec());
-        if self.fail {
-            Err(std::io::Error::other("no space left"))
-        } else {
-            Ok(format!("/fake-{}", self.puts.len()))
-        }
-    }
-}
-
-fn shm_app(fail: bool) -> App<FakeSink> {
-    let sink = FakeSink {
-        puts: Vec::new(),
-        fail,
-    };
-    App::with_transfer(size(), sink, Transfer::Shm)
-}
-
-fn text(bytes: Vec<u8>) -> String {
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
-#[test]
-fn given_shm_transfer_when_taking_graphics_then_both_screens_go_as_object_names() {
-    let mut app = shm_app(false);
-    let out = text(app.graphics());
-    assert_eq!(
-        (
-            out.matches("t=s,S=147456,q=2").count(),
-            out.contains("t=d"),
-            app.sink.puts.iter().map(Vec::len).collect::<Vec<_>>()
-        ),
-        (2, false, vec![256 * 192 * 3, 256 * 192 * 3])
-    );
-}
-
-#[test]
-fn given_shm_transfer_when_taking_graphics_then_payloads_encode_the_names_in_screen_order() {
-    let mut app = shm_app(false);
-    let out = text(app.graphics());
-    let b64 = |name: &str| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, name);
-    let top = out.find(&format!(";{}\x1b\\", b64("/fake-1")));
-    let bottom = out.find(&format!(";{}\x1b\\", b64("/fake-2")));
-    assert!(top.zip(bottom).is_some_and(|(t, b)| t < b));
-}
-
-#[test]
-fn given_failing_shm_write_when_taking_graphics_then_the_frame_falls_back_to_zlib() {
-    let mut app = shm_app(true);
-    let out = text(app.graphics());
-    assert_eq!(
-        (out.contains("t=s"), out.matches("t=d,o=z").count()),
-        (false, 2)
-    );
-}
-
-#[test]
-fn given_failing_shm_write_when_taking_more_frames_then_shm_is_not_tried_again() {
-    let mut app = shm_app(true);
-    let _ = app.graphics();
-    let _ = app.graphics();
-    assert_eq!(app.sink.puts.len(), 1);
-}
-
-#[test]
-fn given_failing_shm_write_when_drawing_then_the_panel_states_the_fallback_reason() {
-    let mut app = shm_app(true);
-    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
-    frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
-    let text = format!("{}", terminal.backend());
-    assert!(text.contains("transfer: zlib (t=d)") && text.contains("shm write failed:"));
-}
-
-#[test]
-fn given_working_shm_when_drawing_then_the_panel_says_shm() {
-    let mut app = shm_app(false);
-    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
-    frame_step(&mut app, &mut terminal, &mut Vec::new()).expect("step");
-    let text = format!("{}", terminal.backend());
-    assert!(text.contains("transfer: shm (t=s)"));
-}
-
-#[test]
-fn given_default_app_when_asking_for_transfer_then_it_is_direct_with_no_reason() {
-    let app = App::new(size());
-    assert_eq!(*app.transfer(), Transfer::Direct { reason: None });
 }
 
 // ------------------------------------------------------------------------------- save file
@@ -353,9 +167,7 @@ fn app_with_saved_machine(name: &str) -> (App, std::path::PathBuf) {
 
 /// `n` frames of the app.
 fn run_frames(app: &mut App, n: u32) {
-    (0..n).for_each(|_| {
-        app.graphics();
-    });
+    (0..n).for_each(|_| app.step());
 }
 
 #[test]
@@ -410,15 +222,16 @@ fn poweroff_app() -> App {
 
 #[test]
 fn given_a_lit_screen_when_choosing_the_pixels_then_they_are_unchanged() {
-    assert_eq!(
-        lit_or_black(vec![1, 2, 0x00FF_FFFF], true),
-        vec![1, 2, 0x00FF_FFFF]
-    );
+    let mut shown = Vec::new();
+    show_pixels(&mut shown, &[1, 2, 0x00FF_FFFF], true);
+    assert_eq!(shown, vec![1, 2, 0x00FF_FFFF]);
 }
 
 #[test]
 fn given_an_unlit_screen_when_choosing_the_pixels_then_every_pixel_is_black_and_the_size_is_kept() {
-    assert_eq!(lit_or_black(vec![1, 2, 0x00FF_FFFF], false), vec![0, 0, 0]);
+    let mut shown = vec![9; 7];
+    show_pixels(&mut shown, &[1, 2, 0x00FF_FFFF], false);
+    assert_eq!(shown, vec![0, 0, 0]);
 }
 
 #[test]
@@ -486,16 +299,20 @@ fn given_a_shut_down_machine_with_unlit_screens_when_graphics_are_taken_then_bot
  {
     let mut app = poweroff_app();
     run_frames(&mut app, 1);
-    let out = text(app.graphics());
+    let mut snapshot = Snapshot::default();
+    app.fill(&mut snapshot);
+    let mut renderer = Renderer::new(NoShm, Transfer::Direct { reason: None });
+    let out = String::from_utf8_lossy(&renderer.graphics(&snapshot)).into_owned();
     assert_eq!((out.contains("i=1"), out.contains("i=2")), (true, true));
 }
 
 /// How many pixels of each screen the app would send that are not black.
 fn lit_pixel_counts(app: &App) -> (usize, usize) {
-    let (top, bottom) = app.screens();
+    let mut shown = Snapshot::default();
+    app.fill(&mut shown);
     (
-        top.iter().filter(|&&p| p != 0).count(),
-        bottom.iter().filter(|&&p| p != 0).count(),
+        shown.top.iter().filter(|&&p| p != 0).count(),
+        shown.bottom.iter().filter(|&&p| p != 0).count(),
     )
 }
 
@@ -528,7 +345,7 @@ fn key_action(code: KeyCode, kind: KeyEventKind) -> Action {
 fn given_a_held_key_when_a_frame_runs_then_the_machine_gets_its_button() {
     let mut app = smoke_app(true);
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::A);
 }
@@ -538,7 +355,7 @@ fn given_a_released_key_when_a_frame_runs_then_the_machine_gets_no_button() {
     let mut app = smoke_app(true);
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Release));
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::empty());
 }
@@ -548,7 +365,7 @@ fn given_focus_lost_when_a_frame_runs_then_the_machine_gets_no_button() {
     let mut app = smoke_app(true);
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
     app.apply(Action::ReleaseAll);
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::empty());
 }
@@ -558,7 +375,7 @@ fn given_the_microphone_and_lid_keys_when_a_frame_runs_then_the_machine_gets_the
     let mut app = smoke_app(true);
     app.apply(key_action(KeyCode::Char('m'), KeyEventKind::Press));
     app.apply(key_action(KeyCode::Char('`'), KeyEventKind::Press));
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!((input.mic, input.hinge_closed), (true, true));
 }
@@ -569,32 +386,13 @@ fn given_a_press_without_release_reports_when_frames_run_then_the_button_lasts_t
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
     let held: Vec<bool> = (0..=crate::input::FALLBACK_HOLD_FRAMES)
         .map(|_| {
-            app.graphics();
+            app.step();
             app.machine().expect("a machine").inspect().input().buttons == ninge_core::Buttons::A
         })
         .collect();
     let mut expected = vec![true; usize::from(crate::input::FALLBACK_HOLD_FRAMES)];
     expected.push(false);
     assert_eq!(held, expected);
-}
-
-/// The text of the screen after one frame of `app`.
-fn panel_text(app: &mut App) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
-    frame_step(app, &mut terminal, &mut Vec::new()).expect("step");
-    format!("{}", terminal.backend())
-}
-
-#[test]
-fn given_a_terminal_without_key_release_when_drawing_then_the_panel_says_so() {
-    let text = panel_text(&mut App::new(size()).with_key_release(false));
-    assert!(text.contains("key release not reported"));
-}
-
-#[test]
-fn given_a_terminal_with_key_release_when_drawing_then_the_panel_does_not_warn() {
-    let text = panel_text(&mut App::new(size()).with_key_release(true));
-    assert!(!text.contains("key release not reported"));
 }
 
 // ---------------------------------------------------------------------------------- mouse
@@ -624,7 +422,7 @@ fn given_a_left_press_on_the_bottom_screen_when_a_frame_runs_then_the_machine_is
     let mut app = smoke_app(true);
     let (c, r) = bottom_centre(&app);
     app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), c, r));
-    app.graphics();
+    app.step();
     assert!(machine_touch(&app).is_some());
 }
 
@@ -637,7 +435,7 @@ fn given_a_left_press_on_the_top_screen_when_a_frame_runs_then_the_machine_is_no
         top.x,
         top.y,
     ));
-    app.graphics();
+    app.step();
     assert_eq!(machine_touch(&app), None);
 }
 
@@ -647,7 +445,7 @@ fn given_a_release_when_a_frame_runs_then_the_machine_is_not_touched() {
     let (c, r) = bottom_centre(&app);
     app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), c, r));
     app.apply(mouse_at(MouseEventKind::Up(MouseButton::Left), c, r));
-    app.graphics();
+    app.step();
     assert_eq!(machine_touch(&app), None);
 }
 
@@ -658,7 +456,7 @@ fn given_focus_lost_or_a_resize_when_a_frame_runs_then_the_pen_is_up() {
         let (c, r) = bottom_centre(&app);
         app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), c, r));
         action(&mut app);
-        app.graphics();
+        app.step();
         machine_touch(&app)
     };
     assert_eq!(
@@ -675,7 +473,7 @@ fn given_the_cell_unit_when_the_first_cell_is_pressed_then_the_point_is_the_cell
     let mut app = smoke_app(true).with_mouse_unit(Unit::Cells);
     let b = app.areas().expect("fits").bottom;
     app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), b.x, b.y));
-    app.graphics();
+    app.step();
     let want = crate::pen::touch_at(
         b.x,
         b.y,
@@ -714,7 +512,7 @@ fn given_cursor_mode_and_space_when_a_frame_runs_then_the_machine_is_touched_at_
     let mut app = smoke_app(true);
     app.apply(tab_key());
     app.apply(char_key(' ', KeyEventKind::Press));
-    app.graphics();
+    app.step();
     assert_eq!(
         machine_touch(&app),
         Some(ninge_core::Touch { x: 128, y: 96 })
@@ -725,7 +523,7 @@ fn given_cursor_mode_and_space_when_a_frame_runs_then_the_machine_is_touched_at_
 fn given_cursor_mode_off_when_space_is_pressed_then_the_machine_is_not_touched() {
     let mut app = smoke_app(true);
     app.apply(char_key(' ', KeyEventKind::Press));
-    app.graphics();
+    app.step();
     assert_eq!(machine_touch(&app), None);
 }
 
@@ -736,7 +534,7 @@ fn given_the_mouse_pen_down_and_the_cursor_touching_when_a_frame_runs_then_the_m
     app.apply(char_key(' ', KeyEventKind::Press));
     let b = app.areas().expect("fits").bottom;
     app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), b.x, b.y));
-    app.graphics();
+    app.step();
     assert_ne!(
         machine_touch(&app),
         Some(ninge_core::Touch { x: 128, y: 96 })
@@ -751,7 +549,7 @@ fn given_the_mouse_pen_up_and_the_cursor_touching_when_a_frame_runs_then_the_cur
     let b = app.areas().expect("fits").bottom;
     app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), b.x, b.y));
     app.apply(mouse_at(MouseEventKind::Up(MouseButton::Left), b.x, b.y));
-    app.graphics();
+    app.step();
     assert_eq!(
         machine_touch(&app),
         Some(ninge_core::Touch { x: 128, y: 96 })
@@ -763,7 +561,7 @@ fn given_a_game_key_in_cursor_mode_when_a_frame_runs_then_the_button_is_still_he
     let mut app = smoke_app(true);
     app.apply(tab_key());
     app.apply(char_key('x', KeyEventKind::Press));
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::A);
 }
@@ -772,8 +570,13 @@ fn given_a_game_key_in_cursor_mode_when_a_frame_runs_then_the_button_is_still_he
 /// the number of pixels that differ.
 fn crosshair_pixels(app: &mut App) -> usize {
     let plain = dummy_frame(0, 1);
-    let shown = app.with_cursor(plain.clone());
-    plain.iter().zip(&shown).filter(|(a, b)| a != b).count()
+    let mut shown = Snapshot::default();
+    app.fill(&mut shown);
+    plain
+        .iter()
+        .zip(&shown.bottom)
+        .filter(|(a, b)| a != b)
+        .count()
 }
 
 #[test]
@@ -792,15 +595,9 @@ fn given_cursor_mode_on_when_the_bottom_screen_is_made_then_the_crosshair_is_dra
 fn given_cursor_mode_on_when_the_top_screen_is_made_then_it_is_unchanged() {
     let mut app = App::new(size());
     app.apply(tab_key());
-    let (top, _) = app.screens();
-    assert_eq!(top, dummy_frame(0, 0));
-}
-
-#[test]
-fn given_cursor_mode_when_drawing_then_the_panel_shows_the_position() {
-    let mut app = App::new(size());
-    app.apply(tab_key());
-    assert!(panel_text(&mut app).contains("cursor mode: 128,96"));
+    let mut shown = Snapshot::default();
+    app.fill(&mut shown);
+    assert_eq!(shown.top, dummy_frame(0, 0));
 }
 
 // -------------------------------------------------------------------------------- gamepad
@@ -810,7 +607,7 @@ fn given_a_pad_button_and_a_key_when_a_frame_runs_then_the_machine_gets_both_or_
     let mut app = smoke_app(true).with_gamepads(true, 1);
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
     app.apply_pad(PadEvent::Button(gilrs::Button::South, true));
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(
         input.buttons,
@@ -825,7 +622,7 @@ fn given_the_same_button_on_pad_and_keyboard_when_the_key_is_released_then_the_p
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
     app.apply_pad(PadEvent::Button(gilrs::Button::East, true));
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Release));
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::A);
 }
@@ -835,32 +632,7 @@ fn given_a_held_pad_button_when_focus_is_lost_then_the_machine_gets_no_button() 
     let mut app = smoke_app(true).with_gamepads(true, 1);
     app.apply_pad(PadEvent::Button(gilrs::Button::East, true));
     app.apply(Action::ReleaseAll);
-    app.graphics();
+    app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::empty());
-}
-
-#[test]
-fn given_the_gamepad_library_failed_when_drawing_then_the_panel_says_it_is_unavailable() {
-    let mut app = App::new(size()).with_gamepads(false, 0);
-    assert!(panel_text(&mut app).contains("gamepad unavailable"));
-}
-
-#[test]
-fn given_no_pad_plugged_in_when_drawing_then_the_panel_says_none_is_connected() {
-    let mut app = App::new(size()).with_gamepads(true, 0);
-    assert!(panel_text(&mut app).contains("no gamepad connected"));
-}
-
-#[test]
-fn given_a_pad_plugged_in_when_drawing_then_the_panel_says_it_is_connected() {
-    let mut app = App::new(size()).with_gamepads(true, 1);
-    assert!(panel_text(&mut app).contains("gamepad connected"));
-}
-
-#[test]
-fn given_a_pad_plugged_in_later_when_the_count_is_updated_then_the_panel_says_it_is_connected() {
-    let mut app = App::new(size()).with_gamepads(true, 0);
-    app.set_pads_connected(1);
-    assert!(panel_text(&mut app).contains("gamepad connected"));
 }

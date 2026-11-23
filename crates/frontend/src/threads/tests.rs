@@ -470,3 +470,26 @@ fn given_the_emu_gone_when_pads_are_forwarded_then_it_reports_false() {
     let mut last = 0;
     assert!(!forward_pads([PadEvent::Disconnected], 0, &mut last, &tx));
 }
+
+#[test]
+fn given_a_render_loop_waiting_on_another_thread_when_a_frame_is_published_then_it_is_shown() {
+    let handoff = Handoff::new(Snapshot::default);
+    let stop = AtomicBool::new(false);
+    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
+    let mut gfx = Vec::new();
+    let mut renderer = Renderer::new(NoShm, Transfer::Direct { reason: None });
+    let mut app = App::new(size());
+    app.step();
+    let result = std::thread::scope(|scope| {
+        let render =
+            scope.spawn(|| run_render(&mut renderer, &mut terminal, &mut gfx, &handoff, &stop));
+        handoff.publish(|snapshot| app.fill(snapshot));
+        drop(StopGuard::new(&stop, &handoff));
+        render.join().expect("render thread")
+    });
+    let text = String::from_utf8_lossy(&gfx).into_owned();
+    assert_eq!(
+        (result.is_ok(), text.contains("i=1"), text.contains("i=2")),
+        (true, true, true)
+    );
+}

@@ -127,7 +127,7 @@ These are choices of the emulator, made so that capture, busy bit and the mixer 
 
 - `LEN` = 0 captures one word.
 - A one-shot capture of one word with PCM8 writes four bytes.
-- A loop capture never clears bit 7; a one-shot clears it when the last slot has been written.
+- A loop capture never clears bit 7; a one-shot clears it when the last slot has been completed.
 - Stopping and restarting a capture starts again at `DAD`.
 - A capture whose `DAD` points at memory the ARM7 cannot write (ROM, unmapped) drops the writes, as
   a DMA does; it does not stop.

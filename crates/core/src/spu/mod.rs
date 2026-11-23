@@ -767,6 +767,9 @@ impl Spu {
     /// bit 12 or 13 sends it away from the mixer.
     // TODO(hw-unverified): "channel a disabled" is "not busy" here (`sound-capture.md`,
     // "Unverified").
+    // TODO(hw-unverified): the addition for the mixer stops when the busy bit clears, while the final
+    // slots of that run are still written with the capture-side addition (`sound-capture.md`,
+    // "Unverified").
     pub(crate) fn adding(&self, time: u64) -> [Adding; CAPTURES] {
         std::array::from_fn(|x| {
             let on = self.captures[x].cnt & CAP_ADD != 0 && self.captures[x].busy(time);

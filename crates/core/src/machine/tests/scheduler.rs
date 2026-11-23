@@ -10,6 +10,12 @@ use crate::cart::test_image::{Image, words};
 use crate::cpu::Bank;
 use crate::machine::*;
 use crate::scheduler::{EventKind, FRAME_CYCLES, HBLANK_START_CYCLES, LINE_CYCLES};
+use crate::spu::OUTPUT_SAMPLE_CYCLES;
+
+/// The first output sample strictly after `time`, on the grid of `spu.md` ("Output samples").
+const fn sample_after(time: u64) -> u64 {
+    (time / OUTPUT_SAMPLE_CYCLES + 1) * OUTPUT_SAMPLE_CYCLES
+}
 
 /// Where the ARM9 counting loop keeps its counter, and the ARM7's.
 const ARM9_COUNTER: u32 = 0x0200_1000;
@@ -269,6 +275,7 @@ fn given_a_booted_machine_when_nothing_ran_then_hblank_and_the_next_line_start_a
     assert_eq!(
         pending,
         vec![
+            (OUTPUT_SAMPLE_CYCLES, EventKind::Sample),
             (HBLANK_START_CYCLES, EventKind::Line(LineEvent::HBlank)),
             (LINE_CYCLES, EventKind::Line(LineEvent::Start))
         ]
@@ -289,6 +296,7 @@ fn given_one_frame_run_when_listing_pending_then_the_next_line_events_follow_the
     assert_eq!(
         pending,
         vec![
+            (sample_after(FRAME_CYCLES), EventKind::Sample),
             (
                 FRAME_CYCLES + HBLANK_START_CYCLES,
                 EventKind::Line(LineEvent::HBlank)
@@ -315,6 +323,7 @@ fn given_two_frames_run_when_listing_pending_then_the_next_line_events_follow_tw
     assert_eq!(
         times,
         vec![
+            sample_after(2 * FRAME_CYCLES),
             2 * FRAME_CYCLES + HBLANK_START_CYCLES,
             2 * FRAME_CYCLES + LINE_CYCLES
         ]
@@ -420,6 +429,7 @@ fn given_debug_steps_crossing_the_frame_end_time_when_listing_pending_then_the_n
     assert_eq!(
         times,
         vec![
+            sample_after(FRAME_CYCLES),
             FRAME_CYCLES + HBLANK_START_CYCLES,
             FRAME_CYCLES + LINE_CYCLES
         ]

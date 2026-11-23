@@ -15,6 +15,7 @@ use crate::cart::test_image::{Image, words};
 use crate::cpu::Bus;
 use crate::machine::*;
 use crate::scheduler::{EventKind, FRAME_CYCLES, SLICE, run_round};
+use crate::spu::OUTPUT_SAMPLE_CYCLES;
 
 const LINE: u64 = 4_260;
 const HBLANK_AT: u64 = 3_212;
@@ -93,6 +94,7 @@ fn given_a_booted_machine_when_nothing_ran_then_the_pending_events_are_hblank_th
     assert_eq!(
         pending,
         vec![
+            (OUTPUT_SAMPLE_CYCLES, EventKind::Sample),
             (HBLANK_AT, EventKind::Line(LineEvent::HBlank)),
             (LINE, EventKind::Line(LineEvent::Start))
         ]
@@ -140,6 +142,10 @@ fn given_a_frame_run_when_listing_pending_then_line_1_events_follow_the_wrap_fro
     assert_eq!(
         pending,
         vec![
+            (
+                (FRAME_CYCLES / OUTPUT_SAMPLE_CYCLES + 1) * OUTPUT_SAMPLE_CYCLES,
+                EventKind::Sample
+            ),
             (FRAME_CYCLES + HBLANK_AT, EventKind::Line(LineEvent::HBlank)),
             (FRAME_CYCLES + LINE, EventKind::Line(LineEvent::Start))
         ]

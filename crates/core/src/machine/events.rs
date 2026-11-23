@@ -3,11 +3,13 @@
 //! scheduler's view of the machine (run a CPU to a time, dispatch a due event); the handlers below
 //! it are the line, HBlank and DMA starts those events lead to (`docs/hw/scheduler.md`).
 
+use super::AUDIO_CAPACITY;
 use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
-use crate::bus::{Arm7View, Arm9View, TcmConfig};
+use crate::bus::{Arm7View, Arm9View, TcmConfig, peek};
 use crate::io::dma::Trigger;
 use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
+use crate::spu::{CHANNELS, OUTPUT_SAMPLE_CYCLES};
 
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
@@ -77,6 +79,7 @@ impl Participants for Machine {
         match event.kind {
             EventKind::Line(LineEvent::Start) => self.line_started(event.time),
             EventKind::Line(LineEvent::HBlank) => self.hblank_started(event.time),
+            EventKind::Sample => self.sample_due(event.time),
             EventKind::Slot { .. } => {
                 if let Some(transfer) = self.io.fire(&mut self.scheduler, event.kind) {
                     self.run_dma(transfer);
@@ -87,6 +90,29 @@ impl Participants for Machine {
 }
 
 impl Machine {
+    /// An output sample is due at `time` (`docs/hw/spu.md`, "Output samples"): every channel's
+    /// sample is read from the ARM7's view of memory, and the result joins the frame's audio. The
+    /// next sample is scheduled from the event's own time, so the grid never drifts.
+    ///
+    /// No allocation: the frame's buffer is reserved once and a sample past its bound is dropped
+    /// (a debugger stepping for many frames without `run_frame`), since the audio is output and not
+    /// state.
+    // TODO(phase6): a plain sum of the channels until the mixer lands (#45, "mixer").
+    fn sample_due(&mut self, time: u64) {
+        let spu = self.io.spu();
+        let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
+        let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
+        let sum: i32 = (0..CHANNELS)
+            .map(|x| spu.channel(x).sample(time, read))
+            .sum();
+        let level = sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        if self.audio.len() < AUDIO_CAPACITY {
+            self.audio.extend([level, level]);
+        }
+        self.scheduler
+            .schedule(time.saturating_add(OUTPUT_SAMPLE_CYCLES), EventKind::Sample);
+    }
+
     /// Runs a DMA transfer through the owning CPU's bus view with the TCM switched off: DMA
     /// cannot reach it (`docs/hw/dma.md`, "Transferring"). The view is the CPU's own, so the
     /// units reach RAM, VRAM and the I/O registers (the DMA registers too) as an instruction's

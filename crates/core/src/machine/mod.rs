@@ -7,7 +7,8 @@ use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
 use crate::io::Io;
-use crate::scheduler::{EventKind, LineEvent, Scheduler};
+use crate::scheduler::{EventKind, FRAME_CYCLES, LineEvent, Scheduler};
+use crate::spu::OUTPUT_SAMPLE_CYCLES;
 use serde::{Deserialize, Serialize};
 
 /// Width of each screen in pixels (`docs/hw/display.md`).
@@ -71,7 +72,16 @@ pub struct Machine {
     pub(crate) bios: BiosState,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
     pub(crate) header: Option<Header>,
+    // The audio of the frame being run: output, not state, so it is not saved. `run_frame` clears it
+    // (the capacity stays) and the sound unit's sample events fill it; reserved once, for a frame's
+    // samples (`docs/hw/spu.md`, "Output samples").
+    #[serde(skip)]
+    pub(crate) audio: Vec<i16>,
 }
+
+/// The most `i16` values (two per output sample) one frame's audio holds: a frame's output samples
+/// and one more for a frame that does not start on the grid.
+pub(crate) const AUDIO_CAPACITY: usize = 2 * (FRAME_CYCLES / OUTPUT_SAMPLE_CYCLES + 2) as usize;
 
 /// One ARM9 instruction through `view`, and its cost added to the master clock. If the
 /// controller's line was asserted before it and CPSR I is clear, the IRQ entry takes the
@@ -168,6 +178,7 @@ impl Machine {
             scheduler: Scheduler::new(),
             bios: BiosState::default(),
             header: None,
+            audio: Vec::with_capacity(AUDIO_CAPACITY),
         };
         machine.schedule_events();
         machine
@@ -187,6 +198,8 @@ impl Machine {
             Scheduler::next_line_start(now),
             EventKind::Line(LineEvent::Start),
         );
+        self.scheduler
+            .schedule(Scheduler::next_sample_time(now), EventKind::Sample);
         self.io.schedule_all(&mut self.scheduler, now);
     }
 
@@ -274,6 +287,7 @@ impl Machine {
     // (`docs/hw/keypad.md`, "Unverified").
     pub fn run_frame(&mut self, input: Input) {
         self.io.latch_input(input);
+        self.audio.clear();
         // A machine that was shut down runs nothing, as with no program: the frame only counts
         // (`touch-power.md`, "What the power register does").
         // TODO(hw-unverified): the frozen frames after shutdown are the model's (`touch-power.md`,
@@ -375,10 +389,12 @@ impl Machine {
     /// samples may differ from frame to frame, so a host must not assume a fixed length. The
     /// slice is the machine's own, borrowed like [`Machine::frame`], and valid until the next
     /// `run_frame`.
-    // TODO(phase6): the SPU (#47) fills this and fixes the sample rate, a hardware fact with no
-    // `docs/hw/` note yet; until then no sound is made and it is empty.
+    ///
+    /// The output rate is one sample per [`OUTPUT_SAMPLE_CYCLES`] master cycles
+    /// (`docs/hw/spu.md`, "Output samples"); resampling to a device is the host's (#47).
+    // TODO(phase6): the mixer (#45) makes this the mixed, gated output; for now it is a plain sum.
     pub fn audio(&self) -> &[i16] {
-        &[]
+        &self.audio
     }
 
     /// Whether the program shut the console down through the power-management device. A host ends

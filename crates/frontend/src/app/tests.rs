@@ -2,7 +2,7 @@
 //! Tests of `app`.
 
 use super::*;
-use crossterm::event::{KeyEventState, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyEventState, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 
 fn size() -> TermSize {
@@ -102,14 +102,14 @@ fn given_resize_event_when_mapping_then_resized() {
 }
 
 #[test]
-fn given_mouse_event_when_mapping_then_none() {
-    let e = Event::Mouse(MouseEvent {
+fn given_mouse_event_when_mapping_then_it_goes_to_the_pen() {
+    let e = MouseEvent {
         kind: MouseEventKind::Moved,
-        column: 0,
-        row: 0,
+        column: 3,
+        row: 4,
         modifiers: KeyModifiers::NONE,
-    });
-    assert_eq!(map_event(&e), Action::None);
+    };
+    assert_eq!(map_event(&Event::Mouse(e)), Action::Mouse(e));
 }
 
 #[test]
@@ -595,4 +595,106 @@ fn given_a_terminal_without_key_release_when_drawing_then_the_panel_says_so() {
 fn given_a_terminal_with_key_release_when_drawing_then_the_panel_does_not_warn() {
     let text = panel_text(&mut App::new(size()).with_key_release(true));
     assert!(!text.contains("key release not reported"));
+}
+
+// ---------------------------------------------------------------------------------- mouse
+
+fn mouse_at(kind: MouseEventKind, column: u16, row: u16) -> Action {
+    Action::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
+}
+
+/// The cell at the middle of the bottom screen of `app`.
+fn bottom_centre(app: &App) -> (u16, u16) {
+    let b = app.areas().expect("fits").bottom;
+    (b.x + b.width / 2, b.y + b.height / 2)
+}
+
+/// The panel point the machine was given on the last frame.
+fn machine_touch(app: &App) -> Option<ninge_core::Touch> {
+    app.machine().expect("a machine").inspect().input().touch
+}
+
+#[test]
+fn given_a_left_press_on_the_bottom_screen_when_a_frame_runs_then_the_machine_is_touched() {
+    let mut app = smoke_app(true);
+    let (c, r) = bottom_centre(&app);
+    app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), c, r));
+    app.graphics();
+    assert!(machine_touch(&app).is_some());
+}
+
+#[test]
+fn given_a_left_press_on_the_top_screen_when_a_frame_runs_then_the_machine_is_not_touched() {
+    let mut app = smoke_app(true);
+    let top = app.areas().expect("fits").top;
+    app.apply(mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        top.x,
+        top.y,
+    ));
+    app.graphics();
+    assert_eq!(machine_touch(&app), None);
+}
+
+#[test]
+fn given_a_release_when_a_frame_runs_then_the_machine_is_not_touched() {
+    let mut app = smoke_app(true);
+    let (c, r) = bottom_centre(&app);
+    app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), c, r));
+    app.apply(mouse_at(MouseEventKind::Up(MouseButton::Left), c, r));
+    app.graphics();
+    assert_eq!(machine_touch(&app), None);
+}
+
+#[test]
+fn given_focus_lost_or_a_resize_when_a_frame_runs_then_the_pen_is_up() {
+    let touched_after = |action: fn(&mut App)| {
+        let mut app = smoke_app(true);
+        let (c, r) = bottom_centre(&app);
+        app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), c, r));
+        action(&mut app);
+        app.graphics();
+        machine_touch(&app)
+    };
+    assert_eq!(
+        (
+            touched_after(|app| app.apply(Action::ReleaseAll)),
+            touched_after(|app| app.resize(size()))
+        ),
+        (None, None)
+    );
+}
+
+#[test]
+fn given_the_cell_unit_when_the_first_cell_is_pressed_then_the_point_is_the_cell_centre() {
+    let mut app = smoke_app(true).with_mouse_unit(Unit::Cells);
+    let b = app.areas().expect("fits").bottom;
+    app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), b.x, b.y));
+    app.graphics();
+    let want = crate::pen::touch_at(
+        b.x,
+        b.y,
+        &Target {
+            unit: Unit::Cells,
+            bottom: b,
+            cell: (size().cell_w, size().cell_h),
+        },
+    );
+    assert_eq!(machine_touch(&app), want);
+}
+
+#[test]
+fn given_a_terminal_too_small_when_a_mouse_report_arrives_then_the_pen_stays_up() {
+    let mut app = App::new(TermSize {
+        cols: 2,
+        rows: 1,
+        ..size()
+    });
+    app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), 0, 0));
+    assert_eq!(app.pen.touch(), None);
 }

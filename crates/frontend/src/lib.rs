@@ -16,6 +16,7 @@ pub mod input;
 pub mod kitty;
 pub mod layout;
 pub mod pattern;
+pub mod pen;
 pub mod placeholder;
 pub mod savefile;
 #[cfg(unix)]

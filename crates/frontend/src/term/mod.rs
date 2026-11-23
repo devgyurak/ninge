@@ -8,6 +8,7 @@
 use crate::app::{Action, App, frame_step, map_event, poll_timeout};
 use crate::kitty;
 use crate::layout::TermSize;
+use crate::pen::Unit;
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::transfer::{ShmSink, Transfer};
@@ -64,6 +65,7 @@ fn restore() {
     if KEYBOARD_FLAGS_PUSHED.swap(false, Ordering::SeqCst) {
         let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
     }
+    let _ = out.write_all(kitty::mouse_disable());
     let _ = crossterm::execute!(out, DisableFocusChange, Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
@@ -116,6 +118,8 @@ struct Negotiated<W> {
     transfer: Transfer,
     /// Whether the terminal has the kitty keyboard protocol, so key release is reported.
     key_release: bool,
+    /// Whether the terminal can report mouse positions in pixels (SGR-Pixels).
+    pixels: bool,
 }
 
 /// Asks the terminal whether it accepts `t=s` and has the kitty keyboard protocol, and picks the
@@ -127,6 +131,7 @@ struct Negotiated<W> {
 fn negotiate() -> Negotiated<ShmWriter> {
     let mut writer = ShmWriter::new();
     let mut key_release = false;
+    let mut pixels = false;
     let probe = writer
         .put(&[0; kitty::PROBE_BYTES])
         .map_err(|e| format!("shared memory unavailable: {e}"))
@@ -139,6 +144,7 @@ fn negotiate() -> Negotiated<ShmWriter> {
         .map(|()| {
             let reply = read_reply(io::stdin(), PROBE_TIMEOUT);
             key_release = kitty::parse_keyboard_reply(&reply);
+            pixels = kitty::parse_pixels_reply(&reply);
             kitty::parse_probe_reply(&reply)
         });
     writer.release();
@@ -147,6 +153,7 @@ fn negotiate() -> Negotiated<ShmWriter> {
         sink: writer,
         transfer,
         key_release,
+        pixels,
     }
 }
 
@@ -157,6 +164,7 @@ fn negotiate() -> Negotiated<crate::transfer::NoShm> {
         sink: crate::transfer::NoShm,
         transfer: Transfer::direct("shared memory is not available on this platform"),
         key_release: false,
+        pixels: false,
     }
 }
 
@@ -185,7 +193,17 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
         crossterm::execute!(out, PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let mut app = App::with_transfer(size()?, found.sink, found.transfer)
+    let size = size()?;
+    // Pixel positions only help with a known cell size; without one the cell centers are used.
+    let unit = if found.pixels && size.px_known {
+        Unit::Pixels
+    } else {
+        Unit::Cells
+    };
+    out.write_all(&kitty::mouse_enable(unit == Unit::Pixels))?;
+    out.flush()?;
+    let mut app = App::with_transfer(size, found.sink, found.transfer)
+        .with_mouse_unit(unit)
         .with_key_release(found.key_release)
         .with_source(source)
         .with_save(save);

@@ -609,6 +609,56 @@ def test_docs_only() -> None:
         _checked("scope: an empty base runs the whole gate", no_base.returncode == 1, no_base.stdout)
 
 
+def test_merge_coverage() -> None:
+    import merge_coverage as cov
+
+    names = ["shard-1-of-3.lcov", "shard-2-of-3.lcov", "shard-3-of-3.lcov"]
+    _checked("coverage: a complete set of shards is accepted", cov.shard_problem(names) is None)
+    _checked("coverage: no report at all is refused", cov.shard_problem([]) is not None)
+    missing = cov.shard_problem([names[0], names[2]])
+    _checked("coverage: a missing shard is named", missing is not None and "missing shard 2 of 3" in missing, str(missing))
+    mixed = cov.shard_problem(["shard-1-of-2.lcov", "shard-2-of-3.lcov"])
+    _checked("coverage: shards of different runs are refused", mixed is not None and "disagree" in mixed, str(mixed))
+    stranger = cov.shard_problem([*names, "notes.txt"])
+    _checked("coverage: a file that is not a shard report is refused", stranger is not None and "notes.txt" in stranger, str(stranger))
+    _checked("coverage: shard 0 is not a shard", cov.shard_problem(["shard-0-of-1.lcov"]) is not None)
+
+    first = "SF:a.rs\nDA:1,3\nDA:2,0\nLF:2\nLH:1\nend_of_record\nSF:b.rs\nDA:7,0\nend_of_record\n"
+    second = "SF:a.rs\nDA:1,0\nDA:2,5\nend_of_record\nSF:b.rs\nDA:7,0\nDA:8,1\nend_of_record\n"
+    _checked("coverage: one report counts its own lines", cov.line_coverage(cov.merge([first])) == (1, 3))
+    merged = cov.merge([first, second])
+    _checked("coverage: a line any shard ran is covered", cov.line_coverage(merged) == (3, 4), str(merged))
+    _checked("coverage: a line no shard ran stays uncovered", merged["b.rs"][7] is False, str(merged))
+    _checked("coverage: a line only one shard lists is still counted", merged["b.rs"][8] is True, str(merged))
+    _checked("coverage: a report without line records has no lines", cov.line_coverage(cov.merge(["TN:\n"])) == (0, 0))
+
+    _checked("coverage: exactly the floor passes", not cov.under_floor(90, 100, 90))
+    _checked("coverage: just under the floor fails", cov.under_floor(8999, 10000, 90))
+    _checked("coverage: no lines at all fails", cov.under_floor(0, 0, 90))
+
+    def cli(directory: Path, floor: str = "75") -> subprocess.CompletedProcess[str]:
+        script = REPO_ROOT / "scripts" / "merge_coverage.py"
+        return subprocess.run(
+            [sys.executable, str(script), "--floor", floor, str(directory)], capture_output=True, text=True, check=False
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _checked("coverage: an empty directory fails the floor", cli(root).returncode == 1)
+        _checked("coverage: a missing directory fails the floor", cli(root / "absent").returncode == 1)
+        (root / "shard-1-of-2.lcov").write_text(first)
+        alone = cli(root)
+        _checked("coverage: one shard of two fails the floor", alone.returncode == 1 and "missing shard 2" in alone.stderr, alone.stderr)
+        (root / "shard-2-of-2.lcov").write_text(second)
+        both = cli(root)
+        _checked("coverage: 3 of 4 lines meets a 75% floor", both.returncode == 0 and "75.00%" in both.stdout, both.stdout + both.stderr)
+        high = cli(root, "76")
+        _checked("coverage: 3 of 4 lines misses a 76% floor", high.returncode == 1 and "under the 76% floor" in high.stderr, high.stderr)
+        (root / "shard-2-of-2.lcov").write_text("TN:\n")
+        hollow = cli(root)
+        _checked("coverage: a shard report with no lines fails the floor", hollow.returncode == 1 and "no line records" in hollow.stderr, hollow.stderr)
+
+
 def main() -> int:
     test_guard_cleanroom()
     test_guard_scan_tracked()
@@ -622,6 +672,7 @@ def main() -> int:
     test_hooks_survive_old_python()
     test_config_drift_helpers()
     test_docs_only()
+    test_merge_coverage()
 
     if FAILURES:
         print("hook selftest FAILED:", file=sys.stderr)

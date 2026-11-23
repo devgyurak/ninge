@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests of `Io`, the address map and the device interface.
 
-use super::device::{Effect, Signal, Signals, Width, read_bytes, write_bytes};
+use super::device::{Effect, Signal, Signals, Width, cx_at, read_bytes, write_bytes};
 use super::map::{ARM7_PORTS, ARM9_PORTS, Owner, Port, PortEntry, decode};
 use super::*;
 use crate::bus::VRAMCNT_A_ADDR;
@@ -558,14 +558,14 @@ fn given_two_effects_with_signals_and_a_recheck_when_merged_then_both_are_kept()
     }
     .merge(Effect {
         signals: Signals::of(Signal::CardWordArm7),
-        recheck_levels: true,
+        recheck_held: true,
         ..Effect::default()
     });
     assert_eq!(
         (
             merged.signals.contains(Signal::CardWordArm9),
             merged.signals.contains(Signal::CardWordArm7),
-            merged.recheck_levels
+            merged.recheck_held
         ),
         (true, true, true)
     );
@@ -680,4 +680,15 @@ fn given_requests_for_each_cpu_when_raised_then_each_controller_latches_only_its
         arm7: 0b10,
     });
     assert_eq!((io.irq9().if_(), io.irq7().if_()), (0b01, 0b10));
+}
+
+#[test]
+fn given_the_fifo_irq_mode_set_when_the_held_requests_are_merged_then_only_the_arm9_holds_bit_21() {
+    let mut io = Io::new();
+    // GXSTAT's IRQ mode (bits 30-31) is 1: less than half full, which the stub's empty FIFO meets.
+    io.gpu3d.write(0x5A0, Width::Word, 1 << 30, cx_at(0));
+    assert_eq!(
+        (io.held_requests::<true>(), io.held_requests::<false>()),
+        (Requests::for_cpu::<true>(1 << 21), Requests::default())
+    );
 }

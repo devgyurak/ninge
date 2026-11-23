@@ -196,18 +196,6 @@ impl Gpu3d {
         self.irq_mode
     }
 
-    /// The IF bits the FIFO IRQ holds up: bit 21 while the mode is 1 (less than half full) or 2
-    /// (empty), a condition the stub's always-empty FIFO keeps true. `Io` re-raises it after
-    /// every write that could make an acknowledge stick, so an acknowledge has no effect while the
-    /// condition holds (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
-    // TODO(hw-unverified): mode 3 (reserved) raises nothing (`gx-stub.md`, "Unverified").
-    pub(crate) fn fifo_irq_asserted(&self) -> Requests {
-        match self.irq_mode {
-            IRQ_HALF_FULL | IRQ_EMPTY => Requests::for_cpu::<true>(GXFIFO_IRQ),
-            _ => Requests::default(),
-        }
-    }
-
     /// GXSTAT as a read sees it (`gx-stub.md`, "GXSTAT bits").
     fn gxstat(&self) -> u32 {
         let coordinate = u32::from(self.coordinate_sp & GXSTAT_COORD_MASK) << GXSTAT_COORD_SHIFT;
@@ -453,7 +441,34 @@ impl Device<true> for Gpu3d {
         read_bytes(offset, width, |at| self.byte_at(at))
     }
 
+    /// The FIFO IRQ is a level: IF bit 21 is held up while the mode is 1 (less than half full) or 2
+    /// (empty), a condition the stub's always-empty FIFO keeps true. A write to this block or to the
+    /// interrupt controller asks `Io` to recheck, which raises the bit again after an acknowledge,
+    /// so an acknowledge has no effect while the condition holds. No other path can make the
+    /// condition true or clear an IF bit (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
+    // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is
+    // acknowledged (`gx-stub.md`, "Unverified").
+    // TODO(hw-unverified): mode 3 (reserved) raises nothing (`gx-stub.md`, "Unverified").
+    fn held_requests(&self) -> Requests {
+        match self.irq_mode {
+            IRQ_HALF_FULL | IRQ_EMPTY => Requests::for_cpu::<true>(GXFIFO_IRQ),
+            _ => Requests::default(),
+        }
+    }
+
+    /// Every write asks `Io` to recheck what the device holds, as the one that sets the mode may
+    /// make the FIFO IRQ's condition true ([`Device::held_requests`]).
     fn write(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
+        Effect {
+            recheck_held: true,
+            ..self.write_registers(offset, width, value, cx)
+        }
+    }
+}
+
+impl Gpu3d {
+    /// The register write itself, without the recheck request (`write`).
+    fn write_registers(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         // POWCNT1 bit 3 clear makes the whole geometry block read-only: GXFIFO, the ports and
         // GXSTAT drop their writes (`gx-stub.md`, "Power control").
         // TODO(hw-unverified): GXSTAT's R/W bits count as read-only too (`gx-stub.md`,

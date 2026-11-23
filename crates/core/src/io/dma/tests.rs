@@ -119,7 +119,7 @@ fn started_by<const A: bool>(
 }
 
 /// The effect of a channel write that queues a start on channel `ch`: a write to the channel
-/// registers always asks for the levels to be rechecked ([`Effect::recheck_levels`]).
+/// registers always asks for the held signals to be rechecked ([`Effect::recheck_held`]).
 fn slot_effect(ch: u32) -> Effect {
     Effect {
         reschedule: 1 << ch,
@@ -130,7 +130,7 @@ fn slot_effect(ch: u32) -> Effect {
 /// The effect of a channel write that changes no schedule.
 fn rechecked() -> Effect {
     Effect {
-        recheck_levels: true,
+        recheck_held: true,
         ..Effect::default()
     }
 }
@@ -1780,13 +1780,13 @@ fn given_a_card_channel_without_repeat_when_its_last_unit_finishes_then_it_is_di
 }
 
 #[test]
-fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_levels_to_be_rechecked()
-{
+fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_held_signals_to_be_rechecked()
+ {
     let mut dma = Dma::<true>::new();
     assert_eq!(
         (
-            write32(&mut dma, 0, 0x0200_0000).recheck_levels,
-            write32(&mut dma, cnt(1), 1).recheck_levels
+            write32(&mut dma, 0, 0x0200_0000).recheck_held,
+            write32(&mut dma, cnt(1), 1).recheck_held
         ),
         (true, true)
     );
@@ -1795,5 +1795,5 @@ fn given_a_write_to_a_channel_register_when_it_returns_then_it_asks_for_the_leve
 #[test]
 fn given_a_write_to_a_fill_register_when_it_returns_then_it_does_not_ask_for_a_recheck() {
     let mut dma = Dma::<true>::new();
-    assert!(!write32(&mut dma, fill(0), 0xDEAD_BEEF).recheck_levels);
+    assert!(!write32(&mut dma, fill(0), 0xDEAD_BEEF).recheck_held);
 }

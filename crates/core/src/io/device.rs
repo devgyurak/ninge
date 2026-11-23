@@ -109,10 +109,14 @@ pub(crate) struct Effect {
     pub(crate) reschedule: SlotMask,
     /// What the device tells the others; `Io` routes it after the IF bits and the slots.
     pub(crate) signals: Signals,
-    /// The access changed what a device waits for, so `Io` asks every device of the CPU that wrote
-    /// for its [`Device::levels`] and routes them: a DMA write may enable a channel whose start
-    /// condition already holds (`dma.md`, "Starting").
-    pub(crate) recheck_levels: bool,
+    /// The access may have changed what a device waits for or what it holds up, so `Io` asks every
+    /// device of the CPU that wrote for its [`Device::held_signals`] and routes them, then for its
+    /// [`Device::held_requests`] and raises them. A DMA write may enable a channel whose start
+    /// condition already holds (`dma.md`, "Starting"); a write to the geometry block or to the
+    /// interrupt controller may leave the FIFO IRQ's condition true after an acknowledge
+    /// (`gx-stub.md`, "GXSTAT and the FIFO IRQ"). Both are idempotent: a bit or a signal already
+    /// raised or queued is not raised twice, so one flag serves both.
+    pub(crate) recheck_held: bool,
 }
 
 impl Effect {
@@ -130,7 +134,7 @@ impl Effect {
             requests: self.requests.merge(other.requests),
             reschedule: self.reschedule | other.reschedule,
             signals: self.signals.merge(other.signals),
-            recheck_levels: self.recheck_levels || other.recheck_levels,
+            recheck_held: self.recheck_held || other.recheck_held,
         }
     }
 }
@@ -153,7 +157,7 @@ pub(crate) struct Cx<'a> {
     pub(crate) host: &'a Input,
     /// The cartridge image, empty before a ROM is loaded.
     pub(crate) rom: &'a [u8],
-    /// The levels one device presents to another, read by `Io` when the access began.
+    /// The signals one device presents to another, read by `Io` when the access began.
     pub(crate) lines: Lines,
 }
 
@@ -231,12 +235,21 @@ pub(crate) trait Device<const ARM9: bool> {
         None
     }
 
-    /// The signals the device holds as a level right now, for the CPU `ARM9` that just wrote a
+    /// The signals the device holds up as a level right now, for the CPU `ARM9` that just wrote a
     /// register: a condition that stays true until something takes it, as a word waiting in the
-    /// cartridge slot. `Io` asks only when an [`Effect`] sets [`Effect::recheck_levels`]. A device
-    /// with no level has none.
-    fn levels(&self) -> Signals {
+    /// cartridge slot. `Io` asks only when an [`Effect`] sets [`Effect::recheck_held`]. A device
+    /// that holds none has none.
+    fn held_signals(&self) -> Signals {
         Signals::default()
+    }
+
+    /// The IF bits the device holds up as a level while its condition is true, for the CPU `ARM9`
+    /// that just wrote a register: an acknowledge clears the bit, and the device raises it again
+    /// at once while the condition holds. `Io` asks only when an [`Effect`] sets
+    /// [`Effect::recheck_held`], and raising a bit that is already set changes nothing. A device
+    /// with no level IRQ has none.
+    fn held_requests(&self) -> Requests {
+        Requests::default()
     }
 
     /// Slot `slot`'s event fired at master time `now`. Whatever it changes comes back in the

@@ -217,21 +217,12 @@ impl Io {
             Effect::default()
         );
         self.apply::<ARM9>(scheduler, at, port, effect);
-        // The FIFO IRQ is level driven: IF bit 21 is held up while the condition holds, so a write
-        // that sets the mode, and any write by the ARM9 to the interrupt controller (IF, an
-        // acknowledge; IE and IME too, which the match cannot tell apart and which are harmless),
-        // re-raises it. No other path can make the condition true or clear an IF bit
-        // (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
-        // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is
-        // acknowledged (`gx-stub.md`, "Unverified").
-        if ARM9 && matches!(port, Port::Gpu3d | Port::Irq) {
-            self.request_irq(self.gpu3d.fifo_irq_asserted());
-        }
     }
 
     /// Hands an access's effect on: its IF bits to the controllers, the event slots it names to
-    /// the scheduler, then its signals and the levels it asks to recheck to the devices that wait
-    /// for them, never earlier than `at.floor`.
+    /// the scheduler, then its signals, and, when it asks to recheck, what the devices hold up as a
+    /// level (signals to the devices that wait for them, IF bits to the controllers), never earlier
+    /// than `at.floor`.
     fn apply<const ARM9: bool>(
         &mut self,
         scheduler: &mut Scheduler,
@@ -246,8 +237,11 @@ impl Io {
         self.route(scheduler, effect.signals, at.floor);
         // A signal that is a level: the device that waits for it may have been enabled while it
         // already holds, and takes it now. One already queued is not queued twice.
-        if effect.recheck_levels {
-            self.route(scheduler, self.levels::<ARM9>(), at.floor);
+        if effect.recheck_held {
+            self.route(scheduler, self.held_signals::<ARM9>(), at.floor);
+            // An IF bit that is a level (the FIFO IRQ): an acknowledge cleared it while its condition
+            // holds, so it is raised again. A bit that is already set stays set.
+            self.request_irq(self.held_requests::<ARM9>());
         }
     }
 

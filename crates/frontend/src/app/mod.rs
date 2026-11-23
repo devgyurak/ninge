@@ -18,6 +18,7 @@
 
 use crate::clock::local_wall_time;
 use crate::cursor::{self, Cursor};
+use crate::gamepad::{Pad, PadEvent};
 use crate::input::{FALLBACK_HOLD_FRAMES, Keys};
 use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
@@ -111,6 +112,12 @@ pub struct App<S = NoShm> {
     keys: Keys,
     /// The keyboard's virtual cursor.
     cursor: Cursor,
+    /// The gamepads' buttons.
+    pad: Pad,
+    /// Whether the gamepad library started; the panel says so when it did not.
+    pad_available: bool,
+    /// How many pads are plugged in, as the library last said.
+    pads_connected: u32,
     /// Where the mouse holds the touch pen.
     pen: Pen,
     /// What a mouse report's column and row count.
@@ -140,9 +147,30 @@ impl<S: ShmSink> App<S> {
             clock: local_wall_time,
             keys: Keys::new(false),
             cursor: Cursor::new(false),
+            pad: Pad::new(),
+            pad_available: true,
+            pads_connected: 0,
             pen: Pen::new(),
             mouse_unit: Unit::Cells,
         }
+    }
+
+    /// Tells the app whether the gamepad library started and how many pads are plugged in.
+    #[must_use]
+    pub fn with_gamepads(mut self, available: bool, connected: u32) -> Self {
+        self.pad_available = available;
+        self.pads_connected = connected;
+        self
+    }
+
+    /// Records how many pads are plugged in now, for the panel.
+    pub fn set_pads_connected(&mut self, connected: u32) {
+        self.pads_connected = connected;
+    }
+
+    /// Takes a gamepad event.
+    pub fn apply_pad(&mut self, event: PadEvent) {
+        self.pad.handle(event);
     }
 
     /// Tells the app whether mouse reports count cells or pixels (SGR-Pixels is on).
@@ -247,6 +275,7 @@ impl<S: ShmSink> App<S> {
             Action::ReleaseAll => {
                 self.keys.release_all();
                 self.cursor.release_all();
+                self.pad.release_all();
                 self.pen.lift();
             }
             Action::None | Action::Resized => {}
@@ -275,6 +304,7 @@ impl<S: ShmSink> App<S> {
             let input: Input = self
                 .keys
                 .input()
+                .with_buttons(self.keys.buttons() | self.pad.buttons())
                 // The mouse's pen wins while its button is down; else the cursor's.
                 .with_touch(self.pen.touch().or(self.cursor.touch()))
                 .with_wall_time((self.clock)());
@@ -374,10 +404,17 @@ impl<S: ShmSink> App<S> {
         } else {
             String::new()
         };
+        let pad_note = if !self.pad_available {
+            "\ngamepad unavailable".to_string()
+        } else if self.pads_connected == 0 {
+            "\nno gamepad connected".to_string()
+        } else {
+            "\ngamepad connected".to_string()
+        };
         // TODO(phase1): real register and disassembly panels (#56).
         frame.render_widget(
             Paragraph::new(format!(
-                "TODO(phase1) (#56){note}{keys_note}{cursor_note}\n{}",
+                "TODO(phase1) (#56){note}{keys_note}{cursor_note}{pad_note}\n{}",
                 self.transfer.label()
             ))
             .wrap(Wrap { trim: false })

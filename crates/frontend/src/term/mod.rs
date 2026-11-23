@@ -6,6 +6,7 @@
 //! Windows backend is an addition (AGENTS.md §2).
 
 use crate::app::{Action, App, frame_step, map_event, poll_timeout};
+use crate::gamepad::Gamepads;
 use crate::kitty;
 use crate::layout::TermSize;
 use crate::pen::Unit;
@@ -208,7 +209,9 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
         .with_source(source)
         .with_save(save);
     let mut gfx = io::stdout();
-    let looped = main_loop(&mut app, &mut terminal, &mut gfx);
+    let mut pads = Gamepads::open();
+    app = app.with_gamepads(pads.available(), pads.connected());
+    let looped = main_loop(&mut app, &mut terminal, &mut gfx, &mut pads);
     // The save file is written last and even when the loop failed, so a game's save is not lost;
     // a write failure shows once the terminal is restored.
     let saved = app.finish().context("writing the save file");
@@ -230,9 +233,13 @@ fn main_loop(
     app: &mut App<impl ShmSink>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     gfx: &mut io::Stdout,
+    pads: &mut Gamepads,
 ) -> anyhow::Result<()> {
     while !app.should_quit() {
         let deadline = Instant::now() + FRAME_TIME;
+        // The pads are read once a frame, before the frame runs.
+        pads.poll().into_iter().for_each(|e| app.apply_pad(e));
+        app.set_pads_connected(pads.connected());
         frame_step(app, terminal, gfx)?;
         // Poll at least once per frame, even after an overrun, so quit and resize are
         // always read. The cap keeps a flood of input (key repeat) from starving drawing.

@@ -57,7 +57,9 @@ From a clone of this repository:
 cargo install --locked --path crates/frontend
 ```
 
-macOS (Apple Silicon first) and Linux are supported; Windows is planned.
+macOS (Apple Silicon first) and Linux are supported; Windows is planned. On Linux the gamepad
+support needs the libudev headers to build: install `libudev-dev` and `pkg-config` (Debian and
+Ubuntu names) first.
 
 ## Run
 

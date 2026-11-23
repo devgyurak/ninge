@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE]    # N defaults to 1
+//! ninge-runner <rom> [--frames N] --audio [--wav PATH]  # also hash (and write) the audio
 //! ninge-runner cpu-suite <dir>       # run the ARM7TDMI JSON suite files in <dir>
 //! ```
 //!
@@ -15,6 +16,11 @@
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error, 3 when
 //! the machine refuses the ROM (an invalid header), 4 when the save file or type is refused.
+//!
+//! With `--audio` the line gains a fourth field, `audio=<016x>`: [`audio_hash`] of every sample the
+//! run made, in order. `--wav PATH` also writes them as a stereo 16-bit WAV at [`WAV_RATE_HZ`], to
+//! listen to a test ROM locally; it implies `--audio`, and the file is never committed (`*.wav` is
+//! git-ignored). Neither flag fits a save chip: a run with them has none.
 //!
 //! The save chip's file is read at the start when it exists and written at the end when the run
 //! changed it, as raw bytes. `--save` names the file (default: the ROM's path with the extension
@@ -138,16 +144,28 @@ pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command
     }
 }
 
-/// Parsed command line: `<rom> [--frames N] [--save PATH] [--save-type TYPE]`.
+/// Parsed command line: `<rom> [--frames N] [--save PATH] [--save-type TYPE] [--audio] [--wav PATH]`.
 #[derive(Debug)]
 pub struct Args {
     rom: PathBuf,
     frames: u64,
     save: Option<PathBuf>,
     save_type: Option<SaveType>,
+    audio: bool,
+    wav: Option<PathBuf>,
 }
 
 impl Args {
+    /// Whether the report should carry the audio hash (`--audio`, or implied by `--wav`).
+    pub fn audio(&self) -> bool {
+        self.audio || self.wav.is_some()
+    }
+
+    /// Where to write the run's audio as a WAV, if asked.
+    pub fn wav(&self) -> Option<&Path> {
+        self.wav.as_deref()
+    }
+
     /// The ROM file to load.
     pub fn rom(&self) -> &Path {
         &self.rom
@@ -170,7 +188,7 @@ impl Args {
     }
 }
 
-const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE]\n       ninge-runner cpu-suite <dir>";
+const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE] [--audio] [--wav PATH]\n       ninge-runner cpu-suite <dir>";
 
 /// Parses the arguments after the program name.
 ///
@@ -189,7 +207,13 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Runn
     let mut frames = None;
     let mut save = None;
     let mut save_type = None;
+    let mut audio = false;
+    let mut wav = None;
     while let Some(flag) = args.next() {
+        if flag == "--audio" && !audio {
+            audio = true;
+            continue;
+        }
         let value = args.next();
         let needs = |what: &str| RunnerError::Usage(format!("{what}\n{USAGE}"));
         if flag == "--frames" && frames.is_none() {
@@ -203,6 +227,10 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Runn
         } else if flag == "--save" && save.is_none() {
             save = Some(PathBuf::from(
                 value.ok_or_else(|| needs("--save needs a path"))?,
+            ));
+        } else if flag == "--wav" && wav.is_none() {
+            wav = Some(PathBuf::from(
+                value.ok_or_else(|| needs("--wav needs a path"))?,
             ));
         } else if flag == "--save-type" && save_type.is_none() {
             let text = value.ok_or_else(|| needs("--save-type needs a name"))?;
@@ -220,6 +248,8 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Runn
         frames: frames.unwrap_or(1),
         save,
         save_type,
+        audio,
+        wav,
     })
 }
 
@@ -298,6 +328,8 @@ pub struct RunReport {
     pub top_hash: u64,
     /// [`frame_hash`] of the bottom screen after the last frame.
     pub bottom_hash: u64,
+    /// [`audio_hash`] of every sample the run made; `None` when the run did not hash the audio.
+    pub audio_hash: Option<u64>,
 }
 
 impl fmt::Display for RunReport {
@@ -306,7 +338,11 @@ impl fmt::Display for RunReport {
             f,
             "frames={} top={:016x} bottom={:016x}",
             self.frames, self.top_hash, self.bottom_hash
-        )
+        )?;
+        match self.audio_hash {
+            Some(audio) => write!(f, " audio={audio:016x}"),
+            None => Ok(()),
+        }
     }
 }
 
@@ -323,6 +359,7 @@ pub fn run(rom: Vec<u8>, frames: u64) -> Result<RunReport, RunnerError> {
         frames: machine.frame_count(),
         top_hash: frame_hash(machine.frame(Screen::Top)),
         bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
+        audio_hash: None,
     })
 }
 
@@ -374,6 +411,7 @@ pub fn run_with_save(
         frames: machine.frame_count(),
         top_hash: frame_hash(machine.frame(Screen::Top)),
         bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
+        audio_hash: None,
     };
     let outcome = SaveOutcome {
         kind: machine.save_type(),
@@ -401,6 +439,17 @@ pub fn run_with_blank_save(
         frames: machine.frame_count(),
         top_hash: frame_hash(machine.frame(Screen::Top)),
         bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
+        audio_hash: None,
+    })
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// `hash` after the FNV-1a 64 step for each of `bytes`.
+fn fnv1a(hash: u64, bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(hash, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
     })
 }
 
@@ -408,14 +457,81 @@ pub fn run_with_blank_save(
 ///
 /// Decided in #68; defined in `tests/golden/README.md` and used by [`golden`].
 pub fn frame_hash(pixels: &[u32]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    pixels
-        .iter()
-        .flat_map(|pixel| pixel.to_le_bytes())
-        .fold(OFFSET_BASIS, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(PRIME)
-        })
+    fnv1a(
+        FNV_OFFSET_BASIS,
+        pixels.iter().flat_map(|pixel| pixel.to_le_bytes()),
+    )
+}
+
+/// The audio hash after `samples` follow the ones `hash` has covered (start from
+/// [`AUDIO_HASH_START`]): FNV-1a 64 over each `i16`'s little-endian bytes, in order. The format
+/// extension of #68, defined in `tests/golden/README.md`.
+pub fn audio_hash_update(hash: u64, samples: &[i16]) -> u64 {
+    fnv1a(hash, samples.iter().flat_map(|sample| sample.to_le_bytes()))
+}
+
+/// Where [`audio_hash_update`] starts: the FNV-1a 64 offset basis, so the hash of no samples is
+/// that value.
+pub const AUDIO_HASH_START: u64 = FNV_OFFSET_BASIS;
+
+/// [`audio_hash_update`] over all of `samples` at once.
+pub fn audio_hash(samples: &[i16]) -> u64 {
+    audio_hash_update(AUDIO_HASH_START, samples)
+}
+
+/// The sample rate a WAV of the audio is written at. The machine makes one sample per 2048 master
+/// cycles, 32728.5 Hz; the file needs a whole number (`docs/hw/spu.md`, "Output samples"). For
+/// listening only, so the half hertz does not matter.
+pub const WAV_RATE_HZ: u32 = 32_728;
+
+/// The bytes of a stereo 16-bit PCM WAV file of the interleaved `samples` at [`WAV_RATE_HZ`].
+pub fn wav_bytes(samples: &[i16]) -> Vec<u8> {
+    const CHANNELS: u16 = 2;
+    const BITS: u16 = 16;
+    let data_len = (samples.len() * 2) as u32;
+    let block_align = CHANNELS * BITS / 8;
+    let mut bytes = Vec::with_capacity(44 + samples.len() * 2);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&CHANNELS.to_le_bytes());
+    bytes.extend_from_slice(&WAV_RATE_HZ.to_le_bytes());
+    bytes.extend_from_slice(&(WAV_RATE_HZ * u32::from(block_align)).to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&BITS.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    bytes.extend(samples.iter().flat_map(|sample| sample.to_le_bytes()));
+    bytes
+}
+
+/// Writes `samples` to `path` as a WAV ([`wav_bytes`]).
+pub fn write_wav(path: &Path, samples: &[i16]) -> Result<(), RunnerError> {
+    std::fs::write(path, wav_bytes(samples)).map_err(|source| RunnerError::Write {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Like [`run`], with the audio: every frame's samples are collected in order, hashed into the
+/// report's `audio_hash` and returned for a WAV. The run has no save chip.
+pub fn run_with_audio(rom: Vec<u8>, frames: u64) -> Result<(RunReport, Vec<i16>), RunnerError> {
+    let mut machine = Machine::new();
+    machine.load_rom(rom)?;
+    let mut samples = Vec::new();
+    for _ in 0..frames {
+        machine.run_frame(Input::new());
+        samples.extend_from_slice(machine.audio());
+    }
+    let report = RunReport {
+        frames: machine.frame_count(),
+        top_hash: frame_hash(machine.frame(Screen::Top)),
+        bottom_hash: frame_hash(machine.frame(Screen::Bottom)),
+        audio_hash: Some(audio_hash(&samples)),
+    };
+    Ok((report, samples))
 }
 
 /// Path of a built test ROM, `testroms/build/<name>.nds` (built by `build_testroms.sh`).

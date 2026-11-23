@@ -8,6 +8,7 @@ fn report(frames: u64, top_hash: u64, bottom_hash: u64) -> RunReport {
         frames,
         top_hash,
         bottom_hash,
+        audio_hash: None,
     }
 }
 
@@ -348,4 +349,122 @@ fn given_an_input_log_when_asked_inside_and_past_its_end_then_the_entry_or_the_d
         (log.input_for(0), log.input_for(1), log.input_for(2)),
         (Input::default(), held, Input::default())
     );
+}
+
+// ----------------------------------------------------------------------------------------- audio
+
+fn with_audio(frames: u64, audio: u64) -> RunReport {
+    RunReport {
+        audio_hash: Some(audio),
+        ..report(frames, 1, 2)
+    }
+}
+
+#[test]
+fn given_a_line_with_an_audio_field_when_parsed_then_the_report_has_the_audio_hash() {
+    let parsed = parse_golden(
+        "frames=3 top=0000000000000001 bottom=0000000000000002 audio=00000000000000ef\n",
+    );
+    assert_eq!(parsed, Ok(vec![with_audio(3, 0xef)]));
+}
+
+#[test]
+fn given_bad_audio_fields_when_parsed_then_every_one_is_rejected_as_malformed() {
+    let line = "frames=3 top=0000000000000001 bottom=0000000000000002";
+    let rejected: Vec<&str> = [
+        "audio=00000000000000EF",
+        "audio=0000000000000ef",
+        "audio=0x0000000000000ef",
+        "sound=00000000000000ef",
+        "audio=00000000000000ef extra",
+    ]
+    .into_iter()
+    .filter(|tail| {
+        !matches!(
+            parse_golden(&format!("{line} {tail}")),
+            Err(GoldenError::Malformed { line: 1, .. })
+        )
+    })
+    .collect();
+    assert_eq!(rejected, Vec::<&str>::new());
+}
+
+#[test]
+fn given_a_golden_line_without_audio_when_the_run_has_audio_then_the_audio_is_not_checked() {
+    let golden = [report(3, 1, 2)];
+    assert_eq!(check_frame_hash(&golden, &with_audio(3, 0xdead)), Ok(()));
+}
+
+#[test]
+fn given_a_golden_line_with_audio_when_the_run_has_the_same_audio_then_it_matches() {
+    let golden = [with_audio(3, 0xef)];
+    assert_eq!(check_frame_hash(&golden, &with_audio(3, 0xef)), Ok(()));
+}
+
+#[test]
+fn given_a_golden_line_with_audio_when_the_run_has_other_audio_then_it_is_a_mismatch() {
+    let golden = [with_audio(3, 0xef)];
+    let actual = with_audio(3, 0xee);
+    assert_eq!(
+        check_frame_hash(&golden, &actual),
+        Err(GoldenError::Mismatch {
+            expected: golden[0],
+            actual
+        })
+    );
+}
+
+#[test]
+fn given_a_golden_line_with_audio_when_the_run_has_none_then_it_is_a_mismatch() {
+    let golden = [with_audio(3, 0xef)];
+    assert!(matches!(
+        check_frame_hash(&golden, &report(3, 1, 2)),
+        Err(GoldenError::Mismatch { .. })
+    ));
+}
+
+#[test]
+fn given_matching_audio_but_different_screens_when_checked_then_it_is_a_mismatch() {
+    let golden = [with_audio(3, 0xef)];
+    let actual = RunReport {
+        top_hash: 9,
+        ..with_audio(3, 0xef)
+    };
+    assert!(matches!(
+        check_frame_hash(&golden, &actual),
+        Err(GoldenError::Mismatch { .. })
+    ));
+}
+
+#[test]
+fn given_equal_sample_lists_when_compared_then_there_is_no_difference() {
+    assert_eq!(first_sample_difference(&[1, 2, 3], &[1, 2, 3]), None);
+}
+
+#[test]
+fn given_lists_that_differ_when_compared_then_the_first_differing_index_is_returned() {
+    assert_eq!(first_sample_difference(&[1, 2, 3], &[1, 9, 3]), Some(1));
+}
+
+#[test]
+fn given_a_list_that_is_a_prefix_when_compared_then_the_shorter_length_is_the_difference() {
+    assert_eq!(first_sample_difference(&[1, 2], &[1, 2, 3]), Some(2));
+}
+
+#[test]
+fn given_a_predicate_when_searching_offsets_then_the_first_base_and_mask_that_match_are_found() {
+    // Channel 0 at base, channel 1 at base + 1: the first base where that holds is 2.
+    let found = find_offsets(0..5, |[a, b]: [i64; 2]| a >= 2 && b == a + 1);
+    assert_eq!(found, Some([2, 3]));
+}
+
+#[test]
+fn given_no_offsets_that_match_when_searching_then_none_is_returned() {
+    assert_eq!(find_offsets(0..3, |[a]: [i64; 1]| a > 10), None);
+}
+
+#[test]
+fn given_three_channels_when_searching_then_each_may_take_either_of_two_consecutive_offsets() {
+    let found = find_offsets(4..5, |[a, b, c]: [i64; 3]| (a, b, c) == (5, 4, 5));
+    assert_eq!(found, Some([5, 4, 5]));
 }

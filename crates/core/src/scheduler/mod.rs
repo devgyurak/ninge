@@ -19,6 +19,10 @@ pub const LINE_CYCLES: u64 = 355 * 6 * 2;
 /// (`display-timing.md`, "Flags").
 // TODO(hw-unverified): one point for both CPUs (`display-timing.md`, "Unverified").
 pub const HBLANK_START_CYCLES: u64 = 1_606 * 2;
+/// The master clock the scheduler counts, in Hz: the ARM9 clock, twice the 33.513982 MHz bus and
+/// ARM7 clock (`scheduler.md`, "Clocks"). A host derives the frame period and the output sample
+/// rate from it; it never enters emulation.
+pub const MASTER_CLOCK_HZ: u64 = 67_027_964;
 /// ARM9 cycles per frame: 263 lines (`scheduler.md`, "Frame timing").
 pub const FRAME_CYCLES: u64 = 263 * LINE_CYCLES;
 /// Longest stretch one CPU runs before the other catches up, in master cycles (`scheduler.md`,

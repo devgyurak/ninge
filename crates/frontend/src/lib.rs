@@ -12,6 +12,7 @@
 //! otherwise ([`transfer`], #6).
 
 pub mod app;
+pub mod audio;
 pub mod cli;
 pub mod clock;
 pub mod cursor;

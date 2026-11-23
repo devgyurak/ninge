@@ -31,6 +31,7 @@ path = "src/main.rs"
 
 [dev-dependencies]
 criterion = "0.8.2"
+proptest.workspace = true
 
 [[bench]]
 name = "transfer"

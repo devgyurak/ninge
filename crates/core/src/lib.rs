@@ -7,7 +7,7 @@
 //! build on, and the ones whose change the release notes call out:
 //!
 //! - the machine and its host data: [`Machine`], [`Input`], [`Buttons`], [`Touch`], [`Screen`],
-//!   [`RomError`], [`SCREEN_WIDTH`], [`SCREEN_HEIGHT`] and [`FRAME_CYCLES`];
+//!   [`RomError`], [`SCREEN_WIDTH`], [`SCREEN_HEIGHT`], [`FRAME_CYCLES`] and [`MASTER_CLOCK_HZ`];
 //! - [`savestate`]: [`Machine::save_state`], [`Machine::load_state`] and
 //!   [`savestate::SavestateError`]. The byte layout is versioned by [`savestate::FORMAT_VERSION`]
 //!   and a mismatch is refused, never migrated;
@@ -44,4 +44,4 @@ pub mod spu;
 
 pub use input::{Buttons, Input, Touch};
 pub use machine::{Machine, RomError, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
-pub use scheduler::FRAME_CYCLES;
+pub use scheduler::{FRAME_CYCLES, MASTER_CLOCK_HZ};

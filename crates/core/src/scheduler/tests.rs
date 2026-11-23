@@ -921,3 +921,19 @@ fn given_clocks_on_and_beside_grid_points_when_the_next_line_events_are_asked_th
  {
     assert_eq!(grid_failures(), vec![]);
 }
+
+#[test]
+fn given_the_master_clock_when_the_output_rate_is_derived_then_it_is_16756991_over_512_hertz() {
+    // 67,027,964 Hz / 2048 master cycles per output sample = 16,756,991 / 512 Hz = 32,728.498 Hz.
+    assert_eq!(
+        MASTER_CLOCK_HZ * 512,
+        16_756_991 * OUTPUT_SAMPLE_CYCLES,
+        "the output rate is not 16,756,991/512 Hz"
+    );
+}
+
+#[test]
+fn given_the_master_clock_when_the_frame_period_is_derived_then_it_is_16715113_nanoseconds() {
+    // 1,120,380 master cycles at 67,027,964 Hz = 16.715113 ms (about 59.826 Hz).
+    assert_eq!(FRAME_CYCLES * 1_000_000_000 / MASTER_CLOCK_HZ, 16_715_113);
+}

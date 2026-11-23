@@ -639,10 +639,25 @@ impl Capture {
     }
 }
 
+impl Capture {
+    /// A stopped capture holds nothing latched; a started one holds a buffer of 1 to `FFFFh` words
+    /// and a period of at least one TMR step, so no divisor or product in [`Self::written`],
+    /// [`Self::end`] or [`CaptureWrites::address`] is zero or can overflow.
+    fn well_formed(&self) -> bool {
+        if self.cnt & CAP_START == 0 {
+            return self.start == 0 && self.latched == CaptureLatched::default();
+        }
+        let l = &self.latched;
+        (1..=u64::from(u16::MAX) * CAP_SAMPLES_PCM8).contains(&l.samples)
+            && (TICKS_PER_TMR_STEP..=TICKS_PER_TMR_STEP * TMR_PERIOD).contains(&l.period)
+    }
+}
+
 impl CaptureLatched {
     /// The address of slot `index` of the buffer: a halfword apart for PCM16, a byte for PCM8.
     const fn address(&self, index: u64) -> u32 {
         let size = if self.pcm8 { 1 } else { 2 };
+        // `index` is below the buffer size (at most 4 * FFFFh), so the narrowing is exact.
         self.dad.wrapping_add((index as u32).wrapping_mul(size))
     }
 }
@@ -801,9 +816,13 @@ impl Spu {
     /// The value capture `x` takes at an output sample, in 1/256 units (`sound-capture.md`,
     /// "Sources" and "The two bugs"): the clipped mixer sum, or channel `a` before its panning.
     fn capture_source(&self, x: usize, mix: &Mix, samples: &[i32; CHANNELS]) -> i64 {
+        // TODO(hw-unverified): the mixer source ignores SOUNDCNT bit 15 and the speaker gates, and
+        // the clip keeps the fraction (`sound-capture.md`, "Unverified").
         if self.captures[x].cnt & CAP_SOURCE_CHANNEL == 0 {
             return mixer::clip_capture(mix.sum[x]);
         }
+        // TODO(hw-unverified): a channel that is not playing is 0 here (`sound-capture.md`,
+        // "Unverified").
         let before_pan = |channel: usize| {
             let c = &self.channels[channel];
             mixer::volumed(samples[channel], c.divider(), c.volume())
@@ -830,6 +849,9 @@ impl Spu {
         time: u64,
     ) -> [Option<CaptureWrites>; CAPTURES] {
         let before = time.saturating_sub(OUTPUT_SAMPLE_CYCLES);
+        // TODO(hw-unverified): the slots of one output sample all get its value, and the last slot
+        // of a one-shot reaches memory at the event after the busy bit clears
+        // (`sound-capture.md`, "Unverified").
         std::array::from_fn(|x| {
             let capture = &self.captures[x];
             let (first, last) = (capture.written(before), capture.written(time));
@@ -993,12 +1015,10 @@ impl Checked for Spu {
                 && c.decoders.adpcm.well_formed()
                 && c.decoders.noise.well_formed()
         });
-        let captures = self.captures.iter().all(|c| {
-            c.cnt & !CAP_MASK == 0
-                && c.dad & !CAP_DAD_MASK == 0
-                && (c.cnt & CAP_START != 0
-                    || (c.start == 0 && c.latched == CaptureLatched::default()))
-        });
+        let captures = self
+            .captures
+            .iter()
+            .all(|c| c.cnt & !CAP_MASK == 0 && c.dad & !CAP_DAD_MASK == 0 && c.well_formed());
         channels && captures && self.cnt & !SOUNDCNT_MASK == 0 && self.bias & !SOUNDBIAS_MASK == 0
     }
 }

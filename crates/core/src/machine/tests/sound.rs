@@ -116,14 +116,29 @@ const PCM8_QUARTER: u32 = 0x4040_4040;
 const LOOP_PCM8: u32 = 1 << 31 | 1 << 27;
 const SOUND0SAD: u32 = 0x0400_0404;
 
+/// Master enable with the master volume 127 (read as 128), and the usual bias `200h`.
+const MASTER_ON: u16 = 1 << 15 | 0x7F;
+const BIAS_MEDIUM: u16 = 0x200;
+/// The channel's volume 127 (read as 128) with the panning 0: all of it on the left.
+const FULL_LEFT: u32 = 0x7F;
+
+/// Master volume 127 and enable, the bias at the medium level: a zero signal is the sample 0 and a
+/// channel at [`FULL_LEFT`] gives its PCM16 value (to a multiple of 64) on the left and 0 on the right
+/// (`spu.md`, "The mixer": `4000h` in is `4000h` out).
+fn mixer_on(m: &mut Machine, at: u64) {
+    m.bus7(at).write16(SOUNDCNT, MASTER_ON);
+    m.bus7(at).write16(SOUNDBIAS, BIAS_MEDIUM);
+}
+
 /// A machine whose channel 0 plays four words of `40h` PCM8 bytes in a loop, started at `at`.
 fn looping(at: u64) -> Machine {
     let mut m = machine();
+    mixer_on(&mut m, at);
     super::dma::poke_words(&mut m, DATA_ADDR, &[PCM8_QUARTER; 4]);
     m.bus7(at).write32(SOUND0SAD, DATA_ADDR);
     m.bus7(at).write16(SOUND0TMR, 0xFFF0);
     m.bus7(at).write32(SOUND0LEN, 4);
-    m.bus7(at).write32(SOUND0CNT, LOOP_PCM8);
+    m.bus7(at).write32(SOUND0CNT, LOOP_PCM8 | FULL_LEFT);
     m
 }
 
@@ -148,8 +163,25 @@ fn given_a_booted_machine_when_a_frame_runs_then_audio_holds_one_stereo_pair_per
 }
 
 #[test]
-fn given_no_channel_started_when_a_frame_runs_then_every_sample_is_zero() {
+fn given_the_mixer_on_and_no_channel_started_when_a_frame_runs_then_every_sample_is_zero() {
     let mut m = machine();
+    mixer_on(&mut m, 1);
+    m.run_frame(crate::Input::new());
+    assert_eq!(m.audio().iter().filter(|&&s| s != 0).count(), 0);
+}
+
+#[test]
+fn given_the_master_enable_off_when_a_frame_runs_then_every_sample_is_the_bias_alone() {
+    // Bias 0 is level 0, which is -8000h; bias 200h would be 0 (`spu.md`, "The gates").
+    let mut m = machine();
+    m.run_frame(crate::Input::new());
+    assert_eq!(m.audio().iter().filter(|&&s| s != -0x8000).count(), 0);
+}
+
+#[test]
+fn given_the_speakers_off_in_powcnt2_when_a_channel_plays_then_every_sample_is_zero() {
+    let mut m = looping(3_000);
+    m.bus7(3_000).write16(POWCNT2, 0);
     m.run_frame(crate::Input::new());
     assert_eq!(m.audio().iter().filter(|&&s| s != 0).count(), 0);
 }
@@ -170,7 +202,7 @@ fn given_a_looping_channel_when_the_frame_runs_then_the_pair_after_the_start_is_
     let mut m = looping(3_000);
     m.run_frame(crate::Input::new());
     // Pairs are at 2048 (before 3000) and 4096, 6144 (after it).
-    assert_eq!(&m.audio()[..6], &[0, 0, 0x4000, 0x4000, 0x4000, 0x4000]);
+    assert_eq!(&m.audio()[..6], &[0, 0, 0x4000, 0, 0x4000, 0]);
 }
 
 #[test]
@@ -179,7 +211,7 @@ fn given_a_frame_run_when_the_next_starts_then_the_audio_of_the_first_is_dropped
     m.run_frame(crate::Input::new());
     let first = m.audio()[..8].to_vec();
     m.run_frame(crate::Input::new());
-    assert_eq!((first.len(), &m.audio()[..2]), (8, &[0x4000, 0x4000][..]));
+    assert_eq!((first.len(), &m.audio()[..2]), (8, &[0x4000, 0][..]));
 }
 
 #[test]
@@ -246,21 +278,25 @@ fn given_debug_steps_far_past_a_frame_when_no_frame_runs_then_the_audio_stays_wi
 fn given_an_adpcm_loop_at_one_sample_per_output_when_a_frame_runs_then_the_audio_follows_the_decoder()
  {
     // TMR FE00h is 4 * 512 = 2,048 master cycles a sample, so each output sample is one decode.
-    // The header is 0 and the nibbles 1, 2, 3, 4, 0, 0, 0, 0 give 1, 4, 8, 15, 16, 17, 17, 17
-    // (the hand table of `spu/tests.rs`); the first output sample is at 2048, the start.
+    // The header is value 0, index 88 (step 7FFFh); the nibbles 2 then Ah (bytes A2h) give
+    // 4095 + 16383 = 20478 and then, at index 87 (step 7462h = 29794), 20478 - (3724 + 14897) =
+    // 1857. At full left and master 127 the 10-bit level is the value >> 6, and the output is that
+    // times 64: 20416 and 1856. The first output sample is at 2048, the start.
     let mut m = machine();
-    super::dma::poke_words(&mut m, DATA_ADDR, &[0, 0x0000_4321, 0, 0]);
+    mixer_on(&mut m, 2_048);
+    super::dma::poke_words(
+        &mut m,
+        DATA_ADDR,
+        &[0x0058_0000, 0xA2A2_A2A2, 0xA2A2_A2A2, 0xA2A2_A2A2],
+    );
     m.bus7(2_048).write32(SOUND0SAD, DATA_ADDR);
     m.bus7(2_048).write16(SOUND0TMR, 0xFE00);
     m.bus7(2_048).write16(SOUND0CNT + 0xA, 1);
     m.bus7(2_048).write32(SOUND0LEN, 3);
     m.bus7(2_048)
-        .write32(SOUND0CNT, 1 << 31 | 1 << 27 | 2 << 29);
+        .write32(SOUND0CNT, 1 << 31 | 1 << 27 | 2 << 29 | FULL_LEFT);
     m.run_frame(crate::Input::new());
-    assert_eq!(
-        &m.audio()[..16],
-        &[1, 1, 4, 4, 8, 8, 15, 15, 16, 16, 17, 17, 17, 17, 17, 17]
-    );
+    assert_eq!(&m.audio()[..4], &[20_416, 0, 1_856, 0]);
 }
 
 #[test]
@@ -299,17 +335,18 @@ fn given_a_psg_channel_at_one_sample_per_output_when_a_frame_runs_then_the_audio
     // TMR FE00h is one wave position per output sample; duty 3 is four LOW then four HIGH. Channel
     // 8 started at 2048, so the first output sample is its first position.
     let mut m = machine();
+    mixer_on(&mut m, 2_048);
     let channel_8 = SOUND0CNT + 8 * 0x10;
     m.bus7(2_048).write16(channel_8 + 8, 0xFE00);
     m.bus7(2_048)
-        .write32(channel_8, 1 << 31 | 1 << 27 | 3 << 29 | 3 << 24);
+        .write32(channel_8, 1 << 31 | 1 << 27 | 3 << 29 | 3 << 24 | FULL_LEFT);
     m.run_frame(crate::Input::new());
-    let low = -0x7FFF;
+    // LOW is -7FFFh: >> 6 gives -512, and 64 times that is -8000h; HIGH 7FFFh gives 511 and 7FC0h.
+    let (low, high) = (-0x8000, 0x7FC0);
     assert_eq!(
         &m.audio()[..16],
         &[
-            low, low, low, low, low, low, low, low, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF,
-            0x7FFF, 0x7FFF
+            low, 0, low, 0, low, 0, low, 0, high, 0, high, 0, high, 0, high, 0
         ]
     );
 }

@@ -18,6 +18,8 @@ pub(crate) const BLOCK_BYTES: u32 = 8;
 const POWCNT2_OFFSET: u32 = 4;
 /// POWCNT2 bits 0 (speakers) and 1 (Wi-Fi); bits 2-31 are not used.
 pub const POWCNT2_MASK: u16 = 0b11;
+/// POWCNT2 bit 0: the internal speakers (`spu.md`, "The gates").
+const POWCNT2_SPEAKERS: u16 = 1 << 0;
 /// POWCNT2 at power-on: the speakers on, Wi-Fi off (GBATEK's initial setting).
 // TODO(hw-unverified): the value after direct boot (`sound-registers.md`, "Unverified").
 const POWCNT2_START: u16 = 0b01;
@@ -33,8 +35,8 @@ const MODE_HALT: u32 = 2;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Power {
     halt_requested: bool,
-    /// POWCNT2: stored and read back, nothing reacts to it.
-    // TODO(phase6): the speaker bit gates the sound output; Wi-Fi is not modeled.
+    /// POWCNT2: stored and read back. The speaker bit gates the sound output (`spu.md`, "The
+    /// gates"); Wi-Fi is not modeled.
     powcnt2: u16,
 }
 
@@ -51,6 +53,11 @@ impl Power {
             halt_requested: false,
             powcnt2: POWCNT2_START,
         }
+    }
+
+    /// POWCNT2 bit 0: the internal speakers are on (`spu.md`, "The gates").
+    pub fn speakers_on(&self) -> bool {
+        self.powcnt2 & POWCNT2_SPEAKERS != 0
     }
 
     /// POWCNT2 as stored.

@@ -9,7 +9,7 @@ use crate::bus::{Arm7View, Arm9View, TcmConfig, peek};
 use crate::io::dma::Trigger;
 use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
-use crate::spu::{CHANNELS, OUTPUT_SAMPLE_CYCLES};
+use crate::spu::OUTPUT_SAMPLE_CYCLES;
 
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
@@ -97,21 +97,20 @@ impl Machine {
     /// No allocation: the frame's buffer is reserved once and a sample past its bound is dropped
     /// (a debugger stepping for many frames without `run_frame`), since the audio is output and not
     /// state.
-    // TODO(phase6): a plain sum of the channels until the mixer lands (#45, "mixer").
     fn sample_due(&mut self, time: u64) {
         let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
         let decoders = std::array::from_fn(|x| io.spu().channel(x).advanced(time, read));
         self.io.spu_mut().set_decoders(decoders);
-        let spu = self.io.spu();
         let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
-        let sum: i32 = (0..CHANNELS)
-            .map(|x| spu.channel(x).sample(time, read))
-            .sum();
-        let level = sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        let spu = io.spu();
+        let samples = std::array::from_fn(|x| spu.channel(x).sample(time, read));
+        // The gates outside the unit: the speakers and the sound amplifier (`spu.md`, "The gates").
+        let audible = io.power().speakers_on() && io.spi().power().amplifier_audible();
+        let pair = spu.output(&samples, audible);
         if self.audio.len() < AUDIO_CAPACITY {
-            self.audio.extend([level, level]);
+            self.audio.extend(pair);
         }
         self.scheduler
             .schedule(time.saturating_add(OUTPUT_SAMPLE_CYCLES), EventKind::Sample);

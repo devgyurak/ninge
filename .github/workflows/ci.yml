@@ -5,8 +5,11 @@ name: ci
 # About one ubuntu runner in four runs the instrumented tests two to four times slower than the
 # rest. Round 1 showed which: Azure D4ads_v7 (AMD EPYC 9V45) at about 2x and an AWS host (Intel
 # Xeon 6975P-C) at about 4x, with no steal time, I/O wait or kernel time, on machines that are
-# the fastest at a plain CPU benchmark. Round 2 asks what in our test binaries is slow there:
-# .github/diag/probe.sh times one ROM test built four ways and samples its stack.
+# the fastest at a plain CPU benchmark. Round 2 asked what in our test binaries is slow there:
+# .github/diag/probe.sh times one ROM test built four ways and samples its stack. The answer:
+# rustc updates coverage counters atomically (`lock add` on x86), which costs 7x on Zen 3/4
+# and 18-25x on Zen 5 and Intel. Round 3 runs the same probe on arm64 Linux runners, where an
+# atomic add is cheap, and tries the test ROM build there.
 
 on:
   pull_request:
@@ -39,15 +42,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Twelve copies, so that the slow kinds of runner are likely to be among them.
   diag:
-    name: diag (${{ matrix.copy }})
+    name: diag (${{ matrix.runner }}, ${{ matrix.copy }})
     needs: testroms
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        copy: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        runner: [ubuntu-24.04-arm]
+        copy: [1, 2, 3]
     steps:
       - uses: actions/checkout@v5
 
@@ -76,3 +79,12 @@ jobs:
 
       - name: Probe
         run: .github/diag/probe.sh
+
+      # Does the pinned BlocksDS image run here, and does it build the same ROMs byte for byte?
+      - name: Test ROM build on this runner
+        continue-on-error: true
+        run: |
+          cp testroms/build/SHA256SUMS "$RUNNER_TEMP/artifact.SHA256SUMS"
+          uname -m
+          time ./scripts/build_testroms.sh -B
+          diff "$RUNNER_TEMP/artifact.SHA256SUMS" testroms/build/SHA256SUMS && echo "ROMs built here match the x64 artifact byte for byte"

@@ -23,7 +23,7 @@ it). The current phase and the open decisions are in `docs/STATUS.md`.
 cargo fmt --all                                            # format
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny --locked check licenses bans sources            # dependency licenses (deny.toml)
-cargo llvm-cov nextest --workspace --locked --fail-under-lines 90   # tests + the 90% coverage floor
+cargo llvm-cov nextest --workspace --locked                # tests + coverage (floor: verify.sh)
 python3 scripts/check_agent_config.py                      # agent-config integrity
 python3 scripts/agent_hooks/selftest.py                    # hook self-test
 python3 scripts/agent_hooks/guard_cleanroom.py --scan-tracked   # no dumps / GPL text tracked
@@ -382,7 +382,7 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 ### 5.9 Coverage floor is 90%
 
 **Coverage floor:** `90%` line coverage across the workspace, measured by `cargo-llvm-cov` in
-`./scripts/verify.sh` and CI (`--fail-under-lines 90`).
+`./scripts/verify.sh` and CI, each line counted once.
 
 - Raise coverage by writing tests that assert hardware behavior — never by lowering the
   floor, excluding files (`--ignore-filename-regex`, `#[coverage(off)]`), or writing tests
@@ -446,9 +446,9 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
   their tests need the repository's `testroms/`, and publishing would put their command line
   and report format under SemVer while both still change. macOS arm64 and Linux x86_64
   binaries on GitHub Releases and a Homebrew tap come later.
-- **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS. The
-  Rust toolchain, `cargo-nextest`, and `cargo-llvm-cov` steps switch on the moment
-  `Cargo.toml` exists.
+- **CI** (`.github/workflows/ci.yml`) runs `./scripts/verify.sh` on Linux and macOS, its
+  tests in shards (`NINGE_TEST_SHARD`); each OS's `verify` job merges their coverage and
+  checks the floor.
 - **BlocksDS is required** (decided). Built test ROMs are never committed (§3.1), so the
   golden tests, and so the 90% coverage floor, need the SDK. It comes from the official
   BlocksDS Docker image **pinned by digest**, the same locally and in CI. Code reads the digest

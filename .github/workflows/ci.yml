@@ -3,10 +3,16 @@ name: ci
 # Runs ./scripts/verify.sh — the same gate an agent or a contributor runs locally. Until
 # Phase 0 adds Cargo.toml, the Rust steps are skipped and only the Python gates run.
 #
+# The tests are most of a run, so each OS splits them over shards: the `test` jobs each run
+# the whole gate with one part of the tests (NINGE_TEST_SHARD) and upload that part's
+# coverage. No shard can meet the coverage floor alone, so the `verify` job of each OS merges
+# its shards' coverage and checks the floor (NINGE_COVERAGE_SHARDS). The branch rulesets
+# require the `verify` checks by name, and those fail unless every shard passed.
+#
 # A documentation-only change (scripts/docs_only.py decides) builds no test ROMs and installs
-# no Rust tools: verify.sh runs its Python gates and skips the cargo steps. The verify jobs
-# still run, because the branch rulesets require their checks by name and a workflow that does
-# not start, or a matrix job skipped as a whole, never reports them.
+# no Rust tools: verify.sh runs its Python gates and skips the cargo steps, in one shard. The
+# verify jobs still run, because a workflow that does not start, or a matrix job skipped as a
+# whole, never reports the required checks.
 
 on:
   push:
@@ -27,12 +33,17 @@ jobs:
   # comparison is the whole pull request and not its last commit; a push is compared with the
   # commit the branch pointed at before. The step cannot fail: anything docs_only.py is not
   # sure of is a full run.
+  #
+  # It also says how many shards each OS splits its tests over. SHARDS below is the one place
+  # that number lives. A documentation-only change runs no tests and gets a single shard.
   scope:
     name: scope
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       base: ${{ steps.scope.outputs.base }}
+      shard_count: ${{ steps.scope.outputs.shard_count }}
+      shards: ${{ steps.scope.outputs.shards }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -42,17 +53,24 @@ jobs:
         id: scope
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+          # macOS runs at most five jobs at once on this plan, across every run in progress.
+          SHARDS: 4
         run: |
+          DOCS_ONLY=false
           if python3 scripts/docs_only.py "$BASE"; then
-            echo "docs_only=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            DOCS_ONLY=true
+            SHARDS=1
           fi
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          {
+            echo "docs_only=$DOCS_ONLY"
+            echo "base=$BASE"
+            echo "shard_count=$SHARDS"
+            echo "shards=[$(seq 1 "$SHARDS" | paste -sd, -)]"
+          } >> "$GITHUB_OUTPUT"
 
   # Builds the test ROMs once, on ubuntu where Docker runs, with the BlocksDS image pinned by
   # digest inside scripts/build_testroms.sh (the only place the digest lives). macOS runners
-  # cannot run Docker, so the verify jobs download this artifact instead. Decided in #65.
+  # cannot run Docker, so the test jobs download this artifact instead. Decided in #65.
   testroms:
     name: testroms
     needs: scope
@@ -78,13 +96,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  verify:
-    name: verify (${{ matrix.os }})
+  # One shard of one OS: the whole gate, with one part of the tests.
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.shard }}/${{ needs.scope.outputs.shard_count }})
     needs: [scope, testroms]
-    # testroms is skipped for a documentation-only change and verify must run all the same.
+    # testroms is skipped for a documentation-only change and the shard must run all the same.
     # Without a status function a job is skipped when a job it needs was, so the condition is
     # spelled out: scope succeeded, and testroms succeeded or was skipped. A failed scope or
-    # testroms still skips verify, and its required checks then block the merge.
+    # testroms still skips the shards, and the verify jobs below then fail.
     if: ${{ !cancelled() && needs.scope.result == 'success' && (needs.testroms.result == 'success' || needs.testroms.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
     env:
@@ -94,6 +113,7 @@ jobs:
       matrix:
         # macOS is included on purpose: Apple Silicon is the target machine (plan §5, Phase 8).
         os: [ubuntu-latest, macos-latest]
+        shard: ${{ fromJSON(needs.scope.outputs.shards) }}
     steps:
       # verify.sh compares with the same commit as the scope job, so a documentation-only run
       # needs the history; a full run does not. The depths are strings because a bare 0 is
@@ -128,11 +148,15 @@ jobs:
       # half per job. The cache holds ~/.cargo and target/; our own crates are always rebuilt.
       # It is keyed by Cargo.lock and the toolchain, and only develop saves it, so pull requests
       # restore develop's cache without filling the repository's cache quota with their own.
+      # Every shard builds the same things, so they share one cache and the first shard saves
+      # it. The key keeps the name it had when this job was called verify, so the caches
+      # develop already holds still match.
       - name: Cache cargo dependencies
         if: env.DOCS_ONLY != 'true' && hashFiles('Cargo.toml') != ''
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/develop' }}
+          shared-key: verify
+          save-if: ${{ github.ref == 'refs/heads/develop' && matrix.shard == 1 }}
 
       # Built test ROMs are never committed (AGENTS.md §3.1); the testroms job builds them.
       # macOS cannot run Docker: it verifies the artifact in place. Ubuntu keeps the artifact
@@ -164,9 +188,62 @@ jobs:
       # macOS only verifies the artifact's checksums. The prebuilt variable is set for macOS
       # alone, so a runner without Docker cannot silently skip the build. A documentation-only
       # run hands verify.sh the commit to compare with; verify.sh checks the change again itself.
-      - name: Verify
+      - name: Verify (one shard of the tests)
         env:
           NINGE_DOCS_ONLY_BASE: ${{ needs.scope.outputs.docs_only == 'true' && needs.scope.outputs.base || '' }}
           NINGE_PREBUILT_TESTROMS: ${{ runner.os == 'macOS' && '1' || '' }}
           NINGE_EXPECTED_TESTROM_SUMS: ${{ runner.os != 'macOS' && format('{0}/testroms/SHA256SUMS', runner.temp) || '' }}
+          NINGE_TEST_SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.shard_count }}
+        run: ./scripts/verify.sh
+
+      # The verify job of this OS merges the shards' reports. A shard that failed uploads
+      # nothing, and the merge refuses an incomplete set. One day is the shortest retention.
+      - name: Upload this shard's coverage
+        if: env.DOCS_ONLY != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.shard }}
+          path: target/coverage/*.lcov
+          if-no-files-found: error
+          retention-days: 1
+
+  # The required checks. Each one stands for an OS: it fails unless every shard passed, then
+  # merges that OS's coverage and checks the floor. The merge is a small script, so both run on
+  # ubuntu and no macOS runner is spent on it. `!cancelled()` makes the job run, and so fail,
+  # when the shards failed or were skipped; a job skipped as a whole would report no check.
+  verify:
+    name: verify (${{ matrix.os }})
+    needs: [scope, test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The OS whose shards this job answers for, not the runner it uses.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Every shard passed
+        if: needs.test.result != 'success'
+        run: |
+          echo "The test shards did not all pass (result: ${{ needs.test.result }}) — see the test jobs." >&2
+          exit 1
+
+      - uses: actions/checkout@v5
+        if: env.DOCS_ONLY != 'true'
+
+      - name: Download the shards' coverage
+        if: env.DOCS_ONLY != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-${{ matrix.os }}-*
+          path: ${{ runner.temp }}/coverage
+          merge-multiple: true
+
+      # A documentation-only change ran no tests, so there is no coverage to check.
+      - name: Coverage floor over the merged shards
+        if: env.DOCS_ONLY != 'true'
+        env:
+          NINGE_COVERAGE_SHARDS: ${{ runner.temp }}/coverage
         run: ./scripts/verify.sh

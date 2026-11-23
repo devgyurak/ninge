@@ -13,6 +13,22 @@ PYTHON="${PYTHON:-python3}"
 step() { printf '\n▶ %s\n' "$1"; }
 skip() { printf '  SKIPPED: %s\n' "$1"; }
 
+# Line-coverage floor (AGENTS.md §5.9). scripts/check_agent_config.py fails if this number
+# and the one in AGENTS.md differ — lowering it is a decision, not an edit.
+COVERAGE_FLOOR=90
+
+# CI splits the test run into shards (NINGE_TEST_SHARD, at the tests step below). A shard runs
+# a part of the tests, so its coverage says nothing about the floor: each shard writes a report
+# and one more run checks the floor over all of them merged. NINGE_COVERAGE_SHARDS names the
+# directory holding those reports and makes this that run. Only ci.yml sets it. Every other
+# gate ran in the shards, and this run says so rather than report them as passed.
+if [ -n "${NINGE_COVERAGE_SHARDS:-}" ]; then
+  step "coverage over the merged shards (floor ${COVERAGE_FLOOR}%)"
+  "$PYTHON" scripts/merge_coverage.py --floor "$COVERAGE_FLOOR" "$NINGE_COVERAGE_SHARDS"
+  printf '\nverify: the coverage floor holds over the merged shards; every other gate ran in the shards, not here.\n'
+  exit 0
+fi
+
 step "agent config"
 "$PYTHON" scripts/check_agent_config.py
 step "hook selftest"
@@ -107,10 +123,26 @@ fi
 step "CPU test suite (fetch + checksums)"
 ./scripts/fetch_cpu_suite.sh
 
-# Line-coverage floor (AGENTS.md §5.9). scripts/check_agent_config.py fails if this number
-# and the one in AGENTS.md differ — lowering it is a decision, not an edit.
-COVERAGE_FLOOR=90
-step "tests + coverage (floor ${COVERAGE_FLOOR}%)"
+# The floor is checked on line records (scripts/merge_coverage.py), not with cargo-llvm-cov's
+# --fail-under-lines. That summary counts a line once for every function it belongs to, so a
+# closure's lines count twice, and it cannot be merged across shards. A line counted once can:
+# a whole run and the merged shards then give exactly the same number, and one script decides.
+#
+# NINGE_TEST_SHARD=<k>/<n> runs shard k of n of the tests and only writes that shard's report:
+# no single shard can meet the floor. Only ci.yml sets it, and a run with
+# NINGE_COVERAGE_SHARDS (above) then checks the floor over all n. Without it this is a whole
+# run, the one shard of one, and the floor is checked right here.
+SHARD_PATTERN='^([1-9][0-9]*)/([1-9][0-9]*)$'
+if [ -z "${NINGE_TEST_SHARD:-}" ]; then
+  COVERAGE_REPORT="target/coverage/shard-1-of-1.lcov"
+  step "tests + coverage (floor ${COVERAGE_FLOOR}%)"
+elif [[ "$NINGE_TEST_SHARD" =~ $SHARD_PATTERN ]]; then
+  COVERAGE_REPORT="target/coverage/shard-${BASH_REMATCH[1]}-of-${BASH_REMATCH[2]}.lcov"
+  step "tests + coverage (shard ${NINGE_TEST_SHARD}; the floor is checked over the merged shards)"
+else
+  echo "NINGE_TEST_SHARD must be <k>/<n>, as in 2/4 — got '${NINGE_TEST_SHARD}'" >&2
+  exit 1
+fi
 INSTALL="cargo install --locked cargo-llvm-cov && rustup component add llvm-tools-preview"
 need cargo llvm-cov --version
 # Coverage counters are memory increments, so in the optimized emulator loops they cost more
@@ -118,12 +150,30 @@ need cargo llvm-cov --version
 # them when the loop exits; the counts, and so the coverage, are the same.
 COV_RUSTFLAGS="-C llvm-args=-do-counter-promotion=true -C llvm-args=-speculative-counter-promotion-to-loop=true"
 COV_RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$COV_RUSTFLAGS"
-if cargo nextest --version >/dev/null 2>&1; then
-  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked --fail-under-lines "$COVERAGE_FLOOR"
+# A report left by an earlier run must not be merged with this one.
+mkdir -p target/coverage
+rm -f target/coverage/*.lcov
+if [ -n "${NINGE_TEST_SHARD:-}" ]; then
+  # `slice` (nextest 0.9.127) deals the tests out in turn across every test binary, so each
+  # ROM's tests, which cost about the same, spread over the shards.
+  INSTALL="cargo install --locked cargo-nextest"
+  need cargo nextest --version
+  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked \
+    --partition "slice:${NINGE_TEST_SHARD}" --lcov --output-path "$COVERAGE_REPORT"
+  echo "  wrote ${COVERAGE_REPORT}; the floor was NOT checked here"
 else
-  RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov --workspace --locked --fail-under-lines "$COVERAGE_FLOOR"
+  if cargo nextest --version >/dev/null 2>&1; then
+    RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov nextest --workspace --locked --lcov --output-path "$COVERAGE_REPORT"
+  else
+    RUSTFLAGS="$COV_RUSTFLAGS" cargo llvm-cov --workspace --locked --lcov --output-path "$COVERAGE_REPORT"
+  fi
+  "$PYTHON" scripts/merge_coverage.py --floor "$COVERAGE_FLOOR" target/coverage
 fi
 step "doc tests"
 cargo test --workspace --locked --doc
 
+if [ -n "${NINGE_TEST_SHARD:-}" ]; then
+  printf '\nverify: shard %s passed; the coverage floor is checked over the merged shards, not here.\n' "$NINGE_TEST_SHARD"
+  exit 0
+fi
 printf '\nverify: all gates passed.\n'

@@ -30,10 +30,24 @@ pub const FRAME_TIME: Duration =
 /// when the ring is far above its target.
 pub const MAX_AUDIO_WAIT: Duration = FRAME_TIME.saturating_mul(2);
 
-/// How long the ring's fill may go without dropping before the device counts as stopped, and
-/// the run falls back to frame pacing. A device that pulls audio empties the ring by a callback's
-/// worth many times in this time; one that does not would otherwise stall the emu thread.
+/// How long the device may go without pulling a single pair before it counts as stopped, and the
+/// run falls back to frame pacing. A running device calls back every few milliseconds; one that
+/// does not would otherwise stall the emu thread.
 pub const STALL_LIMIT: Duration = Duration::from_millis(250);
+
+/// How many frame starts in a row must see no pull before the device counts as stopped, besides
+/// [`STALL_LIMIT`] passing. One long pause of the whole process (a laptop waking from sleep, a
+/// debugger) is one frame start, so it never alone condemns a device.
+pub const STALL_FRAMES: u32 = 3;
+
+/// What the pacer reads of the audio ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Level {
+    /// Pairs stored now.
+    pub fill: usize,
+    /// Pairs the device has asked for so far, stored or missing (`AudioRing::pulled`).
+    pub pulled: u64,
+}
 
 /// What decides when the next frame starts.
 pub trait Pacer {
@@ -80,42 +94,42 @@ impl Pacer for FramePacer {
 /// left to play, so the machine waits for it to drain to the target; at or below, the next frame
 /// is due at once. The wait is capped at [`MAX_AUDIO_WAIT`].
 ///
-/// `fill` reads how many pairs the ring holds, so a test gives it a fake.
+/// `level` reads the ring, so a test gives it a fake.
 #[derive(Clone, Debug)]
 pub struct AudioPacer<F> {
-    fill: F,
+    level: F,
     target: usize,
     device_hz: u32,
 }
 
-impl<F: Fn() -> usize> AudioPacer<F> {
-    /// A pacer for a ring read through `fill`, kept near `target` pairs, drained at `device_hz`
+impl<F: Fn() -> Level> AudioPacer<F> {
+    /// A pacer for a ring read through `level`, kept near `target` pairs, drained at `device_hz`
     /// pairs a second.
     ///
     /// # Panics
     ///
     /// When `device_hz` is zero.
-    pub fn new(fill: F, target: usize, device_hz: u32) -> Self {
+    pub fn new(level: F, target: usize, device_hz: u32) -> Self {
         assert!(device_hz > 0, "a device rate of zero never drains");
         Self {
-            fill,
+            level,
             target,
             device_hz,
         }
     }
 
-    /// The pairs in the ring now.
-    fn fill(&self) -> usize {
-        (self.fill)()
+    /// The ring now.
+    fn level(&self) -> Level {
+        (self.level)()
     }
 }
 
-impl<F: Fn() -> usize> Pacer for AudioPacer<F> {
+impl<F: Fn() -> Level> Pacer for AudioPacer<F> {
     /// Nothing to note: the ring, not a deadline, decides.
     fn frame_started(&mut self, _now: Instant) {}
 
     fn remaining(&self, _now: Instant) -> Duration {
-        let excess = self.fill().saturating_sub(self.target) as u64;
+        let excess = self.level().fill.saturating_sub(self.target) as u64;
         Duration::from_nanos(excess.saturating_mul(1_000_000_000) / u64::from(self.device_hz))
             .min(MAX_AUDIO_WAIT)
     }
@@ -125,30 +139,38 @@ impl<F: Fn() -> usize> Pacer for AudioPacer<F> {
     }
 }
 
-/// Notices a device that stopped pulling: the fill, seen once a frame, has not dropped for
-/// longer than [`STALL_LIMIT`].
+/// Notices a device that stopped pulling: seen once a frame, the count of pairs it has asked for
+/// has not grown for [`STALL_FRAMES`] frame starts in a row and longer than [`STALL_LIMIT`].
+///
+/// It watches what the device does, not how full the ring is: an emulator that runs slower than
+/// real time leaves the fill where it was while the device keeps calling back.
 #[derive(Clone, Copy, Debug)]
 struct StallWatch {
-    last_fill: usize,
-    last_drop: Instant,
+    last_pulled: Option<u64>,
+    last_progress: Instant,
+    idle_frames: u32,
 }
 
 impl StallWatch {
     fn new(now: Instant) -> Self {
         Self {
-            last_fill: usize::MAX,
-            last_drop: now,
+            last_pulled: None,
+            last_progress: now,
+            idle_frames: 0,
         }
     }
 
-    /// Notes the fill at `now`; true when it has not dropped for longer than [`STALL_LIMIT`].
-    /// A fill that stays put counts as not dropping: a full ring that nobody empties is stalled.
-    fn stalled(&mut self, fill: usize, now: Instant) -> bool {
-        if fill < self.last_fill {
-            self.last_drop = now;
+    /// Notes that the device had asked for `pulled` pairs at `now`; true once it has stopped.
+    fn stalled(&mut self, pulled: u64, now: Instant) -> bool {
+        if self.last_pulled == Some(pulled) {
+            self.idle_frames += 1;
+        } else {
+            self.idle_frames = 0;
+            self.last_progress = now;
         }
-        self.last_fill = fill;
-        now.saturating_duration_since(self.last_drop) > STALL_LIMIT
+        self.last_pulled = Some(pulled);
+        self.idle_frames >= STALL_FRAMES
+            && now.saturating_duration_since(self.last_progress) > STALL_LIMIT
     }
 }
 
@@ -156,8 +178,9 @@ impl StallWatch {
 /// not, for good (as the shared-memory to zlib switch is, AGENTS.md §2 rule 12).
 ///
 /// It leaves audio at the first frame start that sees `failed` set (the device's error
-/// callback sets it) or a stall ([`STALL_LIMIT`]). It never goes back, so the speed does not
-/// wander between two clocks, and [`Pacer::feeds_audio`] turns false so nothing more is pushed.
+/// callback sets it) or a stall ([`STALL_LIMIT`], [`STALL_FRAMES`]). It never goes back, so the
+/// speed does not wander
+/// between two clocks, and [`Pacer::feeds_audio`] turns false so nothing more is pushed.
 #[derive(Debug)]
 pub struct Pacing<F>(Mode<F>);
 
@@ -174,7 +197,7 @@ enum Mode<F> {
     Frame(FramePacer),
 }
 
-impl<F: Fn() -> usize> Pacing<F> {
+impl<F: Fn() -> Level> Pacing<F> {
     /// Audio pacing from `now`, falling back when `failed` is set or the device stalls.
     pub fn audio(pacer: AudioPacer<F>, failed: Arc<AtomicBool>, now: Instant) -> Self {
         Self(Mode::Audio {
@@ -190,7 +213,7 @@ impl<F: Fn() -> usize> Pacing<F> {
     }
 }
 
-impl<F: Fn() -> usize> Pacer for Pacing<F> {
+impl<F: Fn() -> Level> Pacer for Pacing<F> {
     fn frame_started(&mut self, now: Instant) {
         if let Mode::Audio {
             pacer,
@@ -199,7 +222,7 @@ impl<F: Fn() -> usize> Pacer for Pacing<F> {
         } = &mut self.0
         {
             // `stalled` runs every frame, even after `failed`, so its record stays current.
-            let stalled = watch.stalled(pacer.fill(), now);
+            let stalled = watch.stalled(pacer.level().pulled, now);
             if failed.load(Ordering::Acquire) || stalled {
                 self.0 = Mode::Frame(FramePacer::new(now));
             }

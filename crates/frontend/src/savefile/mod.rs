@@ -10,7 +10,7 @@ use ninge_core::Machine;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Frames the save memory must hold still before the file is written: a second at 60 Hz. A game
+/// Frames the save memory must hold still before the file is written: about a second (60 frames). A game
 /// saves in a burst of page writes, and the file follows once the burst is over.
 pub const QUIET_FRAMES: u32 = 60;
 

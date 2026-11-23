@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::audio::sink::NoAudio;
-use crate::pacing::{AudioPacer, FramePacer, Pacing};
+use crate::pacing::{AudioPacer, FramePacer, Level, Pacing};
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::transfer::{NoShm, Transfer};
@@ -217,9 +217,14 @@ fn given_frames_when_the_emu_runs_then_each_frame_publishes_a_snapshot_and_waits
 #[derive(Default)]
 struct Recorder {
     frames: Vec<Vec<i16>>,
+    starts: u32,
 }
 
 impl AudioSink for Recorder {
+    fn frame_started(&mut self) {
+        self.starts += 1;
+    }
+
     fn push(&mut self, samples: &[i16]) {
         self.frames.push(samples.to_vec());
     }
@@ -252,7 +257,7 @@ fn sunk_frames(
     failed: &Arc<AtomicBool>,
     fail_after: u32,
     quit_after: u32,
-) -> Vec<Vec<i16>> {
+) -> (Vec<Vec<i16>>, u32) {
     let (tx, rx) = channel();
     let mut sink = Recorder::default();
     run_emu(
@@ -267,7 +272,7 @@ fn sunk_frames(
         Instant::now,
         fail_then_quit(Arc::clone(failed), tx, fail_after, quit_after),
     );
-    sink.frames
+    (sink.frames, sink.starts)
 }
 
 fn smoke_app() -> App {
@@ -276,8 +281,12 @@ fn smoke_app() -> App {
 }
 
 /// A pacing that follows a ring that is always empty (so it never waits) until `failed` is set.
-fn audio_pacing(failed: &Arc<AtomicBool>) -> Pacing<fn() -> usize> {
-    let pacer = AudioPacer::new((|| 0) as fn() -> usize, 2_400, 48_000);
+fn audio_pacing(failed: &Arc<AtomicBool>) -> Pacing<fn() -> Level> {
+    let pacer = AudioPacer::new(
+        (|| Level { fill: 0, pulled: 0 }) as fn() -> Level,
+        2_400,
+        48_000,
+    );
     Pacing::audio(pacer, Arc::clone(failed), Instant::now())
 }
 
@@ -295,21 +304,29 @@ fn reference_audio(frames: usize) -> Vec<Vec<i16>> {
 #[test]
 fn given_audio_pacing_when_frames_run_then_each_frames_audio_reaches_the_sink_in_order() {
     let failed = Arc::new(AtomicBool::new(false));
-    let got = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 99, 3);
+    let (got, _) = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 99, 3);
     assert_eq!(got, reference_audio(3));
+}
+
+#[test]
+fn given_frames_when_they_run_then_the_sink_is_told_each_frame_started() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let (_, starts) = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 99, 3);
+    // A fourth start runs before the quit queued during the third wait is seen.
+    assert_eq!(starts, 4);
 }
 
 #[test]
 fn given_no_rom_when_frames_run_under_audio_pacing_then_nothing_is_pushed() {
     let failed = Arc::new(AtomicBool::new(false));
-    let got = sunk_frames(App::new(size()), &mut audio_pacing(&failed), &failed, 99, 3);
+    let (got, _) = sunk_frames(App::new(size()), &mut audio_pacing(&failed), &failed, 99, 3);
     assert_eq!(got, Vec::<Vec<i16>>::new());
 }
 
 #[test]
 fn given_frame_pacing_when_frames_run_then_nothing_is_pushed() {
     let failed = Arc::new(AtomicBool::new(false));
-    let got = sunk_frames(
+    let (got, _) = sunk_frames(
         smoke_app(),
         &mut FramePacer::new(Instant::now()),
         &failed,
@@ -324,7 +341,7 @@ fn given_the_pacing_falls_back_when_more_frames_run_then_nothing_more_is_pushed(
     let failed = Arc::new(AtomicBool::new(false));
     // Frames 1 and 2 are pushed; `failed` is set while the second one waits, so frame 3 starts on
     // frame pacing and frame 4 too.
-    let got = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 2, 4);
+    let (got, _) = sunk_frames(smoke_app(), &mut audio_pacing(&failed), &failed, 2, 4);
     assert_eq!(got, reference_audio(2));
 }
 

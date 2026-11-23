@@ -167,7 +167,8 @@ impl App {
     }
 
     /// Tells the app whether the terminal reports key release (the kitty keyboard protocol is on);
-    /// without it a press holds its key for [`crate::input::FALLBACK_HOLD_FRAMES`] frames. Resets the keys.
+    /// without it a press holds its key for [`crate::input::FALLBACK_HOLD_FRAMES`] frames. Resets
+    /// the keys.
     #[must_use]
     pub fn with_key_release(mut self, reported: bool) -> Self {
         self.keys = Keys::new(reported);

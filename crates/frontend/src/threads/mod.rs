@@ -127,9 +127,9 @@ pub fn run_emu_and_save<P: Pacer>(
     app.finish().context("writing the save file")
 }
 
-/// Shows frames from `handoff` until `stop` is set. A frame published before the stop is still
-/// shown, so the last frame the emu thread ran is on screen; a frame the render side was too slow
-/// for is skipped, not waited for. Flushes the graphics at the end.
+/// Shows frames from `handoff` until `stop` is set, then shows one more if a frame is still
+/// waiting, so the last frame the emu thread published is on screen. A frame the render side was
+/// too slow for is skipped, not waited for. Flushes the graphics at the end.
 pub fn run_render<S: ShmSink, B: Backend, W: Write>(
     renderer: &mut Renderer<S>,
     terminal: &mut Terminal<B>,
@@ -137,16 +137,16 @@ pub fn run_render<S: ShmSink, B: Backend, W: Write>(
     handoff: &Handoff<Snapshot>,
     stop: &AtomicBool,
 ) -> anyhow::Result<()> {
-    loop {
-        if let Some(shown) = handoff.take(RENDER_WAIT, |snapshot| {
-            renderer.present(snapshot, terminal, gfx)
-        }) {
-            shown?;
-        }
-        if stop.load(Ordering::SeqCst) {
-            break;
-        }
+    let mut show = |wait: Duration| {
+        handoff
+            .take(wait, |snapshot| renderer.present(snapshot, terminal, gfx))
+            .transpose()
+    };
+    while !stop.load(Ordering::SeqCst) {
+        show(RENDER_WAIT)?;
     }
+    // The emu thread publishes before it stops, so anything it published is already waiting.
+    show(Duration::ZERO)?;
     gfx.flush()?;
     Ok(())
 }

@@ -8,6 +8,9 @@
 /testroms/**/build/
 *.elf
 
+# Audio rendered from a test ROM to listen to locally (`ninge-runner --wav`); never committed.
+*.wav
+
 # CPU JSON test suites are fetched, not vendored (AGENTS.md §5.1).
 /tests/data/
 

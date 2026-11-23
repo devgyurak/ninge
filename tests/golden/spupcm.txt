@@ -1,0 +1,7 @@
+# spupcm: three PCM channels at one sample per output sample. Channel 0 loops a rising PCM8 ramp
+# (a 511 Hz saw tone) on the left at volume 64; channel 1 loops a rising PCM16 ramp (a 2 kHz saw tone)
+# on the right; channel 2 plays 16 bytes of the ramp once with Hold and then keeps its last sample.
+# The screens are blank (the ARM9 only spins). The audio= hash is right because crates/runner/tests/spupcm.rs
+# rebuilds every one of the first 2000 sample pairs from the note's formulas (ramp, volume, panning, master
+# stage) and the golden only pins the same samples; the golden is the evidence, the model is the proof.
+frames=4 top=37bb6fb31ef02325 bottom=37bb6fb31ef02325 audio=47f56d0434beb57d

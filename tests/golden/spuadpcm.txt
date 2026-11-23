@@ -1,0 +1,5 @@
+# spuadpcm: one IMA-ADPCM stream of 56 samples played twice at once. Channel 0 loops it on the left at full
+# volume (the decoder state is put back at the loop start); channel 1 plays it once on the right at a
+# quarter volume and then falls silent. The screens are blank. crates/runner/tests/spuadpcm.rs decodes the
+# data with its own decoder from the note's tables and checks the first 300 sample pairs.
+frames=4 top=37bb6fb31ef02325 bottom=37bb6fb31ef02325 audio=0b0b8ba6930422f9

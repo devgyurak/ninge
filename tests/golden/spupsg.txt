@@ -1,0 +1,4 @@
+# spupsg: PSG duty 3 on the left, PSG duty 6 on the right and noise in the centre, one position or step
+# per output sample at volume 32. The screens are blank. crates/runner/tests/spupsg.rs rebuilds the first
+# 600 sample pairs from the duty table and the noise register worked from 7FFFh.
+frames=4 top=37bb6fb31ef02325 bottom=37bb6fb31ef02325 audio=7928688bcffdb445

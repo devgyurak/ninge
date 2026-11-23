@@ -12,7 +12,8 @@ use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
 
 use crate::{
-    RunReport, RunnerError, frame_hash, load_rom_file, run, run_with_blank_save, testrom_path,
+    RunReport, RunnerError, frame_hash, load_rom_file, run_with_audio, run_with_blank_save,
+    testrom_path,
 };
 
 /// The host's input for each frame of a run: entry `n` is set before the run's frame `n + 1`
@@ -143,13 +144,19 @@ fn parse_line(text: &str, line: usize) -> Result<RunReport, GoldenError> {
     let frames = frames_field(parts.next(), line)?;
     let top_hash = hash_field(parts.next(), "top", line)?;
     let bottom_hash = hash_field(parts.next(), "bottom", line)?;
+    // An optional fourth field: the audio hash. Lines without it do not check the audio.
+    let audio_hash = match parts.next() {
+        Some(part) => Some(hash_field(Some(part), "audio", line)?),
+        None => None,
+    };
     if parts.next().is_some() {
-        return Err(malformed(line, "unexpected text after `bottom`"));
+        return Err(malformed(line, "unexpected text after `audio`"));
     }
     Ok(RunReport {
         frames,
         top_hash,
         bottom_hash,
+        audio_hash,
     })
 }
 
@@ -185,7 +192,13 @@ pub fn check_frame_hash(golden: &[RunReport], actual: &RunReport) -> Result<(), 
         .ok_or(GoldenError::MissingFrames {
             frames: actual.frames,
         })?;
-    if expected == actual {
+    // A golden line without `audio=` does not check the audio; one with it must match.
+    let audio_matches = expected
+        .audio_hash
+        .is_none_or(|audio| actual.audio_hash == Some(audio));
+    let screens_match = (expected.frames, expected.top_hash, expected.bottom_hash)
+        == (actual.frames, actual.top_hash, actual.bottom_hash);
+    if screens_match && audio_matches {
         Ok(())
     } else {
         Err(GoldenError::Mismatch {
@@ -241,7 +254,10 @@ fn failure_message(rom: &str, frames: u64, path: &Path, error: &GoldenError) -> 
 /// for, or a mismatch. Every message carries the command that reproduces the run and the
 /// `tests/golden/README.md` pointer; the expected and actual lines appear only for a mismatch.
 pub fn assert_frame_hash(rom: &str, frames: u64) {
-    assert_golden(rom, frames, |bytes| run(bytes, frames));
+    // The audio is hashed too; a golden line checks it only when it has an `audio=` field.
+    assert_golden(rom, frames, |bytes| {
+        run_with_audio(bytes, frames).map(|(report, _)| report)
+    });
 }
 
 /// [`assert_frame_hash`] with the host's input for each frame taken from `log`, for a ROM whose
@@ -259,6 +275,7 @@ pub fn assert_frame_hash_with_input(rom: &str, frames: u64, log: &InputLog) {
             frames: machine.frame_count(),
             top_hash,
             bottom_hash,
+            audio_hash: None,
         })
     });
 }
@@ -444,6 +461,105 @@ pub fn assert_savestate_round_trip_with_input(
              a different savestate than the uninterrupted run (first differing byte at offset \
              {offset}, after frame {})",
             frames_before + frames_after
+        );
+    }
+}
+
+/// The audio of `machine`'s next `frames` frames, in order.
+fn frames_audio(machine: &mut Machine, frames: u64) -> Vec<i16> {
+    let mut samples = Vec::new();
+    (0..frames).for_each(|_| {
+        machine.run_frame(Input::default());
+        samples.extend_from_slice(machine.audio());
+    });
+    samples
+}
+
+/// The audio of the built test ROM `rom` over `frames` frames, interleaved stereo `i16`.
+///
+/// # Panics
+///
+/// On a missing ROM.
+pub fn rom_audio(rom: &str, frames: u64) -> Vec<i16> {
+    run_with_audio(load_rom(rom), frames)
+        .expect("the ROM has a valid header")
+        .1
+}
+
+/// The first offsets, one for each of `N` channels, for which `matches` holds: each channel's first
+/// sounding output sample is `base + 0` or `base + 1` for a `base` in `bases`. Channels a ROM starts
+/// with a few instructions between them begin within one output sample of each other, so which of
+/// two consecutive output samples each is the first to carry its sound depends on where the writes
+/// fall on the 2048-cycle grid; a test states the model and lets this find the phase.
+pub fn find_offsets<const N: usize>(
+    bases: std::ops::Range<i64>,
+    matches: impl Fn([i64; N]) -> bool,
+) -> Option<[i64; N]> {
+    bases.into_iter().find_map(|base| {
+        (0..1u32 << N).find_map(|mask| {
+            let offsets = std::array::from_fn(|channel| base + i64::from((mask >> channel) & 1));
+            matches(offsets).then_some(offsets)
+        })
+    })
+}
+
+/// Index of the first sample where `a` and `b` differ; the shorter length if one is a prefix.
+pub fn first_sample_difference(a: &[i16], b: &[i16]) -> Option<usize> {
+    let common = a.len().min(b.len());
+    (0..common)
+        .find(|&index| a[index] != b[index])
+        .or((a.len() != b.len()).then_some(common))
+}
+
+/// Asserts that running `rom` twice for `frames` frames makes the same audio, sample for sample.
+///
+/// # Panics
+///
+/// On `frames == 0`, a missing ROM, or a difference; the message names the first differing
+/// sample.
+pub fn assert_audio_deterministic(rom: &str, frames: u64) {
+    assert!(
+        frames > 0,
+        "assert_audio_deterministic needs at least one frame to compare; got frames=0 for {rom}"
+    );
+    let bytes = load_rom(rom);
+    let first = frames_audio(&mut booted(bytes.clone()), frames);
+    let second = frames_audio(&mut booted(bytes), frames);
+    if let Some(index) = first_sample_difference(&first, &second) {
+        panic!("{rom} makes different audio in two runs: the first difference is sample {index}");
+    }
+}
+
+/// Asserts that a machine resumed from a savestate taken after `frames_before` frames makes, over
+/// the next `frames_after` frames, the same audio as the uninterrupted run (the decoder, the noise
+/// register and the playback positions are all state).
+///
+/// # Panics
+///
+/// On `frames_after == 0`, a missing ROM, a refused savestate, or a difference; the message
+/// names the first differing sample of the resumed part.
+pub fn assert_audio_round_trip(rom: &str, frames_before: u64, frames_after: u64) {
+    assert!(
+        frames_after > 0,
+        "assert_audio_round_trip needs at least one frame after the load; got frames_after=0 \
+         for {rom}"
+    );
+    let bytes = load_rom(rom);
+    let mut uninterrupted = booted(bytes.clone());
+    frames_audio(&mut uninterrupted, frames_before);
+    let expected = frames_audio(&mut uninterrupted, frames_after);
+
+    let mut saver = booted(bytes.clone());
+    frames_audio(&mut saver, frames_before);
+    let mut resumed = booted(bytes);
+    resumed
+        .load_state(&saver.save_state())
+        .unwrap_or_else(|error| panic!("{rom}: the savestate was refused: {error}"));
+    let after_load = frames_audio(&mut resumed, frames_after);
+    if let Some(index) = first_sample_difference(&expected, &after_load) {
+        panic!(
+            "{rom}: the audio resumed from a savestate taken after {frames_before} frames first \
+             differs from the uninterrupted run at sample {index} of the resumed part"
         );
     }
 }

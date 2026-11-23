@@ -107,6 +107,7 @@ fn given_a_run_report_when_displayed_then_it_is_one_key_value_line() {
         frames: 3,
         top_hash: 0xab,
         bottom_hash: 0x1234_5678_9abc_def0,
+        audio_hash: None,
     };
     assert_eq!(
         report.to_string(),
@@ -510,5 +511,100 @@ fn given_a_run_that_writes_nothing_when_it_ends_then_the_outcome_has_the_chip_an
             kind: SaveType::Eeprom8K,
             written: false
         }
+    );
+}
+
+// ----------------------------------------------------------------------------------------- audio
+
+#[test]
+fn given_a_report_with_an_audio_hash_when_displayed_then_the_line_has_a_fourth_field() {
+    let report = RunReport {
+        frames: 3,
+        top_hash: 0xab,
+        bottom_hash: 0xcd,
+        audio_hash: Some(0x0123_4567_89ab_cdef),
+    };
+    assert_eq!(
+        report.to_string(),
+        "frames=3 top=00000000000000ab bottom=00000000000000cd audio=0123456789abcdef"
+    );
+}
+
+#[test]
+fn given_no_samples_when_hashing_the_audio_then_it_is_the_fnv1a_offset_basis() {
+    assert_eq!(audio_hash(&[]), 0xcbf2_9ce4_8422_2325);
+}
+
+#[test]
+fn given_one_zero_sample_when_hashing_the_audio_then_it_is_fnv1a_over_two_zero_bytes() {
+    // Computed independently with python3: FNV-1a 64 over 00 00.
+    assert_eq!(audio_hash(&[0]), 0x0832_8807_b4eb_6fed);
+}
+
+#[test]
+fn given_two_samples_when_hashing_the_audio_then_it_is_fnv1a_over_their_little_endian_bytes() {
+    // 1 and -1 are 01 00 and FF FF; the same python3 computation over 01 00 FF FF.
+    assert_eq!(audio_hash(&[1, -1]), 0xab59_b177_460d_9ada);
+}
+
+#[test]
+fn given_samples_in_two_parts_when_the_hash_is_updated_in_turn_then_it_equals_the_whole_hash() {
+    let part = audio_hash_update(AUDIO_HASH_START, &[1]);
+    assert_eq!(audio_hash_update(part, &[-1]), audio_hash(&[1, -1]));
+}
+
+#[test]
+fn given_two_samples_when_written_as_a_wav_then_the_bytes_are_the_44_byte_header_and_the_data() {
+    // RIFF, size 36 + 4, WAVE, "fmt " 16, PCM 1, 2 channels, 32728 Hz (7FD8h), byte rate 130912
+    // (1FF60h), block align 4, 16 bits, "data", 4 bytes, then 01 00 FF FF.
+    let expected: Vec<u8> = [
+        b"RIFF".as_slice(),
+        &[40, 0, 0, 0],
+        b"WAVEfmt ",
+        &[16, 0, 0, 0, 1, 0, 2, 0],
+        &[0xD8, 0x7F, 0, 0],
+        &[0x60, 0xFF, 0x01, 0],
+        &[4, 0, 16, 0],
+        b"data",
+        &[4, 0, 0, 0],
+        &[1, 0, 0xFF, 0xFF],
+    ]
+    .concat();
+    assert_eq!(wav_bytes(&[1, -1]), expected);
+}
+
+#[test]
+fn given_no_samples_when_written_as_a_wav_then_it_is_just_the_header() {
+    assert_eq!(wav_bytes(&[]).len(), 44);
+}
+
+#[test]
+fn given_the_audio_flag_when_parsing_args_then_audio_is_asked_for_and_there_is_no_wav() {
+    let args = parse(&["rom", "--audio"]).expect("valid args");
+    assert_eq!((args.audio(), args.wav()), (true, None));
+}
+
+#[test]
+fn given_the_wav_flag_when_parsing_args_then_audio_is_implied_and_the_path_is_kept() {
+    let args = parse(&["rom", "--wav", "out.wav"]).expect("valid args");
+    assert_eq!(
+        (args.audio(), args.wav()),
+        (true, Some(Path::new("out.wav")))
+    );
+}
+
+#[test]
+fn given_no_audio_flags_when_parsing_args_then_audio_is_not_asked_for() {
+    let args = parse(&["rom", "--frames", "2"]).expect("valid args");
+    assert_eq!((args.audio(), args.wav()), (false, None));
+}
+
+#[test]
+fn given_a_repeated_audio_flag_or_a_wav_without_a_path_when_parsing_then_usage_error() {
+    let repeated = parse(&["rom", "--audio", "--audio"]);
+    let bare = parse(&["rom", "--wav"]);
+    assert!(
+        matches!(repeated, Err(RunnerError::Usage(_)))
+            && matches!(bare, Err(RunnerError::Usage(_)))
     );
 }

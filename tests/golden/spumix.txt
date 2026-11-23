@@ -1,0 +1,4 @@
+# spumix: four constant levels stepped through nine mixer settings (volume, panning, master
+# volume, output selection, the not-sent bit, a clip, master enable off). The screens are blank. The nine
+# plateaus are listed with their hand-worked values in crates/runner/tests/spumix.rs.
+frames=5 top=37bb6fb31ef02325 bottom=37bb6fb31ef02325 audio=b2719231a97e7d11

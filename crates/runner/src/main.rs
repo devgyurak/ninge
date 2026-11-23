@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use ninge_core::cart::SaveType;
 use ninge_runner::cpu_suite::report_dir;
-use ninge_runner::{Command, RunnerError, load_rom_file, parse_command, run_with_save};
+use ninge_runner::{
+    Command, RunnerError, load_rom_file, parse_command, run_with_audio, run_with_save, write_wav,
+};
 
 fn main() -> ExitCode {
     match execute() {
@@ -24,6 +26,13 @@ fn execute() -> Result<String, RunnerError> {
     match parse_command(std::env::args_os().skip(1))? {
         Command::Run(args) => {
             let rom = load_rom_file(args.rom())?;
+            if args.audio() {
+                let (report, samples) = run_with_audio(rom, args.frames())?;
+                if let Some(path) = args.wav() {
+                    write_wav(path, &samples)?;
+                }
+                return Ok(report.to_string());
+            }
             let (report, save) = run_with_save(rom, args.frames(), &args.save_setup())?;
             // On stderr, so stdout stays the one report line.
             if save.kind != SaveType::None {

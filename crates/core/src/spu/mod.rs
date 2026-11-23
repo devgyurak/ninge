@@ -681,6 +681,22 @@ impl CaptureWrites {
     }
 }
 
+/// Whether capture `x`'s addition is on for the mixer, and whether channel `b` still counts in it
+/// (`Spu::adding`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Adding {
+    on: bool,
+    b_mixed: bool,
+}
+
+impl Adding {
+    /// No addition.
+    pub(crate) const OFF: Self = Self {
+        on: false,
+        b_mixed: false,
+    };
+}
+
 /// The 16 channels panned and summed: each channel's `(left, right)` and the two mixer sums
 /// before the master stage, in 1/256 units.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -730,38 +746,69 @@ impl Spu {
         &self.captures[index % CAPTURES]
     }
 
+    /// Whether capture `x` adds channel `b` into channel `a` for the mixer at master time `time`,
+    /// and whether `b` still counts (`sound-capture.md`, "The addition mode"): addition needs bit 0
+    /// and bit 7 of SNDCAPxCNT, and channel `b` is muted when channel `a` is not busy or SOUNDCNT
+    /// bit 12 or 13 sends it away from the mixer.
+    // TODO(hw-unverified): "channel a disabled" is "not busy" here (`sound-capture.md`,
+    // "Unverified").
+    pub(crate) fn adding(&self, time: u64) -> [Adding; CAPTURES] {
+        std::array::from_fn(|x| {
+            let on = self.captures[x].cnt & CAP_ADD != 0 && self.captures[x].busy(time);
+            let (a, not_mixed) = (2 * x, [SOUNDCNT_CH1_NOT_MIXED, SOUNDCNT_CH3_NOT_MIXED][x]);
+            Adding {
+                on,
+                b_mixed: self.channels[a].busy(time) && self.cnt & not_mixed == 0,
+            }
+        })
+    }
+
     /// The 16 channels panned and summed into the two mixers, before the master stage
     /// (`spu.md`, "The mixer"). Channel 1 and 3 drop out of the sum when SOUNDCNT bit 12 or 13 says
-    /// so. Pure and allocation-free: this runs once per output sample.
-    pub(crate) fn mix(&self, samples: &[i32; CHANNELS]) -> Mix {
+    /// so. A unit whose addition is on sends channel `b` through channel `a`: `a`'s panning applies
+    /// to the sum of the two, and `b` does not reach the mixer on its own. Pure and
+    /// allocation-free: this runs once per output sample.
+    // TODO(hw-unverified): what channel b's own path does in addition mode: here it reaches the
+    // mixer only through channel a, and the output selection of SOUNDCNT bits 8-11 still sees its
+    // own panned value (`sound-capture.md`, "Unverified").
+    pub(crate) fn mix(&self, samples: &[i32; CHANNELS], adding: [Adding; CAPTURES]) -> Mix {
         let mut mix = Mix::default();
+        let mut with_volume = [0i64; CHANNELS];
+        let mut contribution = [(0i64, 0i64); CHANNELS];
         self.channels
             .iter()
             .zip(samples)
             .enumerate()
             .for_each(|(x, (channel, &sample))| {
-                let (left, right) = mixer::channel(
-                    sample,
-                    channel.divider(),
-                    channel.volume(),
-                    channel.panning(),
-                );
-                mix.routed[x] = (left, right);
+                with_volume[x] = mixer::with_volume(sample, channel.divider(), channel.volume());
+                let routed = mixer::pan(with_volume[x], channel.panning());
+                mix.routed[x] = routed;
                 let not_mixed = match x {
                     CHANNEL_1 => self.cnt & SOUNDCNT_CH1_NOT_MIXED != 0,
                     CHANNEL_3 => self.cnt & SOUNDCNT_CH3_NOT_MIXED != 0,
                     _ => false,
                 };
-                if !not_mixed {
-                    mix.sum[0] += left;
-                    mix.sum[1] += right;
-                }
+                contribution[x] = if not_mixed { (0, 0) } else { routed };
             });
+        adding
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| unit.on)
+            .for_each(|(x, unit)| {
+                let (a, b) = (2 * x, 2 * x + 1);
+                let added = with_volume[a] + if unit.b_mixed { with_volume[b] } else { 0 };
+                contribution[a] = mixer::pan(added, self.channels[a].panning());
+                contribution[b] = (0, 0);
+            });
+        contribution.iter().for_each(|&(left, right)| {
+            mix.sum[0] += left;
+            mix.sum[1] += right;
+        });
         mix
     }
 
-    /// The stereo output sample for the channels' PCM16 values `samples` (`spu.md`, "The mixer"):
-    /// `[left, right]` as `i16`, the medium level at zero. `audible` is the digital gates outside
+    /// The stereo output sample for the channels' PCM16 values `samples` (`spu.md`, "The mixer"),
+    /// with no capture adding: `[left, right]` as `i16`, the medium level at zero. `audible` is the digital gates outside
     /// the unit, the speakers (POWCNT2) and the amplifier, both on; with it off the output is 0.
     /// With the master enable off the mixer is not used and the level is the bias alone.
     ///
@@ -769,7 +816,7 @@ impl Spu {
     // TODO(hw-unverified): a silenced output is 0, and the master-enable-off output is the bias
     // alone (`spu.md`, "Unverified").
     pub fn output(&self, samples: &[i32; CHANNELS], audible: bool) -> [i16; 2] {
-        self.output_mixed(&self.mix(samples), audible)
+        self.output_mixed(&self.mix(samples, [Adding::OFF; CAPTURES]), audible)
     }
 
     /// [`Self::output`] for a mix already made, so the capture units and the speakers read one.
@@ -809,10 +856,14 @@ impl Spu {
             mixer::volumed(samples[channel], c.divider(), c.volume())
         };
         let (a, b) = (before_pan(2 * x), before_pan(2 * x + 1));
-        // TODO(phase6): the addition of channel `b` and the overflow bug (#46, the next PR).
+        if self.captures[x].cnt & CAP_ADD != 0 {
+            // The capture side of the addition: always done, whatever SOUNDCNT bits 12 and 13 say,
+            // and plain `b` while `a` is silent. The sum is not clipped (the overflow bug).
+            return mixer::capture_overflow(a + b);
+        }
         // The both-negative bug: channel `b` is not added, yet it still turns the value into -8000h
         // when both are below 0.
-        if self.captures[x].cnt & CAP_ADD == 0 && a < 0 && b < 0 {
+        if a < 0 && b < 0 {
             mixer::CAPTURE_BUG
         } else {
             a

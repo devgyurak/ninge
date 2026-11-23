@@ -13,6 +13,12 @@ const S: i32 = 0x4000;
 /// The reference left value in 1/256 units.
 const FULL_LEFT: i64 = 0x40_0000;
 
+/// One channel's left and right values for the PCM16 `sample`, in 1/256 units: the volume stages,
+/// then the panning.
+fn channel(sample: i32, divider: u32, volume: u32, panning: u32) -> (i64, i64) {
+    pan(with_volume(sample, divider, volume), panning)
+}
+
 /// The rows `(name, got, want)` that differ.
 fn differing(rows: &[(&'static str, i64, i64)]) -> Vec<(&'static str, i64, i64)> {
     rows.iter().filter(|r| r.1 != r.2).copied().collect()

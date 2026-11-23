@@ -7,12 +7,12 @@
 
 use super::*;
 
-const LEFT: u32 = 0x7F;
-const RIGHT: u32 = 0x7F | 127 << 16;
-const SOURCE_CHANNEL: u32 = 1 << 1;
+pub(super) const LEFT: u32 = 0x7F;
+pub(super) const RIGHT: u32 = 0x7F | 127 << 16;
+pub(super) const SOURCE_CHANNEL: u32 = 1 << 1;
 
 /// A device whose channels `volumes` carry `(channel, panning bits)` at full volume.
-fn with_channels(channels: &[(u32, u32)]) -> Spu {
+pub(super) fn with_channels(channels: &[(u32, u32)]) -> Spu {
     let mut spu = Spu::new();
     channels
         .iter()
@@ -20,14 +20,14 @@ fn with_channels(channels: &[(u32, u32)]) -> Spu {
     spu
 }
 
-fn samples(values: &[(usize, i32)]) -> [i32; CHANNELS] {
+pub(super) fn samples(values: &[(usize, i32)]) -> [i32; CHANNELS] {
     let mut all = [0; CHANNELS];
     values.iter().for_each(|&(x, v)| all[x] = v);
     all
 }
 
 /// Capture `x` started at `now` with `cnt`, `len` words, `dad`, at TMR `FFF0h` on its channel.
-fn capturing(spu: &mut Spu, x: u32, cnt: u8, len: u32, dad: u32, now: u64) {
+pub(super) fn capturing(spu: &mut Spu, x: u32, cnt: u8, len: u32, dad: u32, now: u64) {
     let (timer, base) = (ch(2 * x + 1, TMR_OFFSET), SNDCAP0DAD_OFFSET + 8 * x);
     write(spu, timer, Width::Half, TMR, now);
     write(spu, base, Width::Word, dad, now);
@@ -42,17 +42,17 @@ fn capturing(spu: &mut Spu, x: u32, cnt: u8, len: u32, dad: u32, now: u64) {
 }
 
 /// The plan of capture `x` for the output sample at `time`, with `all` as the channels' samples.
-fn plan(spu: &Spu, all: &[i32; CHANNELS], time: u64, x: usize) -> Option<CaptureWrites> {
-    spu.capture_writes(&spu.mix(all), all, time)[x]
+pub(super) fn plan(spu: &Spu, all: &[i32; CHANNELS], time: u64, x: usize) -> Option<CaptureWrites> {
+    spu.capture_writes(&spu.mix(all, spu.adding(time)), all, time)[x]
 }
 
 /// The value (PCM16 of the 16.8 source) capture `x` writes at `time`.
-fn value(spu: &Spu, all: &[i32; CHANNELS], x: usize) -> Option<i32> {
+pub(super) fn value(spu: &Spu, all: &[i32; CHANNELS], x: usize) -> Option<i32> {
     plan(spu, all, 1_000_000, x).map(|p| p.value)
 }
 
 /// A capture of the given source with a long buffer, started at time 0.
-fn running(spu: &mut Spu, x: u32, cnt: u8) {
+pub(super) fn running(spu: &mut Spu, x: u32, cnt: u8) {
     capturing(spu, x, cnt, 100, 0x0200_0000, 0);
 }
 

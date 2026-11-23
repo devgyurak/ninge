@@ -38,14 +38,21 @@ const LEVEL_MEDIUM: i32 = 0x200;
 /// The 10-bit level is scaled to the `i16` range by 64 (`spu.md`, "Output samples").
 const LEVEL_SCALE: i32 = 64;
 
-/// One channel's left and right values for the PCM16 `sample`, in 1/256 units: divide, multiply by
-/// the volume, then by the panning, and drop the fraction beyond 8 bits (`spu.md`, "Volume and
-/// panning"). The left factor is `(128 - N) / 128` and the right `N / 128`.
+/// A channel's value after the divider and the volume factor, with the 11 fraction bits those two
+/// steps leave (GBATEK's "16.11"): the value the panning (and, in addition mode, the addition)
+/// takes as input. Divide by 1, 2, 4 or 16, then multiply by `N / 128` (`spu.md`, "Volume and
+/// panning").
+pub(super) fn with_volume(sample: i32, divider: u32, volume: u32) -> i64 {
+    let divided = (i64::from(sample) << DIVIDER_BITS) >> DIVIDER_SHIFT[(divider & 3) as usize];
+    divided * factor(volume)
+}
+
+/// The left and right values of `with_volume` panned, in 1/256 units: the fraction beyond 8 bits is
+/// dropped (`spu.md`, "Volume and panning"). The left factor is `(128 - N) / 128` and the right
+/// `N / 128`.
 // TODO(hw-unverified): where each fraction is dropped is read from GBATEK's table
 // (`spu.md`, "Unverified").
-pub(super) fn channel(sample: i32, divider: u32, volume: u32, panning: u32) -> (i64, i64) {
-    let divided = (i64::from(sample) << DIVIDER_BITS) >> DIVIDER_SHIFT[(divider & 3) as usize];
-    let with_volume = divided * factor(volume);
+pub(super) fn pan(with_volume: i64, panning: u32) -> (i64, i64) {
     let pan = factor(panning);
     (
         (with_volume * (128 - pan)) >> CHANNEL_DROP,
@@ -62,8 +69,7 @@ const VOLUMED_DROP: u32 = DIVIDER_BITS + FACTOR_BITS - 8;
 // TODO(hw-unverified): where the fraction is dropped between the volume factor and the capture
 // (`sound-capture.md`, "Unverified").
 pub(super) fn volumed(sample: i32, divider: u32, volume: u32) -> i64 {
-    let divided = (i64::from(sample) << DIVIDER_BITS) >> DIVIDER_SHIFT[(divider & 3) as usize];
-    (divided * factor(volume)) >> VOLUMED_DROP
+    with_volume(sample, divider, volume) >> VOLUMED_DROP
 }
 
 /// The bounds of a capture value, `-8000h` and `7FFFh` with the 8 fraction bits kept.
@@ -72,6 +78,17 @@ const CAPTURE_MAX: i64 = 0x7F_FFFF;
 /// The value a capture of a channel writes in the both-negative bug (`sound-capture.md`, "The two
 /// bugs"): `-8000h`.
 pub(super) const CAPTURE_BUG: i64 = CAPTURE_MIN;
+
+/// The overflow bug of a capture of channel `a` with the addition on (`sound-capture.md`, "The two
+/// bugs"): the sum is ANDed with `FFFFh` instead of clipped. The 16-bit integer part wraps, so a sum
+/// beyond the range loses its sign; the 8 fraction bits stay.
+// TODO(hw-unverified): GBATEK gives the AND for a PCM16 capture; for PCM8 the model wraps the
+// 16-bit integer part before the conversion (`sound-capture.md`, "Unverified").
+pub(super) const fn capture_overflow(value: i64) -> i64 {
+    // The truncation to 16 bits is the bug itself, not an accident.
+    let whole = (value >> 8) as u16 as i16;
+    ((whole as i64) << 8) | (value & 0xFF)
+}
 
 /// A 16.8 value clipped to the range a capture holds (`sound-capture.md`, "Sources").
 pub(super) fn clip_capture(value: i64) -> i64 {

@@ -44,6 +44,7 @@ fn given_save_flags_when_parsing_then_the_options_carry_the_path_and_the_type() 
             rom: Some(PathBuf::from("a.nds")),
             save: Some(PathBuf::from("s.bin")),
             save_type: Some(SaveType::Flash512K),
+            no_audio: false,
         })
     );
 }
@@ -56,6 +57,7 @@ fn given_the_flags_before_the_rom_when_parsing_then_the_rom_is_still_found() {
             rom: Some(PathBuf::from("a.nds")),
             save: None,
             save_type: Some(SaveType::None),
+            no_audio: false,
         })
     );
 }
@@ -95,4 +97,41 @@ fn given_a_repeated_save_flag_when_parsing_then_it_is_a_usage_error() {
         .unwrap_err()
         .to_string();
     assert_eq!(message, format!("unknown option --save\n{USAGE}"));
+}
+
+#[test]
+fn given_no_audio_alone_when_parsing_then_it_is_set_and_there_is_no_rom() {
+    assert_eq!(
+        parse(&["--no-audio"]),
+        Ok(Options {
+            no_audio: true,
+            ..Options::default()
+        })
+    );
+}
+
+#[test]
+fn given_no_audio_with_a_rom_and_save_flags_when_parsing_then_all_of_them_are_kept() {
+    assert_eq!(
+        parse(&["a.nds", "--save", "s.bin", "--no-audio"]),
+        Ok(Options {
+            rom: Some(PathBuf::from("a.nds")),
+            save: Some(PathBuf::from("s.bin")),
+            no_audio: true,
+            ..Options::default()
+        })
+    );
+}
+
+#[test]
+fn given_no_audio_twice_when_parsing_then_it_is_a_usage_error() {
+    let message = parse(&["--no-audio", "--no-audio"])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(message, format!("unknown option --no-audio\n{USAGE}"));
+}
+
+#[test]
+fn given_no_arguments_when_parsing_then_audio_is_on() {
+    assert!(!parse(&[]).unwrap().no_audio);
 }

@@ -618,3 +618,25 @@ fn given_a_held_pad_button_when_focus_is_lost_then_the_machine_gets_no_button() 
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::empty());
 }
+
+#[test]
+fn given_no_rom_when_a_frame_runs_then_there_is_no_audio() {
+    let mut app = App::new(size());
+    app.step();
+    assert_eq!(app.audio(), &[] as &[i16]);
+}
+
+#[test]
+fn given_a_machine_when_a_frame_runs_then_the_audio_is_that_frames_samples() {
+    let mut app = smoke_app(true);
+    app.step();
+    // One pair per 2048 master cycles of a 1,120,380-cycle frame: 547 or 548 pairs.
+    let pairs = app.audio().len() / 2;
+    assert_eq!(
+        (
+            (547..=548).contains(&pairs),
+            Some(app.audio()) == app.machine().map(ninge_core::Machine::audio)
+        ),
+        (true, true)
+    );
+}

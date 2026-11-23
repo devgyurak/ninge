@@ -237,7 +237,7 @@ impl<'a> Inspect<'a> {
 
     /// The ARM7's sound registers: every channel's registers and end time, SOUNDCNT, SOUNDBIAS and
     /// the capture units.
-    // No panel shows them yet: the debugger's sound panel comes with the mixer in Phase 6 (#47).
+    // No panel shows them yet: the debugger panels (the Parallel track) will add a sound panel.
     pub fn spu(&self) -> &'a Spu {
         self.machine.io.spu()
     }

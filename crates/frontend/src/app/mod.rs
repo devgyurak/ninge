@@ -8,8 +8,10 @@
 //!
 //! - **emu** owns the [`App`]. At the start of each frame it applies every queued host event, runs
 //!   [`App::step`], fills a [`Snapshot`] with [`App::fill`] and publishes it through the
-//!   [`crate::handoff`] triple buffer, then waits as a [`crate::pacing::Pacer`] says. Audio pacing
-//!   (#47) replaces the fixed-rate pacer without touching the loop.
+//!   [`crate::handoff`] triple buffer, then waits as a [`crate::pacing::Pacer`] says. A pacer that
+//!   follows the sound device ([`crate::pacing::AudioPacer`], #47) and one that follows the
+//!   machine's frame period ([`crate::pacing::FramePacer`]) drive the same loop; the frame's audio
+//!   ([`App::audio`]) goes to a [`crate::audio::sink::AudioSink`].
 //! - **render** owns the [`crate::render::Renderer`], the terminal and the graphics writer. It
 //!   shows the newest published snapshot. If it is slower than the emu thread, a newer snapshot
 //!   replaces one it never took: emulated frames are unchanged and only displayed frames are
@@ -298,6 +300,16 @@ impl App {
         self.keys.end_frame();
         self.cursor.end_frame();
         self.frame_no += 1;
+    }
+
+    /// The audio of the frame [`App::step`] just ran: interleaved stereo `i16` at the machine's
+    /// output rate, empty without a ROM (the dummy pattern makes no sound) and before the first
+    /// frame.
+    pub fn audio(&self) -> &[i16] {
+        match &self.source {
+            Source::Machine(machine) => machine.audio(),
+            Source::Pattern => &[],
+        }
     }
 
     /// Fills `snapshot` with what the renderer needs for the frame [`App::step`] just ran. The

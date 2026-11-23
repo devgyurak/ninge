@@ -14,6 +14,7 @@
 //! unchanged.
 
 use crate::app::{Action, App, map_event};
+use crate::audio::sink::AudioSink;
 use crate::gamepad::PadEvent;
 use crate::handoff::Handoff;
 use crate::layout::TermSize;
@@ -82,22 +83,33 @@ pub fn apply_host_event(app: &mut App, event: HostEvent) {
     }
 }
 
+/// What paces the emu loop and takes its audio: the [`Pacer`] says when the next frame starts and
+/// whether audio is still fed, the [`AudioSink`] takes each frame's audio.
+pub struct Pace<'a, P, S> {
+    /// When the next frame starts.
+    pub pacer: &'a mut P,
+    /// Where the frame's audio goes.
+    pub sink: &'a mut S,
+}
+
 /// Runs frames until the user quits, the program shuts the console down, or `stop` is set.
 ///
 /// At the start of each frame it applies every event queued since the last one, so input is never
-/// dropped and never starves a frame. It then runs the frame, publishes a snapshot, and waits as
-/// `pacer` says. A frame is run for each `sleep`; `now` is the pacer's clock.
-pub fn run_emu<P: Pacer>(
+/// dropped and never starves a frame. It then runs the frame, hands the frame's audio to `sink`
+/// while its pacer still feeds audio and there is any (none without a ROM), publishes a snapshot,
+/// and waits as `pacer` says. A frame is run for each `sleep`; `now` is the pacer's clock.
+pub fn run_emu<P: Pacer, S: AudioSink>(
     app: &mut App,
     events: &Receiver<HostEvent>,
     handoff: &Handoff<Snapshot>,
-    pacer: &mut P,
+    pace: &mut Pace<'_, P, S>,
     stop: &AtomicBool,
     now: impl Fn() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) {
     loop {
-        pacer.frame_started(now());
+        pace.pacer.frame_started(now());
+        pace.sink.frame_started();
         // A closed channel (the input thread is gone) ends nothing by itself: its guard has set
         // `stop`.
         while let Ok(event) = events.try_recv() {
@@ -107,23 +119,26 @@ pub fn run_emu<P: Pacer>(
             break;
         }
         app.step();
+        if pace.pacer.feeds_audio() && !app.audio().is_empty() {
+            pace.sink.push(app.audio());
+        }
         handoff.publish(|snapshot| app.fill(snapshot));
-        sleep(pacer.remaining(now()));
+        sleep(pace.pacer.remaining(now()));
     }
 }
 
 /// The whole emu thread: the frame loop, then the save. The save is written however the loop
 /// ended, even when render or input failed, so a game's save is not lost.
-pub fn run_emu_and_save<P: Pacer>(
+pub fn run_emu_and_save<P: Pacer, S: AudioSink>(
     app: &mut App,
     events: &Receiver<HostEvent>,
     handoff: &Handoff<Snapshot>,
-    pacer: &mut P,
+    pace: &mut Pace<'_, P, S>,
     stop: &AtomicBool,
     now: impl Fn() -> Instant,
     sleep: impl FnMut(Duration),
 ) -> anyhow::Result<()> {
-    run_emu(app, events, handoff, pacer, stop, now, sleep);
+    run_emu(app, events, handoff, pace, stop, now, sleep);
     app.finish().context("writing the save file")
 }
 

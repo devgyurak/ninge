@@ -98,7 +98,7 @@ jobs:
 
   # One shard of one OS: the whole gate, with one part of the tests.
   test:
-    name: test (${{ matrix.os }}, ${{ matrix.shard }}/${{ needs.scope.outputs.shard_count }})
+    name: test (${{ matrix.os }}, ${{ matrix.shard }}/${{ needs.scope.outputs.shard_count }}, ${{ matrix.copy }})
     needs: [scope, testroms]
     # testroms is skipped for a documentation-only change and the shard must run all the same.
     # Without a status function a job is skipped when a job it needs was, so the condition is
@@ -111,9 +111,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is included on purpose: Apple Silicon is the target machine (plan §5, Phase 8).
-        os: [ubuntu-latest, macos-latest]
+        # DIAGNOSTICS: ubuntu only, and eight jobs, so a slow runner is likely to be among them.
+        os: [ubuntu-latest]
         shard: ${{ fromJSON(needs.scope.outputs.shards) }}
+        copy: [a, b]
     steps:
       # verify.sh compares with the same commit as the scope job, so a documentation-only run
       # needs the history; a full run does not. The depths are strings because a bare 0 is
@@ -188,6 +189,27 @@ jobs:
       # macOS only verifies the artifact's checksums. The prebuilt variable is set for macOS
       # alone, so a runner without Docker cannot silently skip the build. A documentation-only
       # run hands verify.sh the commit to compare with; verify.sh checks the change again itself.
+      # ---- DIAGNOSTICS (throwaway, not for merging) ------------------------------------------
+      - name: "DIAG: the machine"
+        run: |
+          echo "nproc: $(nproc)   kernel: $(uname -r)   virt: $(systemd-detect-virt || true)"
+          lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|MHz|BogoMIPS|Hypervisor|L2|L3|NUMA node\(s\)' || true
+          echo "smt active: $(cat /sys/devices/system/cpu/smt/active 2>/dev/null || echo ?)"
+          echo "cgroup cpu.max: $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo ?)"
+          echo "vm size: $(curl -s --max-time 3 -H Metadata:true 'http://169.254.169.254/metadata/instance/compute/vmSize?api-version=2021-02-01&format=text' || echo ?)"
+          echo "vm location: $(curl -s --max-time 3 -H Metadata:true 'http://169.254.169.254/metadata/instance/compute/location?api-version=2021-02-01&format=text' || echo ?)"
+          grep -H . /sys/devices/system/cpu/vulnerabilities/* 2>/dev/null | sed 's|.*/||' || true
+          free -m
+          df -h / | tail -1
+          .github/diag/sample.sh
+
+      - name: "DIAG: benchmark before the gate"
+        run: python3 .github/diag/bench.py before
+
+      - name: "DIAG: start the sampler"
+        run: |
+          nohup bash -c 'while true; do .github/diag/sample.sh; sleep 15; done' > "$RUNNER_TEMP/sampler.log" 2>&1 &
+
       - name: Verify (one shard of the tests)
         env:
           NINGE_DOCS_ONLY_BASE: ${{ needs.scope.outputs.docs_only == 'true' && needs.scope.outputs.base || '' }}
@@ -196,13 +218,21 @@ jobs:
           NINGE_TEST_SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.shard_count }}
         run: ./scripts/verify.sh
 
+      - name: "DIAG: benchmark after the gate"
+        if: always()
+        run: python3 .github/diag/bench.py after
+
+      - name: "DIAG: the sampler's log"
+        if: always()
+        run: cat "$RUNNER_TEMP/sampler.log"
+
       # The verify job of this OS merges the shards' reports. A shard that failed uploads
       # nothing, and the merge refuses an incomplete set. One day is the shortest retention.
       - name: Upload this shard's coverage
         if: env.DOCS_ONLY != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.os }}-${{ matrix.shard }}
+          name: coverage-${{ matrix.os }}-${{ matrix.shard }}-${{ matrix.copy }}
           path: target/coverage/*.lcov
           if-no-files-found: error
           retention-days: 1
@@ -222,7 +252,7 @@ jobs:
       fail-fast: false
       matrix:
         # The OS whose shards this job answers for, not the runner it uses.
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     steps:
       - name: Every shard passed
         if: needs.test.result != 'success'
@@ -237,7 +267,7 @@ jobs:
         if: env.DOCS_ONLY != 'true'
         uses: actions/download-artifact@v4
         with:
-          pattern: coverage-${{ matrix.os }}-*
+          pattern: coverage-${{ matrix.os }}-*-a
           path: ${{ runner.temp }}/coverage
           merge-multiple: true
 

@@ -179,8 +179,8 @@ impl StallWatch {
 ///
 /// It leaves audio at the first frame start that sees `failed` set (the device's error
 /// callback sets it) or a stall ([`STALL_LIMIT`], [`STALL_FRAMES`]). It never goes back, so the
-/// speed does not wander
-/// between two clocks, and [`Pacer::feeds_audio`] turns false so nothing more is pushed.
+/// speed does not wander between two clocks, and [`Pacer::feeds_audio`] turns false so nothing
+/// more is pushed.
 #[derive(Debug)]
 pub struct Pacing<F>(Mode<F>);
 

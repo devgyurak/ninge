@@ -187,6 +187,11 @@ impl Machine {
             return Err(SavestateError::Corrupt);
         }
         loaded.rom = std::mem::take(&mut self.rom);
+        // The frame's audio is output, not state: the machine keeps its reserved buffer (emptied),
+        // so the first frame after a load does not allocate on the sample path
+        // (`docs/hw/spu.md`, "Output samples").
+        loaded.audio = std::mem::take(&mut self.audio);
+        loaded.audio.clear();
         // The save memory may differ from what a host last wrote: the counter goes up, so the host
         // sees a change (`docs/hw/auxspi-saves.md`, "Save files").
         let generation = self.save_generation().wrapping_add(1);

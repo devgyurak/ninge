@@ -243,6 +243,9 @@ impl Channel {
     /// `None` while the channel is stopped or `now` is before the start (the ARM7 can write at a
     /// time past the master clock, and a sample event at the master clock is then earlier than the
     /// write; `spu.md`, "Position").
+    // TODO(hw-unverified): the sound starts at the write, with none of GBATEK's start delay (1, 3 or
+    // 11 samples) and the busy bit clears at the end of the last sample, not at its begin
+    // (`spu.md`, "Unverified").
     pub const fn elapsed(&self, now: u64) -> Option<u64> {
         if self.cnt & CNT_START == 0 || self.latched.period == 0 || now < self.start {
             return None;
@@ -269,12 +272,16 @@ impl Channel {
         let pnt = per_word * u64::from(latched.pnt);
         let len = per_word * u64::from(latched.len);
         // Below the minimum length nothing plays (`spu.md`, "Position").
+        // TODO(hw-unverified): GBATEK gives this for a one-shot; a loop below it is silent here too
+        // (`spu.md`, "Unverified").
         if pnt + len < per_word * u64::from(MIN_WORDS) {
             return 0;
         }
         let index = if latched.one_shot {
             match (elapsed < pnt + len, self.hold()) {
                 (true, _) => elapsed,
+                // TODO(hw-unverified): the Hold flag during a restart is not modeled
+                // (`spu.md`, "Unverified").
                 (false, true) => pnt + len - 1,
                 (false, false) => return 0,
             }
@@ -282,11 +289,14 @@ impl Channel {
             elapsed
         } else if len == 0 {
             // An empty loop: the PNT part, then silence (`spu.md`, "Model").
+            // TODO(hw-unverified): what GBATEK leaves open for LEN = 0 (`spu.md`, "Unverified").
             return 0;
         } else {
             pnt + (elapsed - pnt) % len
         };
         let at = latched.sad.wrapping_add((index * (4 / per_word)) as u32);
+        // TODO(hw-unverified): a source address the ARM7 bus does not map reads what the bus's read
+        // gives there (`spu.md`, "Unverified").
         match latched.format {
             FORMAT_PCM8 => i32::from(read(at) as i8) << 8,
             _ => i32::from(i16::from_le_bytes([read(at), read(at.wrapping_add(1))])),
@@ -314,6 +324,8 @@ impl Channel {
     }
 
     /// Latches the registers a started sound reads from, at master time `now`.
+    // TODO(hw-unverified): SAD, PNT, LEN, TMR, the format and the repeat mode are read at the start
+    // and a write while the sound plays does not move it (`spu.md`, "Unverified").
     fn latch(&mut self, now: u64) {
         self.start = now;
         self.latched = Latched {
@@ -507,6 +519,8 @@ impl Spu {
                 channel.cnt = with_byte(channel.cnt_at(now), reg - CNT_OFFSET, byte) & CNT_MASK;
                 let started = channel.cnt & CNT_START != 0;
                 // Writing 1 while busy does not restart the sound: the end stays.
+                // TODO(hw-unverified): what a write of 1 to a running channel does on the hardware
+                // (`spu.md`, "Unverified").
                 match (was_busy, started) {
                     (false, true) => {
                         channel.latch(now);

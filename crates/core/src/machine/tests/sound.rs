@@ -241,3 +241,21 @@ fn given_debug_steps_far_past_a_frame_when_no_frame_runs_then_the_audio_stays_wi
     step_arm9(&mut m, 3 * 1_120_380);
     assert!(m.audio().len() <= super::super::AUDIO_CAPACITY);
 }
+
+#[test]
+fn given_a_loaded_state_when_a_frame_runs_then_the_audio_buffer_keeps_its_reserved_capacity() {
+    let mut saver = machine();
+    saver.run_frame(crate::Input::new());
+    let mut loaded = machine();
+    let result = loaded.load_state(&saver.save_state());
+    let before = loaded.audio.capacity();
+    loaded.run_frame(crate::Input::new());
+    assert_eq!(
+        (
+            result,
+            before >= super::super::AUDIO_CAPACITY,
+            loaded.audio.capacity() == before
+        ),
+        (Ok(()), true, true)
+    );
+}

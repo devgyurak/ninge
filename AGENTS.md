@@ -23,7 +23,7 @@ it). The current phase and the open decisions are in `docs/STATUS.md`.
 cargo fmt --all                                            # format
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny --locked check licenses bans sources            # dependency licenses (deny.toml)
-cargo llvm-cov nextest --workspace --locked                # tests + coverage (floor: verify.sh)
+cargo llvm-cov nextest --workspace --locked --lib --bins   # unit tests + coverage
 python3 scripts/check_agent_config.py                      # agent-config integrity
 python3 scripts/agent_hooks/selftest.py                    # hook self-test
 python3 scripts/agent_hooks/guard_cleanroom.py --scan-tracked   # no dumps / GPL text tracked
@@ -381,8 +381,8 @@ full/empty error flags, timer overflow cascade, DMA start modes, and scheduler t
 
 ### 5.9 Coverage floor is 90%
 
-**Coverage floor:** `90%` line coverage across the workspace, measured by `cargo-llvm-cov` in
-`./scripts/verify.sh` and CI, each line counted once.
+**Coverage floor:** `90%` line coverage across the workspace, measured over the unit tests by
+`cargo-llvm-cov` in `./scripts/verify.sh`, each line counted once.
 
 - Raise coverage by writing tests that assert hardware behavior — never by lowering the
   floor, excluding files (`--ignore-filename-regex`, `#[coverage(off)]`), or writing tests

@@ -53,9 +53,11 @@ network. A test that needs a user's ROM reads `NINGE_USER_ROM`, is
    and input log give the same frame hashes and savestate bytes; save → load → continue
    matches an uninterrupted run.
 5. Run the gate: `./scripts/verify.sh`. It includes the **90% line-coverage floor**
-   (`cargo llvm-cov`); when coverage drops, find the uncovered lines with
-   `cargo llvm-cov --html` and cover the **behavior** behind them — never lower the floor,
-   exclude files, or add a test that only executes code.
+   (`cargo llvm-cov`), measured over the **unit tests only**: a test ROM or any other
+   integration test (`crates/*/tests`) gates but does not count. When coverage drops, find
+   the uncovered lines with `cargo llvm-cov --lib --bins --html` and cover the **behavior**
+   behind them with a unit test — never lower the floor, exclude files, or add a test that
+   only executes code.
 
 ## Idioms
 

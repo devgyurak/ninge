@@ -488,6 +488,8 @@ pub const WAV_RATE_HZ: u32 = 32_728;
 pub fn wav_bytes(samples: &[i16]) -> Vec<u8> {
     const CHANNELS: u16 = 2;
     const BITS: u16 = 16;
+    // A WAV holds at most 4 GiB; a longer run is cut to what the header can count.
+    let samples = &samples[..samples.len().min((u32::MAX as usize - 36) / 2)];
     let data_len = (samples.len() * 2) as u32;
     let block_align = CHANNELS * BITS / 8;
     let mut bytes = Vec::with_capacity(44 + samples.len() * 2);

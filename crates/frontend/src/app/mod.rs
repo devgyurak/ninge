@@ -1,18 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Application state, input mapping, and one frame of output.
 //!
-//! # One loop, for now
+//! # Three threads (#218)
 //!
-//! The frontend runs on a single loop that steps the model ([`App::step`]), fills a [`Snapshot`]
-//! from it ([`App::fill`]) and hands that to the [`Renderer`], then polls the terminal's input, on
-//! one thread. The model and the renderer share nothing but the snapshot, so the split into emu,
-//! render and input threads (AGENTS.md §2 rule 12, plan §4.3, #218) only moves them apart.
+//! The frontend runs three threads (AGENTS.md §2 rule 12, plan §4.3), started by [`crate::term`]
+//! and written as plain loops in [`crate::threads`]:
+//!
+//! - **emu** owns the [`App`]. At the start of each frame it applies every queued host event, runs
+//!   [`App::step`], fills a [`Snapshot`] with [`App::fill`] and publishes it through the
+//!   [`crate::handoff`] triple buffer, then waits as a [`crate::pacing::Pacer`] says. Audio pacing
+//!   (#47) replaces the fixed-rate pacer without touching the loop.
+//! - **render** owns the [`crate::render::Renderer`], the terminal and the graphics writer. It
+//!   shows the newest published snapshot. If it is slower than the emu thread, a newer snapshot
+//!   replaces one it never took: emulated frames are unchanged and only displayed frames are
+//!   skipped.
+//! - **input** owns the terminal's event reader and the gamepads, and sends the emu thread
+//!   [`crate::threads::HostEvent`]s over a channel.
+//!
+//! The model and the renderer share nothing but the snapshot.
 //!
 //! # Input (#44)
 //!
 //! Input mapping is a pure function from a terminal event to an [`Action`] ([`map_event`]) and
-//! from the keys held to the host [`Input`] ([`Keys`]); the terminal poll is a thin adapter around
-//! them. That holds whether the poll later runs on this loop or on an input thread (#218).
+//! from the keys held to the host [`Input`] ([`Keys`]). The input thread only maps and forwards
+//! [`Action`]s; the emu thread applies them, because the keys' frame counts, the cursor and the
+//! pen mapping count emu frames or need the layout.
 
 use crate::clock::local_wall_time;
 use crate::cursor::{self, Cursor};
@@ -35,7 +47,8 @@ pub enum Action {
     None,
     /// Leave the program.
     Quit,
-    /// The terminal changed size; the caller re-queries it and calls [`App::resize`].
+    /// The terminal changed size; the input thread re-queries it and sends the new size, which
+    /// the emu thread gives to [`App::resize`].
     Resized,
     /// A key event for the console's keys.
     Key(KeyEvent),

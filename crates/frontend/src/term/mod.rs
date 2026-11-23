@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The terminal adapter: raw mode, alternate screen, size queries, and the main loop.
 //!
-//! This is the only module that touches the OS terminal. Everything it drives is
-//! tested through [`crate::app`] with a test backend. OS-specific pieces stay here so a
-//! Windows backend is an addition (AGENTS.md §2).
+//! This is the only module that touches the OS terminal. It starts the three threads (emu, render
+//! and input, #218) and joins them; what each does is in [`crate::threads`], tested with a test
+//! backend and no thread. OS-specific pieces stay here so a Windows backend is an addition
+//! (AGENTS.md §2).
 
-use crate::app::{Action, App, map_event};
+use crate::app::App;
 use crate::gamepad::Gamepads;
+use crate::handoff::Handoff;
 use crate::kitty;
 use crate::layout::TermSize;
-use crate::pacing::{FramePacer, Pacer};
+use crate::pacing::FramePacer;
 use crate::pen::Unit;
 use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
 use crate::source::Source;
+use crate::threads::{
+    HostEvent, INPUT_POLL, StopGuard, forward_event, forward_pads, run_emu_and_save, run_render,
+};
 use crate::transfer::{ShmSink, Transfer};
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
@@ -28,6 +33,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
 use {
@@ -41,9 +48,6 @@ use {
 /// nothing still answers the DA1 request that follows it, so this is only the bound for
 /// one that answers neither. A reply that arrives later would reach the input reader.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1000);
-
-/// Most input events handled between two frames.
-const MAX_EVENTS_PER_FRAME: usize = 64;
 
 /// What the keyboard protocol is asked for: escape codes for every key, with press, repeat and
 /// release events. Letters send release only with "report all keys as escape codes"; with just
@@ -202,20 +206,21 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
     };
     out.write_all(&kitty::mouse_enable(unit == Unit::Pixels))?;
     out.flush()?;
-    let mut renderer = Renderer::new(found.sink, found.transfer);
     let mut app = App::new(size)
         .with_mouse_unit(unit)
         .with_key_release(found.key_release)
         .with_source(source)
         .with_save(save);
+    let mut renderer = Renderer::new(found.sink, found.transfer);
     let mut gfx = io::stdout();
-    let mut pads = Gamepads::open();
+    // Opened here so the model starts knowing whether the library started and how many pads there
+    // are; the input thread then owns it.
+    let pads = Gamepads::open();
     app = app.with_gamepads(pads.available(), pads.connected());
-    let looped = main_loop(&mut app, &mut renderer, &mut terminal, &mut gfx, &mut pads);
-    // The save file is written last and even when the loop failed, so a game's save is not lost;
-    // a write failure shows once the terminal is restored.
-    let saved = app.finish().context("writing the save file");
-    outcome(looped.and(saved), app.save_note())
+    // The save file is written by the emu thread, last and even when render or input failed, so a
+    // game's save is not lost; a write failure shows once the terminal is restored.
+    let result = run_threads(&mut app, &mut renderer, &mut terminal, &mut gfx, pads);
+    outcome(result, app.save_note())
 }
 
 /// The run's result with the save note: on success the note is handed back to print; on failure it
@@ -228,38 +233,76 @@ fn outcome(result: anyhow::Result<()>, note: Option<String>) -> anyhow::Result<O
     }
 }
 
-/// Draws and reads input until the user quits.
-fn main_loop(
-    app: &mut App,
-    renderer: &mut Renderer<impl ShmSink>,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    gfx: &mut io::Stdout,
+/// Reads terminal events and the pads and sends them to the emu thread until `stop` is set.
+///
+/// The poll's timeout is [`INPUT_POLL`]: it bounds how fast the thread sees `stop` and how late a
+/// pad event is seen.
+fn input_loop(
     pads: &mut Gamepads,
+    tx: &Sender<HostEvent>,
+    stop: &AtomicBool,
 ) -> anyhow::Result<()> {
-    let mut snapshot = Snapshot::default();
-    let mut pacer = FramePacer::new(Instant::now());
-    while !app.should_quit() {
-        pacer.frame_started(Instant::now());
-        // The pads are read once a frame, before the frame runs.
-        pads.poll().into_iter().for_each(|e| app.apply_pad(e));
-        app.set_pads_connected(pads.connected());
-        app.step();
-        app.fill(&mut snapshot);
-        renderer.present(&snapshot, terminal, gfx)?;
-        // Poll at least once per frame, even after an overrun, so quit and resize are
-        // always read. The cap keeps a flood of input (key repeat) from starving drawing.
-        for _ in 0..MAX_EVENTS_PER_FRAME {
-            if !event::poll(pacer.remaining(Instant::now()))? {
-                break;
-            }
-            match map_event(&event::read()?) {
-                Action::Resized => app.resize(size()?),
-                other => app.apply(other),
-            }
+    let mut connected = pads.connected();
+    while !stop.load(Ordering::SeqCst) {
+        if event::poll(INPUT_POLL)? && !forward_event(&event::read()?, size, tx)? {
+            break;
+        }
+        if !forward_pads(pads.poll(), pads.connected(), &mut connected, tx) {
+            break;
         }
     }
-    gfx.flush()?;
     Ok(())
+}
+
+/// Runs the emu, render and input threads until one of them ends, then joins all three.
+///
+/// A thread that returns, fails or panics sets `stop` through its [`StopGuard`], so the other two
+/// end too; the emu thread still writes the save first. The first failure of render, input and
+/// emu, in that order, is the result.
+fn run_threads<S: ShmSink + Send>(
+    app: &mut App,
+    renderer: &mut Renderer<S>,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    gfx: &mut io::Stdout,
+    mut pads: Gamepads,
+) -> anyhow::Result<()> {
+    let stop = AtomicBool::new(false);
+    let handoff = Handoff::new(Snapshot::default);
+    let (tx, rx) = mpsc::channel();
+    let mut pacer = FramePacer::new(Instant::now());
+    let joined = |handle: thread::ScopedJoinHandle<'_, anyhow::Result<()>>, name: &str| {
+        handle
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the {name} thread panicked")))
+    };
+    thread::scope(|scope| {
+        let emu = scope.spawn(|| {
+            let _stop = StopGuard::new(&stop, &handoff);
+            // A `Receiver` is `Send` but not `Sync`: the emu thread takes it by value.
+            let rx = rx;
+            run_emu_and_save(
+                app,
+                &rx,
+                &handoff,
+                &mut pacer,
+                &stop,
+                Instant::now,
+                thread::sleep,
+            )
+        });
+        let render = scope.spawn(|| {
+            let _stop = StopGuard::new(&stop, &handoff);
+            run_render(renderer, terminal, gfx, &handoff, &stop)
+        });
+        let input = scope.spawn(|| {
+            let _stop = StopGuard::new(&stop, &handoff);
+            input_loop(&mut pads, &tx, &stop)
+        });
+        let rendered = joined(render, "render");
+        let read = joined(input, "input");
+        let saved = joined(emu, "emu");
+        rendered.and(read).and(saved)
+    })
 }
 
 #[cfg(all(test, unix))]

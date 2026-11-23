@@ -162,3 +162,11 @@ proptest! {
         prop_assert_eq!(got, stream);
     }
 }
+
+#[test]
+fn given_pops_that_take_and_miss_pairs_when_pulled_is_asked_then_it_counts_both() {
+    let ring = AudioRing::new(8);
+    ring.push(&pairs(1, 2));
+    popped(&ring, 5);
+    assert_eq!((ring.pulled(), ring.underruns()), (5, 3));
+}

@@ -10,13 +10,14 @@
 //! split, so the split is its own `REF:` issue, #218, the last of Phase 5 and ahead of #47, and
 //! the loop stays as it is until then. Nothing before #218 should add a thread.
 //!
-//! # For the input work (#44)
+//! # Input (#44)
 //!
-//! Write input mapping as a pure function from a terminal event to an [`Action`] or to the host
-//! [`Input`], and keep the terminal poll a thin adapter around it, as [`map_event`] is. That holds
-//! whether the poll later runs on this loop or on an input thread.
+//! Input mapping is a pure function from a terminal event to an [`Action`] ([`map_event`]) and
+//! from the keys held to the host [`Input`] ([`Keys`]); the terminal poll is a thin adapter around
+//! them. That holds whether the poll later runs on this loop or on an input thread (#218).
 
 use crate::clock::local_wall_time;
+use crate::input::{FALLBACK_HOLD_FRAMES, Keys};
 use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
@@ -50,26 +51,29 @@ pub enum Action {
     Quit,
     /// The terminal changed size; the caller re-queries it and calls [`App::resize`].
     Resized,
+    /// A key event for the console's keys.
+    Key(KeyEvent),
+    /// The terminal lost focus: every key lets go, since a release sent after it would never
+    /// arrive.
+    ReleaseAll,
 }
 
-/// Maps a terminal event to an [`Action`]. `q`, Esc, and Ctrl-C quit (raw mode delivers
-/// Ctrl-C as a key).
+/// Whether `event` is the press of a quit key: Ctrl-C or Ctrl-Q (raw mode delivers them as keys).
+/// Neither `q` nor Esc quits: `q` is the L button, and Esc is too easy to hit in a game.
+fn is_quit(event: &KeyEvent) -> bool {
+    let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+    let letter = |c: char| matches!(event.code, KeyCode::Char(k) if k.eq_ignore_ascii_case(&c));
+    event.kind == KeyEventKind::Press && ctrl && (letter('c') || letter('q'))
+}
+
+/// Maps a terminal event to an [`Action`]: Ctrl-C and Ctrl-Q quit, a resize and a loss of focus
+/// have their own actions, and every other key goes to the console's keys.
 pub fn map_event(event: &Event) -> Action {
     match event {
-        Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        }) => {
-            let ctrl_c = *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL);
-            if ctrl_c || matches!(code, KeyCode::Char('q') | KeyCode::Esc) {
-                Action::Quit
-            } else {
-                Action::None
-            }
-        }
+        Event::Key(key) if is_quit(key) => Action::Quit,
+        Event::Key(key) => Action::Key(*key),
         Event::Resize(..) => Action::Resized,
+        Event::FocusLost => Action::ReleaseAll,
         _ => Action::None,
     }
 }
@@ -98,6 +102,8 @@ pub struct App<S = NoShm> {
     sink: S,
     /// The host's wall-clock time, read once a frame for the machine's clock chip.
     clock: fn() -> u32,
+    /// The keys held, from which each frame's input is built.
+    keys: Keys,
 }
 
 impl App<NoShm> {
@@ -121,7 +127,16 @@ impl<S: ShmSink> App<S> {
             transfer,
             sink,
             clock: local_wall_time,
+            keys: Keys::new(false),
         }
+    }
+
+    /// Tells the app whether the terminal reports key release (the kitty keyboard protocol is on);
+    /// without it a press holds its key for [`FALLBACK_HOLD_FRAMES`] frames. Resets the keys.
+    #[must_use]
+    pub fn with_key_release(mut self, reported: bool) -> Self {
+        self.keys = Keys::new(reported);
+        self
     }
 
     /// Reads the host's time from `clock` instead of the system clock, so a test controls it.
@@ -185,7 +200,12 @@ impl<S: ShmSink> App<S> {
 
     /// Applies an [`Action`]; `Resized` is handled by the caller through [`App::resize`].
     pub fn apply(&mut self, action: Action) {
-        self.quit |= action == Action::Quit;
+        match action {
+            Action::Quit => self.quit = true,
+            Action::Key(key) => self.keys.handle(&key),
+            Action::ReleaseAll => self.keys.release_all(),
+            Action::None | Action::Resized => {}
+        }
     }
 
     /// Whether the user asked to quit.
@@ -205,9 +225,10 @@ impl<S: ShmSink> App<S> {
     pub fn graphics(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         if let Source::Machine(machine) = &mut self.source {
-            // TODO(phase5): the key mapping will build the rest of the frame's input here; until
-            // then no button is held. The host's local time feeds the clock chip (`rtc.md`).
-            machine.run_frame(Input::new().with_wall_time((self.clock)()));
+            // The keys held make the buttons, the microphone and the lid; the host's local time
+            // feeds the clock chip (`rtc.md`).
+            let input: Input = self.keys.input().with_wall_time((self.clock)());
+            machine.run_frame(input);
             if let Some(save) = &mut self.save {
                 save.after_frame(machine);
             }
@@ -216,6 +237,7 @@ impl<S: ShmSink> App<S> {
             // (`touch-power.md`, "What the power register does").
             self.quit |= machine.is_shut_down();
         }
+        self.keys.end_frame();
         if let Some(areas) = self.areas {
             let (top, bottom) = self.screens();
             out.extend(self.send(TOP_IMAGE_ID, &top, areas.top));
@@ -279,10 +301,15 @@ impl<S: ShmSink> App<S> {
         } else {
             "\ncell size unknown, assuming 8x16"
         };
+        let keys_note = if self.keys.release_reported() {
+            String::new()
+        } else {
+            format!("\nkey release not reported:\na press holds {FALLBACK_HOLD_FRAMES} frames")
+        };
         // TODO(phase1): real register and disassembly panels (#56).
         frame.render_widget(
             Paragraph::new(format!(
-                "TODO(phase1) (#56){note}\n{}",
+                "TODO(phase1) (#56){note}{keys_note}\n{}",
                 self.transfer.label()
             ))
             .wrap(Wrap { trim: false })

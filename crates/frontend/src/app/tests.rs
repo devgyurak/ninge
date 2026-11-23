@@ -29,39 +29,71 @@ fn press(code: KeyCode) -> Action {
 }
 
 #[test]
-fn given_q_or_esc_when_mapping_then_quit() {
+fn given_ctrl_c_or_ctrl_q_when_mapping_then_quit() {
+    let ctrl = |c| key(KeyCode::Char(c), KeyModifiers::CONTROL, KeyEventKind::Press);
     assert_eq!(
-        (press(KeyCode::Char('q')), press(KeyCode::Esc)),
+        (map_event(&ctrl('c')), map_event(&ctrl('q'))),
         (Action::Quit, Action::Quit)
     );
 }
 
 #[test]
-fn given_ctrl_c_when_mapping_then_quit() {
+fn given_a_shifted_ctrl_q_when_mapping_then_quit() {
     let e = key(
-        KeyCode::Char('c'),
-        KeyModifiers::CONTROL,
+        KeyCode::Char('Q'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         KeyEventKind::Press,
     );
     assert_eq!(map_event(&e), Action::Quit);
 }
 
 #[test]
-fn given_other_key_or_plain_c_when_mapping_then_none() {
+fn given_q_or_esc_when_mapping_then_they_are_keys_and_do_not_quit() {
+    let (q, esc) = (
+        key(KeyCode::Char('q'), KeyModifiers::NONE, KeyEventKind::Press),
+        key(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Press),
+    );
     assert_eq!(
-        (press(KeyCode::Char('x')), press(KeyCode::Char('c'))),
-        (Action::None, Action::None)
+        (map_event(&q), map_event(&esc)),
+        (
+            Action::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Action::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        )
     );
 }
 
 #[test]
-fn given_key_release_of_q_when_mapping_then_none() {
-    let e = key(
-        KeyCode::Char('q'),
+fn given_a_plain_c_or_a_ctrl_release_when_mapping_then_it_does_not_quit() {
+    let release = key(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL,
+        KeyEventKind::Release,
+    );
+    assert_eq!(
+        (
+            matches!(press(KeyCode::Char('c')), Action::Key(_)),
+            matches!(map_event(&release), Action::Key(_))
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_a_key_release_when_mapping_then_it_goes_to_the_keys() {
+    let release = KeyEvent::new_with_kind(
+        KeyCode::Char('x'),
         KeyModifiers::NONE,
         KeyEventKind::Release,
     );
-    assert_eq!(map_event(&e), Action::None);
+    assert_eq!(map_event(&Event::Key(release)), Action::Key(release));
+}
+
+#[test]
+fn given_focus_lost_or_gained_when_mapping_then_only_losing_it_releases_the_keys() {
+    assert_eq!(
+        (map_event(&Event::FocusLost), map_event(&Event::FocusGained)),
+        (Action::ReleaseAll, Action::None)
+    );
 }
 
 #[test]
@@ -472,4 +504,95 @@ fn given_a_machine_with_both_backlights_off_when_the_screens_are_taken_then_no_p
     let mut app = poweroff_app();
     run_frames(&mut app, 1);
     assert_eq!(lit_pixel_counts(&app), (0, 0));
+}
+
+// ----------------------------------------------------------------------------------- keys
+
+/// An app running the smoke ROM, on a terminal that reports key release or not.
+fn smoke_app(release_reported: bool) -> App {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testroms/build/smoke.nds"),
+    )
+    .expect("smoke ROM is built");
+    let machine = crate::source::boot(rom).expect("valid header");
+    App::new(size())
+        .with_key_release(release_reported)
+        .with_source(Source::Machine(Box::new(machine)))
+}
+
+fn key_action(code: KeyCode, kind: KeyEventKind) -> Action {
+    map_event(&key(code, KeyModifiers::NONE, kind))
+}
+
+#[test]
+fn given_a_held_key_when_a_frame_runs_then_the_machine_gets_its_button() {
+    let mut app = smoke_app(true);
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(input.buttons, ninge_core::Buttons::A);
+}
+
+#[test]
+fn given_a_released_key_when_a_frame_runs_then_the_machine_gets_no_button() {
+    let mut app = smoke_app(true);
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Release));
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(input.buttons, ninge_core::Buttons::empty());
+}
+
+#[test]
+fn given_focus_lost_when_a_frame_runs_then_the_machine_gets_no_button() {
+    let mut app = smoke_app(true);
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
+    app.apply(Action::ReleaseAll);
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(input.buttons, ninge_core::Buttons::empty());
+}
+
+#[test]
+fn given_the_microphone_and_lid_keys_when_a_frame_runs_then_the_machine_gets_them() {
+    let mut app = smoke_app(true);
+    app.apply(key_action(KeyCode::Char('m'), KeyEventKind::Press));
+    app.apply(key_action(KeyCode::Char('`'), KeyEventKind::Press));
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!((input.mic, input.hinge_closed), (true, true));
+}
+
+#[test]
+fn given_a_press_without_release_reports_when_frames_run_then_the_button_lasts_the_fixed_count() {
+    let mut app = smoke_app(false);
+    app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
+    let held: Vec<bool> = (0..=crate::input::FALLBACK_HOLD_FRAMES)
+        .map(|_| {
+            app.graphics();
+            app.machine().expect("a machine").inspect().input().buttons == ninge_core::Buttons::A
+        })
+        .collect();
+    let mut expected = vec![true; usize::from(crate::input::FALLBACK_HOLD_FRAMES)];
+    expected.push(false);
+    assert_eq!(held, expected);
+}
+
+/// The text of the screen after one frame of `app`.
+fn panel_text(app: &mut App) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(120, 50)).expect("test backend");
+    frame_step(app, &mut terminal, &mut Vec::new()).expect("step");
+    format!("{}", terminal.backend())
+}
+
+#[test]
+fn given_a_terminal_without_key_release_when_drawing_then_the_panel_says_so() {
+    let text = panel_text(&mut App::new(size()).with_key_release(false));
+    assert!(text.contains("key release not reported"));
+}
+
+#[test]
+fn given_a_terminal_with_key_release_when_drawing_then_the_panel_does_not_warn() {
+    let text = panel_text(&mut App::new(size()).with_key_release(true));
+    assert!(!text.contains("key release not reported"));
 }

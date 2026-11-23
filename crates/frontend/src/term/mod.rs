@@ -13,13 +13,17 @@ use crate::source::Source;
 use crate::transfer::{ShmSink, Transfer};
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event;
+use crossterm::event::{
+    self, DisableFocusChange, EnableFocusChange, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, window_size,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 #[cfg(unix)]
 use {
@@ -40,12 +44,27 @@ const FRAME_TIME: Duration = Duration::from_micros(16_667);
 /// Most input events handled between two frames.
 const MAX_EVENTS_PER_FRAME: usize = 64;
 
+/// What the keyboard protocol is asked for: escape codes for every key, with press, repeat and
+/// release events. Letters send release only with "report all keys as escape codes"; with just
+/// "disambiguate" and "event types" a held `x` would never be seen to let go.
+const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        .union(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+        .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES);
+
+/// Whether [`KEYBOARD_FLAGS`] are pushed, so `restore` pops them: the panic hook calls it too,
+/// and a terminal without the protocol is never sent the pop.
+static KEYBOARD_FLAGS_PUSHED: AtomicBool = AtomicBool::new(false);
+
 /// Restores the terminal on drop.
 struct Restore;
 
 fn restore() {
     let mut out = io::stdout();
-    let _ = crossterm::execute!(out, Show, LeaveAlternateScreen);
+    if KEYBOARD_FLAGS_PUSHED.swap(false, Ordering::SeqCst) {
+        let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
+    }
+    let _ = crossterm::execute!(out, DisableFocusChange, Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
 
@@ -89,13 +108,25 @@ fn read_reply(fd: impl AsFd, timeout: Duration) -> Vec<u8> {
     buf
 }
 
-/// Asks the terminal whether it accepts `t=s` and picks the medium from its answer.
+/// What the startup probe found out.
+struct Negotiated<W> {
+    /// Where shared-memory frames are written.
+    sink: W,
+    /// How frames go over.
+    transfer: Transfer,
+    /// Whether the terminal has the kitty keyboard protocol, so key release is reported.
+    key_release: bool,
+}
+
+/// Asks the terminal whether it accepts `t=s` and has the kitty keyboard protocol, and picks the
+/// medium and the key handling from its answers.
 ///
 /// Raw mode must be on and the event reader not started. The probe object is unlinked
 /// right after the answer: a terminal that refuses never reads it.
 #[cfg(unix)]
-fn negotiate() -> (ShmWriter, Transfer) {
+fn negotiate() -> Negotiated<ShmWriter> {
     let mut writer = ShmWriter::new();
+    let mut key_release = false;
     let probe = writer
         .put(&[0; kitty::PROBE_BYTES])
         .map_err(|e| format!("shared memory unavailable: {e}"))
@@ -105,19 +136,28 @@ fn negotiate() -> (ShmWriter, Transfer) {
                 .and_then(|()| out.flush())
                 .map_err(|e| format!("probe not sent: {e}"))
         })
-        .map(|()| kitty::parse_probe_reply(&read_reply(io::stdin(), PROBE_TIMEOUT)));
+        .map(|()| {
+            let reply = read_reply(io::stdin(), PROBE_TIMEOUT);
+            key_release = kitty::parse_keyboard_reply(&reply);
+            kitty::parse_probe_reply(&reply)
+        });
     writer.release();
     let transfer = probe.map_or_else(Transfer::direct, Transfer::from_probe);
-    (writer, transfer)
+    Negotiated {
+        sink: writer,
+        transfer,
+        key_release,
+    }
 }
 
 /// Shared memory is POSIX-only so far (Windows is planned, AGENTS.md §2).
 #[cfg(not(unix))]
-fn negotiate() -> (crate::transfer::NoShm, Transfer) {
-    (
-        crate::transfer::NoShm,
-        Transfer::direct("shared memory is not available on this platform"),
-    )
+fn negotiate() -> Negotiated<crate::transfer::NoShm> {
+    Negotiated {
+        sink: crate::transfer::NoShm,
+        transfer: Transfer::direct("shared memory is not available on this platform"),
+        key_release: false,
+    }
 }
 
 /// The current terminal size, with the cell pixel size when the terminal reports it.
@@ -135,11 +175,18 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
     }));
     enable_raw_mode().context("enabling raw mode")?;
     let _restore = Restore;
-    let (sink, transfer) = negotiate();
+    let found = negotiate();
     let mut out = io::stdout();
-    crossterm::execute!(out, EnterAlternateScreen, Hide)?;
+    crossterm::execute!(out, EnterAlternateScreen, Hide, EnableFocusChange)?;
+    // After the alternate screen is entered: each screen has its own stack of keyboard flags.
+    if found.key_release {
+        // Marked first: a push that fails half way must still be popped by `restore`.
+        KEYBOARD_FLAGS_PUSHED.store(true, Ordering::SeqCst);
+        crossterm::execute!(out, PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
+    }
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    let mut app = App::with_transfer(size()?, sink, transfer)
+    let mut app = App::with_transfer(size()?, found.sink, found.transfer)
+        .with_key_release(found.key_release)
         .with_source(source)
         .with_save(save);
     let mut gfx = io::stdout();

@@ -45,6 +45,12 @@ writes its report without checking the floor, and a run with `NINGE_COVERAGE_SHA
 checks the floor over every shard's report merged. Only `ci.yml` sets them; a local run is
 the one shard of one and checks the floor itself. A shard that passed has not met the floor.
 
+A **documentation-only change** (`scripts/docs_only.py`: `docs/`, the agent settings, Markdown
+outside `crates/`) runs only steps 1–6; `verify.sh` prints that it skipped the cargo steps.
+`NINGE_DOCS_ONLY_BASE=<commit>` turns this on locally. Report it as skipped, never as passed —
+and a change that touches `scripts/`, `.github/workflows/`, or a manifest is not documentation
+only, even when the edit is a comment.
+
 Until Phase 0 adds `Cargo.toml`, steps 7–12 print `SKIPPED`. Once it exists, a missing
 `cargo-deny` or `cargo-llvm-cov` fails the gate with the install command. Say that when you report — the
 Rust gates did not pass, they did not run.

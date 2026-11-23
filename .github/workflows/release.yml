@@ -1,6 +1,6 @@
 name: release
 
-# A `vX.Y.Z` tag on `main` publishes ninge-core and then ninge to crates.io (AGENTS.md §7).
+# A `vX.Y.Z` tag on `main` publishes ninge-core and then ninge to crates.io (docs/contributing/ci-and-release.md).
 # ninge-runner and ninge-tracediff are repository tools and are not published. The tag is
 # the release: the release PR (develop -> main) has already bumped `[workspace.package]
 # version` and set `publish = true`, and CI was green on it. This workflow only checks that,

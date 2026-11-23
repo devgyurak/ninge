@@ -92,7 +92,7 @@ INSTALL="cargo install --locked cargo-deny"
 need cargo deny --version
 cargo deny --locked check licenses bans sources
 
-# Test ROMs (AGENTS.md §3.1, §7). Built ROMs are never committed, so the golden tests need
+# Test ROMs (AGENTS.md §3.1, docs/contributing/ci-and-release.md). Built ROMs are never committed, so the golden tests need
 # them built from testroms/ sources. Decided in #65.
 #   1. NINGE_PREBUILT_TESTROMS=1 -> verify the prebuilt artifact's checksums (the macOS CI
 #      job, which cannot run Docker). Only ci.yml sets it, so a stale local build/ directory

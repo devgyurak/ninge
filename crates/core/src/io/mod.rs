@@ -92,7 +92,7 @@ registry! {
         /// The ARM7's RTCCNT and the clock chip on its pins (`rtc.md`).
         rtc: Rtc = Rtc::new() => [Port::Rtc],
         /// The ARM7's sound and capture registers (`sound-registers.md`).
-        spu: Spu = Spu::new() => [Port::Spu],
+        spu / spu_mut: Spu = Spu::new() => [Port::Spu],
     }
     each {
         /// Each CPU's interrupt controller: the same addresses, separate state (`interrupts.md`).

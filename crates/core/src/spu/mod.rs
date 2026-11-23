@@ -13,8 +13,12 @@
 //! its own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
 // TODO(phase6): the capture writes replace the capture's lazy end time with a real position (#46).
 
+mod adpcm;
+
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
+
+pub use adpcm::Adpcm;
 
 /// SOUND0CNT, the first register of the window, at `0400_0400h` (`sound-registers.md`, "The
 /// channels").
@@ -77,6 +81,8 @@ const CNT_DUTY_MASK: u32 = 0b111;
 /// Samples in a word: four PCM8 samples, two PCM16 samples (`spu.md`, "Position").
 const PCM8_PER_WORD: u64 = 4;
 const PCM16_PER_WORD: u64 = 2;
+/// IMA-ADPCM: eight 4-bit samples in a word.
+const ADPCM_PER_WORD: u64 = 8;
 /// Master cycles between two output samples: 1024 ARM7 cycles, two master cycles each
 /// (`spu.md`, "Output samples").
 // TODO(hw-unverified): GBATEK's 32.768 kHz is not exactly 1024 ARM7 cycles (`spu.md`,
@@ -121,6 +127,17 @@ const CAPTURE_TIMER_CHANNEL: [usize; CAPTURES] = [1, 3];
 /// The end time of a unit that never ends by itself. An unstarted unit holds 0.
 const NEVER: u64 = u64::MAX;
 
+/// Where a channel is in its data (`Channel::position`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Position {
+    /// Nothing plays.
+    Silent,
+    /// Data sample `n` plays (counted after the header word for ADPCM).
+    At(u64),
+    /// A one-shot ended with Hold set: the last data sample, `n`, stays.
+    Last(u64),
+}
+
 /// What a channel latches when it starts: the registers that decide where each sample comes from.
 /// A write to them while the sound plays does not move it (`spu.md`, "Model"). Volume, divider,
 /// panning, hold and duty are not here: they are read live from SOUNDxCNT.
@@ -146,6 +163,8 @@ pub struct Channel {
     /// Master time of the write that started the sound; 0 while stopped.
     start: u64,
     latched: Latched,
+    /// The IMA-ADPCM decoder, advanced as the sample clock runs; unused by the other formats.
+    adpcm: Adpcm,
     /// Master time the busy bit clears, [`NEVER`] if it does not, 0 while stopped. Computed once at
     /// the start from the latched registers, so the busy bit and the output share one position.
     end: u64,
@@ -253,54 +272,124 @@ impl Channel {
         Some((now - self.start) / self.latched.period)
     }
 
+    /// Where the data position is after `elapsed` samples of the sample clock (`spu.md`,
+    /// "Position"). The sizes come from the format; the loop part is what follows the PNT part.
+    fn position(&self, elapsed: u64) -> Position {
+        let latched = &self.latched;
+        let words = u64::from(latched.pnt) + u64::from(latched.len);
+        // Below the minimum length nothing plays (`spu.md`, "Position").
+        // TODO(hw-unverified): GBATEK gives this for a one-shot; a loop below it is silent here too
+        // (`spu.md`, "Unverified").
+        if words < u64::from(MIN_WORDS) {
+            return Position::Silent;
+        }
+        let (total, pnt) = match latched.format {
+            FORMAT_PCM8 => (
+                PCM8_PER_WORD * words,
+                PCM8_PER_WORD * u64::from(latched.pnt),
+            ),
+            FORMAT_PCM16 => (
+                PCM16_PER_WORD * words,
+                PCM16_PER_WORD * u64::from(latched.pnt),
+            ),
+            // The first word is the header, so the sound is a word shorter and the loop start,
+            // counted from the header, a word earlier (`spu.md`, "Position").
+            FORMAT_ADPCM => (
+                ADPCM_PER_WORD * (words - 1),
+                ADPCM_PER_WORD * u64::from(latched.pnt).saturating_sub(1),
+            ),
+            _ => return Position::Silent,
+        };
+        let len = total - pnt;
+        if latched.one_shot {
+            match (elapsed < total, self.hold()) {
+                (true, _) => Position::At(elapsed),
+                // TODO(hw-unverified): the Hold flag during a restart is not modeled
+                // (`spu.md`, "Unverified").
+                (false, true) => Position::Last(total - 1),
+                (false, false) => Position::Silent,
+            }
+        } else if elapsed < pnt {
+            Position::At(elapsed)
+        } else if len == 0 {
+            // An empty loop: the PNT part, then silence (`spu.md`, "Model").
+            // TODO(hw-unverified): what GBATEK leaves open for LEN = 0 (`spu.md`, "Unverified").
+            Position::Silent
+        } else {
+            Position::At(pnt + (elapsed - pnt) % len)
+        }
+    }
+
     /// The channel's sample at master time `now` as a PCM16 value (`-8000h`-`7FFFh`), or 0 while
     /// it is silent. `read` is the ARM7's side-effect-free byte read of the source data.
     ///
-    /// A pure function of the start time, the latched registers and `now`; nothing is stepped.
-    /// After a one-shot ends the sample is 0, or the last one with Hold set (`spu.md`, "Position").
-    // TODO(phase6): IMA-ADPCM, PSG and noise are silent until their own steps of #45 land.
+    /// PCM is a pure function of the start time, the latched registers and `now`; nothing is
+    /// stepped. IMA-ADPCM is the value its decoder holds, so [`Channel::advanced`] must have caught
+    /// up to `now` first. After a one-shot ends the sample is 0, or the last one with Hold set
+    /// (`spu.md`, "Position").
+    // TODO(phase6): PSG and noise are silent until their own step of #45 lands.
     pub fn sample(&self, now: u64, read: impl Fn(u32) -> u8) -> i32 {
         let Some(elapsed) = self.elapsed(now) else {
             return 0;
         };
-        let latched = &self.latched;
-        let per_word = match latched.format {
-            FORMAT_PCM8 => PCM8_PER_WORD,
-            FORMAT_PCM16 => PCM16_PER_WORD,
-            _ => return 0,
-        };
-        let pnt = per_word * u64::from(latched.pnt);
-        let len = per_word * u64::from(latched.len);
-        // Below the minimum length nothing plays (`spu.md`, "Position").
-        // TODO(hw-unverified): GBATEK gives this for a one-shot; a loop below it is silent here too
-        // (`spu.md`, "Unverified").
-        if pnt + len < per_word * u64::from(MIN_WORDS) {
+        let (Position::At(index) | Position::Last(index)) = self.position(elapsed) else {
             return 0;
-        }
-        let index = if latched.one_shot {
-            match (elapsed < pnt + len, self.hold()) {
-                (true, _) => elapsed,
-                // TODO(hw-unverified): the Hold flag during a restart is not modeled
-                // (`spu.md`, "Unverified").
-                (false, true) => pnt + len - 1,
-                (false, false) => return 0,
-            }
-        } else if elapsed < pnt {
-            elapsed
-        } else if len == 0 {
-            // An empty loop: the PNT part, then silence (`spu.md`, "Model").
-            // TODO(hw-unverified): what GBATEK leaves open for LEN = 0 (`spu.md`, "Unverified").
-            return 0;
-        } else {
-            pnt + (elapsed - pnt) % len
         };
-        let at = latched.sad.wrapping_add((index * (4 / per_word)) as u32);
+        let sad = self.latched.sad;
         // TODO(hw-unverified): a source address the ARM7 bus does not map reads what the bus's read
         // gives there (`spu.md`, "Unverified").
-        match latched.format {
-            FORMAT_PCM8 => i32::from(read(at) as i8) << 8,
-            _ => i32::from(i16::from_le_bytes([read(at), read(at.wrapping_add(1))])),
+        match self.latched.format {
+            FORMAT_PCM8 => i32::from(read(sad.wrapping_add(index as u32)) as i8) << 8,
+            FORMAT_PCM16 => {
+                let at = sad.wrapping_add((index * 2) as u32);
+                i32::from(i16::from_le_bytes([read(at), read(at.wrapping_add(1))]))
+            }
+            FORMAT_ADPCM => self.adpcm.pcm(),
+            _ => 0,
         }
+    }
+
+    /// The IMA-ADPCM decoder state after catching up with the sample clock at master time `now`:
+    /// one decode per elapsed sample, the header read at the first (`spu.md`, "IMA-ADPCM"). A
+    /// channel of another format, or one not playing, returns its state as it is. Pure: the caller
+    /// stores the result ([`Spu::set_adpcm`]), so the read of memory and the write of the state do
+    /// not overlap.
+    ///
+    /// The cost is the samples elapsed since the last call, at most a few hundred between two
+    /// output samples; no allocation.
+    // TODO(hw-unverified): the header is read when the first output sample after the start catches
+    // up, not at the start, and what an ADPCM loop whose start is the header does (`spu.md`,
+    // "Unverified").
+    pub fn advanced(&self, now: u64, read: impl Fn(u32) -> u8) -> Adpcm {
+        let mut state = self.adpcm;
+        let Some(elapsed) = self
+            .elapsed(now)
+            .filter(|_| self.latched.format == FORMAT_ADPCM)
+        else {
+            return state;
+        };
+        let sad = self.latched.sad;
+        let loop_start = ADPCM_PER_WORD * u64::from(self.latched.pnt).saturating_sub(1);
+        while state.ticks <= elapsed {
+            let tick = state.ticks;
+            if tick == 0 {
+                let word =
+                    u32::from_le_bytes(std::array::from_fn(|i| read(sad.wrapping_add(i as u32))));
+                state = Adpcm::from_header(word);
+            }
+            if let Position::At(index) = self.position(tick) {
+                // The data follows the header word; two samples to a byte.
+                let at = sad.wrapping_add(4).wrapping_add((index / 2) as u32);
+                state.decode(index, loop_start, read(at));
+            }
+            state.ticks = tick + 1;
+        }
+        state
+    }
+
+    /// The decoder state (`spu.md`, "IMA-ADPCM"), for the debugger.
+    pub const fn adpcm(&self) -> &Adpcm {
+        &self.adpcm
     }
 
     /// The end time of a sound that starts at `now` with the registers as they are.
@@ -328,6 +417,7 @@ impl Channel {
     // and a write while the sound plays does not move it (`spu.md`, "Unverified").
     fn latch(&mut self, now: u64) {
         self.start = now;
+        self.adpcm = Adpcm::default();
         self.latched = Latched {
             sad: self.sad,
             pnt: u32::from(self.pnt),
@@ -430,6 +520,14 @@ impl Spu {
         Self::default()
     }
 
+    /// Stores the IMA-ADPCM decoder states [`Channel::advanced`] returned, one per channel.
+    pub(crate) fn set_adpcm(&mut self, states: [Adpcm; CHANNELS]) {
+        self.channels
+            .iter_mut()
+            .zip(states)
+            .for_each(|(channel, state)| channel.adpcm = state);
+    }
+
     /// Channel `index` (0-15).
     pub fn channel(&self, index: usize) -> &Channel {
         &self.channels[index % CHANNELS]
@@ -530,6 +628,7 @@ impl Spu {
                     (_, false) => {
                         channel.start = 0;
                         channel.latched = Latched::default();
+                        channel.adpcm = Adpcm::default();
                         channel.end = 0;
                     }
                 }
@@ -571,6 +670,7 @@ impl Checked for Spu {
                 && c.sad & !SAD_MASK == 0
                 && c.len & !LEN_MASK == 0
                 && (c.cnt & CNT_START != 0 || (c.end == 0 && c.start == 0))
+                && c.adpcm.well_formed()
         });
         let captures = self.captures.iter().all(|c| {
             c.cnt & !CAP_MASK == 0

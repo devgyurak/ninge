@@ -4,7 +4,7 @@ The current phase is the single line that starts with `▶`. The SessionStart ho
 and `scripts/check_agent_config.py` fails unless there is exactly one. Move the marker only
 when the phase's DoD (plan §5) is met — that is a human decision.
 
-▶ Phase 5 — Commercial boot: cart protocol, AUXSPI saves, synthetic firmware, RTC, touch SPI, power, sound-register stubs (started)
+▶ Phase 6 — Sound: 16 channels, PCM/ADPCM/PSG, capture, `cpal`, audio pacing (started)
 
 | Phase | Scope (plan §5) | DoD | State |
 |---|---|---|---|
@@ -13,8 +13,8 @@ when the phase's DoD (plan §5) is met — that is a human decision.
 | 2 | First pixel, ARM9 only: header parse, direct boot, main RAM, TCM, VRAM A LCDC, display mode 2 | A test ROM's VRAM image shows in Ghostty, pinned by a golden-frame test | Done |
 | 3 | Both CPUs: scheduler, two bus views, WRAMCNT, IPC, IRQ, timers, DMA, HLE SWI, text BG | A libnds homebrew's console printf output displays correctly | Done |
 | 4 | 2D complete: engines A/B, sprites, ext palettes, windows, blending, brightness, VRAM page table, capture | Every 2D test ROM's golden frame passes | Done |
-| 5 | Commercial boot: cart protocol, AUXSPI saves, synthetic firmware, RTC, touch SPI, power, sound-register stubs | Pokémon Diamond boots, starts a new game, saves, and reloads the save (3D may be a non-drawing stub) | In progress |
-| 6 | Sound: 16 channels, PCM/ADPCM/PSG, capture, `cpal`, audio pacing | Waveform snapshot tests pass; a commercial game's sound is correct | — |
+| 5 | Commercial boot: cart protocol, AUXSPI saves, synthetic firmware, RTC, touch SPI, power, sound-register stubs | Pokémon Diamond boots, starts a new game, saves, and reloads the save (3D may be a non-drawing stub) | Done |
+| 6 | Sound: 16 channels, PCM/ADPCM/PSG, capture, `cpal`, audio pacing | Waveform snapshot tests pass; a commercial game's sound is correct | In progress |
 | 7 | 3D: geometry engine, software rasterizer | 3D test ROM golden frames pass; Pokémon Diamond is playable | — |
 | 8 | Performance and accuracy | Full speed on Apple Silicon for the main games | — |
 

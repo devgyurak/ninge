@@ -5,11 +5,12 @@
 //! tested through [`crate::app`] with a test backend. OS-specific pieces stay here so a
 //! Windows backend is an addition (AGENTS.md §2).
 
-use crate::app::{Action, App, frame_step, map_event, poll_timeout};
+use crate::app::{Action, App, map_event, poll_timeout};
 use crate::gamepad::Gamepads;
 use crate::kitty;
 use crate::layout::TermSize;
 use crate::pen::Unit;
+use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::transfer::{ShmSink, Transfer};
@@ -203,7 +204,8 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
     };
     out.write_all(&kitty::mouse_enable(unit == Unit::Pixels))?;
     out.flush()?;
-    let mut app = App::with_transfer(size, found.sink, found.transfer)
+    let mut renderer = Renderer::new(found.sink, found.transfer);
+    let mut app = App::new(size)
         .with_mouse_unit(unit)
         .with_key_release(found.key_release)
         .with_source(source)
@@ -211,7 +213,7 @@ pub fn run(source: Source, save: Option<SaveFile>) -> anyhow::Result<Option<Stri
     let mut gfx = io::stdout();
     let mut pads = Gamepads::open();
     app = app.with_gamepads(pads.available(), pads.connected());
-    let looped = main_loop(&mut app, &mut terminal, &mut gfx, &mut pads);
+    let looped = main_loop(&mut app, &mut renderer, &mut terminal, &mut gfx, &mut pads);
     // The save file is written last and even when the loop failed, so a game's save is not lost;
     // a write failure shows once the terminal is restored.
     let saved = app.finish().context("writing the save file");
@@ -230,17 +232,21 @@ fn outcome(result: anyhow::Result<()>, note: Option<String>) -> anyhow::Result<O
 
 /// Draws and reads input until the user quits.
 fn main_loop(
-    app: &mut App<impl ShmSink>,
+    app: &mut App,
+    renderer: &mut Renderer<impl ShmSink>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     gfx: &mut io::Stdout,
     pads: &mut Gamepads,
 ) -> anyhow::Result<()> {
+    let mut snapshot = Snapshot::default();
     while !app.should_quit() {
         let deadline = Instant::now() + FRAME_TIME;
         // The pads are read once a frame, before the frame runs.
         pads.poll().into_iter().for_each(|e| app.apply_pad(e));
         app.set_pads_connected(pads.connected());
-        frame_step(app, terminal, gfx)?;
+        app.step();
+        app.fill(&mut snapshot);
+        renderer.present(&snapshot, terminal, gfx)?;
         // Poll at least once per frame, even after an overrun, so quit and resize are
         // always read. The cap keeps a flood of input (key repeat) from starving drawing.
         for _ in 0..MAX_EVENTS_PER_FRAME {

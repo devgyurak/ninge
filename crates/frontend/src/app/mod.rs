@@ -3,12 +3,10 @@
 //!
 //! # One loop, for now
 //!
-//! The frontend runs on a single loop: [`frame_step`] and [`poll_timeout`] run the machine, draw
-//! and poll the terminal's input in turn, on one thread. AGENTS.md §2 rule 12 (and plan §4.3)
-//! describes three threads (emu, render, input), a triple-buffered frame hand-off and audio-based
-//! pacing; that is deferred, not dropped. Audio pacing (#47) is the first feature that needs the
-//! split, so the split is its own `REF:` issue, #218, the last of Phase 5 and ahead of #47, and
-//! the loop stays as it is until then. Nothing before #218 should add a thread.
+//! The frontend runs on a single loop that steps the model ([`App::step`]), fills a [`Snapshot`]
+//! from it ([`App::fill`]) and hands that to the [`Renderer`], then polls the terminal's input, on
+//! one thread. The model and the renderer share nothing but the snapshot, so the split into emu,
+//! render and input threads (AGENTS.md §2 rule 12, plan §4.3, #218) only moves them apart.
 //!
 //! # Input (#44)
 //!
@@ -19,31 +17,17 @@
 use crate::clock::local_wall_time;
 use crate::cursor::{self, Cursor};
 use crate::gamepad::{Pad, PadEvent};
-use crate::input::{FALLBACK_HOLD_FRAMES, Keys};
-use crate::kitty;
+use crate::input::Keys;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
 use crate::pen::{Pen, Target, Unit};
-use crate::placeholder::ScreenImage;
+use crate::render::Snapshot;
 use crate::savefile::SaveFile;
 use crate::source::Source;
-use crate::transfer::{NoShm, ShmSink, Transfer};
-use anyhow::anyhow;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
-use ratatui::Frame;
-use ratatui::Terminal;
-use ratatui::backend::Backend;
-use ratatui::layout::Rect;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use std::io::Write;
 use std::time::{Duration, Instant};
-
-/// Image id of the top screen.
-pub const TOP_IMAGE_ID: u32 = 1;
-/// Image id of the bottom screen.
-pub const BOTTOM_IMAGE_ID: u32 = 2;
 
 /// What an input event asks the app to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,28 +68,28 @@ pub fn map_event(event: &Event) -> Action {
     }
 }
 
-/// The pixels of a screen as shown: unchanged while its backlight is on, all black while it is
-/// off. The core's frame buffers are not dimmed; what an unlit screen looks like is the host's
-/// choice (`touch-power.md`, "What the power register does").
+/// Fills `dst` with the pixels of a screen as shown: `src` unchanged while its backlight is on,
+/// all black while it is off. The core's frame buffers are not dimmed; what an unlit screen looks
+/// like is the host's choice (`touch-power.md`, "What the power register does"). `dst`'s buffer is
+/// reused.
 // TODO(hw-unverified): what an unlit screen shows (`touch-power.md`, "Unverified").
-pub fn lit_or_black(pixels: Vec<u32>, backlight: bool) -> Vec<u32> {
+pub fn show_pixels(dst: &mut Vec<u32>, src: &[u32], backlight: bool) {
+    dst.clear();
     if backlight {
-        pixels
+        dst.extend_from_slice(src);
     } else {
-        vec![0; pixels.len()]
+        dst.resize(src.len(), 0);
     }
 }
 
-/// Frontend state. `S` is where shared-memory frames are written.
-pub struct App<S = NoShm> {
+/// Frontend state: everything the emulation side owns, with no terminal in it.
+pub struct App {
     size: TermSize,
     areas: Option<Areas>,
     frame_no: u64,
     source: Source,
     save: Option<SaveFile>,
     quit: bool,
-    transfer: Transfer,
-    sink: S,
     /// The host's wall-clock time, read once a frame for the machine's clock chip.
     clock: fn() -> u32,
     /// The keys held, from which each frame's input is built.
@@ -124,17 +108,9 @@ pub struct App<S = NoShm> {
     mouse_unit: Unit,
 }
 
-impl App<NoShm> {
-    /// A new app for a terminal of `size` that sends frames as zlib.
+impl App {
+    /// A new app for a terminal of `size`.
     pub fn new(size: TermSize) -> Self {
-        Self::with_transfer(size, NoShm, Transfer::Direct { reason: None })
-    }
-}
-
-impl<S: ShmSink> App<S> {
-    /// A new app that sends frames the `transfer` way, writing shared-memory frames
-    /// through `sink`.
-    pub fn with_transfer(size: TermSize, sink: S, transfer: Transfer) -> Self {
         Self {
             size,
             areas: compute(size),
@@ -142,8 +118,6 @@ impl<S: ShmSink> App<S> {
             source: Source::Pattern,
             save: None,
             quit: false,
-            transfer,
-            sink,
             clock: local_wall_time,
             keys: Keys::new(false),
             cursor: Cursor::new(false),
@@ -181,7 +155,7 @@ impl<S: ShmSink> App<S> {
     }
 
     /// Tells the app whether the terminal reports key release (the kitty keyboard protocol is on);
-    /// without it a press holds its key for [`FALLBACK_HOLD_FRAMES`] frames. Resets the keys.
+    /// without it a press holds its key for [`crate::input::FALLBACK_HOLD_FRAMES`] frames. Resets the keys.
     #[must_use]
     pub fn with_key_release(mut self, reported: bool) -> Self {
         self.keys = Keys::new(reported);
@@ -236,12 +210,6 @@ impl<S: ShmSink> App<S> {
         }
     }
 
-    /// The medium frames go over now; it turns to zlib for good if a shared-memory write
-    /// fails.
-    pub fn transfer(&self) -> &Transfer {
-        &self.transfer
-    }
-
     /// Records that the terminal is now `size`; the next frame places the images anew.
     pub fn resize(&mut self, size: TermSize) {
         self.size = size;
@@ -292,12 +260,9 @@ impl<S: ShmSink> App<S> {
         self.areas
     }
 
-    /// The graphics bytes for this frame: each screen's pixels with its virtual
-    /// placement. Re-transmitting an image deletes its placements, so every frame
-    /// places both again. Advances the frame counter and, with a machine, runs one of
-    /// its frames even when the terminal is too small to show it.
-    pub fn graphics(&mut self) -> Vec<u8> {
-        let mut out = Vec::new();
+    /// Runs one frame: with a machine, one of its frames, even when the terminal is too small to
+    /// show it; then the held keys age by a frame and the frame counter advances.
+    pub fn step(&mut self) {
         if let Source::Machine(machine) = &mut self.source {
             // The keys held make the buttons, the microphone and the lid; the host's local time
             // feeds the clock chip (`rtc.md`).
@@ -319,113 +284,52 @@ impl<S: ShmSink> App<S> {
         }
         self.keys.end_frame();
         self.cursor.end_frame();
-        if let Some(areas) = self.areas {
-            let (top, bottom) = self.screens();
-            out.extend(self.send(TOP_IMAGE_ID, &top, areas.top));
-            out.extend(self.send(BOTTOM_IMAGE_ID, &bottom, areas.bottom));
-        }
         self.frame_no += 1;
-        out
     }
 
-    /// The pixels of both screens for this tick.
-    fn screens(&self) -> (Vec<u32>, Vec<u32>) {
+    /// Fills `snapshot` with what the renderer needs for the frame [`App::step`] just ran. The
+    /// pixels are filled only while the screens have somewhere to go, and `snapshot`'s buffers are
+    /// reused.
+    pub fn fill(&self, snapshot: &mut Snapshot) {
+        snapshot.areas = self.areas;
+        snapshot.px_known = self.size.px_known;
+        snapshot.key_release_reported = self.keys.release_reported();
+        snapshot.cursor = self.cursor.active().then(|| self.cursor.position());
+        snapshot.pad_available = self.pad_available;
+        snapshot.pads_connected = self.pads_connected;
+        if self.areas.is_some() {
+            self.fill_screens(snapshot);
+        } else {
+            snapshot.top.clear();
+            snapshot.bottom.clear();
+        }
+    }
+
+    /// The pixels of both screens for the frame just run.
+    fn fill_screens(&self, snapshot: &mut Snapshot) {
         match &self.source {
-            Source::Machine(machine) => (
-                lit_or_black(
-                    machine.frame(Screen::Top).to_vec(),
+            Source::Machine(machine) => {
+                show_pixels(
+                    &mut snapshot.top,
+                    machine.frame(Screen::Top),
                     machine.backlight(Screen::Top),
-                ),
-                self.with_cursor(lit_or_black(
-                    machine.frame(Screen::Bottom).to_vec(),
+                );
+                show_pixels(
+                    &mut snapshot.bottom,
+                    machine.frame(Screen::Bottom),
                     machine.backlight(Screen::Bottom),
-                )),
-            ),
-            Source::Pattern => (
-                dummy_frame(self.frame_no, 0),
-                self.with_cursor(dummy_frame(self.frame_no, 1)),
-            ),
-        }
-    }
-
-    /// The bottom screen's `pixels` with the crosshair over them in cursor mode.
-    fn with_cursor(&self, mut pixels: Vec<u32>) -> Vec<u32> {
-        if self.cursor.active() {
-            cursor::overlay(&mut pixels, self.cursor.position());
-        }
-        pixels
-    }
-
-    /// One screen over the current medium. A failed shared-memory write is not retried:
-    /// this frame and every later one go as zlib, and the panel says why.
-    fn send(&mut self, image_id: u32, pixels: &[u32], area: Rect) -> Vec<u8> {
-        if self.transfer == Transfer::Shm {
-            match self.sink.put(&kitty::rgb24(pixels)) {
-                Ok(name) => {
-                    return kitty::transmit_shm(image_id, &name, area.width, area.height);
-                }
-                Err(e) => self.transfer = Transfer::direct(format!("shm write failed: {e}")),
+                );
+            }
+            Source::Pattern => {
+                // `frame_no` already counts the frame just run; the pattern starts at phase 0.
+                let phase = self.frame_no.saturating_sub(1);
+                snapshot.top = dummy_frame(phase, 0);
+                snapshot.bottom = dummy_frame(phase, 1);
             }
         }
-        kitty::transmit(image_id, pixels, area.width, area.height)
-    }
-
-    /// Draws the screens and panels.
-    pub fn draw(&self, frame: &mut Frame) {
-        let Some(areas) = self.areas else {
-            frame.render_widget(Paragraph::new("terminal too small"), frame.area());
-            return;
-        };
-        frame.render_widget(
-            ScreenImage {
-                image_id: TOP_IMAGE_ID,
-            },
-            areas.top,
-        );
-        frame.render_widget(
-            ScreenImage {
-                image_id: BOTTOM_IMAGE_ID,
-            },
-            areas.bottom,
-        );
-        let note = if self.size.px_known {
-            ""
-        } else {
-            "\ncell size unknown, assuming 8x16"
-        };
-        let keys_note = if self.keys.release_reported() {
-            String::new()
-        } else {
-            format!("\nkey release not reported:\na press holds {FALLBACK_HOLD_FRAMES} frames")
-        };
-        let cursor_note = if self.cursor.active() {
-            let (x, y) = self.cursor.position();
-            format!("\ncursor mode: {x},{y}")
-        } else {
-            String::new()
-        };
-        let pad_note = if !self.pad_available {
-            "\ngamepad unavailable".to_string()
-        } else if self.pads_connected == 0 {
-            "\nno gamepad connected".to_string()
-        } else {
-            "\ngamepad connected".to_string()
-        };
-        // TODO(phase1): real register and disassembly panels (#56).
-        frame.render_widget(
-            Paragraph::new(format!(
-                "TODO(phase1) (#56){note}{keys_note}{cursor_note}{pad_note}\n{}",
-                self.transfer.label()
-            ))
-            .wrap(Wrap { trim: false })
-            .block(Block::new().borders(Borders::ALL).title("Registers")),
-            areas.registers,
-        );
-        frame.render_widget(
-            Paragraph::new("TODO(phase1) (#56)")
-                .block(Block::new().borders(Borders::ALL).title("Disassembly")),
-            areas.disasm,
-        );
+        if self.cursor.active() {
+            cursor::overlay(&mut snapshot.bottom, self.cursor.position());
+        }
     }
 }
 
@@ -434,18 +338,6 @@ impl<S: ShmSink> App<S> {
 /// drawing overran the frame time.
 pub fn poll_timeout(deadline: Instant, now: Instant) -> Duration {
     deadline.saturating_duration_since(now)
-}
-
-/// One tick: write the graphics to `gfx`, then draw with ratatui.
-pub fn frame_step<S: ShmSink, B: Backend, W: Write>(
-    app: &mut App<S>,
-    terminal: &mut Terminal<B>,
-    gfx: &mut W,
-) -> anyhow::Result<()> {
-    gfx.write_all(&app.graphics())?;
-    gfx.flush()?;
-    terminal.draw(|f| app.draw(f)).map_err(|e| anyhow!("{e}"))?;
-    Ok(())
 }
 
 #[cfg(test)]

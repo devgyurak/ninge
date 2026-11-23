@@ -187,7 +187,10 @@ pub fn size() -> io::Result<TermSize> {
 pub fn run(source: Source, save: Option<SaveFile>, audio: bool) -> anyhow::Result<Option<String>> {
     // Before the terminal changes mode: a sound library may print to stderr while it looks for a
     // device, and that should land on the normal screen.
-    let device = use_audio(audio, matches!(source, Source::Machine(_)), Device::open);
+    let mut refused = None;
+    let device = use_audio(audio, matches!(source, Source::Machine(_)), || {
+        Device::open().inspect_err(|error| refused = Some(error.to_string()))
+    });
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -235,7 +238,31 @@ pub fn run(source: Source, save: Option<SaveFile>, audio: bool) -> anyhow::Resul
         pads,
         device.as_ref(),
     );
-    outcome(result, app.save_note())
+    let failed = device
+        .as_ref()
+        .is_some_and(|device| device.failed.load(Ordering::Acquire));
+    outcome(
+        result,
+        join_notes(sound_note(refused.as_deref(), failed), app.save_note()),
+    )
+}
+
+/// What to tell the user about the sound once the terminal is restored: why no device was used, or
+/// that the one in use reported an error and the run went on without sound.
+fn sound_note(refused: Option<&str>, failed: bool) -> Option<String> {
+    match (refused, failed) {
+        (Some(why), _) => Some(format!("no sound: {why}")),
+        (None, true) => Some("the sound device reported an error; ran without sound".to_string()),
+        (None, false) => None,
+    }
+}
+
+/// Two notes as one, one per line.
+fn join_notes(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}\n{second}")),
+        (first, second) => first.or(second),
+    }
 }
 
 /// The run's result with the save note: on success the note is handed back to print; on failure it

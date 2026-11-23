@@ -9,7 +9,7 @@
 //! only wires them to `cpal`, so CI, which has no sound device, runs the "no device" path.
 
 use super::ring::AudioRing;
-use super::ring_capacity;
+use super::{prefill, ring_capacity, target_pairs};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SizedSample, Stream, StreamConfig};
 use std::fmt;
@@ -148,6 +148,8 @@ impl Device {
             SampleFormat::U16 => build::<u16>(&device, config, reads, flags),
             other => Err(OpenError::Unsupported(other)),
         }?;
+        // Before the first callback, so the device has sound to play while the first frames run.
+        prefill(&ring, target_pairs(rate));
         stream.play()?;
         Ok(Self {
             _stream: stream,

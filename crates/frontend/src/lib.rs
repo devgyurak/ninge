@@ -8,8 +8,8 @@
 //! threads (#218): emu runs the machine, render writes the frames and draws, input reads the
 //! terminal and the pads ([`threads`]). Frames pass from emu to render through a triple buffer
 //! ([`handoff`]), and the emu thread's rate comes from a [`pacing::Pacer`]: the sound device's
-//! ring when there is one ([`audio`], #47), the machine's frame period otherwise. Frames go over shared memory when the terminal
-//! accepts it and as zlib otherwise ([`transfer`], #6).
+//! ring when there is one ([`audio`], #47), the machine's frame period otherwise. Frames go over
+//! shared memory when the terminal accepts it and as zlib otherwise ([`transfer`], #6).
 
 pub mod app;
 pub mod audio;

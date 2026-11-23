@@ -698,3 +698,107 @@ fn given_a_terminal_too_small_when_a_mouse_report_arrives_then_the_pen_stays_up(
     app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), 0, 0));
     assert_eq!(app.pen.touch(), None);
 }
+
+// -------------------------------------------------------------------------------- cursor
+
+fn char_key(c: char, kind: KeyEventKind) -> Action {
+    key_action(KeyCode::Char(c), kind)
+}
+
+fn tab_key() -> Action {
+    key_action(KeyCode::Tab, KeyEventKind::Press)
+}
+
+#[test]
+fn given_cursor_mode_and_space_when_a_frame_runs_then_the_machine_is_touched_at_the_centre() {
+    let mut app = smoke_app(true);
+    app.apply(tab_key());
+    app.apply(char_key(' ', KeyEventKind::Press));
+    app.graphics();
+    assert_eq!(
+        machine_touch(&app),
+        Some(ninge_core::Touch { x: 128, y: 96 })
+    );
+}
+
+#[test]
+fn given_cursor_mode_off_when_space_is_pressed_then_the_machine_is_not_touched() {
+    let mut app = smoke_app(true);
+    app.apply(char_key(' ', KeyEventKind::Press));
+    app.graphics();
+    assert_eq!(machine_touch(&app), None);
+}
+
+#[test]
+fn given_the_mouse_pen_down_and_the_cursor_touching_when_a_frame_runs_then_the_mouse_wins() {
+    let mut app = smoke_app(true);
+    app.apply(tab_key());
+    app.apply(char_key(' ', KeyEventKind::Press));
+    let b = app.areas().expect("fits").bottom;
+    app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), b.x, b.y));
+    app.graphics();
+    assert_ne!(
+        machine_touch(&app),
+        Some(ninge_core::Touch { x: 128, y: 96 })
+    );
+}
+
+#[test]
+fn given_the_mouse_pen_up_and_the_cursor_touching_when_a_frame_runs_then_the_cursor_touches() {
+    let mut app = smoke_app(true);
+    app.apply(tab_key());
+    app.apply(char_key(' ', KeyEventKind::Press));
+    let b = app.areas().expect("fits").bottom;
+    app.apply(mouse_at(MouseEventKind::Down(MouseButton::Left), b.x, b.y));
+    app.apply(mouse_at(MouseEventKind::Up(MouseButton::Left), b.x, b.y));
+    app.graphics();
+    assert_eq!(
+        machine_touch(&app),
+        Some(ninge_core::Touch { x: 128, y: 96 })
+    );
+}
+
+#[test]
+fn given_a_game_key_in_cursor_mode_when_a_frame_runs_then_the_button_is_still_held() {
+    let mut app = smoke_app(true);
+    app.apply(tab_key());
+    app.apply(char_key('x', KeyEventKind::Press));
+    app.graphics();
+    let input = app.machine().expect("a machine").inspect().input();
+    assert_eq!(input.buttons, ninge_core::Buttons::A);
+}
+
+/// The bottom image's pixels of the pattern as the app sends them, with or without the cursor:
+/// the number of pixels that differ.
+fn crosshair_pixels(app: &mut App) -> usize {
+    let plain = dummy_frame(0, 1);
+    let shown = app.with_cursor(plain.clone());
+    plain.iter().zip(&shown).filter(|(a, b)| a != b).count()
+}
+
+#[test]
+fn given_cursor_mode_off_when_the_bottom_screen_is_made_then_no_pixel_changes() {
+    assert_eq!(crosshair_pixels(&mut App::new(size())), 0);
+}
+
+#[test]
+fn given_cursor_mode_on_when_the_bottom_screen_is_made_then_the_crosshair_is_drawn() {
+    let mut app = App::new(size());
+    app.apply(tab_key());
+    assert_eq!(crosshair_pixels(&mut app), 13);
+}
+
+#[test]
+fn given_cursor_mode_on_when_the_top_screen_is_made_then_it_is_unchanged() {
+    let mut app = App::new(size());
+    app.apply(tab_key());
+    let (top, _) = app.screens();
+    assert_eq!(top, dummy_frame(0, 0));
+}
+
+#[test]
+fn given_cursor_mode_when_drawing_then_the_panel_shows_the_position() {
+    let mut app = App::new(size());
+    app.apply(tab_key());
+    assert!(panel_text(&mut app).contains("cursor mode: 128,96"));
+}

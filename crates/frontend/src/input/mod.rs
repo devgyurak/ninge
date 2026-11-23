@@ -118,7 +118,7 @@ impl Key {
 
 /// How long a key stays held.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Hold {
+pub(crate) enum Hold {
     /// Not held.
     #[default]
     Up,
@@ -137,6 +137,31 @@ pub struct Keys {
     held: [Hold; KEYS.len()],
     /// Whether the lid is closed.
     hinge_closed: bool,
+}
+
+impl Hold {
+    /// The hold a press starts: until release when the terminal reports it, else a fixed count.
+    pub(crate) const fn pressed(release_reported: bool) -> Self {
+        if release_reported {
+            Self::UntilRelease
+        } else {
+            Self::Frames(FALLBACK_HOLD_FRAMES)
+        }
+    }
+
+    /// Whether the key is held.
+    pub(crate) fn is_held(self) -> bool {
+        self != Self::Up
+    }
+
+    /// The hold after one frame: a fixed count runs down.
+    pub(crate) const fn after_frame(self) -> Self {
+        match self {
+            Self::Frames(1) => Self::Up,
+            Self::Frames(n) => Self::Frames(n - 1),
+            other => other,
+        }
+    }
 }
 
 impl Keys {
@@ -177,11 +202,7 @@ impl Keys {
                 if key == Key::Lid && self.held[key.index()] == Hold::Up {
                     self.hinge_closed = !self.hinge_closed;
                 }
-                self.held[key.index()] = if self.release_reported {
-                    Hold::UntilRelease
-                } else {
-                    Hold::Frames(FALLBACK_HOLD_FRAMES)
-                };
+                self.held[key.index()] = Hold::pressed(self.release_reported);
             }
         }
     }
@@ -219,17 +240,13 @@ impl Keys {
 
     /// One frame has passed: a hold without a release event runs down.
     pub fn end_frame(&mut self) {
-        self.held.iter_mut().for_each(|hold| {
-            *hold = match *hold {
-                Hold::Frames(1) => Hold::Up,
-                Hold::Frames(n) => Hold::Frames(n - 1),
-                other => other,
-            };
-        });
+        self.held
+            .iter_mut()
+            .for_each(|hold| *hold = hold.after_frame());
     }
 
     fn is_held(&self, key: Key) -> bool {
-        self.held[key.index()] != Hold::Up
+        self.held[key.index()].is_held()
     }
 }
 

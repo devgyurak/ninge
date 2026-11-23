@@ -17,6 +17,7 @@
 //! them. That holds whether the poll later runs on this loop or on an input thread (#218).
 
 use crate::clock::local_wall_time;
+use crate::cursor::{self, Cursor};
 use crate::input::{FALLBACK_HOLD_FRAMES, Keys};
 use crate::kitty;
 use crate::layout::{Areas, TermSize, compute};
@@ -108,6 +109,8 @@ pub struct App<S = NoShm> {
     clock: fn() -> u32,
     /// The keys held, from which each frame's input is built.
     keys: Keys,
+    /// The keyboard's virtual cursor.
+    cursor: Cursor,
     /// Where the mouse holds the touch pen.
     pen: Pen,
     /// What a mouse report's column and row count.
@@ -136,6 +139,7 @@ impl<S: ShmSink> App<S> {
             sink,
             clock: local_wall_time,
             keys: Keys::new(false),
+            cursor: Cursor::new(false),
             pen: Pen::new(),
             mouse_unit: Unit::Cells,
         }
@@ -153,6 +157,7 @@ impl<S: ShmSink> App<S> {
     #[must_use]
     pub fn with_key_release(mut self, reported: bool) -> Self {
         self.keys = Keys::new(reported);
+        self.cursor = Cursor::new(reported);
         self
     }
 
@@ -221,7 +226,10 @@ impl<S: ShmSink> App<S> {
     pub fn apply(&mut self, action: Action) {
         match action {
             Action::Quit => self.quit = true,
-            Action::Key(key) => self.keys.handle(&key),
+            Action::Key(key) => {
+                self.keys.handle(&key);
+                self.cursor.handle(&key);
+            }
             Action::Mouse(mouse) => {
                 let bottom = self.areas.map(|areas| areas.bottom);
                 match bottom {
@@ -238,6 +246,7 @@ impl<S: ShmSink> App<S> {
             }
             Action::ReleaseAll => {
                 self.keys.release_all();
+                self.cursor.release_all();
                 self.pen.lift();
             }
             Action::None | Action::Resized => {}
@@ -266,7 +275,8 @@ impl<S: ShmSink> App<S> {
             let input: Input = self
                 .keys
                 .input()
-                .with_touch(self.pen.touch())
+                // The mouse's pen wins while its button is down; else the cursor's.
+                .with_touch(self.pen.touch().or(self.cursor.touch()))
                 .with_wall_time((self.clock)());
             machine.run_frame(input);
             if let Some(save) = &mut self.save {
@@ -278,6 +288,7 @@ impl<S: ShmSink> App<S> {
             self.quit |= machine.is_shut_down();
         }
         self.keys.end_frame();
+        self.cursor.end_frame();
         if let Some(areas) = self.areas {
             let (top, bottom) = self.screens();
             out.extend(self.send(TOP_IMAGE_ID, &top, areas.top));
@@ -295,13 +306,24 @@ impl<S: ShmSink> App<S> {
                     machine.frame(Screen::Top).to_vec(),
                     machine.backlight(Screen::Top),
                 ),
-                lit_or_black(
+                self.with_cursor(lit_or_black(
                     machine.frame(Screen::Bottom).to_vec(),
                     machine.backlight(Screen::Bottom),
-                ),
+                )),
             ),
-            Source::Pattern => (dummy_frame(self.frame_no, 0), dummy_frame(self.frame_no, 1)),
+            Source::Pattern => (
+                dummy_frame(self.frame_no, 0),
+                self.with_cursor(dummy_frame(self.frame_no, 1)),
+            ),
         }
+    }
+
+    /// The bottom screen's `pixels` with the crosshair over them in cursor mode.
+    fn with_cursor(&self, mut pixels: Vec<u32>) -> Vec<u32> {
+        if self.cursor.active() {
+            cursor::overlay(&mut pixels, self.cursor.position());
+        }
+        pixels
     }
 
     /// One screen over the current medium. A failed shared-memory write is not retried:
@@ -346,10 +368,16 @@ impl<S: ShmSink> App<S> {
         } else {
             format!("\nkey release not reported:\na press holds {FALLBACK_HOLD_FRAMES} frames")
         };
+        let cursor_note = if self.cursor.active() {
+            let (x, y) = self.cursor.position();
+            format!("\ncursor mode: {x},{y}")
+        } else {
+            String::new()
+        };
         // TODO(phase1): real register and disassembly panels (#56).
         frame.render_widget(
             Paragraph::new(format!(
-                "TODO(phase1) (#56){note}{keys_note}\n{}",
+                "TODO(phase1) (#56){note}{keys_note}{cursor_note}\n{}",
                 self.transfer.label()
             ))
             .wrap(Wrap { trim: false })

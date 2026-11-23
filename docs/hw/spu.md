@@ -259,6 +259,9 @@ oracle.
   first two like a loop, plays silence for format 3 on channels 0-7 (busy stays set), and plays
   nothing for the third. — `spu/`.
 - **An empty loop** (LEN = 0 after a PNT part). — `spu/`.
+- **Whether the first noise output is the first step or the initial register.** GBATEK gives the
+  start value `7FFFh` and the step; the model takes the first step at the first sample of the
+  clock (so the first output is LOW and the register `5FFFh`). — `spu/psg/`.
 - **Register writes while a channel plays**: TMR, SAD, PNT, LEN, the format and the repeat mode
   are latched at the start here. — `spu/`.
 - **The phase of PSG and noise on restart** is GBATEK's (LOW first, `X = 7FFFh`); what a write of 1

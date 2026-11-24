@@ -238,8 +238,11 @@ fn given_the_projection_mode_when_a_matrix_is_pushed_and_restored_then_the_singl
 }
 
 #[test]
-fn given_the_projection_mode_when_a_second_push_finds_entry_1_then_the_error_is_set_and_nothing_is_stored()
+fn given_the_projection_mode_when_a_second_push_finds_entry_1_then_the_error_is_set_and_it_overwrites_entry_0()
  {
+    // GBATEK: the upper half of every stack mirrors the lower. The first push stores (4, 5, 6) at
+    // entry 0 and the matrix becomes (5, 6, 7); the second push finds entry 1, which is entry 0, and
+    // stores (5, 6, 7) there. Both pops then load entry 0 (the first through the mirror).
     let mut gpu = in_mode(0);
     command(&mut gpu, MTX_TRANS, &[4, 5, 6]);
     push(&mut gpu, 1);
@@ -247,12 +250,9 @@ fn given_the_projection_mode_when_a_second_push_finds_entry_1_then_the_error_is_
     push(&mut gpu, 1);
     pop(&mut gpu, 1);
     pop(&mut gpu, 1);
-    // The first push stored (4, 5, 6) at entry 0; the second found entry 1 and stored nothing; the
-    // pops step the 1-bit pointer back and load entry 0 after the second one, entry 1 (nothing)
-    // after the first.
     assert_eq!(
         (error(&gpu), gpu.projection_matrix()[12..15].to_vec()),
-        (true, vec![4, 5, 6])
+        (true, vec![5, 6, 7])
     );
 }
 

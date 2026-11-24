@@ -5,6 +5,10 @@
 //! bits, `1.0` is `1000h`). Arithmetic is integer with an `i64` accumulator; nothing is floating
 //! point, as on the hardware.
 
+use super::{
+    CMD_MTX_LOAD_4X3, CMD_MTX_LOAD_4X4, CMD_MTX_MULT_3X3, CMD_MTX_MULT_4X3, CMD_MTX_MULT_4X4,
+    CMD_MTX_SCALE, CMD_MTX_TRANS,
+};
 use serde::{Deserialize, Serialize};
 
 /// A 4x4 matrix, row by row: element `m[4 * y + x]` is row `y`, column `x`.
@@ -58,28 +62,28 @@ pub(super) fn shape(id: u8, params: &[u32]) -> Matrix {
     let at = |i: usize| params.get(i).copied().map_or(0, element);
     match id {
         // MTX_LOAD_4x4 and MTX_MULT_4x4: sixteen elements in order.
-        0x16 | 0x18 => std::array::from_fn(&at),
+        CMD_MTX_LOAD_4X4 | CMD_MTX_MULT_4X4 => std::array::from_fn(&at),
         // MTX_LOAD_4x3 and MTX_MULT_4x3: three columns of four rows, the fourth column `0, 0, 0,
         // 1.0`.
-        0x17 | 0x19 => std::array::from_fn(|i| match i % 4 {
+        CMD_MTX_LOAD_4X3 | CMD_MTX_MULT_4X3 => std::array::from_fn(|i| match i % 4 {
             3 if i == 15 => ONE,
             3 => 0,
             x => at(3 * (i / 4) + x),
         }),
         // MTX_MULT_3x3: the upper left 3x3, the rest of the identity.
-        0x1A => std::array::from_fn(|i| match (i / 4, i % 4) {
+        CMD_MTX_MULT_3X3 => std::array::from_fn(|i| match (i / 4, i % 4) {
             (3, 3) => ONE,
             (3, _) | (_, 3) => 0,
             (y, x) => at(3 * y + x),
         }),
         // MTX_SCALE: the three values on the diagonal.
-        0x1B => std::array::from_fn(|i| match i {
+        CMD_MTX_SCALE => std::array::from_fn(|i| match i {
             0 | 5 | 10 => at(i / 5),
             15 => ONE,
             _ => 0,
         }),
         // MTX_TRANS: the identity with the three values in the bottom row.
-        0x1C => std::array::from_fn(|i| match i {
+        CMD_MTX_TRANS => std::array::from_fn(|i| match i {
             12..=14 => at(i - 12),
             _ => IDENTITY[i],
         }),
@@ -162,14 +166,16 @@ impl Matrices {
 
     /// Stores the current matrix of the target's stack at `entry`: the coordinate stacks keep the
     /// position and the vector matrix at the entry the 6-bit pointer mirrors onto; the projection
-    /// and texture stacks have the one entry 0 and ignore any other.
-    // TODO(hw-unverified): an access to entry 1 of a one-entry stack stores and loads nothing
+    /// and texture stacks have the one entry 0, which entry 1 mirrors.
+    // GBATEK: "for all stacks, the upper half is a mirror of the lower half", so entry 1 of a
+    // one-entry stack is entry 0 (the error flag is the caller's).
+    // TODO(hw-unverified): the coordinate stack's slot is the entry modulo 32 whether or not it
+    // raised the error flag, and the texture stack follows the projection stack
     // (`geometry-engine.md`, "Unverified").
     pub(super) fn store(&mut self, target: Target, entry: u8) {
         match target {
-            Target::Projection if entry == 0 => self.projection_stack = self.projection,
-            Target::Texture if entry == 0 => self.texture_stack = self.texture,
-            Target::Projection | Target::Texture => {}
+            Target::Projection => self.projection_stack = self.projection,
+            Target::Texture => self.texture_stack = self.texture,
             Target::Coordinate { .. } => {
                 let slot = usize::from(entry & ENTRY_MASK);
                 self.position_stack[slot] = self.position;
@@ -181,9 +187,8 @@ impl Matrices {
     /// Loads the current matrix of the target's stack from `entry`; see [`Matrices::store`].
     pub(super) fn restore(&mut self, target: Target, entry: u8) {
         match target {
-            Target::Projection if entry == 0 => self.projection = self.projection_stack,
-            Target::Texture if entry == 0 => self.texture = self.texture_stack,
-            Target::Projection | Target::Texture => {}
+            Target::Projection => self.projection = self.projection_stack,
+            Target::Texture => self.texture = self.texture_stack,
             Target::Coordinate { .. } => {
                 let slot = usize::from(entry & ENTRY_MASK);
                 self.position = self.position_stack[slot];

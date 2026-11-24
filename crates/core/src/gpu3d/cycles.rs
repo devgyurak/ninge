@@ -2,13 +2,13 @@
 //! How long each geometry command takes the engine (`docs/hw/geometry-engine.md`, "Executing a
 //! command"). GBATEK counts bus cycles; the scheduler counts master cycles, twice as many.
 
+use super::MODE_SIMULTANEOUS;
+
 /// Master cycles in one bus cycle (`scheduler.md`, "Clocks").
 const MASTER_PER_BUS: u64 = 2;
 /// The extra bus cycles a MULT or TRANS takes in matrix mode 2: the position matrix and then the
 /// vector matrix.
 const SIMULTANEOUS_MODE_EXTRA: u64 = 30;
-/// MTX_MODE value of the simultaneous mode.
-const MODE_SIMULTANEOUS: u8 = 2;
 /// NORMAL takes 9 bus cycles and one more for each enabled light, up to 12.
 const NORMAL_LIGHT_CYCLES_CAP: u64 = 3;
 /// SWAP_BUFFERS' own execution once the wait for VBlank is over.

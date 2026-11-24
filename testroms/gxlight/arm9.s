@@ -8,9 +8,9 @@
 @ inspector (crates/runner/tests/gxlight.rs), with expected values worked out by hand from the note
 @ and not from running this ROM. The ROM leaves 1 at 0x02008000 and "GXLI" at 0x0200807C when done.
 @
-@ TODO(hw-unverified): the lighting equation is the model of docs/hw/geometry-engine.md ("Model",
-@ "Unverified"); a pass says the emulator follows the note, not that hardware was measured. The ROM
-@ relies on the documented POWCNT1 reset value 820Fh having bit 3 (the geometry engine) set
+@ TODO(hw-unverified): the lighting equation is GBATEK's, with the fixed-point widths of the model of
+@ docs/hw/geometry-engine.md ("Model", "Unverified"); a pass says the emulator follows the note, not
+@ that hardware was measured. The ROM relies on the documented POWCNT1 reset value 820Fh having bit 3 (the geometry engine) set
 @ (docs/hw/display-mode-vram.md, "Unverified").
     .equ REC, 0x02008000
     .equ GXFIFO, 0x04000400

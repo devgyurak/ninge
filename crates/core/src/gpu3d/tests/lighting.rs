@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Vertex colours from the lights and the texture coordinate modes as a device. GBATEK gives the
-//! registers and no equation, so the expected values come from the model in
-//! `docs/hw/geometry-engine.md` ("Lighting", "Texture coordinates", "Unverified"), worked out by
-//! hand:
+//! equation ("Internal Operation on Normal Command") but not its fixed-point widths, so the expected
+//! values come from `docs/hw/geometry-engine.md` ("Lighting", "Texture coordinates", "Unverified"),
+//! worked out by hand:
 //!
 //! - a light of direction `L = (0, 0, -511)` and a normal `N = (0, 0, 511)` (1.0.9, so `511` is
 //!   just under 1.0) give `-(N . L) = 261121`, which shifts right by 9 to 510 (of 512);
@@ -287,4 +287,81 @@ fn given_lighting_state_when_saved_and_loaded_then_it_is_kept() {
     let bytes = postcard::to_allocvec(&original).unwrap();
     let restored: Gpu3d = postcard::from_bytes(&bytes).unwrap();
     assert_eq!(restored, original);
+}
+
+// ------------------------------------------------------- the squared shininess level
+
+/// A shininess table with 100 at entry 32 and 50 at entry 64, the rest 0.
+fn with_mid_table(gpu: &mut Gpu3d) {
+    let mut words = [0u32; 32];
+    words[8] = 100;
+    words[16] = 50;
+    command(gpu, SHININESS, &words);
+}
+
+/// A normal `(0, 0, 256)` against the light `(0, 0, -511)`: the specular dot is 256 of 512, 0.5.
+const HALF_ANGLE: u32 = 256 << 20;
+
+#[test]
+fn given_a_half_dot_product_when_the_table_is_on_then_the_squared_level_selects_entry_32() {
+    // GBATEK squares the level: 0.5 x 0.5 = 0.25 of 512 is 128, which is entry 32 (100), not entry
+    // 64 (50) as the linear level would give. 31 x 31 x 100 / (31 x 256) = 12.
+    let got = colors(LIGHT_0, HALF_ANGLE, |gpu| {
+        material(WHITE, 0, WHITE | 1 << 15)(gpu);
+        with_mid_table(gpu);
+    });
+    assert_eq!(got, vec![12 | 12 << 5 | 12 << 10; 3]);
+}
+
+#[test]
+fn given_a_half_dot_product_when_the_table_is_off_then_the_ramp_follows_the_squared_level() {
+    // Level 128, index 32, ramp 64: 31 x 31 x 64 / (31 x 256) = 7.75, 7 (the linear level would
+    // give a ramp of 128 and 15).
+    let got = colors(LIGHT_0, HALF_ANGLE, material(WHITE, 0, WHITE));
+    assert_eq!(got, vec![7 | 7 << 5 | 7 << 10; 3]);
+}
+
+// ----------------------------------------------- texture mode 2 before the vector matrix
+
+/// A quarter turn about Z in the vector matrix (matrix mode 2).
+fn turned_vector_matrix(gpu: &mut Gpu3d) {
+    command(gpu, 0x10, &[2]);
+    command(gpu, 0x1A, &[0, 0x1000, 0, 0xFFFF_F000, 0, 0, 0, 0, 0x1000]);
+}
+
+#[test]
+fn given_mode_2_and_a_turned_vector_matrix_when_normal_runs_then_the_texture_uses_the_normal_as_it_arrives()
+ {
+    // GBATEK transforms the texture coordinates from the normal before the vector matrix turns it:
+    // N = (511, 0, 0) gives S = 15 + 10h = 31 as with the identity (turned, it would be T = 15 + 20h).
+    let got = st(2, Some(vec10(511, 0, 0)), turned_vector_matrix);
+    assert_eq!(got, (31, 0x20));
+}
+
+// -------------------------------------------- interpolated texture coordinates in a cut polygon
+
+/// A vertex at `(x, y, 0)` with texture coordinates `(s, t)` set before it.
+fn textured(gpu: &mut Gpu3d, s: u32, t: u32, x: u32, y: u32) {
+    command(gpu, TEXCOORD, &[t << 16 | s]);
+    command(gpu, VTX_16, &[y << 16 | x, 0]);
+}
+
+#[test]
+fn given_a_cut_triangle_with_texture_coordinates_when_clipped_then_the_new_corners_interpolate_them()
+ {
+    // A (0, 0) and C (0, 0x800) are inside, B at x = 2.0 beyond the right plane, so the corners come
+    // out as [I1 on B-C, C, A, I2 on A-B], each new one halfway along its edge:
+    // I1: S = 100h + (40h - 100h) / 2 = A0h, T = 80h + (40h - 80h) / 2 = 60h; I2: S = 80h, T = 40h.
+    let mut gpu = Gpu3d::new();
+    command(&mut gpu, BEGIN_VTXS, &[0]);
+    textured(&mut gpu, 0, 0, 0, 0);
+    textured(&mut gpu, 0x100, 0x80, 0x2000, 0);
+    textured(&mut gpu, 0x40, 0x40, 0, 0x800);
+    let got: Vec<(i16, i16)> = gpu
+        .geometry_ram()
+        .vertices
+        .iter()
+        .map(|v| (v.s, v.t))
+        .collect();
+    assert_eq!(got, vec![(0xA0, 0x60), (0x40, 0x40), (0, 0), (0x80, 0x40)]);
 }

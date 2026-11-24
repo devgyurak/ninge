@@ -55,12 +55,22 @@ pub struct Polygon {
 }
 
 /// One set of Polygon RAM and Vertex RAM.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ram {
     /// The polygons stored, in the order they were completed.
     pub polygons: Vec<Polygon>,
     /// The vertices the polygons point at.
     pub vertices: Vec<Vertex>,
+}
+
+/// A clone keeps the room a full set needs, so that vertices stored after it never allocate.
+impl Clone for Ram {
+    fn clone(&self) -> Self {
+        let mut ram = Self::new();
+        ram.polygons.extend_from_slice(&self.polygons);
+        ram.vertices.extend_from_slice(&self.vertices);
+        ram
+    }
 }
 
 impl Ram {
@@ -71,16 +81,16 @@ impl Ram {
         }
     }
 
-    /// Empties the set.
+    /// Empties the set; the room stays.
     fn clear(&mut self) {
         self.polygons.clear();
         self.vertices.clear();
-        self.reserve();
     }
 
-    /// Makes room for a full set. A set made by `new` has it already; after a clone or a load the
-    /// capacity is the length, so this allocates once there and never in steady state.
-    fn reserve(&mut self) {
+    /// Makes room for a full set. A set made by `new` or a clone has it already; a set a savestate
+    /// load decoded has exactly its length, so the machine calls this once after a load
+    /// (`Gpu3d::reserve_ram`) and nothing allocates while commands run.
+    pub(super) fn reserve(&mut self) {
         self.polygons
             .reserve_exact(POLYGON_RAM.saturating_sub(self.polygons.len()));
         self.vertices
@@ -187,6 +197,10 @@ impl Geometry {
         self.primitive = Some((param & 3) as u8);
         self.count = 0;
         self.held = [Held::default(); 4];
+    }
+
+    /// Reserves the full room in both sets of RAM; see [`Ram::reserve`].
+    pub(super) fn reserve_ram(&mut self) {
         self.ram.iter_mut().for_each(Ram::reserve);
     }
 
@@ -214,11 +228,15 @@ impl Geometry {
     /// NORMAL: the vertex colour from the lights, and in texture mode 2 the coordinates from the
     /// normal.
     pub(super) fn normal(&mut self, param: u32, vector: &Matrix, texture: &Matrix) {
-        let normal = direction(unpack(param), vector);
-        self.color = self.lighting.vertex_color(normal, self.attr & LIGHT_BITS);
+        // GBATEK's order: the texture coordinates come from the normal as it arrives, then the
+        // vector matrix turns it for the lights (a sphere map loads the texture matrix from the
+        // vector matrix, so the normal must not be turned twice).
+        let arriving = unpack(param);
         if self.texture_mode() == 2 {
-            self.st = texture_from(normal.map(i64::from), VECTOR_TEXTURE_SHIFT, self, texture);
+            self.st = texture_from(arriving.map(i64::from), VECTOR_TEXTURE_SHIFT, self, texture);
         }
+        let normal = direction(arriving, vector);
+        self.color = self.lighting.vertex_color(normal, self.attr & LIGHT_BITS);
     }
 
     pub(super) fn diffuse_ambient(&mut self, param: u32) {
@@ -259,6 +277,8 @@ impl Geometry {
             0x26 => (self.position[0], self.position[2]) = (half(p0, false), half(p0, true)),
             0x27 => (self.position[1], self.position[2]) = (half(p0, false), half(p0, true)),
             // VTX_DIFF: each field is added to the previous coordinate as a 12-bit-fraction count.
+            // TODO(hw-unverified): the field format and the wrap of the sum (`geometry-engine.md`,
+            // "Unverified").
             _ => {
                 (0..3).for_each(|n| {
                     let delta = sign_extend_10(p0 >> (10 * n as u32)) as i16;
@@ -391,6 +411,9 @@ impl Geometry {
                 });
                 self.push_polygon(order.len(), indices);
             }
+            // A polygon that was cut stands alone: its corners are stored afresh.
+            // TODO(hw-unverified): strip clipping stores the cut polygon afresh and the strip's own
+            // vertices again later (`geometry-engine.md`, "Unverified").
             Clipped::Cut(count) => {
                 if !self.room(count) {
                     return;
@@ -458,6 +481,9 @@ impl Geometry {
 
     /// SWAP_BUFFERS: the two sets exchange roles and the one the geometry engine gets back is
     /// emptied; the swap's two parameter bits are kept for the renderer.
+    // TODO(hw-unverified): the sets swap and RAM_COUNT clears when SWAP_BUFFERS ends, 784 master cycles
+    // after VBlank begins, where GBATEK says 10 cycles after VBlank (`geometry-engine.md`,
+    // "Unverified").
     pub(super) fn swap(&mut self, param: u32) {
         self.fill ^= 1;
         let fill = usize::from(self.fill & 1);
@@ -504,6 +530,7 @@ const POSITION_TEXTURE_SHIFT: u32 = 20;
 /// Texture mode 1: `(S, T, 1/16, 1/16)` times the first two columns of the texture matrix. S and T
 /// have 4 fraction bits, the matrix 12, so the sum shifts right by 12; the two constants are `1/16`
 /// (a raw 1). The result is masked to 16 bits.
+// TODO(hw-unverified): the constants' use and the shift (`geometry-engine.md`, "Unverified").
 fn map_texcoord(st: &[i16; 2], m: &Matrix) -> [i16; 2] {
     let [s, t] = st.map(i64::from);
     std::array::from_fn(|c| {
@@ -596,6 +623,8 @@ fn intersect(a: &Vertex, b: &Vertex, da: i64, db: i64) -> Vertex {
 /// Clips a polygon of 3 or 4 corners against the six sides of the view volume, one plane after the
 /// other. `render_far` is POLYGON_ATTR bit 12: with it clear a polygon that reaches past the far
 /// plane is hidden whole.
+// TODO(hw-unverified): the far-plane rule, the inside test and the order of the corners that remain
+// (`geometry-engine.md`, "Unverified").
 pub(super) fn clip(
     corners: &[Vertex],
     render_far: bool,
@@ -631,11 +660,17 @@ pub(super) fn clip(
 
 /// Planes of the view volume.
 const PLANES: usize = 6;
-/// Room for a polygon while it is being clipped: a quad gains at most one corner for each plane.
+/// Room for a polygon while it is being clipped: a convex quad gains at most one corner for each
+/// plane. A crossed quad or one with an angle over 180 degrees (GBATEK's "prohibited quads") can gain
+/// more; the corners past the room are dropped, never a panic.
+// TODO(hw-unverified): what the hardware does with a prohibited quad (`geometry-engine.md`,
+// "Unverified").
 const WORK: usize = MAX_POLYGON_VERTICES + 2;
 
 /// One pass of the clipper: the polygon in `points[..count]` against one `plane`. Returns the
 /// corners that remain, how many, and whether an edge crossed the plane.
+// TODO(hw-unverified): the inside test `-w <= x, y, z <= w`, the order of the corners that remain
+// and the handling of `w <= 0` (`geometry-engine.md`, "Unverified").
 fn clip_plane(
     points: &[Vertex; WORK],
     count: usize,

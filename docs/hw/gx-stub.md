@@ -18,28 +18,21 @@ accepted and dropped, nothing is drawn.
 
 ## Scope
 
-**Implemented (#43):** DISP3DCNT; the command decoder (GXFIFO, packed and unpacked words, and the
-command ports); the matrix mode and the three stack pointers with their error flag; GXSTAT; the FIFO
-IRQ condition; the zero reads of the rendering and test registers; ARM9 DMA start mode 7;
-POWCNT1 bits 2 and 3 gating the ports.
+This note is the register front of the geometry engine: the registers, the command decoder (GXFIFO,
+packed and unpacked words, the command ports), the matrix mode and the stack pointers with their
+error flag, GXSTAT's layout and POWCNT1 bits 2 and 3 gating the ports. What the engine does with the
+commands (the FIFO and the PIPE, timing, matrices, polygons, lighting, the tests, DMA start mode 7)
+is in `geometry-engine.md`, which wins where the two differ about a timing or a result.
 
-**A deliberate approximation, not a hardware claim: instant drain.** A command is executed (consumed
-and dropped) the moment its last parameter arrives. The FIFO and the PIPE never hold an entry, so a
-program can never see a full or half-full FIFO, a busy engine, a busy stack, or a stalled CPU. There
-is no per-command cycle cost, no stall on a full FIFO, and SWAP_BUFFERS does not wait for VBlank.
-`TODO(phase7)` (#48): `geometry-engine.md` replaces this with the real FIFO, the PIPE, the command
-timings and the swap at VBlank.
-
-**Not implemented (`TODO(phase7)`):** vertices and polygons, lighting, textures,
-POS_TEST, VEC_TEST and BOX_TEST results, RAM_COUNT and the lock-up SWAP_BUFFERS has after an
-incomplete polygon list; all in `geometry-engine.md`. The rendering registers' effect is #49-#52.
+The rendering registers' effect is #49-#52 (`TODO(phase7)`): they drop their writes and read 0
+here.
 
 ## Registers
 
 All of these are ARM9 only. The ARM7 does not see them: the ARM7 has the sound registers at
 `0400_0400h` (`sound-registers.md`).
 
-| Address | Name | Width | Access | Stub |
+| Address | Name | Width | Access | Behavior |
 |---|---|---|---|---|
 | `0400_0060h` | DISP3DCNT | 16 | R/W | stored, bits 12-13 acknowledge |
 | `0400_0320h` | RDLINES_COUNT | 8 | R | a fixed value, see "Unverified" |
@@ -47,12 +40,12 @@ All of these are ARM9 only. The ARM7 does not see them: the ARM7 has the sound r
 | `0400_0400h`-`0400_043Fh` | GXFIFO (16 mirrors of one word) | 32 | W | the command decoder |
 | `0400_0440h`-`0400_05FFh` | the command ports | 32 | W | the command decoder |
 | `0400_0600h` | GXSTAT | 32 | R, bits 30-31 R/W, bit 15 write-1-to-clear | see below |
-| `0400_0604h` | RAM_COUNT | 32 | R | reads 0 |
+| `0400_0604h` | RAM_COUNT | 32 | R | the Polygon and Vertex RAM counts (`geometry-engine.md`) |
 | `0400_0610h` | DISP_1DOT_DEPTH | 16 | W | write dropped |
-| `0400_0620h`-`0400_062Fh` | POS_RESULT | 4 words | R | reads 0 |
-| `0400_0630h`-`0400_0635h` | VEC_RESULT | 3 halfwords | R | reads 0 |
-| `0400_0640h`-`0400_067Fh` | CLIPMTX_RESULT | 16 words | R | the clip matrix (`geometry-engine.md`, "Matrices") |
-| `0400_0680h`-`0400_06A3h` | VECMTX_RESULT | 9 words | R | the vector matrix (`geometry-engine.md`, "Matrices") |
+| `0400_0620h`-`0400_062Fh` | POS_RESULT | 4 words | R | the last POS_TEST (`geometry-engine.md`) |
+| `0400_0630h`-`0400_0635h` | VEC_RESULT | 3 halfwords | R | the last VEC_TEST (`geometry-engine.md`) |
+| `0400_0640h`-`0400_067Fh` | CLIPMTX_RESULT | 16 words | R | the clip matrix (`geometry-engine.md`) |
+| `0400_0680h`-`0400_06A3h` | VECMTX_RESULT | 9 words | R | the vector matrix (`geometry-engine.md`) |
 
 GBATEK heads GXFIFO as "mirrored up to 400043Fh?" with a question mark, and the text under it relies
 on the mirror for `STRD` and `STM` (see "Unverified"). The geometry block therefore ends at
@@ -84,22 +77,10 @@ a write of 1 to them changes nothing (see "Unverified"). A byte write changes on
 
 ### GXSTAT bits (`0400_0600h`)
 
-| Bits | Meaning | Stub reads |
-|---|---|---|
-| 0 | BOX_TEST, POS_TEST or VEC_TEST busy | 0 |
-| 1 | BOX_TEST result: 1 = parts or all of the box inside the view volume | 0 until a BOX_TEST has run, then 1 (see "Model") |
-| 2-7 | Not used | 0 |
-| 8-12 | Position/vector stack level: the low 5 bits of the 6-bit coordinate stack pointer | the pointer |
-| 13 | Projection stack level (the 1-bit projection pointer) | the pointer |
-| 14 | Matrix stack busy (a push or pop is executing) | 0 |
-| 15 | Matrix stack overflow/underflow error. Write 1 to clear | the flag |
-| 16-23 | The low 8 bits of the number of 40-bit FIFO entries (0-256) | 0 |
-| 24 | FIFO full (the top bit of the count, 256 entries) | 0 |
-| 25 | FIFO less than half full | 1 |
-| 26 | FIFO empty | 1 |
-| 27 | Geometry engine busy (a command is executing, or the PIPE or FIFO holds data) | 0 |
-| 28-29 | Not used | 0 |
-| 30-31 | FIFO IRQ: 0 = never, 1 = less than half full, 2 = empty, 3 = reserved | the value written |
+The bits are listed in `geometry-engine.md`, "GXSTAT". This note owns the writable ones: bits
+30-31, the FIFO IRQ mode (0 = never, 1 = less than half full, 2 = empty, 3 = reserved), and bit 15,
+the matrix stack error flag (write 1 to clear). Bits 8-13 are the stack levels, the low 5 bits of the
+6-bit coordinate pointer and the 1-bit projection pointer.
 
 Only bits 30-31 are writable, apart from bit 15: a write of 1 to bit 15 clears the error flag and
 also resets the projection stack pointer to 0; GBATEK says it "probably" also resets the texture
@@ -107,7 +88,7 @@ stack pointer (see "Unverified"). A write of 0 to bit 15 changes nothing. Every 
 writes. The register is 32 bits wide; a halfword or byte access sees the matching part and a write
 to a part acts on only that part.
 
-Reset value in the stub: `0600_0000h` (bits 25 and 26: less than half full, empty).
+Reset value: `0600_0000h` (bits 25 and 26: less than half full, empty).
 
 ### Reads of the write-only registers
 
@@ -210,10 +191,9 @@ command; when it completes, the rest of the packed word it came from still runs 
 ### Matrix mode and the stack pointers
 
 MTX_MODE takes bits 0-1 of its parameter: 0 = projection, 1 = position (modelview), 2 = position and
-vector together, 3 = texture. The stub keeps only this number; the matrices themselves are not
-computed.
+vector together, 3 = texture. The matrices themselves are in `geometry-engine.md`.
 
-There are three stacks and two pointers. The stub keeps the pointers:
+There are three stacks and two pointers; this note keeps the pointers:
 
 | Stack | Valid entries | Pointer | Selected by |
 |---|---|---|---|
@@ -244,8 +224,8 @@ PUSH in projection mode, a PUSH with the coordinate pointer at 31 or above, a PO
 STORE or RESTORE with `N` = 31 all set it. The flag stays set until a program writes 1 to GXSTAT bit
 15. In the stub the pointer moves whether or not the entry was valid (see "Unverified").
 
-GBATEK says entry 31 appears to exist and to be readable and writable, though it raises the flag. The
-stub keeps no matrices, so that matters only to the flag.
+GBATEK says entry 31 appears to exist and to be readable and writable, though it raises the flag
+(`geometry-engine.md`, "Matrices", keeps a matrix there).
 
 In projection mode GBATEK is "not sure" whether the ignored parameter of POP, STORE and RESTORE has
 to be written to the FIFO; the stub requires it (one parameter word) like any other command with
@@ -253,16 +233,13 @@ parameters (see "Unverified").
 
 ### GXSTAT and the FIFO IRQ
 
-A GXSTAT read assembles the bits of the table above from the pointers and the error flag. The FIFO
-and the engine are never occupied, so bits 0 and 14 read 0, bit 1 reads the stub's BOX_TEST result,
-bits 16-24 read 0 (an empty FIFO), bits 25 and 26 read 1, and bit 27 reads 0.
+A GXSTAT read assembles its bits from the engine's state (`geometry-engine.md`, "GXSTAT").
 
 The FIFO IRQ (IF bit 21 on the ARM9) is level driven. With the mode in bits 30-31 set to 1 (less than
 half full) or 2 (empty), the IF bit stays set for as long as that condition is true, and an
 acknowledge written to IF bit 21 does nothing meanwhile: a handler has to make the condition false
-(refill the FIFO) or turn the mode off before its acknowledge counts. Mode 0 raises nothing, and mode 3 is reserved: the stub raises nothing for
-it. The stub's FIFO is always empty and always less than half full, so the condition holds for
-modes 1 and 2 and never for 0 and 3.
+(refill the FIFO) or turn the mode off before its acknowledge counts. Mode 0 raises nothing, and mode 3 is reserved: nothing is raised for it. The conditions are the real
+FIFO count's: below 128 entries for mode 1, none for mode 2.
 
 So: when a write sets the mode to 1 or 2, IF bit 21 is set at once. An acknowledge of IF bit 21
 while the mode is 1 or 2 leaves it set. A write that sets the mode to 0 or 3 stops further requests;
@@ -275,11 +252,7 @@ again. Raising a bit that is already set changes nothing, so the recheck is safe
 
 ### BOX_TEST, POS_TEST and VEC_TEST
 
-The three test commands take their parameters (BOX_TEST 3, POS_TEST 2, VEC_TEST 1) and consume
-them. The tests are busy for a while on hardware (GXSTAT bit 0); the stub finishes at once and bit
-0 stays 0. POS_RESULT, VEC_RESULT read 0. BOX_TEST sets the result bit (GXSTAT bit 1) to 1,
-meaning "parts or all of the box are inside the view volume", so a program that tests a box before
-it draws takes its normal path; see "Model".
+They take 3, 2 and 1 parameters; what they compute is in `geometry-engine.md`.
 
 ### Power control: POWCNT1 bits 2 and 3
 
@@ -300,36 +273,18 @@ it.
 
 ### ARM9 DMA start mode 7
 
-(Phase 7 replaces the stub's instant-drain start described here with the real one: a burst of 112
-words each time the FIFO is less than half full, in `geometry-engine.md`, "The FIFO IRQ, the DMA
-start and the stall". The text below is the stub's and no longer what the code does.)
-
-A channel whose ARM9 start timing (control bits 27-29) is 7 starts when the geometry command FIFO is
-less than half full, and moves 112 words to GXFIFO, or fewer if the count runs out first. GBATEK
-gives the usual setup as 32-bit units, a fixed destination `0400_0400h`, repeat off.
-
-The stub's FIFO is always less than half full, so the condition always holds: a channel set to mode 7
-starts as soon as it is enabled and moves its words in bursts of 112 (the last burst shorter), one
-after the other, until the count is spent. The bursts follow one another with nothing in between
-(the FIFO never fills, so no burst waits), and the model's transfers are atomic (`dma.md`,
-"Model"), so it moves the whole count in one transfer; the words and their order are the same as in
-bursts. Then the end of a transfer works as for any channel (`dma.md`): IF bit 8 + *n* if control
-bit 30 is set, and the enable bit clears when repeat is off. Each word goes to the destination
-exactly as a CPU write of that word would, so the decoder above sees them in order.
-
-The ARM7 has no start mode 7. A channel of the ARM7 with the same bits does not start.
+A channel whose ARM9 start timing (control bits 27-29) is 7 takes bursts of 112 words into GXFIFO
+each time the geometry FIFO is less than half full, in `geometry-engine.md`, "The FIFO IRQ, the DMA
+start and the stall". The ARM7 has no start mode 7: a channel of the ARM7 with the same bits does
+not start.
 
 ## Model (not hardware)
 
-- **Instant drain** (see "Scope").
-- **The BOX_TEST result.** GXSTAT bit 1 reads 0 until a BOX_TEST has been executed and 1 after it.
-  Hardware computes it from the box and the matrices; the stub has no matrices and answers "inside",
-  which keeps a program on its draw path. This is a stub value, not a hardware fact. `TODO(phase7)`.
-- **The results read 0:** POS_RESULT, VEC_RESULT, RAM_COUNT (CLIPMTX_RESULT and VECMTX_RESULT are real since #48 PR C).
-- **The rendering registers drop their writes and read 0.** They are write-only on hardware, and the
-  stub has nothing to store them for. `TODO(phase7)` (#49-#52).
-- **GXSTAT bit 15 and the pointers** are the only state the commands change: the matrix mode, the
-  three pointers, the error flag.
+- **The rendering registers drop their writes and read 0.** They are write-only on hardware, and
+  nothing stores them yet. `TODO(phase7)` (#49-#52).
+- **GXSTAT bit 15 and the pointers** are the state the decoder's stack commands change here: the
+  matrix mode, the three pointers, the error flag (the matrices themselves are in
+  `geometry-engine.md`).
 
 ## Edge cases
 
@@ -339,8 +294,7 @@ The ARM7 has no start mode 7. A channel of the ARM7 with the same bits does not 
 - A packed word of four NOPs (`0000_0000h`) does nothing. A word whose first byte is zero and others
   not still runs the others, in order.
 - An invalid ID inside a packed word takes no parameters, and the next ID of the word runs.
-- A COLOR, VTX_16 or any other command that draws is consumed with its parameters and has no effect.
-- SWAP_BUFFERS (one parameter) is consumed with no wait.
+- What a command does with its parameters, and when, is in `geometry-engine.md`.
 - A write of any width to a port or GXFIFO is one entry (see "Unverified").
 - A guest value never panics: every pointer wraps by its width and every unknown ID is ignored.
 
@@ -381,10 +335,6 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **IF bit 21 after the mode goes to 0.** GBATEK does not say plainly whether a bit already set
   stays until acknowledged. The stub leaves it set. — `gpu3d/` (`Gpu3d::held_requests`).
 - **Mode 3 of the FIFO IRQ** ("reserved") raises nothing. — `gpu3d/`.
-- **Repeat on in DMA mode 7.** GBATEK gives repeat off as the usual setup and says nothing of repeat
-  on. The stub starts the channel once, when it is enabled; a repeating channel stays enabled with
-  its count reloaded and is not started again, because no trigger follows (the level that starts it
-  is only looked at when the channel is enabled). — `io/dma/mod.rs` (`Dma::write_control`).
 - **RDLINES_COUNT.** A real value depends on the renderer. The stub reads 46, the largest the field
   can hold (a renderer that always keeps its 48-line buffer full), so a program that checks for
   underflow danger sees none. — `gpu3d/`.

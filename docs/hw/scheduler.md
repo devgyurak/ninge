@@ -120,12 +120,13 @@ other events due at the same time wait for the next round too. That round is zer
 and fires them in the same order, so nothing observable changes. This keeps a handler that reschedules itself
 from being popped forever if the clock ever saturated; the machine would stall, not the host.
 
-Six events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
+Seven events exist so far, the line start (every 4,260 master cycles), the HBlank start (once per
 line, 3,212 master cycles after it; see `display-timing.md`), the timer overflow (one per
 started, clock-driven timer of either CPU, so at most eight; see `timers.md`) and the DMA start (one
 per channel whose transfer is waiting to run, at most eight; see `dma.md`) and the card word (one,
 for the next word of a cartridge transfer; see `cart-protocol.md`) and the SPI bus's completion interrupt (one, only
-for a unit that started with SPICNT bit 14 set; see `spi.md`). A pending event of
+for a unit that started with SPICNT bit 14 set; see `spi.md`) and the geometry engine's command end
+(one, while a command executes; see `geometry-engine.md`). A pending event of
 a kind can be cancelled, which a timer write uses to replace its overflow: the bus view holds the
 scheduler, so the write schedules at once, never before the end of the writing instruction
 (`timers.md`, "Model"). Each line start of a visible line draws that line (`bg-text.md`, "Lines"); the one that begins
@@ -196,8 +197,12 @@ and a load rebuilds it, so no check has to prove that the queue and the devices 
   grid point strictly after `now`.
 - Every started, clock-driven timer gets a timer overflow event at the later of the overflow time
   its own counter gives and `now` (`timers.md`, "Model").
-- Every channel with a start waiting gets a DMA start event at `now`: a waiting start is due at once
-  and the queue never holds an event before the master clock (`dma.md`, "Model").
+- Every channel with a start waiting gets a DMA start event at the later of its due time and `now`:
+  a waiting start is due at once (due time 0) except the pause between two geometry bursts, whose
+  due time the channel keeps, and the queue never holds an event before the master clock (`dma.md`,
+  "Model").
+- The geometry engine gets an event at the end of the command it is executing, if it is executing
+  one (`geometry-engine.md`, "Executing a command").
 
 Every event the queue can hold between rounds is covered, except the known gap under "Edge cases": the event a handler scheduled during
 the last dispatch and that waits for the next round is one of these (a DMA start the VBlank

@@ -59,7 +59,11 @@ fn given_the_gxfifo_rom_when_6_frames_run_then_the_record_holds_the_note_values(
         record(&boot_for(FRAMES)),
         [
             0x0600_0000, // GXSTAT at power-on
+            // TODO(hw-unverified): a command takes its entries from the queue only when all are
+            // there (`geometry-engine.md`, "Unverified").
             0x0E00_0000, // SWAP_BUFFERS waits for VBlank: busy, FIFO empty
+            // TODO(hw-unverified): the PIPE takes the first four entries and refills instantly
+            // (`geometry-engine.md`, "Unverified").
             0x0A06_0000, // ten pushes: PIPE 4, FIFO 6
             0,           // mode 2 (empty): not empty, no IRQ
             0x0020_0000, // mode 1 (less than half full): IF bit 21

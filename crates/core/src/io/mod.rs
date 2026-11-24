@@ -38,7 +38,9 @@ use crate::input::Input;
 use crate::scheduler::{EventKind, Scheduler};
 use crate::spu::Spu;
 use cart::Cart;
-use device::{Checked, Cx, Device, Effect, Fired, Lines, Signal, Signals, SlotMask, Width};
+use device::{
+    Checked, Cx, Device, Effect, Fired, Lines, Signal, Signals, SlotMask, Width, Written,
+};
 use divsqrt::DivSqrt;
 use dma::{Dma, End, Transfer, Trigger};
 use ipc::Ipc;
@@ -86,7 +88,7 @@ registry! {
     }
     arm7 {
         /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
-        power / power_mut: Power = Power::new() => [Port::Power],
+        power: Power = Power::new() => [Port::Power],
         /// The ARM7's SPI bus and the firmware chip on it (`spi.md`).
         spi: Spi = Spi::new() => [Port::Spi],
         /// The ARM7's RTCCNT and the clock chip on its pins (`rtc.md`).
@@ -202,7 +204,7 @@ impl Io {
         offset: u32,
         width: Width,
         value: u32,
-    ) -> u64 {
+    ) -> Written {
         let cx = Cx {
             now: at.now,
             host: &self.input,
@@ -230,7 +232,7 @@ impl Io {
         at: At<'_>,
         port: Port,
         effect: Effect,
-    ) -> u64 {
+    ) -> Written {
         self.request_irq(effect.requests);
         if effect.reschedule != 0 {
             self.schedule_slots::<ARM9>(scheduler, port, effect.reschedule, at.floor);
@@ -246,7 +248,10 @@ impl Io {
         if effect.recheck_held_requests {
             self.request_irq(self.held_requests::<ARM9>());
         }
-        effect.stall
+        Written {
+            stall: effect.stall,
+            halt: effect.halt,
+        }
     }
 
     /// Delivers `signals` at master time `time`, one signal at a time in the order of

@@ -5,7 +5,7 @@
 
 use super::Memory;
 use crate::cpu::{Bus, Cp15, Tcm};
-use crate::io::device::Width;
+use crate::io::device::{Width, Written};
 use crate::io::map::{Owner, decode};
 use crate::io::{At, Io};
 use crate::scheduler::Scheduler;
@@ -147,11 +147,12 @@ impl<'a, const ARM9: bool> Access<'a, ARM9> {
     }
 
     /// A data write. It returns the master cycles the access held its CPU, which only a write to a
-    /// full geometry FIFO does (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
-    fn write<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> u64 {
+    /// full geometry FIFO does (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall"),
+    /// and whether it asked the CPU to halt.
+    fn write<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> Written {
         let addr = addr & !(N as u32 - 1);
         if self.memory.store::<ARM9, N>(&self.tcm, addr, bytes) {
-            0
+            Written::default()
         } else {
             self.write_registers(addr, bytes)
         }
@@ -174,20 +175,20 @@ impl<'a, const ARM9: bool> Access<'a, ARM9> {
     /// The slow path for a write: the address is decoded once and one device takes the access
     /// (or `Memory`, for the memory-control block); an unmapped address ignores the write.
     // TODO(hw-unverified): a byte on no register is dropped (`arm9-memory-map.md`, "Unverified").
-    fn write_registers<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> u64 {
+    fn write_registers<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> Written {
         let width = Width::of::<N>();
         let value = pack(bytes);
         match decode::<ARM9>(addr) {
             Some(Owner::Memory(offset)) => {
                 self.memory.write_control::<ARM9>(offset, width, value);
-                0
+                Written::default()
             }
             Some(Owner::Io(port, offset)) => {
                 let at = self.at();
                 self.io
                     .write::<ARM9>(self.scheduler, at, port, offset, width, value)
             }
-            None => 0,
+            None => Written::default(),
         }
     }
 
@@ -356,16 +357,16 @@ impl Bus for Arm9View<'_> {
         u32::from_le_bytes(self.access().read(addr))
     }
     fn write8(&mut self, addr: u32, value: u8) {
-        let stall = self.access().write(addr, value.to_le_bytes());
-        self.stall(stall);
+        let written = self.access().write(addr, value.to_le_bytes());
+        self.stall(written.stall);
     }
     fn write16(&mut self, addr: u32, value: u16) {
-        let stall = self.access().write(addr, value.to_le_bytes());
-        self.stall(stall);
+        let written = self.access().write(addr, value.to_le_bytes());
+        self.stall(written.stall);
     }
     fn write32(&mut self, addr: u32, value: u32) {
-        let stall = self.access().write(addr, value.to_le_bytes());
-        self.stall(stall);
+        let written = self.access().write(addr, value.to_le_bytes());
+        self.stall(written.stall);
     }
 }
 
@@ -388,6 +389,9 @@ pub struct Arm7View<'a> {
     clock: u64,
     now: u64,
     floor: u64,
+    /// A write asked the ARM7 to halt and the owner of the view has not taken it yet
+    /// ([`Arm7View::take_halt`]).
+    halt: bool,
 }
 
 impl<'a> Arm7View<'a> {
@@ -410,6 +414,7 @@ impl<'a> Arm7View<'a> {
             clock,
             now: clock,
             floor,
+            halt: false,
         }
     }
 
@@ -425,11 +430,6 @@ impl<'a> Arm7View<'a> {
         self.io
     }
 
-    /// The register devices, to take a HALTCNT request after an instruction.
-    pub(crate) fn io_mut(&mut self) -> &mut Io {
-        self.io
-    }
-
     /// The ARM7's clock.
     pub(crate) fn clock(&self) -> u64 {
         self.clock
@@ -438,6 +438,13 @@ impl<'a> Arm7View<'a> {
     /// Advances the ARM7's clock by `cycles`: the instruction's cost. The master clock stays.
     pub(crate) fn advance(&mut self, cycles: u64) {
         self.clock = self.clock.saturating_add(cycles);
+    }
+
+    /// Whether a write through this view asked the ARM7 to halt (a HALTCNT write of the halt mode),
+    /// once per request. The halt travels with the access that made it, so it is the view's owner,
+    /// which holds the CPU, that acts on it (`interrupts.md`, "HALTCNT").
+    pub(crate) fn take_halt(&mut self) -> bool {
+        std::mem::take(&mut self.halt)
     }
 
     /// The master clock, which the ARM7's steps leave where it is.
@@ -476,15 +483,18 @@ impl Bus for Arm7View<'_> {
     }
     // The ARM7 cannot reach the geometry block, the only source of a stall.
     fn write8(&mut self, addr: u32, value: u8) {
-        let stall = self.access().write(addr, value.to_le_bytes());
-        debug_assert_eq!(stall, 0, "the ARM7 never stalls");
+        let written = self.access().write(addr, value.to_le_bytes());
+        debug_assert_eq!(written.stall, 0, "the ARM7 never stalls");
+        self.halt |= written.halt;
     }
     fn write16(&mut self, addr: u32, value: u16) {
-        let stall = self.access().write(addr, value.to_le_bytes());
-        debug_assert_eq!(stall, 0, "the ARM7 never stalls");
+        let written = self.access().write(addr, value.to_le_bytes());
+        debug_assert_eq!(written.stall, 0, "the ARM7 never stalls");
+        self.halt |= written.halt;
     }
     fn write32(&mut self, addr: u32, value: u32) {
-        let stall = self.access().write(addr, value.to_le_bytes());
-        debug_assert_eq!(stall, 0, "the ARM7 never stalls");
+        let written = self.access().write(addr, value.to_le_bytes());
+        debug_assert_eq!(written.stall, 0, "the ARM7 never stalls");
+        self.halt |= written.halt;
     }
 }

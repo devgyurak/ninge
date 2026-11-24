@@ -145,7 +145,7 @@ impl Machine {
             .flatten()
             .for_each(|writes| writes.run(&mut view));
         // As for a DMA unit, a write may reach HALTCNT: the ARM7 halts at once.
-        if self.io.power_mut().take_halt() {
+        if view.take_halt() {
             self.arm7.set_halted(true);
         }
     }
@@ -193,12 +193,13 @@ impl Machine {
                 &self.rom,
                 self.arm7_clock,
             );
-            transfer.run(&mut view)
+            let end = transfer.run(&mut view);
+            // A DMA unit may write HALTCNT: the ARM7 halts at once, not after its next instruction.
+            if view.take_halt() {
+                self.arm7.set_halted(true);
+            }
+            end
         };
-        // A DMA unit may write HALTCNT: the ARM7 halts at once, not after its next instruction.
-        if self.io.power_mut().take_halt() {
-            self.arm7.set_halted(true);
-        }
         self.io
             .dma_finished(&mut self.scheduler, &transfer, end, self.arm9_hold_until);
     }

@@ -917,29 +917,22 @@ fn given_the_arm9_starts_a_timer_with_its_irq_enabled_and_halts_when_rounds_run_
 }
 
 /// An ARM7 whose DMA channel 0 copies one halfword, 8000h, to POSTFLG/HALTCNT, so the high byte
-/// (HALTCNT) is mode 2. Returns after the first round in which the ARM7 is halted or the request
-/// is pending: `(halted, request still pending)`.
-fn arm7_halted_by_dma() -> (bool, bool) {
+/// (HALTCNT) is mode 2. Returns whether the ARM7 is halted after the first round in which it is.
+fn arm7_halted_by_dma() -> bool {
     let mut m = arm7_running(&[SPIN]);
     m.bus7(0).write16(0x0220_0000, 0x8000);
     m.bus7(0).write32(0x0400_00B0, 0x0220_0000);
     m.bus7(0).write32(0x0400_00B4, 0x0400_0300);
     m.bus7(0).write32(0x0400_00B8, (1 << 31) | 1);
-    (0..8)
-        .map(|_| {
-            run_round(&mut m);
-            (
-                m.inspect().arm7().halted(),
-                m.inspect().power().halt_requested(),
-            )
-        })
-        .find(|&(halted, pending)| halted || pending)
-        .unwrap_or((false, false))
+    (0..8).any(|_| {
+        run_round(&mut m);
+        m.inspect().arm7().halted()
+    })
 }
 
 #[test]
 fn given_a_dma_unit_writing_haltcnt_when_the_transfer_ends_then_the_arm7_is_halted_at_once() {
-    assert_eq!(arm7_halted_by_dma(), (true, false));
+    assert!(arm7_halted_by_dma());
 }
 
 #[test]
@@ -960,4 +953,37 @@ fn given_a_halted_arm9_when_a_frame_latch_meets_the_keypad_condition_then_it_wak
         ),
         (false, 0x66)
     );
+}
+
+#[test]
+fn given_a_halt_written_through_the_arm7_bus_when_the_view_is_asked_then_it_reports_it_once() {
+    let mut m = Machine::new();
+    let mut bus = m.bus7(0);
+    bus.write8(0x0400_0301, 0x80);
+    assert_eq!((bus.take_halt(), bus.take_halt()), (true, false));
+}
+
+#[test]
+fn given_a_halfword_write_over_haltcnt_when_the_view_is_asked_then_it_reports_the_halt() {
+    let mut m = Machine::new();
+    let mut bus = m.bus7(0);
+    bus.write16(0x0400_0300, 0x8000);
+    assert!(bus.take_halt());
+}
+
+#[test]
+fn given_a_word_write_over_haltcnt_when_the_view_is_asked_then_it_reports_the_halt() {
+    let mut m = Machine::new();
+    let mut bus = m.bus7(0);
+    bus.write32(0x0400_0300, 0x0000_8000);
+    assert!(bus.take_halt());
+}
+
+#[test]
+fn given_a_halt_then_a_plain_write_when_the_view_is_asked_then_the_halt_is_still_reported() {
+    let mut m = Machine::new();
+    let mut bus = m.bus7(0);
+    bus.write8(0x0400_0301, 0x80);
+    bus.write8(0x0200_0000, 1);
+    assert!(bus.take_halt());
 }

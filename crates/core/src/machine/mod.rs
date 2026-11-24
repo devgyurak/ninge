@@ -151,7 +151,7 @@ fn arm7_instruction(arm7: &mut Cpu<false>, bios: &mut SwiRecord, view: &mut Arm7
             None => arm7.step(view),
         },
     };
-    if view.io_mut().power_mut().take_halt() {
+    if view.take_halt() {
         arm7.set_halted(true);
     }
     view.advance(cost);

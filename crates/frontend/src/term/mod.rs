@@ -183,8 +183,14 @@ pub fn size() -> io::Result<TermSize> {
 
 /// Runs the TUI until the user quits, showing frames from `source`. With `audio` and a ROM it opens
 /// the default sound device and keeps time by it; with no device, or without either, it keeps
-/// time by the machine's frame period.
-pub fn run(source: Source, save: Option<SaveFile>, audio: bool) -> anyhow::Result<Option<String>> {
+/// time by the machine's frame period. With `focus_pause` the run pauses while the terminal is
+/// not focused ([`App::with_focus_pause`]).
+pub fn run(
+    source: Source,
+    save: Option<SaveFile>,
+    audio: bool,
+    focus_pause: bool,
+) -> anyhow::Result<Option<String>> {
     // Before the terminal changes mode: a sound library may print to stderr while it looks for a
     // device, and that should land on the normal screen.
     let mut refused = None;
@@ -220,6 +226,7 @@ pub fn run(source: Source, save: Option<SaveFile>, audio: bool) -> anyhow::Resul
     let mut app = App::new(size)
         .with_mouse_unit(unit)
         .with_key_release(found.key_release)
+        .with_focus_pause(focus_pause)
         .with_source(source)
         .with_save(save);
     let mut renderer = Renderer::new(found.sink, found.transfer);

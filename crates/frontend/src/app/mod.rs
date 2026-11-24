@@ -7,7 +7,7 @@
 //! and written as plain loops in [`crate::threads`]:
 //!
 //! - **emu** owns the [`App`]. At the start of each frame it applies every queued host event, runs
-//!   [`App::step`], fills a [`Snapshot`] with [`App::fill`] and publishes it through the
+//!   [`App::step`] (not while paused, see "Focus"), fills a [`Snapshot`] with [`App::fill`] and publishes it through the
 //!   [`crate::handoff`] triple buffer, then waits as a [`crate::pacing::Pacer`] says. A pacer that
 //!   follows the sound device ([`crate::pacing::AudioPacer`], #47) and one that follows the
 //!   machine's frame period ([`crate::pacing::FramePacer`]) drive the same loop; the frame's audio
@@ -27,6 +27,21 @@
 //! from the keys held to the host [`Input`] ([`Keys`]). The input thread only maps and forwards
 //! [`Action`]s; the emu thread applies them, because the keys' frame counts, the cursor and the
 //! pen mapping count emu frames or need the layout.
+//!
+//! # Focus
+//!
+//! A terminal that loses the focus always lets every key go. With `--focus-pause`
+//! ([`App::with_focus_pause`]) the run is also paused while the terminal is not focused
+//! ([`App::paused`]): no frame runs and no sound is made, and both go on from where they were
+//! when the focus comes back. It is for a terminal that keeps a closed window's program alive
+//! for a while (so that the close can be undone), which would otherwise go on sounding with no
+//! window to see. It is off unless asked for: a game left running in a window one is not typing
+//! in is a use too. It rests on the terminal reporting focus
+//! changes; one that does not never pauses, and one that reported the loss and never reports
+//! the return leaves the run paused until a signal ends it (the quit keys are keys, and reach
+//! only a focused terminal). The machine is not told: its clock chip reads the host's time, so a
+//! program sees the time that passed, as after a closed lid. A gamepad is not the terminal's:
+//! its buttons are still followed in a pause, and one held when the focus comes back is held.
 
 use crate::clock::local_wall_time;
 use crate::cursor::{self, Cursor};
@@ -57,8 +72,10 @@ pub enum Action {
     /// A mouse report: the left button is the touch pen.
     Mouse(MouseEvent),
     /// The terminal lost focus: every key lets go, since a release sent after it would never
-    /// arrive.
-    ReleaseAll,
+    /// arrive, and the run pauses if it was asked to ([`App::with_focus_pause`]).
+    FocusLost,
+    /// The terminal has the focus again: a paused run goes on.
+    FocusGained,
 }
 
 /// Whether `event` is the press of a quit key: Ctrl-C or Ctrl-Q (raw mode delivers them as keys).
@@ -69,7 +86,7 @@ fn is_quit(event: &KeyEvent) -> bool {
     event.kind == KeyEventKind::Press && ctrl && (letter('c') || letter('q'))
 }
 
-/// Maps a terminal event to an [`Action`]: Ctrl-C and Ctrl-Q quit, a resize and a loss of focus
+/// Maps a terminal event to an [`Action`]: Ctrl-C and Ctrl-Q quit, a resize and a change of focus
 /// have their own actions, and every other key goes to the console's keys.
 pub fn map_event(event: &Event) -> Action {
     match event {
@@ -77,7 +94,8 @@ pub fn map_event(event: &Event) -> Action {
         Event::Key(key) => Action::Key(*key),
         Event::Mouse(mouse) => Action::Mouse(*mouse),
         Event::Resize(..) => Action::Resized,
-        Event::FocusLost => Action::ReleaseAll,
+        Event::FocusLost => Action::FocusLost,
+        Event::FocusGained => Action::FocusGained,
         _ => Action::None,
     }
 }
@@ -104,6 +122,10 @@ pub struct App {
     source: Source,
     save: Option<SaveFile>,
     quit: bool,
+    /// Whether the terminal has the focus, as it last reported; true until it says otherwise.
+    focused: bool,
+    /// Whether the run pauses while the terminal is not focused (`--focus-pause`).
+    focus_pause: bool,
     /// The host's wall-clock time, read once a frame for the machine's clock chip.
     clock: fn() -> u32,
     /// The keys held, from which each frame's input is built.
@@ -132,6 +154,8 @@ impl App {
             source: Source::Pattern,
             save: None,
             quit: false,
+            focused: true,
+            focus_pause: false,
             clock: local_wall_time,
             keys: Keys::new(false),
             cursor: Cursor::new(false),
@@ -159,6 +183,14 @@ impl App {
     /// Takes a gamepad event.
     pub fn apply_pad(&mut self, event: PadEvent) {
         self.pad.handle(event);
+    }
+
+    /// Tells the app whether to pause the run while the terminal is not focused; it does not
+    /// unless told to.
+    #[must_use]
+    pub fn with_focus_pause(mut self, pause: bool) -> Self {
+        self.focus_pause = pause;
+        self
     }
 
     /// Tells the app whether mouse reports count cells or pixels (SGR-Pixels is on).
@@ -199,7 +231,9 @@ impl App {
         self
     }
 
-    /// Called when the main loop ends: writes any save memory the file does not hold yet.
+    /// Writes any save memory the file does not hold yet. Called when the main loop ends, and
+    /// when a pause begins: no frame runs in a pause, so the usual write a quiet second after a
+    /// save would wait for the focus to come back.
     pub fn finish(&mut self) -> std::io::Result<()> {
         match (&mut self.save, &self.source) {
             (Some(save), Source::Machine(machine)) => save.finish(machine),
@@ -255,12 +289,14 @@ impl App {
                     None => self.pen.lift(),
                 }
             }
-            Action::ReleaseAll => {
+            Action::FocusLost => {
                 self.keys.release_all();
                 self.cursor.release_all();
                 self.pad.release_all();
                 self.pen.lift();
+                self.focused = false;
             }
+            Action::FocusGained => self.focused = true,
             Action::None | Action::Resized => {}
         }
     }
@@ -268,6 +304,13 @@ impl App {
     /// Whether the user asked to quit.
     pub fn should_quit(&self) -> bool {
         self.quit
+    }
+
+    /// Whether the run is paused: it was asked to pause without the focus
+    /// ([`App::with_focus_pause`]), and the terminal reported that it lost the focus and has not
+    /// reported getting it back. The emu loop runs no frame while this holds.
+    pub fn paused(&self) -> bool {
+        self.focus_pause && !self.focused
     }
 
     /// The current layout, `None` when the terminal is too small.
@@ -322,6 +365,7 @@ impl App {
         snapshot.cursor = self.cursor.active().then(|| self.cursor.position());
         snapshot.pad_available = self.pad_available;
         snapshot.pads_connected = self.pads_connected;
+        snapshot.paused = self.paused();
         if self.areas.is_some() {
             self.fill_screens(snapshot);
         } else {

@@ -90,11 +90,85 @@ fn given_a_key_release_when_mapping_then_it_goes_to_the_keys() {
 }
 
 #[test]
-fn given_focus_lost_or_gained_when_mapping_then_only_losing_it_releases_the_keys() {
+fn given_focus_lost_or_gained_when_mapping_then_each_has_its_own_action() {
     assert_eq!(
         (map_event(&Event::FocusLost), map_event(&Event::FocusGained)),
-        (Action::ReleaseAll, Action::None)
+        (Action::FocusLost, Action::FocusGained)
     );
+}
+
+/// An app that was asked to pause while the terminal is not focused (`--focus-pause`).
+fn pausing_app() -> App {
+    App::new(size()).with_focus_pause(true)
+}
+
+#[test]
+fn given_a_new_app_when_asked_then_it_is_not_paused() {
+    assert!(!pausing_app().paused());
+}
+
+#[test]
+fn given_focus_lost_then_gained_when_applied_then_the_app_pauses_and_goes_on() {
+    let mut app = pausing_app();
+    app.apply(Action::FocusLost);
+    let after_loss = app.paused();
+    app.apply(Action::FocusGained);
+    assert_eq!((after_loss, app.paused()), (true, false));
+}
+
+#[test]
+fn given_focus_regained_when_it_is_lost_again_then_the_app_pauses_again() {
+    let mut app = pausing_app();
+    app.apply(Action::FocusLost);
+    app.apply(Action::FocusGained);
+    app.apply(Action::FocusLost);
+    assert!(app.paused());
+}
+
+#[test]
+fn given_a_paused_app_when_focus_is_lost_again_then_it_stays_paused() {
+    let mut app = pausing_app();
+    app.apply(Action::FocusLost);
+    app.apply(Action::FocusLost);
+    assert!(app.paused());
+}
+
+#[test]
+fn given_a_focused_app_when_focus_is_gained_then_it_is_still_not_paused() {
+    let mut app = pausing_app();
+    app.apply(Action::FocusGained);
+    assert!(!app.paused());
+}
+
+#[test]
+fn given_a_focus_change_when_a_snapshot_is_filled_then_it_says_whether_the_run_is_paused() {
+    let mut app = pausing_app();
+    let mut snapshot = Snapshot::default();
+    app.fill(&mut snapshot);
+    let before = snapshot.paused;
+    app.apply(Action::FocusLost);
+    app.fill(&mut snapshot);
+    let during = snapshot.paused;
+    app.apply(Action::FocusGained);
+    app.fill(&mut snapshot);
+    assert_eq!((before, during, snapshot.paused), (false, true, false));
+}
+
+#[test]
+fn given_an_app_not_asked_to_pause_when_focus_is_lost_then_it_is_not_paused() {
+    let mut app = App::new(size());
+    app.apply(Action::FocusLost);
+    assert!(!app.paused());
+}
+
+#[test]
+fn given_an_app_not_asked_to_pause_when_focus_is_lost_then_frames_still_run() {
+    let mut app = App::new(size());
+    app.apply(Action::FocusLost);
+    app.step();
+    let mut snapshot = Snapshot::default();
+    app.fill(&mut snapshot);
+    assert_eq!((app.paused(), snapshot.paused), (false, false));
 }
 
 #[test]
@@ -346,7 +420,7 @@ fn given_a_released_key_when_a_frame_runs_then_the_machine_gets_no_button() {
 fn given_focus_lost_when_a_frame_runs_then_the_machine_gets_no_button() {
     let mut app = smoke_app(true);
     app.apply(key_action(KeyCode::Char('x'), KeyEventKind::Press));
-    app.apply(Action::ReleaseAll);
+    app.apply(Action::FocusLost);
     app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::empty());
@@ -443,7 +517,7 @@ fn given_focus_lost_or_a_resize_when_a_frame_runs_then_the_pen_is_up() {
     };
     assert_eq!(
         (
-            touched_after(|app| app.apply(Action::ReleaseAll)),
+            touched_after(|app| app.apply(Action::FocusLost)),
             touched_after(|app| app.resize(size()))
         ),
         (None, None)
@@ -613,7 +687,7 @@ fn given_the_same_button_on_pad_and_keyboard_when_the_key_is_released_then_the_p
 fn given_a_held_pad_button_when_focus_is_lost_then_the_machine_gets_no_button() {
     let mut app = smoke_app(true).with_gamepads(true, 1);
     app.apply_pad(PadEvent::Button(gilrs::Button::East, true));
-    app.apply(Action::ReleaseAll);
+    app.apply(Action::FocusLost);
     app.step();
     let input = app.machine().expect("a machine").inspect().input();
     assert_eq!(input.buttons, ninge_core::Buttons::empty());

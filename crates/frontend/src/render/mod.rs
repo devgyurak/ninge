@@ -43,6 +43,8 @@ pub struct Snapshot {
     pub pad_available: bool,
     /// How many pads are plugged in.
     pub pads_connected: u32,
+    /// Whether the run is paused because the terminal is not focused, which the panel says.
+    pub paused: bool,
 }
 
 /// Writes snapshots to the terminal. `S` is where shared-memory frames are written.
@@ -129,10 +131,16 @@ impl<S: ShmSink> Renderer<S> {
         } else {
             "\ngamepad connected".to_string()
         };
+        // Short enough for one line of the panel.
+        let paused_note = if snapshot.paused {
+            "\npaused: not focused"
+        } else {
+            ""
+        };
         // TODO(phase1): real register and disassembly panels (#56).
         frame.render_widget(
             Paragraph::new(format!(
-                "TODO(phase1) (#56){note}{keys_note}{cursor_note}{pad_note}\n{}",
+                "TODO(phase1) (#56){note}{keys_note}{cursor_note}{pad_note}{paused_note}\n{}",
                 self.transfer.label()
             ))
             .wrap(Wrap { trim: false })

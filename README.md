@@ -72,11 +72,15 @@ Open Ghostty or kitty, then:
 ninge path/to/program.nds   # run a ROM
 ninge                       # no ROM: show a test pattern
 ninge --no-audio program.nds   # run without opening a sound device
+ninge --focus-pause program.nds   # pause while the terminal is not focused
 ```
 
 Sound plays through the default output device, and the device's clock keeps the speed. With
 `--no-audio`, or when no device can be opened, ninge keeps the machine's own frame rate (about
 59.83 Hz) instead and plays nothing.
+
+With `--focus-pause`, ninge pauses, sound included, while its terminal is not focused, and goes
+on when the focus comes back.
 
 Quit with `Ctrl-C` or `Ctrl-Q`. ninge runs programs you have the right to run, such as
 homebrew you built yourself; it ships no ROMs and never needs a BIOS or firmware file.

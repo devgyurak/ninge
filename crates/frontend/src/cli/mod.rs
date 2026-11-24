@@ -8,7 +8,8 @@ use std::fmt;
 use std::path::PathBuf;
 
 /// The usage line shown with every [`UsageError`].
-pub const USAGE: &str = "usage: ninge [--no-audio] [<rom> [--save PATH] [--save-type TYPE]]";
+pub const USAGE: &str =
+    "usage: ninge [--no-audio] [--focus-pause] [<rom> [--save PATH] [--save-type TYPE]]";
 
 /// Arguments the frontend does not accept.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,12 +34,15 @@ pub struct Options {
     pub save_type: Option<SaveType>,
     /// `--no-audio`: open no sound device and keep time by the frame period.
     pub no_audio: bool,
+    /// `--focus-pause`: pause the run, sound included, while the terminal is not focused.
+    pub focus_pause: bool,
 }
 
 /// Parses the arguments after the program name: none shows the dummy pattern, one path is the ROM,
-/// `--save PATH` and `--save-type TYPE` (which need a ROM) name the save file and chip, and
-/// `--no-audio` (with or without a ROM) opens no sound device. More than one path, or any other
-/// option, is a usage error.
+/// `--save PATH` and `--save-type TYPE` (which need a ROM) name the save file and chip,
+/// `--no-audio` (with or without a ROM) opens no sound device, and `--focus-pause` (likewise)
+/// pauses the run while the terminal is not focused. More than one path, or any other option, is
+/// a usage error.
 pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, UsageError> {
     let mut args = args.into_iter();
     let mut options = Options::default();
@@ -46,6 +50,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, U
         let text = arg.to_string_lossy();
         match text.as_ref() {
             "--no-audio" if !options.no_audio => options.no_audio = true,
+            "--focus-pause" if !options.focus_pause => options.focus_pause = true,
             "--save" if options.save.is_none() => {
                 let value = args
                     .next()

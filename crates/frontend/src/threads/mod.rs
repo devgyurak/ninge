@@ -18,7 +18,7 @@ use crate::audio::sink::AudioSink;
 use crate::gamepad::PadEvent;
 use crate::handoff::Handoff;
 use crate::layout::TermSize;
-use crate::pacing::Pacer;
+use crate::pacing::{FRAME_TIME, Pacer};
 use crate::render::{Renderer, Snapshot};
 use crate::transfer::ShmSink;
 use anyhow::Context as _;
@@ -37,6 +37,10 @@ pub const RENDER_WAIT: Duration = Duration::from_millis(50);
 /// How long the input thread waits for a terminal event before it polls the pads and looks at the
 /// stop flag again: it bounds how fast the thread sees a stop, and how late a pad event is seen.
 pub const INPUT_POLL: Duration = Duration::from_millis(4);
+
+/// How long the emu thread waits between two looks at its events while the run is paused: a
+/// frame's time, so the focus coming back is acted on as fast as a key is.
+pub const PAUSED_POLL: Duration = FRAME_TIME;
 
 /// What the input thread tells the emu thread.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,7 +101,18 @@ pub struct Pace<'a, P, S> {
 /// At the start of each frame it applies every event queued since the last one, so input is never
 /// dropped and never starves a frame. It then runs the frame, hands the frame's audio to `sink`
 /// while its pacer still feeds audio and there is any (none without a ROM), publishes a snapshot,
-/// and waits as `pacer` says. A frame is run for each `sleep`; `now` is the pacer's clock.
+/// and waits as `pacer` says. `sleep` is called once a turn; `now` is the pacer's clock.
+///
+/// While the app is paused ([`App::paused`]: the terminal is not focused) a turn runs no frame
+/// and pushes no audio, so the device plays out what it has and falls silent. It publishes a
+/// snapshot only when an event came in (the pause itself, a resize), and waits [`PAUSED_POLL`]
+/// whatever the pacer says: an audio pacer sees an empty ring and would ask for the next frame at
+/// once. A paused turn is not a frame, so the pacer and the sink are not told one started: to a
+/// pacer the whole pause is one long gap between two frames, which never alone makes it give a
+/// device up. The turn the pause begins writes the save file if anything is pending
+/// ([`App::finish`]), since no frame will come to do it and the terminal may end the program
+/// before the focus is back. The first turn after the pause tells the sink
+/// ([`AudioSink::resumed`]).
 pub fn run_emu<P: Pacer, S: AudioSink>(
     app: &mut App,
     events: &Receiver<HostEvent>,
@@ -107,16 +122,40 @@ pub fn run_emu<P: Pacer, S: AudioSink>(
     now: impl Fn() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) {
+    let mut was_paused = false;
     loop {
-        pace.pacer.frame_started(now());
-        pace.sink.frame_started();
+        if !app.paused() {
+            pace.pacer.frame_started(now());
+            pace.sink.frame_started();
+        }
         // A closed channel (the input thread is gone) ends nothing by itself: its guard has set
         // `stop`.
+        let mut changed = false;
         while let Ok(event) = events.try_recv() {
             apply_host_event(app, event);
+            changed = true;
         }
         if app.should_quit() || stop.load(Ordering::SeqCst) {
             break;
+        }
+        if app.paused() {
+            if !was_paused {
+                // A failed write is not lost: the memory stays pending, and the flush at the
+                // end of the run tries again and reports it.
+                let _ = app.finish();
+            }
+            if changed {
+                handoff.publish(|snapshot| app.fill(snapshot));
+            }
+            was_paused = true;
+            sleep(PAUSED_POLL);
+            continue;
+        }
+        if std::mem::take(&mut was_paused) {
+            // This turn began paused, so its start was not announced above.
+            pace.pacer.frame_started(now());
+            pace.sink.frame_started();
+            pace.sink.resumed();
         }
         app.step();
         if pace.pacer.feeds_audio() && !app.audio().is_empty() {

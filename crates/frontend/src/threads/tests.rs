@@ -10,6 +10,7 @@ use crate::transfer::{NoShm, Transfer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ninge_core::Buttons;
 use ratatui::backend::TestBackend;
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::channel;
@@ -364,6 +365,383 @@ fn given_each_host_event_when_applied_then_the_model_takes_it() {
     );
 }
 
+// ---------------------------------------------------------------------------------- pause
+
+/// What a sink saw of a run, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    Push,
+    Resumed,
+}
+
+/// A sink that logs its pushes and its `resumed` calls in one sequence.
+#[derive(Default)]
+struct MarkSink {
+    marks: Vec<Mark>,
+}
+
+impl AudioSink for MarkSink {
+    fn resumed(&mut self) {
+        self.marks.push(Mark::Resumed);
+    }
+
+    fn push(&mut self, _samples: &[i16]) {
+        self.marks.push(Mark::Push);
+    }
+}
+
+/// What a script does at the end of a turn.
+enum Step {
+    Send(HostEvent),
+    Stop,
+}
+
+/// What the render side would have taken from the hand-off after a turn.
+#[derive(Debug, PartialEq, Eq)]
+struct Seen {
+    paused: bool,
+    areas: Option<crate::layout::Areas>,
+}
+
+/// What a scripted run left behind.
+struct Scripted {
+    result: anyhow::Result<()>,
+    app: App,
+    marks: Vec<Mark>,
+    /// Every wait, in turn order.
+    waits: Vec<Duration>,
+    /// After each wait, the snapshot published during that turn, `None` when nothing was.
+    seen: Vec<Option<Seen>>,
+    /// Whether the save file was there at each wait, so before the write at the end of the run.
+    saved_by: Vec<bool>,
+    save_file: Option<Vec<u8>>,
+}
+
+/// Runs `run_emu_and_save` over `app`, asked to pause while the terminal is not focused
+/// (`--focus-pause`). The steps scripted at turn 0 are queued before the first turn; those at
+/// turn n run in the n-th wait, so the (n + 1)-th turn sees them.
+fn scripted(
+    app: App,
+    path: Option<PathBuf>,
+    pacer: &mut impl Pacer,
+    script: Vec<(u32, Step)>,
+) -> Scripted {
+    scripted_with(app.with_focus_pause(true), path, pacer, script)
+}
+
+/// [`scripted`] over `app` as it is.
+fn scripted_with(
+    mut app: App,
+    path: Option<PathBuf>,
+    pacer: &mut impl Pacer,
+    script: Vec<(u32, Step)>,
+) -> Scripted {
+    let (tx, rx) = channel();
+    let stop = AtomicBool::new(false);
+    let handoff = Handoff::new(Snapshot::default);
+    let run_step = |step: &Step| match step {
+        Step::Send(event) => tx.send(*event).expect("receiver"),
+        Step::Stop => stop.store(true, Ordering::SeqCst),
+    };
+    script
+        .iter()
+        .filter(|(turn, _)| *turn == 0)
+        .for_each(|(_, step)| run_step(step));
+    let mut sink = MarkSink::default();
+    let mut waits = Vec::new();
+    let mut seen = Vec::new();
+    let mut saved_by = Vec::new();
+    let clock = Cell::new(Instant::now());
+    let result = run_emu_and_save(
+        &mut app,
+        &rx,
+        &handoff,
+        &mut Pace {
+            pacer,
+            sink: &mut sink,
+        },
+        &stop,
+        // A clock that moves a microsecond each time it is read: the run does not depend on how
+        // fast the machine is (an audio pacing gives a silent device up after a quarter second),
+        // and a frame pacer's wait is never exactly a frame's time.
+        || {
+            clock.set(clock.get() + Duration::from_micros(1));
+            clock.get()
+        },
+        |wait| {
+            waits.push(wait);
+            let turn = u32::try_from(waits.len()).expect("a few turns");
+            seen.push(handoff.take(Duration::ZERO, |s| Seen {
+                paused: s.paused,
+                areas: s.areas,
+            }));
+            saved_by.push(path.as_ref().is_some_and(|p| p.exists()));
+            script
+                .iter()
+                .filter(|(at, _)| *at == turn)
+                .for_each(|(_, step)| run_step(step));
+        },
+    );
+    let save_file = path.and_then(|p| {
+        let bytes = std::fs::read(&p).ok();
+        let _ = std::fs::remove_file(p);
+        bytes
+    });
+    Scripted {
+        result,
+        app,
+        marks: sink.marks,
+        waits,
+        seen,
+        saved_by,
+        save_file,
+    }
+}
+
+fn quit() -> Step {
+    Step::Send(HostEvent::Action(Action::Quit))
+}
+
+fn focus_lost() -> Step {
+    Step::Send(HostEvent::Action(Action::FocusLost))
+}
+
+fn focus_gained() -> Step {
+    Step::Send(HostEvent::Action(Action::FocusGained))
+}
+
+#[test]
+fn given_focus_lost_before_the_first_turn_when_the_emu_runs_then_no_frame_runs_nothing_is_pushed_and_it_polls_and_saves()
+ {
+    let (app, path) = app_with_changed_save("smoke.nds", "paused.sav");
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted(
+        app,
+        Some(path),
+        &mut audio_pacing(&failed),
+        vec![(0, focus_lost()), (3, quit())],
+    );
+    assert_eq!(
+        (
+            run.result.is_ok(),
+            frames(&run.app),
+            run.marks,
+            run.waits,
+            run.save_file
+        ),
+        (
+            true,
+            Some(0),
+            Vec::new(),
+            vec![PAUSED_POLL; 3],
+            Some(vec![0x21; 512])
+        )
+    );
+}
+
+#[test]
+fn given_the_pause_poll_when_asked_then_it_is_a_frames_time() {
+    assert_eq!(PAUSED_POLL, crate::pacing::FRAME_TIME);
+}
+
+#[test]
+fn given_focus_lost_and_nothing_else_when_turns_pass_then_one_snapshot_is_published_and_it_says_paused()
+ {
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![(0, focus_lost()), (3, quit())],
+    );
+    let paused = |seen: Option<Seen>| seen.map(|s| s.paused);
+    assert_eq!(
+        run.seen.into_iter().map(paused).collect::<Vec<_>>(),
+        vec![Some(true), None, None]
+    );
+}
+
+#[test]
+fn given_frames_then_a_pause_then_frames_when_the_emu_runs_then_only_unpaused_turns_make_frames_and_audio()
+ {
+    let failed = Arc::new(AtomicBool::new(false));
+    // Turns 1 and 2 run, 3 and 4 are paused, 5 and 6 run, the quit sent in wait 6 ends turn 7.
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut audio_pacing(&failed),
+        vec![(2, focus_lost()), (4, focus_gained()), (6, quit())],
+    );
+    assert_eq!(
+        (frames(&run.app), run.marks),
+        (
+            Some(4),
+            vec![
+                Mark::Push,
+                Mark::Push,
+                Mark::Resumed,
+                Mark::Push,
+                Mark::Push
+            ]
+        )
+    );
+}
+
+#[test]
+fn given_a_pause_in_the_middle_when_the_emu_runs_then_the_paused_turns_wait_a_poll_and_the_others_as_paced()
+ {
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![(1, focus_lost()), (3, focus_gained()), (5, quit())],
+    );
+    assert_eq!(
+        run.waits
+            .iter()
+            .map(|w| *w == PAUSED_POLL)
+            .collect::<Vec<_>>(),
+        vec![false, true, true, false, false]
+    );
+}
+
+// The save file is written a quiet second after the memory changed (`savefile`), which is 60
+// frames away in these runs: only the pause can have written it before the end.
+#[test]
+fn given_a_changed_save_when_the_pause_begins_then_the_file_is_written_in_that_turn() {
+    let (app, path) = app_with_changed_save("smoke.nds", "pause-flush.sav");
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted(
+        app,
+        Some(path),
+        &mut audio_pacing(&failed),
+        vec![(1, focus_lost()), (3, quit())],
+    );
+    assert_eq!(run.saved_by, vec![false, true, true]);
+}
+
+#[test]
+fn given_a_changed_save_and_no_pause_when_a_few_frames_run_then_the_file_waits_for_the_end() {
+    let (app, path) = app_with_changed_save("smoke.nds", "no-pause-flush.sav");
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted(
+        app,
+        Some(path),
+        &mut audio_pacing(&failed),
+        vec![(3, quit())],
+    );
+    assert_eq!(
+        (run.saved_by, run.save_file),
+        (vec![false; 3], Some(vec![0x21; 512]))
+    );
+}
+
+#[test]
+fn given_focus_lost_and_gained_in_one_turn_when_the_emu_runs_then_no_turn_is_paused() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut audio_pacing(&failed),
+        vec![(1, focus_lost()), (1, focus_gained()), (3, quit())],
+    );
+    assert_eq!(
+        (frames(&run.app), run.marks),
+        (Some(3), vec![Mark::Push; 3])
+    );
+}
+
+#[test]
+fn given_a_run_not_asked_to_pause_when_focus_is_lost_then_frames_and_audio_go_on() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted_with(
+        smoke_app(),
+        None,
+        &mut audio_pacing(&failed),
+        vec![(1, focus_lost()), (3, quit())],
+    );
+    assert_eq!(
+        (frames(&run.app), run.marks),
+        (Some(3), vec![Mark::Push; 3])
+    );
+}
+
+#[test]
+fn given_a_run_that_never_pauses_when_the_emu_runs_then_the_sink_is_never_told_resumed() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut audio_pacing(&failed),
+        vec![(3, quit())],
+    );
+    assert_eq!(run.marks, vec![Mark::Push; 3]);
+}
+
+#[test]
+fn given_focus_gained_while_focused_when_the_emu_runs_then_the_sink_is_never_told_resumed() {
+    let failed = Arc::new(AtomicBool::new(false));
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut audio_pacing(&failed),
+        vec![(1, focus_gained()), (3, quit())],
+    );
+    assert_eq!(run.marks, vec![Mark::Push; 3]);
+}
+
+#[test]
+fn given_stop_set_while_paused_when_the_emu_runs_then_the_loop_ends_and_saves() {
+    let (app, path) = app_with_changed_save("smoke.nds", "paused-stop.sav");
+    let run = scripted(
+        app,
+        Some(path),
+        &mut FramePacer::new(Instant::now()),
+        vec![(0, focus_lost()), (2, Step::Stop)],
+    );
+    assert_eq!(
+        (
+            run.result.is_ok(),
+            frames(&run.app),
+            run.waits.len(),
+            run.save_file
+        ),
+        (true, Some(0), 2, Some(vec![0x21; 512]))
+    );
+}
+
+#[test]
+fn given_a_resize_while_paused_when_the_emu_runs_then_it_is_applied_and_published_still_paused() {
+    let resized = TermSize {
+        cols: 100,
+        rows: 40,
+        ..size()
+    };
+    let expected = App::new(resized).areas();
+    let run = scripted(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![
+            (0, focus_lost()),
+            (2, Step::Send(HostEvent::Resize(resized))),
+            (4, quit()),
+        ],
+    );
+    assert_eq!(
+        (
+            run.seen.into_iter().nth(2),
+            run.app.areas() != App::new(size()).areas()
+        ),
+        (
+            Some(Some(Seen {
+                paused: true,
+                areas: expected
+            })),
+            true
+        )
+    );
+}
+
 // ---------------------------------------------------------------------------------- render
 
 /// A snapshot of one frame of the dummy pattern.
@@ -556,14 +934,20 @@ fn given_a_failing_size_query_when_a_resize_is_forwarded_then_it_is_an_error_and
 
 #[test]
 fn given_an_event_the_console_ignores_when_forwarded_then_nothing_is_sent() {
-    let (result, sent) = forwarded(&Event::FocusGained, Ok(size()));
+    let (result, sent) = forwarded(&Event::Paste(String::new()), Ok(size()));
     assert_eq!((result.expect("ok"), sent), (true, Vec::new()));
 }
 
 #[test]
-fn given_focus_lost_when_forwarded_then_the_emu_gets_release_all() {
+fn given_focus_lost_when_forwarded_then_the_emu_gets_focus_lost() {
     let (_, sent) = forwarded(&Event::FocusLost, Ok(size()));
-    assert_eq!(sent, vec![HostEvent::Action(Action::ReleaseAll)]);
+    assert_eq!(sent, vec![HostEvent::Action(Action::FocusLost)]);
+}
+
+#[test]
+fn given_focus_gained_when_forwarded_then_the_emu_gets_focus_gained() {
+    let (_, sent) = forwarded(&Event::FocusGained, Ok(size()));
+    assert_eq!(sent, vec![HostEvent::Action(Action::FocusGained)]);
 }
 
 #[test]

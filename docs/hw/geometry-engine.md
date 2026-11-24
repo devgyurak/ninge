@@ -159,10 +159,14 @@ time is up**, so a register read during the execution still sees the state from 
   the count past 128 and up to 256 or beyond; what does not fit is covered by the next item.
 - **A write to a full FIFO.** GBATEK says the CPU is frozen for as long as the FIFO is full, and
   that this includes the bus (no DMA, no interrupt, no ARM7 access in that time). The model: the
-  ARM9 write that finds no space runs the engine forward until one entry is free, and the engine
-  cycles that took are charged to the ARM9 as the cost of the write. No separate event holds the
-  CPU. This is deterministic because the engine's clock is a function of the queue alone. The
-  ARM7 is not frozen (see "Unverified"). DMA words wait the same way.
+  ARM9 write that finds no space runs the engine forward until one entry is free, and the ARM9 is
+  **held** for the engine cycles that took: the machine records "ARM9 held until *T*" (state, saved
+  with the machine) and the run loop skips the ARM9's clock to *T*, or to the next event if that
+  comes first, without running an instruction, so the line, timer, DMA, sample and IRQ events keep
+  firing on time during the hold. No separate event holds the CPU. This is deterministic because
+  the engine's clock is a function of the queue alone. The ARM7 is not frozen (see "Unverified").
+  A DMA word that finds the FIFO full does the same and holds the ARM9 with it, as GBATEK's "DMA
+  Overkill" paragraph says the DMA and the CPU are paused together.
 
 ### Matrices
 
@@ -398,8 +402,8 @@ and END_VTXS, except POS_TEST (GBATEK: "anywhere, except within strips, huh?").
   ends; nothing is recomputed on load (`savestate/mod.rs`).
 - Reading CLIPMTX_RESULT or VECMTX_RESULT while a command that changes the matrix is executing
   returns the matrix from before that command.
-- A write to the FIFO that stalls the ARM9 may stall for a whole frame when the engine is waiting
-  for VBlank; a program that fills the FIFO behind a SWAP_BUFFERS therefore waits.
+- A write to the FIFO that holds the ARM9 may hold it for a whole frame when the engine is waiting
+  for VBlank (its events still fire); a program that fills the FIFO behind a SWAP_BUFFERS therefore waits.
 - The FIFO count reaches 256 and bit 24 is set; the low 8 bits (bits 16-23) then read 0.
 
 ## Model (not hardware)
@@ -411,7 +415,7 @@ PR that implements it. None claims to be how the silicon works.
   its effect at the end. (PR B)
 - **PIPE refill.** The 2-entry refill happens at the moment the engine takes entries, with no
   delay. (PR B)
-- **The stall.** The ARM9 pays for engine time itself; see "The FIFO IRQ, the DMA start and the
+- **The stall.** The ARM9 is held for the engine time; see "The FIFO IRQ, the DMA start and the
   stall". (PR B)
 - **Lighting rounding**: the precision of the products, the squaring and the table index. (PR E; see
   "Unverified")
@@ -430,6 +434,23 @@ oracle.
   FIFO, nor whether a long command starts before its last parameter arrives. The model takes all
   entries at the start. — `gpu3d/` (the engine) — verify by reading GXSTAT bits 16-26 between two
   writes of one MTX_LOAD_4x4.
+- **A command abandoned midway.** When another port is written while a command waits for
+  parameters, the model drops the entries the abandoned command already queued (the engine takes a
+  command only when all its entries are there, so they would otherwise block the queue for ever).
+  GBATEK says nothing of an abandoned command. — `gpu3d/` (`Gpu3d::abandon`) — verify by writing
+  part of a MTX_LOAD_4x4 to its port and then another port's command, and reading GXSTAT's busy bit
+  and FIFO count.
+- **A write that can never complete.** A writer stuck on a FIFO the engine can never drain would
+  hang the hardware; the model drops the entry instead. Not reachable until SWAP_BUFFERS locks the
+  hardware up (`geometry-engine.md`, "SWAP_BUFFERS"). — `gpu3d/` (`Gpu3d::enqueue`).
+- **The ARM9 hold.** A write to a full FIFO holds the ARM9 until the engine took an entry; the
+  model skips its clock to that time (events still fire in between) and the engine state is
+  advanced inline at the write, so for the span of the hold a register read by another path
+  (a DMA at `now`) sees the engine already at the end of it. A DMA burst that finds the FIFO full
+  holds the ARM9 the same way (GBATEK, "GXFIFO DMA Overkill": "the DMA (and CPU) paused"). —
+  `machine/events.rs` (`run_arm9_until`, `run_dma`).
+- **The swap's wait.** SWAP_BUFFERS' own time is "until VBlank plus 392 cycles"; see the item on
+  its timing. — `gpu3d/` (`Gpu3d::start`).
 - **NOP and invalid IDs queue no entry.** GBATEK says a no-parameter command takes one entry and
   says nothing of NOP or of an invalid ID. — `gpu3d/` (`Gpu3d::run_pending`) — verify by counting
   GXSTAT's FIFO count after a word of NOPs behind a busy engine.
@@ -444,8 +465,9 @@ oracle.
   answers the stub's Unverified item on a repeating channel. — `io/dma/mod.rs`.
 - **The pause between bursts.** A burst is one atomic transfer and the next one starts after the
   words of the last have gone by at one bus cycle each, so a channel that never fills the FIFO does
-  not restart at the very same time for ever. DMA is not held by a full FIFO either: its writes
-  run the engine on for room but charge no CPU. — `io/mod.rs` (`Io::dma_finished`), `io/dma/mod.rs`.
+  not restart at the very same time for ever; the time the next burst is due is saved with the
+  channel. A word that finds the FIFO full holds the ARM9 (see the ARM9 hold). —
+  `io/mod.rs` (`Io::dma_finished`), `io/dma/mod.rs`.
 - **Cycle counts starred in GBATEK** (MULT and TRANS) and the +30 of mode 2: which commands it
   covers. NORMAL's 9..12 range for 0..4 lights, which is five settings for four timings. The model
   takes 9 plus the light count, capped at 12. — `gpu3d/`.

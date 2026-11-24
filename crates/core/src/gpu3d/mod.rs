@@ -386,6 +386,7 @@ impl Gpu3d {
             return;
         };
         if self.owed == 0 || self.command != id {
+            self.abandon();
             self.pending = 0;
             self.command = id;
             self.owed = count;
@@ -395,6 +396,20 @@ impl Gpu3d {
             }
         }
         self.parameter(word, at);
+    }
+
+    /// Drops the command that waits for parameters, with the entries it already queued: the engine
+    /// takes a command only when all its entries are there, so they would otherwise stay in the
+    /// queue for ever and shift every later command boundary.
+    // TODO(hw-unverified): an abandoned command's entries are taken back (`geometry-engine.md`,
+    // "Unverified").
+    fn abandon(&mut self) {
+        let count = parameter_count(self.command).map_or(0, usize::from);
+        let queued = count.saturating_sub(usize::from(self.owed));
+        if self.owed > 0 {
+            self.queue.drop_newest(queued);
+        }
+        self.owed = 0;
     }
 
     /// One parameter word of the current command, queued as an entry; the last one frees the
@@ -474,6 +489,8 @@ impl Gpu3d {
         }
         let param = (0..entries).fold(0, |last, _| self.queue.pop().map_or(last, |e| e.param));
         // SWAP_BUFFERS is held until VBlank begins; the engine counts as busy meanwhile.
+        // TODO(hw-unverified): the wait ends at the first line-192 start at or after the command
+        // begins, the next frame's inside VBlank (`geometry-engine.md`, "Unverified").
         let begins = match front.command {
             CMD_SWAP_BUFFERS => at.max(next_vblank_start(at)),
             _ => at,

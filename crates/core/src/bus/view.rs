@@ -228,9 +228,12 @@ pub struct Arm9View<'a> {
     tcm: TcmConfig,
     now: u64,
     floor: u64,
-    /// Master cycles the step's writes have held the ARM9 so far; the run loop adds them to the
-    /// instruction's cost ([`Arm9View::take_stall`]).
+    /// Master cycles the step's writes have held the ARM9 so far ([`Arm9View::take_stall`]).
     stalled: u64,
+    /// The master time the ARM9 is held until (a write to a full geometry FIFO, a DMA burst into
+    /// it): the run loop skips to it, or to the next event, without running instructions
+    /// (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+    hold_until: u64,
 }
 
 impl<'a> Arm9View<'a> {
@@ -256,7 +259,24 @@ impl<'a> Arm9View<'a> {
             now,
             floor: now,
             stalled: 0,
+            hold_until: 0,
         }
+    }
+
+    /// The ARM9 is held until `time` already: the machine's saved hold.
+    pub(crate) fn with_hold(mut self, time: u64) -> Self {
+        self.hold_until = time;
+        self
+    }
+
+    /// The master time the ARM9 is held until; at or before the clock it is not held.
+    pub(crate) fn hold_until(&self) -> u64 {
+        self.hold_until
+    }
+
+    /// Holds the ARM9 until `time` at least.
+    pub(crate) fn hold(&mut self, time: u64) {
+        self.hold_until = self.hold_until.max(time);
     }
 
     /// The master cycles the step's writes held the ARM9, which the caller adds to the instruction's
@@ -454,13 +474,17 @@ impl Bus for Arm7View<'_> {
     fn read32(&mut self, addr: u32) -> u32 {
         u32::from_le_bytes(self.access().read(addr))
     }
+    // The ARM7 cannot reach the geometry block, the only source of a stall.
     fn write8(&mut self, addr: u32, value: u8) {
-        self.access().write(addr, value.to_le_bytes());
+        let stall = self.access().write(addr, value.to_le_bytes());
+        debug_assert_eq!(stall, 0, "the ARM7 never stalls");
     }
     fn write16(&mut self, addr: u32, value: u16) {
-        self.access().write(addr, value.to_le_bytes());
+        let stall = self.access().write(addr, value.to_le_bytes());
+        debug_assert_eq!(stall, 0, "the ARM7 never stalls");
     }
     fn write32(&mut self, addr: u32, value: u32) {
-        self.access().write(addr, value.to_le_bytes());
+        let stall = self.access().write(addr, value.to_le_bytes());
+        debug_assert_eq!(stall, 0, "the ARM7 never stalls");
     }
 }

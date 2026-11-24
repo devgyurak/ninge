@@ -368,8 +368,8 @@ impl Io {
         time: u64,
     ) {
         let floor = time.max(scheduler.now());
-        let queued9 = arm9.map_or(0, |trigger| self.dma9.trigger(trigger));
-        let queued7 = arm7.map_or(0, |trigger| self.dma7.trigger(trigger));
+        let queued9 = arm9.map_or(0, |trigger| self.dma9.trigger(trigger, time));
+        let queued7 = arm7.map_or(0, |trigger| self.dma7.trigger(trigger, time));
         self.schedule_slots::<true>(scheduler, Port::Dma, queued9, floor);
         self.schedule_slots::<false>(scheduler, Port::Dma, queued7, floor);
     }

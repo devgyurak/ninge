@@ -151,7 +151,7 @@ pub(super) fn run_frames(m: &mut Machine, frames: u32) {
 }
 
 /// The pending DMA start events as `(time, arm9, channel)`, in firing order.
-fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
+pub(super) fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
     m.inspect()
         .scheduler()
         .pending()

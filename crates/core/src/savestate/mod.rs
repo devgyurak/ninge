@@ -183,6 +183,7 @@ impl Machine {
             || (loaded.header.is_some() && loaded.arm7_clock < loaded.scheduler.now())
             // TODO(phase8): once an instruction's cost varies, this bound is the largest cost.
             || loaded.arm7_clock >= loaded.scheduler.now().saturating_add(ARM7_INSTRUCTION_COST)
+            || loaded.arm9_hold_until > crate::scheduler::MAX_TIME
         {
             return Err(SavestateError::Corrupt);
         }

@@ -4,11 +4,13 @@
 //! block, the level-driven IF bit 21, and a savestate taken in the middle of a command.
 
 use super::dma::{
-    B_SELF, DST, ENABLE, SPIN, SRC, WORD, machine, peek_words, poke_words, rom_with, run_frames,
-    set7, set9,
+    B_SELF, DST, ENABLE, SPIN, SRC, WORD, dma_events, machine, peek_words, poke_words, rom_with,
+    run_frames, set7, set9,
 };
 use super::*;
 use crate::cpu::Bus;
+use crate::io::dma::Trigger;
+use crate::scheduler::Participants;
 
 const GXFIFO: u32 = 0x0400_0400;
 const GXSTAT: u32 = 0x0400_0600;
@@ -379,4 +381,61 @@ fn given_an_str_to_a_full_geometry_fifo_when_the_arm9_steps_then_the_wait_is_par
         str_cost_with(260) - str_cost_with(10),
         192 * 4_260 + 784 + 34
     );
+}
+
+// ------------------------------------------------------------------------ the ARM9 hold
+
+#[test]
+fn given_a_held_arm9_when_the_machine_runs_then_no_instruction_runs_until_the_hold_ends() {
+    let mut m = machine();
+    let before = m.arm9.clone();
+    let start = m.scheduler.now();
+    m.arm9_hold_until = start + 10_000;
+    Participants::run_arm9_until(&mut m, start + 500);
+    assert_eq!((m.scheduler.now(), m.arm9 == before), (start + 500, true));
+}
+
+#[test]
+fn given_a_hold_when_the_target_is_past_its_end_then_the_clock_stops_at_the_hold_and_the_cpu_goes_on()
+ {
+    let mut m = machine();
+    let start = m.scheduler.now();
+    m.arm9_hold_until = start + 100;
+    Participants::run_arm9_until(&mut m, start + 200);
+    assert_eq!(m.scheduler.now(), start + 200);
+}
+
+#[test]
+fn given_a_held_arm9_when_an_event_is_due_before_the_hold_ends_then_the_clock_stops_at_the_event() {
+    let mut m = machine();
+    let start = m.scheduler.now();
+    m.arm9_hold_until = start + 1_000_000;
+    let event = m.scheduler.next_time().expect("the line events are queued");
+    Participants::run_arm9_until(&mut m, start + 1_000_000);
+    assert_eq!(m.scheduler.now(), event);
+}
+
+#[test]
+fn given_a_dma_burst_into_a_full_fifo_when_it_runs_then_the_arm9_is_held_for_the_wait() {
+    // A mode-0 DMA of 300 words to GXFIFO behind SWAP_BUFFERS: the FIFO fills and the burst waits.
+    let mut m = machine();
+    hold_the_engine_with(&mut m, 0);
+    poke_words(&mut m, SRC, &[MTX_PUSH; 300]);
+    set9(&mut m, 0, SRC, GXFIFO, ENABLE | WORD | DEST_FIXED | 300);
+    run_frames(&mut m, 1);
+    assert!(m.arm9_hold_until > 0);
+}
+
+#[test]
+fn given_a_geometry_burst_pause_when_saved_and_loaded_then_the_next_start_is_due_at_the_same_time()
+{
+    // A channel whose next start was queued for later (the pause between two bursts): the due time
+    // is state, so a load rebuilds the event where it was.
+    let mut m = machine();
+    set9(&mut m, 0, SRC, DST, ENABLE | WORD | 1 << 27 | 4);
+    m.io.trigger_dma(&mut m.scheduler, Trigger::VBlank, 5_000);
+    let state = m.save_state();
+    let mut loaded = machine();
+    loaded.load_state(&state).expect("a state of this machine");
+    assert_eq!(dma_events(&loaded), vec![(5_000, true, 0)]);
 }

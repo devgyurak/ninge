@@ -4,19 +4,24 @@ Sources: GBATEK "DS Memory Maps" (the NDS9 and NDS7 BIOS rows and the BIOS ROM s
 Interrupts" (the handler pointer and IRQ check flag addresses), both read; GBATEK "BIOS Interrupt
 Handling" for the GBA (the register set the BIOS saves around the user handler and the
 `SUBS PC, LR, #4` return), read for the GBA only; GBATEK "BIOS Misc Functions" (WaitByLoop: the
-loop it runs and the counts that make one millisecond), read. Two more are recalled from memory of
+loop it runs and the counts that make one millisecond; GetSineTable, GetPitchTable and
+GetVolumeTable: the index and entry ranges, what the sine table holds, and that an index outside
+the range returns garbage), read; GBATEK "BIOS Function Summary" (the rows of the three table
+numbers `1Ah`-`1Ch` and the CPUs that have them), read. Two more are recalled from memory of
 GBATEK, not read, so each is under "Unverified": the SWI comment field ("ARM Opcodes ... SWI",
-"THUMB Opcodes ... SWI") and the DS function numbers ("BIOS Function Summary"). Also
+"THUMB Opcodes ... SWI") and the other DS function numbers ("BIOS Function Summary"). Also
 `arm-exceptions-modes.md` for the exception entry.
 Used by: `crates/core/src/hle/`, `crates/core/src/bus/memory/mod.rs`,
-`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 to 3 of 3); SoundBias: 5 (#42)
+`crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 to 3 of 3); SoundBias: 5 (#42); the
+sound tables: 6
 
 ninge boots without a BIOS dump (AGENTS.md §3.2). The BIOS is high-level emulated: the CPU
 enters its exception vectors exactly as on hardware, and the machine does in Rust what the BIOS
 code at those addresses would do. No BIOS image exists in ninge, and no instruction of it is
 written down anywhere. This note covers the BIOS area, the vectors, how an SWI number is found,
 the IRQ dispatcher, the wait routines (Halt, WaitByLoop, IntrWait, VBlankIntrWait), the copy,
-math, checksum and decompression routines, SoundBias, and the SWI numbers nothing implements.
+math, checksum and decompression routines, SoundBias, the three sound tables, and the SWI numbers
+nothing implements.
 
 ## The BIOS area
 
@@ -263,6 +268,59 @@ reads the memory there, as the BIOS would.
   form), low byte first. A block copy reads bytes already collected in the pair or already
   written. A size that is odd leaves the last byte unwritten.
 
+## The sound table SWIs
+
+Three numbers of the ARM7 return one entry of a table that sits in the BIOS ROM (GBATEK, "BIOS
+Misc Functions"). A sound driver uses them to turn a note and a loudness into register values:
+the pitch table for a channel's timer, the volume table for its volume, the sine table for a
+vibrato.
+
+| Number | Name | `R0` in | `R0` out |
+|---|---|---|---|
+| `1Ah` | GetSineTable | index `00h`-`3Fh` | an entry, `0000h`-`7FF5h` |
+| `1Bh` | GetPitchTable | index `000h`-`2FFh` | an entry, `0000h`-`FF8Ah` |
+| `1Ch` | GetVolumeTable | index `000h`-`2D3h` | an entry, `00h`-`7Fh` |
+
+Only `R0` changes, and the cost is the one instruction of any SWI here (see "Cost"). The ARM9 has
+none of the three: GBATEK's function summary lists them for the ARM7 alone, so on the ARM9 they
+take the "Unimplemented number" path.
+
+GBATEK gives each table's index range and the range of its entries, and says what the sine table
+holds. It does not list the entries. ninge has no BIOS to read them from (AGENTS.md §3.2), so the
+entries are **computed**: each table from one formula, each entry rounded to the nearest whole
+number. The formulas are below; how far they can be trusted is under "Unverified".
+
+**The sine table** (64 entries) is a quarter of a sine wave: entry `i` is `sin(i * 90° / 64) *
+7FFFh`. GBATEK calls it the sine of 0 to 88.6 degrees times `8000h`, with `7FF5h` the largest
+entry. The last entry is the sine of 88.59°, 0.999699: times `7FFFh` that is 32757.1, which is
+`7FF5h`; times `8000h` it would be `7FF6h`. So the scale here is `7FFFh`.
+
+**The pitch table** (768 entries) splits an octave in 768 equal steps, 64 to a semitone: entry `i`
+is `(2^(i/768) - 1) * 10000h`, the fraction by which a frequency `i` steps up exceeds the one it
+started from. Entry 0 is 0. The last is 0.998196 times `10000h`, 65417.8, which rounds to `FF8Ah`,
+GBATEK's largest entry (rounded down it would be `FF89h`): this is why entries are rounded to the
+nearest and not down.
+
+**The volume table** (724 entries) is taken to be in tenths of a decibel: the top entry, 723, is
+the full level and every entry below it is a tenth of a decibel quieter, so the level of entry `i`
+is `10^((i - 723) / 200)`. An entry is a value for the 7-bit volume of SOUNDxCNT, and at full level
+it is `7Fh`. Seven bits alone cannot carry 72 dB: near the bottom the whole range would be a
+handful of values. SOUNDxCNT has a volume divider beside the volume (/2, /4, /16), and the table is
+taken to be made for use with it: an entry holds the level times the divider that goes with it,
+and the divider changes where the level has fallen to a half, a quarter and a sixteenth, which is
+60, 120 and 240 tenths of a decibel down (6.02 dB is a factor of two), at entries 663, 603 and 483:
+
+```
+k = 16 below 483, 4 for 483-602, 2 for 603-662, 1 from 663 up
+entry[i] = min(7Fh, 127 * 10^((i - 723) / 200) * k)
+```
+
+So the entries climb four times: from 0 to 127 over entries 0 to 482, from 32 to 126 over 483 to
+602, from 64 to 126 over 603 to 662, and from 64 to 127 over 663 to 723. The level a program gets,
+the entry over the divider, never falls as the index rises.
+
+**An index outside a table's range.** GBATEK says the result is garbage. Here it is 0.
+
 ## The IRQ dispatcher
 
 Hardware: the BIOS IRQ code saves `R0-R3`, `R12` and `LR` on the IRQ-mode stack, loads the
@@ -335,6 +393,26 @@ checks").
 
 ## Unverified
 
+- **The entries of the three sound tables.** They are computed, not read, and no entry has been
+  compared with a BIOS. What is known is what GBATEK gives: the sizes and the smallest and largest
+  entry of each table, which the formulas meet (`0000h` and `7FF5h`, `0000h` and `FF8Ah`, `00h` and
+  `7Fh`). An entry in between can differ from the real one by the rounding, or by more where a
+  formula is wrong. — `hle::swi::sound` — verify by a test ROM on hardware that holds the
+  formulas itself, asks for every index, and reports only whether each answer agrees (or the
+  first index that does not). What the hardware answers is BIOS data: it is never written down,
+  in the test ROM's source, a fixture, an issue or a PR (AGENTS.md §3.1, §3.2).
+- **The formulas of the pitch and volume tables.** GBATEK describes the sine table; for the other
+  two it gives only the ranges. That the pitch table is `2^(i/768) - 1` is inferred from its size
+  (64 steps to each of 12 semitones) and its largest entry. That the volume table is in tenths of a
+  decibel, and holds the level times a divider that changes at a half, a quarter and a sixteenth,
+  is inferred from its size, its range and the divider SOUNDxCNT has. One observation is
+  consistent with it and is not its source: in a local run a program wrote the divider /2 beside
+  the entries 603 to 662, /4 beside 483 to 602 and /16 below 483. That is an observation of a
+  program, not of the BIOS. — `hle::swi::sound`.
+- **The scale of the sine table**, `7FFFh` where GBATEK writes `8000h`, chosen to meet its largest
+  entry. — `hle::swi::sound`.
+- **An index outside a table's range** returns 0 here. GBATEK calls what the BIOS returns
+  garbage. A program that relies on it is not expected. — `hle::swi::sound`.
 - **The IRQ return address `base + 20h`.** GBATEK does not give the DS BIOS's own address for the
   user handler's return. — `hle::IRQ_RETURN_VECTOR` in `crates/core/src/hle/` — it matters only to
   a handler that reads `LR` for itself; verify by a test ROM on hardware that prints `LR` in

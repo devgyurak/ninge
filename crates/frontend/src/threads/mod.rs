@@ -3,9 +3,9 @@
 //!
 //! Each loop is a plain function over what it drives: a channel of [`HostEvent`]s, a
 //! [`Handoff`] of [`Snapshot`]s, a [`Pacer`], a clock and a sleep, a terminal backend and a
-//! writer. A test runs one without spawning a thread, with a pre-filled channel, a no-op sleep, a
-//! `TestBackend` and a `Vec<u8>`. [`crate::term`] keeps only the OS wiring: the real terminal, the
-//! real pads, and spawning.
+//! writer, a [`TerminalInput`]. A test runs one without spawning a thread, with a pre-filled
+//! channel, a no-op sleep, a `TestBackend`, a `Vec<u8>` and a scripted terminal. [`crate::term`]
+//! keeps only the OS wiring: the real terminal, the real pads, and spawning.
 //!
 //! The emu thread owns the model ([`App`]); the render thread owns the [`Renderer`] and the
 //! terminal; the input thread owns the event reader and the pads. Input hands the emu thread
@@ -37,6 +37,14 @@ pub const RENDER_WAIT: Duration = Duration::from_millis(50);
 /// How long the input thread waits for a terminal event before it polls the pads and looks at the
 /// stop flag again: it bounds how fast the thread sees a stop, and how late a pad event is seen.
 pub const INPUT_POLL: Duration = Duration::from_millis(4);
+
+/// How long the run waits for the input thread once the other two have ended. A stop reaches it
+/// within [`INPUT_POLL`]; one that takes this much longer is taken to be stuck in the terminal's
+/// event reader and is left behind ([`finishes_within`]).
+pub const INPUT_GRACE: Duration = Duration::from_millis(250);
+
+/// How often [`finishes_within`] asks again.
+pub const JOIN_POLL: Duration = Duration::from_millis(1);
 
 /// How long the emu thread waits between two looks at its events while the run is paused: a
 /// frame's time, so the focus coming back is acted on as fast as a key is.
@@ -203,6 +211,71 @@ pub fn run_render<S: ShmSink, B: Backend, W: Write>(
     show(Duration::ZERO)?;
     gfx.flush()?;
     Ok(())
+}
+
+/// The terminal as the input loop reads it. [`crate::term`] has the real one; a test scripts one.
+pub trait TerminalInput {
+    /// Waits up to `wait` for the terminal to have something to read, and says whether the
+    /// terminal is gone: its window closed, or the connection to it dropped.
+    fn gone(&mut self, wait: Duration) -> bool;
+
+    /// The next event that is already waiting, `None` when there is none. Never waits.
+    fn next_event(&mut self) -> io::Result<Option<Event>>;
+
+    /// The terminal's size now.
+    fn size(&self) -> io::Result<TermSize>;
+}
+
+/// Reads terminal events and the pads and sends them to the emu thread until `stop` is set or
+/// the emu thread has gone. `pads` returns the pad events since it was last asked and how many
+/// pads are plugged in now; `connected` is that count at the start.
+///
+/// Each turn first asks whether the terminal is gone, and ends with an error if it is, before
+/// any event is read: an event reader given a terminal that hung up can read "nothing" from it
+/// for ever and never return, so a run whose terminal went away without a signal would stay
+/// behind, busy. The same call is the loop's wait ([`INPUT_POLL`]): it bounds how fast the thread
+/// sees `stop` and how late a pad event is seen. Every event already waiting is then forwarded,
+/// so a burst is not spread over several waits; a stop ends a burst too.
+pub fn run_input<T: TerminalInput>(
+    terminal: &mut T,
+    mut pads: impl FnMut() -> (Vec<PadEvent>, u32),
+    connected: u32,
+    tx: &Sender<HostEvent>,
+    stop: &AtomicBool,
+) -> anyhow::Result<()> {
+    let mut connected = connected;
+    while !stop.load(Ordering::SeqCst) {
+        anyhow::ensure!(!terminal.gone(INPUT_POLL), "the terminal is gone");
+        while let Some(event) = terminal.next_event()? {
+            if stop.load(Ordering::SeqCst) || !forward_event(&event, || terminal.size(), tx)? {
+                return Ok(());
+            }
+        }
+        let (events, now_connected) = pads();
+        if !forward_pads(events, now_connected, &mut connected, tx) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `done` turns true within `limit`, asked again every [`JOIN_POLL`]. The run uses it to
+/// wait for the input thread without depending on it: a thread stuck in the terminal's event
+/// reader never ends, and the process is about to exit anyway.
+pub fn finishes_within(
+    done: impl Fn() -> bool,
+    limit: Duration,
+    now: impl Fn() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> bool {
+    let deadline = now() + limit;
+    while !done() {
+        if now() >= deadline {
+            return false;
+        }
+        sleep(JOIN_POLL);
+    }
+    true
 }
 
 /// Sends the emu thread what a terminal `event` means: a resize with the size `query_size` reads

@@ -22,8 +22,8 @@ The mixer, the volume and panning, the PSG and noise generation, reading the sam
 PCM16, ADPCM) and the gates (SOUNDCNT, POWCNT2, the sound amplifier of the power-management device)
 are in `spu.md` (#45), and what the capture units write to memory is in `sound-capture.md` (#46).
 The addition of channel 1 or 3 into channel 0 or 2 (SNDCAPxCNT bit 0) is in `sound-capture.md` too.
-Not implemented (`TODO(phase6)`): the BIOS table SWIs (sine, pitch and volume tables, which are BIOS
-data and need a plan of their own).
+The BIOS table SWIs (the sine, pitch and volume tables a sound driver reads) are in `hle-swi.md`,
+"The sound table SWIs".
 
 ## Who sees them
 
@@ -186,12 +186,16 @@ channel is not documented.
 - **One sample takes `4 * (10000h - TMR)` master cycles.** The sample clock is the ARM7 clock
   halved (GBATEK's formula), and one ARM7 cycle is two master cycles (`scheduler.md`).
   A TMR of 0 gives `10000h` cycles per sample, the slowest rate.
-- **The end is computed once, at the start.** When bit 31 goes from 0 to 1 the model records
+- **The end is computed at the start.** When bit 31 goes from 0 to 1 the model records
   `end = now + samples * 4 * (10000h - TMR)`, with `now` the master time of the write. A read of
   the register reports busy while the channel has started and `now < end`. No scheduler event and
   no timer are involved. The playback of a channel (`spu.md`, "Position") uses the same end, so
   the busy bit and the output agree. A capture is the same, with a start time and the slots written
   so far instead of an end (`sound-capture.md`, "Model").
+- **A TMR write while the channel is busy moves the end.** The sample in progress keeps its
+  length and the samples after it take the new one (`spu.md`, "Position"), so the end becomes the
+  end of the sample in progress plus the samples still to play at the new length. A one-shot in
+  its last sample has none left and its end stays.
 - **A capture is the same**, with the sample rate of channel 1 (capture 0) or channel 3
   (capture 1) taken from their TMR at the moment the capture starts.
 - **The busy bit never clears** for: loop mode, PSG and noise (format 3), the manual (0) and
@@ -227,7 +231,9 @@ hardware, or a comparison with the reference emulator used as an oracle.
 
 - **A start delay before playback begins.** None is modeled; the real channels may take some
   cycles before the first sample. — `spu/` — verify by a test ROM timing the busy bit.
-- **TMR, PNT or LEN written while a channel is busy.** The end time is not recomputed. — `spu/`.
+- **PNT or LEN written while a channel is busy.** The end time is not recomputed. — `spu/`.
+- **TMR written while a channel is busy.** The rate, and so the end, follow the write from the
+  next sample on; the reason and what is not known are in `spu.md`, "Unverified". — `spu/`.
 - **The manual (0) and prohibited (3) repeat modes** are treated as never ending. GBATEK says
   nothing about their busy bit. — `spu/`.
 - **PSG on channels 0-7 and noise on channels other than 14-15.** GBATEK says PSG works on 8-13 and

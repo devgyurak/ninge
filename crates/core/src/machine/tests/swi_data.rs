@@ -310,3 +310,94 @@ fn given_swi_08_on_the_arm9_when_called_then_it_is_recorded_unimplemented() {
     let m = arm9_after(0x08, [1, 0, 0, 0]);
     assert_eq!(m.inspect().swi_record9().last_unimplemented(), Some(0x08));
 }
+
+// ----------------------------------------------------------------------------- the sound tables
+//
+// Expected values are worked out by hand from the formulas in `docs/hw/hle-swi.md` ("The sound
+// table SWIs"): sine[32] = 0.7071068 * 32767 = 23169.8 -> 23170, pitch[384] = (sqrt 2 - 1) * 65536
+// = 27145.9 -> 27146, volume[723] = 127.
+
+/// The three numbers with an index and the entry the note's formula gives.
+const SOUND_TABLES: [(u32, u32, u32); 3] =
+    [(0x1A, 32, 23170), (0x1B, 384, 27146), (0x1C, 723, 127)];
+
+/// The `(number, got)` pairs where the ARM7's `R0` after the SWI is not the expected entry.
+fn sound_table_r0_failures() -> Vec<(u32, u32)> {
+    SOUND_TABLES
+        .iter()
+        .map(|&(n, index, want)| {
+            (
+                n,
+                want,
+                arm7_after(n, [index, 11, 22, 33]).arm7.regs().get(0),
+            )
+        })
+        .filter(|&(_, want, got)| want != got)
+        .map(|(n, _, got)| (n, got))
+        .collect()
+}
+
+/// The numbers after which the ARM7's `R1`-`R3` are not what they were.
+fn sound_table_other_regs_failures() -> Vec<u32> {
+    SOUND_TABLES
+        .iter()
+        .filter(|&&(n, index, _)| {
+            let m = arm7_after(n, [index, 11, 22, 33]);
+            [1, 2, 3].map(|i| m.arm7.regs().get(i)) != [11, 22, 33]
+        })
+        .map(|&(n, _, _)| n)
+        .collect()
+}
+
+#[test]
+fn given_the_sound_table_swis_on_the_arm7_when_called_then_r0_is_the_entry() {
+    assert_eq!(sound_table_r0_failures(), Vec::<(u32, u32)>::new());
+}
+
+#[test]
+fn given_the_sound_table_swis_on_the_arm7_when_called_then_r1_to_r3_keep_their_values() {
+    assert_eq!(sound_table_other_regs_failures(), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_sound_table_swis_on_the_arm7_when_called_then_none_is_recorded_unimplemented() {
+    let recorded: Vec<Option<u8>> = [0x1A, 0x1B, 0x1C]
+        .iter()
+        .map(|&n| {
+            arm7_after(n, [0, 0, 0, 0])
+                .inspect()
+                .swi_record7()
+                .last_unimplemented()
+        })
+        .collect();
+    assert_eq!(recorded, vec![None; 3]);
+}
+
+#[test]
+fn given_the_sound_table_swis_on_the_arm9_when_called_then_each_is_recorded_unimplemented() {
+    let recorded: Vec<Option<u8>> = [0x1A, 0x1B, 0x1C]
+        .iter()
+        .map(|&n| {
+            arm9_after(n, [5, 0, 0, 0])
+                .inspect()
+                .swi_record9()
+                .last_unimplemented()
+        })
+        .collect();
+    assert_eq!(recorded, [0x1A, 0x1B, 0x1C].map(Some).to_vec());
+}
+
+#[test]
+fn given_the_sound_table_swis_on_the_arm9_when_called_then_r0_is_unchanged() {
+    let r0: Vec<u32> = [0x1A, 0x1B, 0x1C]
+        .iter()
+        .map(|&n| r9(&arm9_after(n, [5, 0, 0, 0]))[0])
+        .collect();
+    assert_eq!(r0, vec![5; 3]);
+}
+
+#[test]
+fn given_swi_pitch_table_on_the_arm7_when_the_index_is_768_then_r0_is_0() {
+    let m = arm7_after(0x1B, [768, 0, 0, 0]);
+    assert_eq!(m.arm7.regs().get(0), 0);
+}

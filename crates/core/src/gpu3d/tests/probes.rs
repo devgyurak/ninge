@@ -233,3 +233,51 @@ fn given_the_results_in_a_state_when_saved_and_loaded_then_they_are_kept() {
         (true, vec![1, 2, 3, 0x1000], vec![0x0800, 0xF800, 0])
     );
 }
+
+// ----------------------------------------------------- BOX_TEST's parameter order
+
+// Parameter 1 is `y << 16 | x`, parameter 2 `width << 16 | z` and parameter 3 `depth << 16 | height`.
+// Each box below sticks out of the view volume along one axis only (the corner at 1.5), and its size
+// along that axis is -1.0, which brings it back inside: the box is inside only if the right field is
+// that axis' size. The other two sizes are 0x100, which would leave it outside.
+
+#[test]
+fn given_a_box_whose_width_alone_brings_it_back_inside_when_tested_then_the_width_is_parameter_2_high()
+ {
+    let mut gpu = Gpu3d::new();
+    assert!(box_test(&mut gpu, [0x1800, 0, 0], [-0x1000, 0x100, 0x100]));
+}
+
+#[test]
+fn given_a_box_whose_height_alone_brings_it_back_inside_when_tested_then_the_height_is_parameter_3_low()
+ {
+    let mut gpu = Gpu3d::new();
+    assert!(box_test(&mut gpu, [0, 0x1800, 0], [0x100, -0x1000, 0x100]));
+}
+
+#[test]
+fn given_a_box_whose_depth_alone_brings_it_back_inside_when_tested_then_the_depth_is_parameter_3_high()
+ {
+    let mut gpu = Gpu3d::new();
+    assert!(box_test(&mut gpu, [0, 0, 0x1800], [0x100, 0x100, -0x1000]));
+}
+
+#[test]
+fn given_the_same_boxes_with_the_sizes_swapped_when_tested_then_they_stay_outside() {
+    let mut gpu = Gpu3d::new();
+    let results = [
+        box_test(&mut gpu, [0x1800, 0, 0], [0x100, -0x1000, 0x100]),
+        box_test(&mut gpu, [0, 0x1800, 0], [0x100, 0x100, -0x1000]),
+        box_test(&mut gpu, [0, 0, 0x1800], [-0x1000, 0x100, 0x100]),
+    ];
+    assert_eq!(results, [false, false, false]);
+}
+
+#[test]
+fn given_a_vector_and_a_half_matrix_when_vec_test_runs_then_the_low_bits_of_the_result_are_kept() {
+    // 1/512 (the vector's smallest step) times 0.5 (800h) is 1/1024, which is 4 in 12 fraction bits.
+    let mut gpu = in_mode(2);
+    command(&mut gpu, 0x1A, &[0x800, 0, 0, 0, 0x800, 0, 0, 0, 0x800]);
+    command(&mut gpu, VEC_TEST_CMD, &[vec10(1, 0, 0)]);
+    assert_eq!(vec_result(&gpu)[0], 4);
+}

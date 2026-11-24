@@ -455,6 +455,8 @@ impl Geometry {
 
     /// POS_TEST: the position is replaced by `(x, y, z)` (as VTX_16 gives them) and goes through the
     /// clip matrix; the four results are `(x, y, z, w)`, 1.19.12.
+    // TODO(hw-unverified): the colour and the texture coordinates are left alone (`geometry-engine.md`,
+    // "Unverified").
     pub(super) fn position_test(&mut self, params: &[u32], clip: &Matrix) -> [i32; 4] {
         let half = |word: u32, high: bool| (word >> if high { 16 } else { 0 }) as u16 as i16;
         self.position = [

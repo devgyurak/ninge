@@ -28,7 +28,7 @@ use crate::io::device::{
 use crate::io::irq::{GXFIFO_IRQ, Requests};
 use crate::io::timing::next_vblank_start;
 use cycles::command_cycles;
-use lighting::{direction, unpack};
+use lighting::unpack;
 use matrix::{IDENTITY, Matrices, Matrix, Target, shape};
 use polygon::Geometry;
 pub use polygon::{MAX_POLYGON_VERTICES, POLYGON_RAM, Polygon, Ram, VERTEX_RAM, Vertex};
@@ -404,6 +404,8 @@ impl Gpu3d {
             self.running
                 .is_some_and(|running| ids.contains(&running.command))
         };
+        // TODO(hw-unverified): bit 0 covers the whole time a test executes and bit 14 the time a
+        // push, pop, store or restore executes (`geometry-engine.md`, "Unverified").
         let test_busy = if executing(&[CMD_BOX_TEST, CMD_POS_TEST, CMD_VEC_TEST]) {
             GXSTAT_TEST_BUSY
         } else {
@@ -846,12 +848,17 @@ impl Gpu3d {
 }
 
 /// VEC_TEST: the vector (1.0.9) through the vector matrix, as 12-bit fractions in 16 bits whose top
-/// four bits copy the sign: a value of 1.0 or more overflows (1.0 reads as -1.0).
+/// four bits copy the sign: a value of 1.0 or more overflows (1.0 reads as -1.0). The sum of the
+/// products has 21 fraction bits (9 and 12) and keeps 12, so the low bits of the result are real.
+// TODO(hw-unverified): the result's width and sign extension (`geometry-engine.md`, "Unverified").
 fn vector_test(param: u32, vector: &Matrix) -> [u16; 3] {
-    let through = direction(unpack(param), vector);
-    through.map(|component| {
-        // 9 fraction bits to 12, then the 13-bit signed value sign-extended to 16 bits.
-        let twelve = component << 3;
+    let v = unpack(param);
+    std::array::from_fn(|c| {
+        let sum = (0..3).fold(0i64, |sum, k| {
+            sum.wrapping_add(i64::from(v[k]).wrapping_mul(i64::from(vector[4 * k + c])))
+        });
+        // 21 fraction bits to 12, then the 13-bit signed value sign-extended to 16 bits.
+        let twelve = (sum >> 9) as i32;
         (((twelve << 19) >> 19) as i16) as u16
     })
 }

@@ -206,3 +206,107 @@ fn given_an_unknown_save_type_when_cli_runs_then_exit_code_is_2() {
     let out = run_cli_on_smoke(&["--save-type", "flash-3m"]);
     assert_eq!(out.status.code(), Some(2));
 }
+
+// ---- replay ----
+
+/// The header CRC of the smoke ROM, which the log's header must carry.
+fn smoke_crc() -> u16 {
+    let mut machine = ninge_core::Machine::new();
+    let rom = std::fs::read(testrom_path("smoke")).expect("smoke ROM is built");
+    machine.load_rom(rom).expect("a valid header");
+    machine.header().expect("a header").crc
+}
+
+/// A log file under the temp dir with `body` after a header for the smoke ROM (no save chip,
+/// whose memory hashes as FNV-1a of nothing).
+fn log_file(name: &str, rom_crc: u16, body: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("ninge-cli-{}-{name}", std::process::id()));
+    let header = format!("ninge-input 1 rom={rom_crc:04x} save=none:cbf29ce484222325\n");
+    std::fs::write(&path, header + body).expect("temp dir is writable");
+    path
+}
+
+/// `replay` on the smoke ROM and `log`, with a save path that does not exist, so no file beside
+/// the ROM takes part.
+fn run_replay(log: &std::path::Path, extra: &[&str]) -> Output {
+    let rom = testrom_path("smoke");
+    let no_save =
+        std::env::temp_dir().join(format!("ninge-cli-{}-no-such.sav", std::process::id()));
+    let mut args: Vec<&OsStr> = vec![
+        OsStr::new("replay"),
+        rom.as_os_str(),
+        log.as_os_str(),
+        OsStr::new("--save"),
+        no_save.as_os_str(),
+    ];
+    args.extend(extra.iter().map(OsStr::new));
+    run_cli(&args)
+}
+
+#[test]
+fn given_a_log_of_three_frames_when_cli_replays_it_then_stdout_is_the_report_of_three_frames() {
+    let log = log_file("three.ninput", smoke_crc(), "f=1 b=A\nf=2\nf=3 wall=7\n");
+    let out = run_replay(&log, &[]);
+    assert_eq!(
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        ),
+        (Some(0), expected_line(3))
+    );
+}
+
+#[test]
+fn given_a_log_of_one_frame_when_cli_replays_it_for_four_then_four_frames_run() {
+    let log = log_file("one.ninput", smoke_crc(), "f=1\n");
+    let out = run_replay(&log, &["--frames", "4"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected_line(4));
+}
+
+#[test]
+fn given_a_log_cut_off_mid_line_when_cli_replays_it_then_the_prefix_runs_and_stderr_says_so() {
+    let log = log_file("cut.ninput", smoke_crc(), "f=1\nf=2 b=");
+    let out = run_replay(&log, &[]);
+    assert_eq!(
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).contains("partial line")
+        ),
+        (Some(0), expected_line(1), true)
+    );
+}
+
+#[test]
+fn given_a_malformed_log_when_cli_replays_it_then_exit_code_is_5_and_stderr_names_the_line() {
+    let log = log_file("bad.ninput", smoke_crc(), "f=1\nf=9\n");
+    let out = run_replay(&log, &[]);
+    assert_eq!(
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).contains("line 3"),
+            out.stdout.is_empty()
+        ),
+        (Some(5), true, true)
+    );
+}
+
+#[test]
+fn given_a_log_for_another_rom_when_cli_replays_it_then_exit_code_is_5_and_no_frame_runs() {
+    let log = log_file("other.ninput", smoke_crc() ^ 1, "f=1\n");
+    let out = run_replay(&log, &[]);
+    assert_eq!((out.status.code(), out.stdout.is_empty()), (Some(5), true));
+}
+
+#[test]
+fn given_a_log_that_does_not_exist_when_cli_replays_it_then_exit_code_is_1() {
+    let out = run_replay(std::path::Path::new("/nonexistent/ninge/none.ninput"), &[]);
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn given_replay_without_a_log_when_cli_runs_then_exit_code_is_2() {
+    let rom = testrom_path("smoke");
+    let out = run_cli(&[OsStr::new("replay"), rom.as_os_str()]);
+    assert_eq!(out.status.code(), Some(2));
+}

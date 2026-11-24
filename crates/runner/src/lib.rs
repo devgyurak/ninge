@@ -6,16 +6,18 @@
 //! ```text
 //! ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE]    # N defaults to 1
 //! ninge-runner <rom> [--frames N] --audio [--wav PATH]  # also hash (and write) the audio
+//! ninge-runner replay <rom> <log> [--frames N] [--save PATH]   # run a recorded input log
 //! ninge-runner cpu-suite <dir>       # run the ARM7TDMI JSON suite files in <dir>
 //! ```
 //!
 //! A ROM path that starts with `-` is read as a flag and refused; pass `./-x.nds` instead. A
-//! ROM literally named `cpu-suite` is passed as `./cpu-suite`. The same rule applies to the
+//! ROM literally named `cpu-suite` or `replay` is passed as `./cpu-suite`. The same rule applies to the
 //! `cpu-suite` directory: pass `./-x` for a directory whose name starts with `-`.
 //!
 //! The binary prints one line, `frames=N top=<016x> bottom=<016x>`, where each hash is
 //! [`frame_hash`] of a screen. It exits 0 on success, 1 on an IO error, 2 on a usage error, 3 when
-//! the machine refuses the ROM (an invalid header), 4 when the save file or type is refused.
+//! the machine refuses the ROM (an invalid header), 4 when the save file or type is refused, 5 when
+//! an input log is malformed or was recorded for another ROM or save.
 //!
 //! With `--audio` the line gains a fourth field, `audio=<016x>`: [`audio_hash`] of every sample the
 //! run made, in order. `--wav PATH` also writes them as a stereo 16-bit WAV at [`WAV_RATE_HZ`], to
@@ -27,18 +29,24 @@
 //! `.sav`); `--save-type` names the chip (`auto` by default: a file's size names it, else the chip
 //! is detected from its first commands). See `docs/hw/auxspi-saves.md`.
 //!
+//! `replay` runs the log's frames (more with `--frames`, which get no input) against the save file
+//! the recording began with, read the same way and never written; the log format is in
+//! `docs/contributing/input-log.md`. It prints the same report line.
+//!
 //! `cpu-suite` prints one `<file>: <cases> cases, <failed> failed` line per `*.json.bin` file
 //! and a final `total:` line. Failing cases are expected until the CPU executes instructions
 //! (#8–#13), so they do not change the exit code; see [`cpu_suite`].
 
 pub mod cpu_suite;
 pub mod golden;
+pub mod replay;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use ninge_core::cart::{SaveError, SaveType, resolve_save};
+use ninge_core::input_log::{InputLogError, MismatchError};
 use ninge_core::{Input, Machine, RomError, Screen};
 
 /// Why the runner could not do what was asked.
@@ -66,6 +74,10 @@ pub enum RunnerError {
     Rom(RomError),
     /// The save file does not fit the save type, or no type has its size.
     Save(SaveError),
+    /// The input log is malformed, or of a version this build does not read.
+    Log(InputLogError),
+    /// The input log was recorded for another ROM or save.
+    LogMismatch(MismatchError),
 }
 
 impl fmt::Display for RunnerError {
@@ -77,6 +89,19 @@ impl fmt::Display for RunnerError {
             Self::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             Self::Rom(error) => write!(f, "the ROM was refused: {error}"),
             Self::Save(error) => write!(f, "the save was refused: {error}"),
+            Self::Log(error) => write!(f, "the input log was refused: {error}"),
+            Self::LogMismatch(
+                error @ (MismatchError::SaveType { .. } | MismatchError::SaveHash { .. }),
+            ) => {
+                write!(
+                    f,
+                    "the input log does not fit: {error}\n\
+                     (a replay reads the save file as it is now: pass the save as it was before \
+                     recording with --save, or a path that does not exist if the log began with \
+                     no save)"
+                )
+            }
+            Self::LogMismatch(error) => write!(f, "the input log does not fit: {error}"),
         }
     }
 }
@@ -89,6 +114,8 @@ impl std::error::Error for RunnerError {
             Self::Suite(error) => Some(error),
             Self::Rom(error) => Some(error),
             Self::Save(error) => Some(error),
+            Self::Log(error) => Some(error),
+            Self::LogMismatch(error) => Some(error),
         }
     }
 }
@@ -105,6 +132,18 @@ impl From<SaveError> for RunnerError {
     }
 }
 
+impl From<InputLogError> for RunnerError {
+    fn from(error: InputLogError) -> Self {
+        Self::Log(error)
+    }
+}
+
+impl From<MismatchError> for RunnerError {
+    fn from(error: MismatchError) -> Self {
+        Self::LogMismatch(error)
+    }
+}
+
 impl From<cpu_suite::SuiteError> for RunnerError {
     fn from(error: cpu_suite::SuiteError) -> Self {
         Self::Suite(error)
@@ -116,15 +155,22 @@ impl From<cpu_suite::SuiteError> for RunnerError {
 pub enum Command {
     /// Run a ROM for some frames and print its screen hashes.
     Run(Args),
+    /// Run a ROM on a recorded input log and print its screen hashes.
+    Replay(replay::ReplayArgs),
     /// Run the ARM7TDMI JSON suite files in a directory.
     CpuSuite(PathBuf),
 }
 
 /// Parses the arguments after the program name into a [`Command`].
 ///
-/// `cpu-suite <dir>` selects the suite; anything else is a ROM run as in [`parse_args`].
+/// `cpu-suite <dir>` selects the suite, `replay <rom> <log>` a replay; anything else is a ROM run as
+/// in [`parse_args`].
 pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command, RunnerError> {
     let mut args = args.into_iter().peekable();
+    if args.peek().is_some_and(|first| first == "replay") {
+        args.next();
+        return replay::parse_replay_args(args).map(Command::Replay);
+    }
     if args.peek().is_none_or(|first| first != "cpu-suite") {
         return parse_args(args).map(Command::Run);
     }
@@ -188,7 +234,7 @@ impl Args {
     }
 }
 
-const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE] [--audio] [--wav PATH]\n       ninge-runner cpu-suite <dir>";
+const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE] [--audio] [--wav PATH]\n       ninge-runner replay <rom> <log> [--frames N] [--save PATH]\n       ninge-runner cpu-suite <dir>";
 
 /// Parses the arguments after the program name.
 ///

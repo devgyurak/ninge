@@ -8,6 +8,7 @@
 //!
 //! - the machine and its host data: [`Machine`], [`Input`], [`Buttons`], [`Touch`], [`Screen`],
 //!   [`RomError`], [`SCREEN_WIDTH`], [`SCREEN_HEIGHT`], [`FRAME_CYCLES`] and [`MASTER_CLOCK_HZ`];
+//! - [`input_log`]: the text format of a recorded run, one `Input` per line (`docs/contributing/input-log.md`);
 //! - [`savestate`]: [`Machine::save_state`], [`Machine::load_state`] and
 //!   [`savestate::SavestateError`]. The byte layout is versioned by [`savestate::FORMAT_VERSION`]
 //!   and a mismatch is refused, never migrated;
@@ -34,6 +35,7 @@ mod gpu2d;
 pub mod gpu3d;
 mod hle;
 pub mod input;
+pub mod input_log;
 mod io;
 mod machine;
 mod rtc;

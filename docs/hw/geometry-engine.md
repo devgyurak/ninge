@@ -388,8 +388,8 @@ and END_VTXS, except POS_TEST (GBATEK: "anywhere, except within strips, huh?").
 ## Edge cases
 
 - A command for which the entries never complete (a program stops writing mid-command) keeps the
-  engine waiting; GXSTAT bit 27 reads 0 then, because nothing is executing and nothing complete is
-  queued (the model; see "Unverified").
+  engine waiting; the entries it has sit in the PIPE and FIFO, so GXSTAT bit 27 reads 1 (it is set
+  while either holds data) and the engine does nothing.
 - An odd value is never an error to the host: stack pointers wrap by their width, a matrix product
   wraps in 32 bits, a full RAM drops the polygon, a bad ID is ignored.
 - A savestate taken mid-command keeps the queue, the PIPE, the command in execution and the time it
@@ -402,21 +402,19 @@ and END_VTXS, except POS_TEST (GBATEK: "anywhere, except within strips, huh?").
 
 ## Model (not hardware)
 
-These are decisions that GBATEK does not state and that the emulator needs. Each is written in the
-PR that implements it. None claims to be how the silicon works.
+These are decisions that GBATEK does not state and that the emulator needs. None claims to be how the silicon works.
 
 - **Command start.** A command starts when all its entries are queued, takes them at once and has
-  its effect at the end. (PR B)
+  its effect at the end.
 - **PIPE refill.** The 2-entry refill happens at the moment the engine takes entries, with no
-  delay. (PR B)
-- **The stall.** The ARM9 pays for engine time itself; see "The FIFO IRQ, the DMA start and the
-  stall". (PR B)
-- **Lighting rounding**: the precision of the products, the squaring and the table index. (PR E; see
-  "Unverified")
-- **Clipping interpolation** and the guard band. (PR D; see "Unverified")
+  delay.
+- **The stall.** The ARM9 is held for the engine time; see "The FIFO IRQ, the DMA start and the
+  stall".
+- **Lighting rounding**: the precision of the products, the squaring and the table index.
+- **Clipping interpolation** and the guard band.
 - **Polygon RAM layout.** A polygon is a fixed-size record: attributes, texture parameters, the
   vertex count and the first vertex index, with the vertices in Vertex RAM in order. The renderer
-  reads the buffer the last swap made current. (PR D)
+  reads the buffer the last swap made current.
 
 ## Unverified
 

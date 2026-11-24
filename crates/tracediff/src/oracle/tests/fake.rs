@@ -7,9 +7,11 @@
 //! packet layer does not cancel itself against the fake.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::rc::Rc;
+
+use ninge_core::trace::{Opcode, TraceRecord};
 
 /// What the stub saw, shared with the test that built it.
 #[derive(Debug, Default)]
@@ -58,6 +60,21 @@ impl State {
         self
     }
 
+    /// The state a trace record describes: its registers and CPSR, and its opcode's bytes at the
+    /// pc (so the adapter reads the same instruction back).
+    pub fn from_record(record: &TraceRecord) -> Self {
+        let mut state = Self {
+            regs: record.regs,
+            cpsr: record.cpsr,
+            memory: BTreeMap::new(),
+        };
+        match record.opcode {
+            Opcode::Arm(word) => state.put(record.pc(), &word.to_le_bytes()),
+            Opcode::Thumb(half) => state.put(record.pc(), &half.to_le_bytes()),
+        }
+        state
+    }
+
     pub fn put(&mut self, addr: u32, bytes: &[u8]) {
         bytes.iter().enumerate().for_each(|(offset, byte)| {
             self.memory.insert(addr + offset as u32, *byte);
@@ -83,6 +100,8 @@ pub struct Fake {
     script: Vec<State>,
     at: usize,
     exited: bool,
+    /// The addresses `Z0` set and `z0` has not removed.
+    breakpoints: BTreeSet<u32>,
     /// Where the CPSR sits in the `g` block, in words.
     cpsr_word: usize,
     mode: Mode,
@@ -108,6 +127,7 @@ impl Fake {
             script,
             at: 0,
             exited: false,
+            breakpoints: BTreeSet::new(),
             cpsr_word: 16,
             mode: Mode::Simulate,
             overrides: BTreeMap::new(),
@@ -201,10 +221,32 @@ impl Fake {
         }
     }
 
-    /// Runs on to the last state of the script, as if a breakpoint there was hit.
+    /// Runs on to the next state after the current one whose r15 is a breakpoint address, or to
+    /// the last state of the script when there is none.
     fn resume(&mut self) -> Vec<u8> {
-        self.at = self.script.len().saturating_sub(1);
+        let last = self.script.len().saturating_sub(1);
+        self.at = (self.at + 1..self.script.len())
+            .find(|&index| self.breakpoints.contains(&self.script[index].regs[15]))
+            .unwrap_or(last);
         b"S05".to_vec()
+    }
+
+    /// `Z0,<addr>,<kind>` and `z0,<addr>,<kind>`: records or removes the address.
+    fn breakpoint(&mut self, set: bool, args: &str) -> Vec<u8> {
+        let addr = args
+            .strip_prefix("0,")
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|addr| u32::from_str_radix(addr, 16).ok());
+        match addr {
+            Some(addr) => {
+                match set {
+                    true => self.breakpoints.insert(addr),
+                    false => self.breakpoints.remove(&addr),
+                };
+                b"OK".to_vec()
+            }
+            None => b"E01".to_vec(),
+        }
     }
 
     fn answer(&mut self, data: &[u8]) -> Vec<u8> {
@@ -223,7 +265,7 @@ impl Fake {
             b'm' => self.memory(&args),
             b's' => self.step(),
             b'c' => self.resume(),
-            b'Z' | b'z' => b"OK".to_vec(),
+            b'Z' | b'z' => self.breakpoint(command == b'Z', &args),
             _ => Vec::new(),
         }
     }
@@ -336,6 +378,11 @@ fn wire(data: &[u8]) -> Vec<u8> {
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The scripted states of a run: one per record, in order.
+pub fn script_of(records: &[TraceRecord]) -> Vec<State> {
+    records.iter().map(State::from_record).collect()
 }
 
 /// The request payloads that start with `command`.

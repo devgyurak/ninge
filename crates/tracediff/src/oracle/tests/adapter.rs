@@ -571,3 +571,201 @@ fn given_a_layout_with_the_cpsr_among_the_first_words_when_the_reply_is_short_th
         })
     ));
 }
+
+// ---- state, run_to_breakpoint, run_to_hit ----
+
+const BP_A: u32 = 0x0200_0000;
+const BP_B: u32 = 0x0200_0004;
+const BP_C: u32 = 0x0200_0008;
+
+/// States numbered by r0, at the given pcs, ARM mode.
+fn numbered(pcs: &[u32]) -> Vec<State> {
+    pcs.iter()
+        .enumerate()
+        .map(|(index, pc)| arm_at(*pc).reg(0, index as u32))
+        .collect()
+}
+
+/// The (r0, r15) of the oracle's current state.
+fn marker<T: std::io::Read + std::io::Write>(cpu: &mut OracleCpu<T>) -> (u32, u32) {
+    let (regs, _) = cpu.state().expect("the registers are read");
+    (regs[0], regs[15])
+}
+
+#[test]
+fn given_a_script_when_state_is_read_then_it_is_the_registers_and_the_cpsr_of_the_current_state() {
+    let mut script = numbered(&[BP_A]);
+    script[0].regs[5] = 0xDEAD_BEEF;
+    script[0].cpsr = 0x6000_001F;
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, script);
+    let (regs, cpsr) = cpu.state().unwrap();
+    assert_eq!((regs[5], regs[15], cpsr), (0xDEAD_BEEF, BP_A, 0x6000_001F));
+}
+
+#[test]
+fn given_a_script_when_state_is_read_then_the_stub_is_not_stepped_nor_resumed() {
+    let (mut cpu, log) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B]));
+    cpu.state().unwrap();
+    cpu.state().unwrap();
+    let movers = requests(&log, 's').len() + requests(&log, 'c').len() + requests(&log, 'm').len();
+    assert_eq!(movers, 0);
+}
+
+#[test]
+fn given_a_cpsr_in_another_word_when_state_is_read_then_it_comes_from_that_word() {
+    let mut script = numbered(&[BP_A]);
+    script[0].cpsr = 0x2000_0010;
+    let (fake, _) = Fake::new(script);
+    let mut cpu = OracleCpu::connect(
+        fake.cpsr_word(20),
+        TraceCpu::Arm9,
+        RegisterLayout { cpsr: 20 },
+    );
+    assert_eq!(cpu.state().unwrap().1, 0x2000_0010);
+}
+
+#[test]
+fn given_a_short_register_reply_when_state_is_read_then_the_register_count_is_wrong() {
+    // 16 words where the default layout needs the CPSR at word 16.
+    let (fake, _) = Fake::new(numbered(&[BP_A]));
+    let mut cpu = connect(TraceCpu::Arm9, fake.reply(b'g', "00".repeat(64).as_bytes()));
+    assert!(matches!(
+        cpu.state(),
+        Err(AdapterError::RegisterCount {
+            words: 16,
+            needed: 17
+        })
+    ));
+}
+
+#[test]
+fn given_a_breakpoint_ahead_when_run_to_breakpoint_then_the_oracle_stops_there() {
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C, BP_B]));
+    cpu.client().set_breakpoint(BP_C, 4).unwrap();
+    let stopped = cpu.run_to_breakpoint(false).unwrap();
+    assert_eq!((stopped, marker(&mut cpu)), (true, (2, BP_C)));
+}
+
+#[test]
+fn given_no_step_off_when_run_to_breakpoint_then_no_step_is_sent() {
+    let (mut cpu, log) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C]));
+    cpu.client().set_breakpoint(BP_B, 4).unwrap();
+    cpu.run_to_breakpoint(false).unwrap();
+    assert_eq!(requests(&log, 's'), Vec::<String>::new());
+}
+
+#[test]
+fn given_a_step_off_when_run_to_breakpoint_then_the_oracle_leaves_the_breakpoint_it_stands_on() {
+    // At the first hit of B; with step_off the next call goes on to the second B instead of
+    // stopping where it stands.
+    let (mut cpu, log) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C, BP_B, BP_C]));
+    cpu.client().set_breakpoint(BP_B, 4).unwrap();
+    cpu.run_to_breakpoint(false).unwrap();
+    let stopped = cpu.run_to_breakpoint(true).unwrap();
+    assert_eq!(
+        (stopped, marker(&mut cpu), requests(&log, 's').len()),
+        (true, (3, BP_B), 1)
+    );
+}
+
+#[test]
+fn given_a_step_off_at_the_end_of_the_script_when_run_to_breakpoint_then_the_target_exited() {
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, numbered(&[BP_A]));
+    assert!(!cpu.run_to_breakpoint(true).unwrap());
+}
+
+#[test]
+fn given_an_exit_on_resume_when_run_to_breakpoint_then_it_reports_the_exit() {
+    let (fake, _) = Fake::new(numbered(&[BP_A, BP_B]));
+    let mut cpu = connect(TraceCpu::Arm9, fake.reply(b'c', b"W00"));
+    assert!(!cpu.run_to_breakpoint(false).unwrap());
+}
+
+#[test]
+fn given_an_exited_target_when_run_to_breakpoint_again_then_nothing_more_is_sent() {
+    let (fake, log) = Fake::new(numbered(&[BP_A, BP_B]));
+    let mut cpu = connect(TraceCpu::Arm9, fake.reply(b'c', b"W00"));
+    cpu.run_to_breakpoint(false).unwrap();
+    let before = log.borrow().packets.len();
+    let again = cpu.run_to_breakpoint(true).unwrap();
+    assert_eq!((again, log.borrow().packets.len()), (false, before));
+}
+
+#[test]
+fn given_a_stub_that_fails_when_run_to_breakpoint_then_the_error_surfaces() {
+    let (fake, _) = Fake::new(numbered(&[BP_A]));
+    let mut cpu = connect(TraceCpu::Arm9, fake.mode(Mode::Error));
+    assert!(matches!(
+        cpu.run_to_breakpoint(false),
+        Err(AdapterError::Rsp(_))
+    ));
+}
+
+#[test]
+fn given_a_second_hit_when_run_to_hit_then_the_oracle_stands_at_the_second_visit() {
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C, BP_B, BP_C]));
+    let reached = cpu.run_to_hit(BP_B, 4, 2).unwrap();
+    assert_eq!((reached, marker(&mut cpu)), (true, (3, BP_B)));
+}
+
+#[test]
+fn given_a_first_hit_when_run_to_hit_then_the_oracle_stands_at_the_first_visit() {
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C, BP_B, BP_C]));
+    let reached = cpu.run_to_hit(BP_B, 4, 1).unwrap();
+    assert_eq!((reached, marker(&mut cpu)), (true, (1, BP_B)));
+}
+
+#[test]
+fn given_a_hit_that_never_comes_when_run_to_hit_then_it_reports_false() {
+    // B is the last state, so the third hit needs a step past the end of the script.
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C, BP_B]));
+    assert!(!cpu.run_to_hit(BP_B, 4, 3).unwrap());
+}
+
+#[test]
+fn given_a_hit_when_run_to_hit_then_the_breakpoint_is_set_and_removed_with_the_same_kind() {
+    let (mut cpu, log) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C]));
+    cpu.run_to_hit(BP_B, 4, 1).unwrap();
+    let breakpoints: Vec<String> = log
+        .borrow()
+        .packets
+        .iter()
+        .filter(|packet| packet.to_lowercase().starts_with('z'))
+        .cloned()
+        .collect();
+    assert_eq!(
+        breakpoints,
+        vec!["Z0,2000004,4".to_string(), "z0,2000004,4".to_string()]
+    );
+}
+
+#[test]
+fn given_a_hit_when_run_to_hit_then_the_breakpoint_is_gone_and_the_next_resume_runs_to_the_end() {
+    let (mut cpu, _) = adapter(TraceCpu::Arm9, numbered(&[BP_A, BP_B, BP_C, BP_B, BP_C]));
+    cpu.run_to_hit(BP_B, 4, 1).unwrap();
+    cpu.client().resume().unwrap();
+    assert_eq!(marker(&mut cpu), (4, BP_C));
+}
+
+#[test]
+fn given_records_taken_before_when_run_to_hit_then_the_next_record_is_step_0_at_the_hit() {
+    let (mut cpu, _) = adapter(
+        TraceCpu::Arm9,
+        numbered(&[BP_A, BP_B, BP_C, BP_B, BP_C, BP_B, BP_C]),
+    );
+    cpu.next_record().unwrap();
+    cpu.next_record().unwrap();
+    cpu.run_to_hit(BP_B, 4, 2).unwrap();
+    let record = cpu.next_record().unwrap().unwrap();
+    assert_eq!((record.step, record.pc(), cpu.steps()), (0, BP_B, 1));
+}
+
+#[test]
+fn given_a_stub_without_breakpoints_when_run_to_hit_then_the_stub_error_surfaces() {
+    let (fake, _) = Fake::new(numbered(&[BP_A, BP_B]));
+    let mut cpu = connect(TraceCpu::Arm9, fake.mode(Mode::Empty));
+    assert!(matches!(
+        cpu.run_to_hit(BP_B, 4, 1),
+        Err(AdapterError::Rsp(RspError::Unsupported))
+    ));
+}

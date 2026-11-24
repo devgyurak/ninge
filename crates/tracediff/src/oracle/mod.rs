@@ -10,4 +10,4 @@ pub use adapter::{AdapterError, OracleCpu, RegisterLayout};
 pub use client::{GdbClient, Stop};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

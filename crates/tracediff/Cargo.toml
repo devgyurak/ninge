@@ -13,3 +13,7 @@ ninge-core.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "ninge-tracediff"
+path = "src/main.rs"

@@ -4,4 +4,5 @@
 
 mod adapter;
 mod client;
-mod fake;
+pub(crate) mod fake;
+mod stub;

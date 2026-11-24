@@ -2,11 +2,12 @@
 //! The sound registers of the ARM7: the 16 channels, SOUNDCNT, SOUNDBIAS and the two capture
 //! units (`docs/hw/sound-registers.md`).
 //!
-//! A channel's playback is a pure function of the master time it started, the registers latched at
-//! the start and the time of the query (`docs/hw/spu.md`, "Position"): how many samples have
-//! elapsed, and so which sample of the data is playing. The busy bit uses the same elapsed count (an
-//! end time computed once at the start), so the bit and the output cannot disagree, and a savestate
-//! taken mid-playback plays on exactly as an uninterrupted run. A capture unit is the same: its busy bit
+//! A channel's playback is a pure function of its sample clock, the registers latched at the start
+//! and the time of the query (`docs/hw/spu.md`, "Position"): how many samples have elapsed, and so
+//! which sample of the data is playing. The clock is plain data, set at the start and moved only by
+//! a write to SOUNDxTMR while the channel plays. The busy bit uses the same elapsed count (an end
+//! time computed from the clock), so the bit and the output cannot disagree, and a savestate taken
+//! mid-playback plays on exactly as an uninterrupted run. A capture unit is the same: its busy bit
 //! and the slots it has written are one pure function of its start time and what it latched
 //! (`docs/hw/sound-capture.md`, "Model").
 //!
@@ -178,7 +179,8 @@ pub struct Decoders {
 
 /// What a channel latches when it starts: the registers that decide where each sample comes from.
 /// A write to them while the sound plays does not move it (`spu.md`, "Model"). Volume, divider,
-/// panning, hold and duty are not here: they are read live from SOUNDxCNT.
+/// panning, hold and duty are not here: they are read live from SOUNDxCNT. Neither is TMR: its
+/// value is in the [`SampleClock`], which a write moves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Latched {
     sad: u32,
@@ -188,7 +190,19 @@ struct Latched {
     /// The channel's number, which decides what format 3 is.
     channel: u8,
     one_shot: bool,
-    /// Master cycles per sample.
+}
+
+/// A channel's sample clock (`spu.md`, "Position", "Model"): sample `base` begins at master time
+/// `origin`, and from there a sample takes `period` master cycles. A start sets it to sample 0 at
+/// the time of the write; a TMR write while the channel plays moves it to the sample after the one
+/// in progress, with the new period, so the count never jumps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct SampleClock {
+    /// The count of the sample that begins at `origin`.
+    base: u64,
+    /// The master time sample `base` begins.
+    origin: u64,
+    /// Master cycles per sample from `origin` on; 0 while stopped.
     period: u64,
 }
 
@@ -203,11 +217,14 @@ pub struct Channel {
     /// Master time of the write that started the sound; 0 while stopped.
     start: u64,
     latched: Latched,
+    /// Where the sample clock is; all zero while stopped.
+    clock: SampleClock,
     /// The IMA-ADPCM decoder and the noise register, advanced as the sample clock runs; each is
     /// unused by the other formats.
     decoders: Decoders,
-    /// Master time the busy bit clears, [`NEVER`] if it does not, 0 while stopped. Computed once at
-    /// the start from the latched registers, so the busy bit and the output share one position.
+    /// Master time the busy bit clears, [`NEVER`] if it does not, 0 while stopped. Computed from
+    /// the latched registers and the sample clock, at the start and when a TMR write moves the
+    /// clock, so the busy bit and the output share one position.
     end: u64,
 }
 
@@ -302,15 +319,25 @@ impl Channel {
     /// Samples elapsed since the start at master time `now`: the position of the sample clock, or
     /// `None` while the channel is stopped or `now` is before the start (the ARM7 can write at a
     /// time past the master clock, and a sample event at the master clock is then earlier than the
-    /// write; `spu.md`, "Position").
+    /// write; `spu.md`, "Position"). A time before the clock's origin is inside the sample that
+    /// was in progress when TMR was last written, which ends at the origin (`spu.md`, "Model").
     // TODO(hw-unverified): the sound starts at the write, with none of GBATEK's start delay (1, 3 or
     // 11 samples) and the busy bit clears at the end of the last sample, not at its begin
     // (`spu.md`, "Unverified").
     pub const fn elapsed(&self, now: u64) -> Option<u64> {
-        if self.cnt & CNT_START == 0 || self.latched.period == 0 || now < self.start {
+        let clock = &self.clock;
+        if self.cnt & CNT_START == 0 || clock.period == 0 || now < self.start {
             return None;
         }
-        Some((now - self.start) / self.latched.period)
+        if now < clock.origin {
+            return Some(clock.base.saturating_sub(1));
+        }
+        // Saturating: a loaded state can hold any count, and a count is never a panic.
+        Some(
+            clock
+                .base
+                .saturating_add((now - clock.origin) / clock.period),
+        )
     }
 
     /// Whether the latched channel is one that makes format 3 sound: PSG on 8-13, noise on 14-15
@@ -471,29 +498,35 @@ impl Channel {
         &self.decoders.noise
     }
 
-    /// The end time of a sound that starts at `now` with the registers as they are.
-    // TODO(hw-unverified): no start delay before the first sample, and TMR, PNT and LEN written
-    // while busy do not move the end (`sound-registers.md`, "Unverified"; `spu.md`, "Unverified").
+    /// The master time the busy bit clears for the latched registers and the sample clock as they
+    /// are: where the clock reaches the last sample's end, [`NEVER`] for a sound with no end
+    /// (`sound-registers.md`, "Model").
+    // TODO(hw-unverified): no start delay before the first sample, and PNT and LEN written while
+    // busy do not move the end (`sound-registers.md`, "Unverified"; `spu.md`, "Unverified").
     // TODO(hw-unverified): the manual and prohibited repeat modes, and PSG and noise on any
     // channel, never end (`sound-registers.md`, "Unverified").
-    fn end_from(&self, now: u64) -> u64 {
-        let words = u64::from(self.latched.pnt + self.latched.len);
-        let one_shot = self.latched.one_shot;
-        let samples = match (self.cnt >> CNT_FORMAT_SHIFT) & CNT_FORMAT_MASK {
-            FORMAT_PCM8 => 4 * words,
-            FORMAT_PCM16 => 2 * words,
-            FORMAT_ADPCM => 8 * words.saturating_sub(1),
+    fn end_of_run(&self) -> u64 {
+        let words = u64::from(self.latched.pnt) + u64::from(self.latched.len);
+        let samples = match self.latched.format {
+            FORMAT_PCM8 => PCM8_PER_WORD * words,
+            FORMAT_PCM16 => PCM16_PER_WORD * words,
+            FORMAT_ADPCM => ADPCM_PER_WORD * words.saturating_sub(1),
             _ => return NEVER,
         };
-        if !one_shot || words < u64::from(MIN_WORDS) {
+        if !self.latched.one_shot || words < u64::from(MIN_WORDS) {
             return NEVER;
         }
-        now.saturating_add(samples * self.latched.period)
+        // The samples that begin at the origin or later, each a period long.
+        let left = samples.saturating_sub(self.clock.base);
+        self.clock
+            .origin
+            .saturating_add(left.saturating_mul(self.clock.period))
     }
 
-    /// Latches the registers a started sound reads from, at master time `now`.
-    // TODO(hw-unverified): SAD, PNT, LEN, TMR, the format and the repeat mode are read at the start
-    // and a write while the sound plays does not move it (`spu.md`, "Unverified").
+    /// Latches the registers a started sound reads from and starts its sample clock, at master
+    /// time `now`.
+    // TODO(hw-unverified): SAD, PNT, LEN, the format and the repeat mode are read at the start and
+    // a write while the sound plays does not move it (`spu.md`, "Unverified").
     fn latch(&mut self, now: u64, channel: u8) {
         self.start = now;
         self.decoders = Decoders::default();
@@ -504,8 +537,42 @@ impl Channel {
             format: self.format(),
             channel,
             one_shot: self.repeat_mode() == REPEAT_ONE_SHOT,
+        };
+        self.clock = SampleClock {
+            base: 0,
+            origin: now,
             period: ticks_per_sample(self.tmr),
         };
+        self.end = self.end_of_run();
+    }
+
+    /// Takes a TMR written at master time `now` while the sound plays: the sample in progress
+    /// keeps its length, and the samples after it take the new one (`spu.md`, "Position"). The
+    /// clock moves to the sample that begins next, so the count goes on without a jump, and the
+    /// end moves with it. A second write inside the same sample only replaces the period.
+    // TODO(hw-unverified): that the rate follows a TMR write at all rests on a program seen to
+    // depend on it, and that it does so at the next sample is a choice (`spu.md`, "Unverified").
+    fn retime(&mut self, now: u64) {
+        let period = ticks_per_sample(self.tmr);
+        // `None` only for a time before the start, which the ARM7's own clock never gives a
+        // write that follows the start: the value is then kept for the next start.
+        let Some(elapsed) = self.elapsed(now) else {
+            return;
+        };
+        if period == self.clock.period {
+            return;
+        }
+        let clock = &mut self.clock;
+        if now >= clock.origin {
+            // Whole samples since the origin, and the one in progress: its end is the new origin.
+            let begun = ((now - clock.origin) / clock.period).saturating_add(1);
+            clock.origin = clock
+                .origin
+                .saturating_add(begun.saturating_mul(clock.period));
+            clock.base = elapsed.saturating_add(1);
+        }
+        clock.period = period;
+        self.end = self.end_of_run();
     }
 }
 
@@ -620,7 +687,8 @@ impl Capture {
     /// Latches the registers a started capture reads from, at master time `now`, with the TMR of
     /// the channel it shares a timer with.
     // TODO(hw-unverified): TMR, LEN, DAD and the format are read at the start and a write while the
-    // capture runs does not move it (`sound-capture.md`, "Unverified").
+    // capture runs does not move it, while the channel that shares the timer does follow a TMR
+    // write, so the two drift apart if a program writes it then (`sound-capture.md`, "Unverified").
     fn latch(&mut self, now: u64, tmr: u16) {
         let per_word = if self.cnt & CAP_PCM8 != 0 {
             CAP_SAMPLES_PCM8
@@ -1029,14 +1097,12 @@ impl Spu {
                 // TODO(hw-unverified): what a write of 1 to a running channel does on the hardware
                 // (`spu.md`, "Unverified").
                 match (was_busy, started) {
-                    (false, true) => {
-                        channel.latch(now, (offset >> CHANNEL_STRIDE_SHIFT) as u8);
-                        channel.end = channel.end_from(now);
-                    }
+                    (false, true) => channel.latch(now, (offset >> CHANNEL_STRIDE_SHIFT) as u8),
                     (true, true) => {}
                     (_, false) => {
                         channel.start = 0;
                         channel.latched = Latched::default();
+                        channel.clock = SampleClock::default();
                         channel.decoders = Decoders::default();
                         channel.end = 0;
                     }
@@ -1047,6 +1113,11 @@ impl Spu {
             }
             TMR_OFFSET..PNT_OFFSET => {
                 channel.tmr = with_byte(u32::from(channel.tmr), reg - TMR_OFFSET, byte) as u16;
+                // A playing channel follows the write; a stopped or ended one only keeps the
+                // value for its next start (`spu.md`, "Position", "Edge cases").
+                if channel.busy(now) {
+                    channel.retime(now);
+                }
             }
             PNT_OFFSET..LEN_OFFSET => {
                 channel.pnt = with_byte(u32::from(channel.pnt), reg - PNT_OFFSET, byte) as u16;
@@ -1078,13 +1149,21 @@ impl Spu {
 impl Checked for Spu {
     /// Every register holds only the bits it keeps, and a stopped unit has no end time. A started
     /// unit may be past its end (the bit is folded away lazily), and `end` is deliberately not
-    /// checked against `now`: any end time is one a program can have reached.
+    /// checked against `now`: any end time is one a program can have reached. A stopped channel's
+    /// sample clock is all zero and a started one's period is one a TMR value gives, as a
+    /// capture's is.
     fn well_formed(&self, _now: u64) -> bool {
         let channels = self.channels.iter().all(|c| {
+            let clocked = if c.cnt & CNT_START == 0 {
+                c.clock == SampleClock::default()
+            } else {
+                (TICKS_PER_TMR_STEP..=TICKS_PER_TMR_STEP * TMR_PERIOD).contains(&c.clock.period)
+            };
             c.cnt & !CNT_MASK == 0
                 && c.sad & !SAD_MASK == 0
                 && c.len & !LEN_MASK == 0
                 && (c.cnt & CNT_START != 0 || (c.end == 0 && c.start == 0))
+                && clocked
                 && c.decoders.adpcm.well_formed()
                 && c.decoders.noise.well_formed()
         });

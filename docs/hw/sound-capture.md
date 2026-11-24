@@ -172,7 +172,10 @@ oracle.
   the final slots of that run are still written with the capture-side addition. — `spu/`.
 - **A write of 1 to bit 7 while busy.** It keeps the current run here; GBATEK says nothing. —
   `spu/`.
-- **A write to TMR, LEN, DAD or the format while a capture runs.** Latched at the start here. —
-  `spu/`.
+- **A write to TMR, LEN, DAD or the format while a capture runs.** Latched at the start here. The
+  channel that shares the timer follows a TMR write (`spu.md`, "Position") and the capture does
+  not, so a program that changes SOUND1TMR or SOUND3TMR while the capture runs sees the capture and
+  the channel drift apart here; on the hardware they have one timer. No program is known to do
+  it. — `spu/`.
 - **The source value when channel `a` is not playing.** The model takes 0 for `ch(a)` (and the
   mixer value as it is). — `spu/`.

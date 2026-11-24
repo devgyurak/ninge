@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::io::device::cx_at;
+use proptest::prelude::*;
 
 mod addition;
 mod capture;
@@ -181,11 +182,171 @@ fn given_an_ended_one_shot_when_a_low_byte_is_written_then_the_stale_start_bit_i
     assert_eq!(spu.channel(0).cnt() & CNT_START, 0);
 }
 
-#[test]
-fn given_a_busy_channel_when_tmr_is_written_then_the_end_is_not_recomputed() {
+// ------------------------------------------------------------------- TMR written while playing
+//
+// `docs/hw/spu.md` ("Position", "Edge cases") and `docs/hw/sound-registers.md` ("Model"): a TMR
+// write keeps the length of the sample in progress, and each later sample takes `4 * (10000h - TMR)`
+// cycles of the new value. The end of a one-shot is the end of the sample in progress plus the
+// samples still to play times the new length. The PCM8 one-shot below is 4 words = 16 samples.
+
+/// A PCM8 one-shot of 4 words started at 0 (64 cycles a sample), then each `(time, TMR)` written as
+/// a halfword in order.
+fn retimed(writes: &[(u64, u32)]) -> Spu {
     let mut spu = started(0, start(ONE_SHOT, PCM8), 0, 4, 0);
-    write(&mut spu, ch(0, TMR_OFFSET), Width::Half, 0, 1);
+    writes
+        .iter()
+        .for_each(|&(time, tmr)| write(&mut spu, ch(0, TMR_OFFSET), Width::Half, tmr, time));
+    spu
+}
+
+/// The playback of [`DATA`] started at [`STARTED_AT`] with TMR `FFE0h` (128 cycles) written at 1,100,
+/// inside sample 1 (1,064..1,128).
+fn bent() -> Spu {
+    let mut spu = started(0, start(ONE_SHOT, PCM8), 0, 4, STARTED_AT);
+    write(&mut spu, ch(0, TMR_OFFSET), Width::Half, 0xFFE0, 1_100);
+    spu
+}
+
+#[test]
+fn given_a_busy_channel_when_a_slower_tmr_is_written_then_later_samples_take_the_new_length() {
+    // Sample 0 ends at 64; the other 15 take 4 * 20h = 128 each: 64 + 15 * 128.
+    let spu = retimed(&[(1, 0xFFE0)]);
+    assert_eq!(spu.channel(0).end(), 1_984);
+}
+
+#[test]
+fn given_a_busy_channel_when_a_faster_tmr_is_written_then_the_busy_bit_clears_earlier() {
+    // TMR FFF8h is 4 * 8 = 32 cycles a sample: 64 + 15 * 32.
+    let spu = retimed(&[(1, 0xFFF8)]);
+    assert_eq!(
+        (spu.channel(0).end(), busy_around(&spu, 0, 544)),
+        (544, (true, false))
+    );
+}
+
+#[test]
+fn given_a_tmr_written_inside_a_sample_when_played_then_that_sample_keeps_its_length() {
+    let expected = [
+        (1_127, 0x2000),
+        (1_128, 0x3000),
+        (1_255, 0x3000),
+        (1_256, 0x4000),
+        (1_383, 0x4000),
+        (1_384, -0x8000),
+    ];
+    assert_eq!(sample_failures(&bent(), 0, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_tmr_written_inside_a_sample_when_the_count_is_read_then_it_does_not_jump() {
+    let mut spu = started(0, start(ONE_SHOT, PCM8), 0, 4, STARTED_AT);
+    let before = spu.channel(0).elapsed(1_099);
+    write(&mut spu, ch(0, TMR_OFFSET), Width::Half, 0xFFE0, 1_100);
+    assert_eq!((before, spu.channel(0).elapsed(1_100)), (Some(1), Some(1)));
+}
+
+#[test]
+fn given_two_tmr_writes_inside_one_sample_when_played_then_only_the_last_one_counts() {
+    // Sample 1 (64..128) is in progress at both writes and ends at 128; the 14 after it take 32.
+    let spu = retimed(&[(70, 0xFFE0), (100, 0xFFF8)]);
+    assert_eq!(spu.channel(0).end(), 128 + 14 * 32);
+}
+
+#[test]
+fn given_a_tmr_written_as_two_bytes_when_played_then_it_equals_the_halfword_write() {
+    // TMR FEE0h is 4 * 120h = 1,152 cycles a sample: 64 + 15 * 1,152. The half-written value (a
+    // low byte alone, `FFE0h`, 128 cycles) must never become a sample length.
+    let mut bytes = started(0, start(ONE_SHOT, PCM8), 0, 4, 0);
+    write(&mut bytes, ch(0, TMR_OFFSET), Width::Byte, 0xE0, 1);
+    write(&mut bytes, ch(0, TMR_OFFSET) + 1, Width::Byte, 0xFE, 1);
+    let half = retimed(&[(1, 0xFEE0)]);
+    assert_eq!(
+        (bytes.channel(0).end(), half.channel(0).end()),
+        (17_344, 17_344)
+    );
+}
+
+#[test]
+fn given_the_same_tmr_written_again_when_played_then_the_end_does_not_move() {
+    let spu = retimed(&[(1, 0xFFF0)]);
     assert_eq!(spu.channel(0).end(), 1_024);
+}
+
+#[test]
+fn given_a_tmr_written_in_the_last_sample_when_played_then_the_end_does_not_move() {
+    // The last sample starts at 15 * 64 = 960; no sample begins after the write.
+    let spu = retimed(&[(15 * 64 + 1, 0xFFE0)]);
+    assert_eq!(spu.channel(0).end(), 1_024);
+}
+
+#[test]
+fn given_a_tmr_written_after_the_one_shot_ended_when_started_again_then_the_new_value_is_used() {
+    let mut spu = retimed(&[(2_000, 0xFFE0)]);
+    let quiet = (busy(&spu, 0, 2_000), busy(&spu, 0, 2_001));
+    write(
+        &mut spu,
+        ch(0, CNT_OFFSET),
+        Width::Word,
+        start(ONE_SHOT, PCM8),
+        3_000,
+    );
+    // 16 samples of 128 cycles from the start at 3,000.
+    assert_eq!((quiet, spu.channel(0).end()), ((false, false), 5_048));
+}
+
+#[test]
+fn given_a_loop_channel_when_tmr_is_written_then_it_never_ends() {
+    let mut spu = started(0, start(LOOP, PCM8), 0, 4, 0);
+    write(&mut spu, ch(0, TMR_OFFSET), Width::Half, 0xFFE0, 1);
+    assert_eq!(
+        (busy(&spu, 0, 1 << 40), spu.channel(0).end()),
+        (true, u64::MAX)
+    );
+}
+
+#[test]
+fn given_a_psg_channel_when_tmr_is_written_then_the_pitch_follows_from_the_next_sample() {
+    // Sample 1 ends at 1,128; samples 2 and 3 take 128 each, so sample 4, the first HIGH, begins at
+    // 1,384 (1,256 without the write).
+    let mut spu = generator(8, 3);
+    write(&mut spu, ch(8, TMR_OFFSET), Width::Half, 0xFFE0, 1_100);
+    let expected = [(1_255, LOW), (1_383, LOW), (1_384, HIGH)];
+    assert_eq!(sample_failures(&spu, 8, &expected), Vec::new());
+}
+
+#[test]
+fn given_a_retimed_channel_when_checked_then_the_device_is_well_formed() {
+    let spu = retimed(&[(1, 0xFFE0)]);
+    assert_eq!((spu.well_formed(0), spu.well_formed(1 << 40)), (true, true));
+}
+
+/// The (time, count before the write, count after it) of each write after which the count of a
+/// looping PCM8 channel jumped, and the write times where it went backwards.
+fn retime_count_failures(writes: &[(u64, u32)]) -> Vec<(u64, Option<u64>, Option<u64>)> {
+    let mut spu = started(0, start(LOOP, PCM8), 0, 4, 0);
+    let mut now = 0;
+    let mut last = None;
+    let mut failures = Vec::new();
+    for &(gap, tmr) in writes {
+        now += gap;
+        let before = spu.channel(0).elapsed(now);
+        write(&mut spu, ch(0, TMR_OFFSET), Width::Half, tmr, now);
+        let after = spu.channel(0).elapsed(now);
+        if before != after || before < last {
+            failures.push((now, before, after));
+        }
+        last = after;
+    }
+    failures
+}
+
+proptest! {
+    #[test]
+    fn given_any_tmr_writes_when_a_loop_plays_then_the_sample_count_never_jumps_or_falls(
+        writes in proptest::collection::vec((1u64..5_000, 0xF000u32..=0xFFFF), 1..8),
+    ) {
+        prop_assert_eq!(retime_count_failures(&writes), Vec::new());
+    }
 }
 
 /// The registers written with all ones, as (name, address in the device, width, what a read
@@ -405,6 +566,27 @@ fn given_a_stopped_channel_with_an_end_time_when_checked_then_it_is_not_well_for
     assert!(!spu.well_formed(0));
 }
 
+// A stopped channel's sample clock is all zero and a started one's period is one a TMR value gives:
+// `4 * (10000h - TMR)` is 4 to 40000h master cycles (`spu.md`, "Position").
+#[test]
+fn given_a_stopped_channel_with_a_sample_clock_when_checked_then_it_is_not_well_formed() {
+    let mut spu = Spu::new();
+    spu.channels[0].clock.period = 64;
+    assert!(!spu.well_formed(0));
+}
+
+#[test]
+fn given_a_started_channel_with_a_period_no_tmr_gives_when_checked_then_it_is_not_well_formed() {
+    let mut none = started(0, start(LOOP, PCM8), 0, 4, 0);
+    none.channels[0].clock.period = 0;
+    let mut too_long = started(0, start(LOOP, PCM8), 0, 4, 0);
+    too_long.channels[0].clock.period = 0x4_0001;
+    assert_eq!(
+        [none, too_long].map(|spu| spu.well_formed(0)),
+        [false, false]
+    );
+}
+
 #[test]
 fn given_a_one_shot_past_its_end_when_checked_then_it_is_still_well_formed() {
     let spu = started(0, start(ONE_SHOT, PCM8), 0, 4, 0);
@@ -611,13 +793,13 @@ fn given_a_started_channel_when_stopped_then_its_output_is_zero_at_once() {
     );
 }
 
+// SAD and LEN are latched at the start; TMR is not, and has its own tests (`spu.md`, "Model").
 #[test]
-fn given_a_playing_channel_when_sad_len_and_tmr_are_written_then_the_sound_does_not_move() {
+fn given_a_playing_channel_when_sad_and_len_are_written_then_the_sound_does_not_move() {
     let mut spu = started(0, start(LOOP, PCM8), 0, 4, STARTED_AT);
     let later = at_sample(2);
     write(&mut spu, ch(0, SAD_OFFSET), Width::Word, 4, later);
     write(&mut spu, ch(0, LEN_OFFSET), Width::Word, 1, later);
-    write(&mut spu, ch(0, TMR_OFFSET), Width::Half, 0, later);
     let expected = [
         (at_sample(2), 0x3000),
         (at_sample(3), 0x4000),

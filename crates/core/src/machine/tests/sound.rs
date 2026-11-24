@@ -69,6 +69,34 @@ fn given_a_savestate_mid_playback_when_loaded_then_the_bit_clears_at_the_same_ti
 }
 
 #[test]
+fn given_a_slower_tmr_written_while_playing_when_the_arm7_polls_then_the_bit_clears_at_the_moved_end()
+ {
+    // `spu.md`, "Position": sample 0 ends at 64, the other 15 take 4 * 20h = 128: 64 + 15 * 128.
+    let (mut m, at) = playing();
+    m.bus7(at + 1).write16(SOUND0TMR, 0xFFE0);
+    let polls = [at + 1_983, at + 1_984].map(|t| busy(&mut m, t));
+    assert_eq!(polls, [true, false]);
+}
+
+#[test]
+fn given_a_savestate_after_a_tmr_write_when_loaded_then_the_bit_clears_at_the_moved_end() {
+    let (mut m, at) = playing();
+    m.bus7(at + 1).write16(SOUND0TMR, 0xFFE0);
+    let state = m.save_state();
+    let mut loaded = machine();
+    let result = loaded.load_state(&state);
+    let polls = [at + 1_983, at + 1_984].map(|t| busy(&mut loaded, t));
+    assert_eq!((result, polls), (Ok(()), [true, false]));
+}
+
+#[test]
+fn given_a_tmr_written_while_playing_when_inspected_then_the_end_time_has_moved() {
+    let (mut m, at) = playing();
+    m.bus7(at + 1).write16(SOUND0TMR, 0xFFE0);
+    assert_eq!(m.inspect().spu().channel(0).end(), at + 1_984);
+}
+
+#[test]
 fn given_the_same_sound_writes_when_two_machines_save_then_the_states_are_identical() {
     let (a, _) = playing();
     let (b, _) = playing();

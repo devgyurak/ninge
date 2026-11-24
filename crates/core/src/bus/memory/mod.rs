@@ -61,9 +61,9 @@ const WRAMCNT_MODE_MASK: u8 = 0x03;
 /// The BIOS areas: 32 KiB at `FFFF_0000h` for the ARM9, 16 KiB at 0 for the ARM7 (`hle-swi.md`,
 /// "The BIOS area").
 pub(crate) const BIOS9_BASE: u32 = 0xFFFF_0000;
-const BIOS9_SIZE: u32 = 32 << 10;
+pub(crate) const BIOS9_SIZE: u32 = 32 << 10;
 pub(crate) const BIOS7_BASE: u32 = 0;
-const BIOS7_SIZE: u32 = 16 << 10;
+pub(crate) const BIOS7_SIZE: u32 = 16 << 10;
 
 /// The nine VRAM banks, A to I (`vram-banks.md`, "The banks").
 pub(crate) const BANK_COUNT: usize = 9;

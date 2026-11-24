@@ -24,6 +24,7 @@ mod swi_data;
 mod timers;
 mod timing;
 mod touch;
+mod trace;
 
 fn run_frames(machine: &mut Machine, frames: u32) {
     (0..frames).for_each(|_| machine.run_frame(crate::Input::new()));

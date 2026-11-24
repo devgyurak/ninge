@@ -11,6 +11,8 @@ use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
 use crate::spu::{CAPTURES, CaptureWrites, OUTPUT_SAMPLE_CYCLES};
 
+// `traced.rs` repeats these two run loops and the per-instruction functions in `mod.rs` with a
+// trace record; a change to either must be made in both (a test pins traced = untraced).
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
         &mut self.scheduler

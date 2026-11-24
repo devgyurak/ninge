@@ -12,8 +12,9 @@
 //! minor release, [`Inspect`] and [`Machine::inspect`] included. The debugger panels (#56-#59)
 //! decide what becomes stable.
 //!
-//! Breakpoint and trace hooks (plan §4.1) are not here yet: the debugger is a parallel track, and
-//! they join this module with its stepping and trace panels (#56, #60).
+//! The instruction trace hook is [`Machine::run_frame_traced`] with a [`crate::trace::Tracer`]; a
+//! trace panel (#56-#59) is a [`crate::trace::TraceSink`]. Breakpoints (plan §4.1) are not here
+//! yet: they join this module with the stepping panel.
 
 use crate::bus::{BANK_COUNT, TcmConfig};
 use crate::cpu::Cpu;

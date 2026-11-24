@@ -10,6 +10,8 @@ use crate::transfer::{NoShm, Transfer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ninge_core::Buttons;
 use ratatui::backend::TestBackend;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::channel;
@@ -611,6 +613,373 @@ fn given_the_emu_gone_when_pads_are_forwarded_then_it_reports_false() {
     drop(rx);
     let mut last = 0;
     assert!(!forward_pads([PadEvent::Disconnected], 0, &mut last, &tx));
+}
+
+/// One thing a scripted terminal does when `next_event` is called.
+enum Step {
+    /// Hands this event out.
+    Event(Event),
+    /// Sets `stop`, then hands this event out: a stop that comes in the middle of a burst.
+    StopThen(Event),
+    /// Fails the read.
+    Fail,
+    /// Reports that nothing more is waiting, which ends the turn's reads.
+    Idle,
+}
+
+/// A terminal that does what it is told: hands out its steps in order (nothing once they are
+/// spent), answers `gone` true from the `gone_from`th call on, and sets `stop` at the
+/// `stop_at`th call of `gone` (both counted from 1).
+struct Scripted {
+    steps: VecDeque<Step>,
+    gone_from: Option<u32>,
+    stop_at: Option<u32>,
+    stop: Arc<AtomicBool>,
+    reported_size: Option<TermSize>,
+    gone_calls: u32,
+    event_calls: u32,
+}
+
+impl Scripted {
+    fn new(steps: impl IntoIterator<Item = Step>) -> Self {
+        Self {
+            steps: steps.into_iter().collect(),
+            gone_from: None,
+            stop_at: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            reported_size: Some(size()),
+            gone_calls: 0,
+            event_calls: 0,
+        }
+    }
+}
+
+impl TerminalInput for Scripted {
+    fn gone(&mut self, _wait: Duration) -> bool {
+        self.gone_calls += 1;
+        if self.stop_at == Some(self.gone_calls) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+        self.gone_from.is_some_and(|from| self.gone_calls >= from)
+    }
+
+    fn next_event(&mut self) -> io::Result<Option<Event>> {
+        self.event_calls += 1;
+        match self.steps.pop_front() {
+            Some(Step::Event(event)) => Ok(Some(event)),
+            Some(Step::StopThen(event)) => {
+                self.stop.store(true, Ordering::SeqCst);
+                Ok(Some(event))
+            }
+            Some(Step::Fail) => Err(io::Error::other("read failed")),
+            Some(Step::Idle) | None => Ok(None),
+        }
+    }
+
+    fn size(&self) -> io::Result<TermSize> {
+        self.reported_size
+            .ok_or_else(|| io::Error::other("no size"))
+    }
+}
+
+/// What a `run_input` run left behind.
+struct InputRun {
+    /// The error's message, `None` for `Ok`.
+    error: Option<String>,
+    sent: Vec<HostEvent>,
+    /// How many times the pads were asked.
+    pad_asks: u32,
+}
+
+/// Runs `run_input` on `terminal` with `pad_turns` as what the pads report on each ask (nothing,
+/// and the last count, once spent), starting from `connected` pads. `emu_gone` drops the
+/// receiver first.
+fn run_scripted(
+    terminal: &mut Scripted,
+    pad_turns: Vec<(Vec<PadEvent>, u32)>,
+    connected: u32,
+    emu_gone: bool,
+) -> InputRun {
+    let (tx, rx) = channel();
+    if emu_gone {
+        drop(rx);
+        let (error, pad_asks) = drive(terminal, pad_turns, connected, &tx);
+        return InputRun {
+            error,
+            sent: Vec::new(),
+            pad_asks,
+        };
+    }
+    let (error, pad_asks) = drive(terminal, pad_turns, connected, &tx);
+    drop(tx);
+    InputRun {
+        error,
+        sent: rx.try_iter().collect(),
+        pad_asks,
+    }
+}
+
+fn drive(
+    terminal: &mut Scripted,
+    pad_turns: Vec<(Vec<PadEvent>, u32)>,
+    connected: u32,
+    tx: &Sender<HostEvent>,
+) -> (Option<String>, u32) {
+    let stop = Arc::clone(&terminal.stop);
+    let mut turns: VecDeque<_> = pad_turns.into();
+    let mut asks = 0;
+    let mut count = connected;
+    let pads = || {
+        asks += 1;
+        let (events, now) = turns.pop_front().unwrap_or((Vec::new(), count));
+        count = now;
+        (events, now)
+    };
+    let result = run_input(terminal, pads, connected, tx, &stop);
+    (result.err().map(|error| format!("{error:#}")), asks)
+}
+
+fn key_step(code: KeyCode) -> Step {
+    Step::Event(plain_key(code))
+}
+
+fn key_sent(code: KeyCode) -> HostEvent {
+    HostEvent::Action(Action::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+}
+
+#[test]
+fn given_a_terminal_gone_at_the_first_turn_when_the_input_runs_then_it_fails_before_any_read() {
+    let mut terminal = Scripted::new([key_step(KeyCode::Tab)]);
+    terminal.gone_from = Some(1);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (
+            run.error
+                .is_some_and(|e| e.contains("the terminal is gone")),
+            terminal.event_calls,
+            run.sent,
+            run.pad_asks
+        ),
+        (true, 0, Vec::new(), 0)
+    );
+}
+
+#[test]
+fn given_a_terminal_that_goes_away_after_two_turns_when_the_input_runs_then_it_fails_with_the_earlier_events_forwarded()
+ {
+    let mut terminal = Scripted::new([
+        key_step(KeyCode::Char('a')),
+        Step::Idle,
+        key_step(KeyCode::Char('b')),
+        Step::Idle,
+        key_step(KeyCode::Char('c')),
+    ]);
+    terminal.gone_from = Some(3);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (
+            run.error
+                .is_some_and(|e| e.contains("the terminal is gone")),
+            run.sent,
+            terminal.gone_calls
+        ),
+        (
+            true,
+            vec![key_sent(KeyCode::Char('a')), key_sent(KeyCode::Char('b'))],
+            3
+        )
+    );
+}
+
+#[test]
+fn given_several_events_waiting_when_one_turn_runs_then_all_are_forwarded_in_order_before_the_next_ask()
+ {
+    let mut terminal = Scripted::new([
+        key_step(KeyCode::Char('a')),
+        key_step(KeyCode::Char('b')),
+        key_step(KeyCode::Char('c')),
+    ]);
+    // Stop comes at the second ask: whatever the first turn did not forward is never sent.
+    terminal.stop_at = Some(2);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (run.error, run.sent, terminal.gone_calls),
+        (
+            None,
+            vec![
+                key_sent(KeyCode::Char('a')),
+                key_sent(KeyCode::Char('b')),
+                key_sent(KeyCode::Char('c'))
+            ],
+            2
+        )
+    );
+}
+
+#[test]
+fn given_stop_set_in_the_middle_of_a_burst_when_the_input_runs_then_it_returns_ok_and_reads_no_more()
+ {
+    let mut terminal = Scripted::new([
+        key_step(KeyCode::Char('a')),
+        Step::StopThen(plain_key(KeyCode::Char('b'))),
+        key_step(KeyCode::Char('c')),
+    ]);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (run.error, run.sent, terminal.event_calls, run.pad_asks),
+        (None, vec![key_sent(KeyCode::Char('a'))], 2, 0)
+    );
+}
+
+#[test]
+fn given_stop_already_set_when_the_input_runs_then_it_returns_ok_without_asking_the_terminal() {
+    let mut terminal = Scripted::new([key_step(KeyCode::Tab)]);
+    terminal.stop.store(true, Ordering::SeqCst);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (
+            run.error,
+            terminal.gone_calls,
+            terminal.event_calls,
+            run.sent,
+            run.pad_asks
+        ),
+        (None, 0, 0, Vec::new(), 0)
+    );
+}
+
+#[test]
+fn given_the_emu_gone_and_an_event_waiting_when_the_input_runs_then_it_returns_ok_without_asking_the_pads()
+ {
+    let mut terminal = Scripted::new([key_step(KeyCode::Tab)]);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, true);
+    assert_eq!((run.error, run.pad_asks), (None, 0));
+}
+
+#[test]
+fn given_the_emu_gone_and_only_pad_events_when_the_input_runs_then_it_returns_ok_after_one_ask() {
+    let mut terminal = Scripted::new([]);
+    let pads = vec![(vec![PadEvent::Disconnected], 0)];
+    let run = run_scripted(&mut terminal, pads, 0, true);
+    assert_eq!((run.error, run.pad_asks, terminal.gone_calls), (None, 1, 1));
+}
+
+#[test]
+fn given_pad_events_and_a_changed_count_when_the_input_runs_then_the_events_come_first_then_the_count()
+ {
+    let mut terminal = Scripted::new([]);
+    terminal.stop_at = Some(1);
+    let pads = vec![(vec![PadEvent::Button(gilrs::Button::East, true)], 1)];
+    let run = run_scripted(&mut terminal, pads, 0, false);
+    assert_eq!(
+        (run.error, run.sent),
+        (
+            None,
+            vec![
+                HostEvent::Pad(PadEvent::Button(gilrs::Button::East, true)),
+                HostEvent::PadsConnected(1)
+            ]
+        )
+    );
+}
+
+#[test]
+fn given_a_count_equal_to_the_starting_one_when_the_input_runs_then_no_pads_connected_is_sent() {
+    let mut terminal = Scripted::new([]);
+    terminal.stop_at = Some(1);
+    let pads = vec![(vec![PadEvent::Button(gilrs::Button::East, true)], 2)];
+    let run = run_scripted(&mut terminal, pads, 2, false);
+    assert_eq!(
+        (run.error, run.sent),
+        (
+            None,
+            vec![HostEvent::Pad(PadEvent::Button(gilrs::Button::East, true))]
+        )
+    );
+}
+
+#[test]
+fn given_a_failing_read_when_the_input_runs_then_it_ends_with_that_error_after_the_earlier_events()
+{
+    let mut terminal = Scripted::new([key_step(KeyCode::Tab), Step::Fail]);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (run.error, run.sent),
+        (
+            Some("read failed".to_string()),
+            vec![key_sent(KeyCode::Tab)]
+        )
+    );
+}
+
+#[test]
+fn given_a_resize_and_a_failing_size_query_when_the_input_runs_then_it_ends_with_an_error_and_sends_nothing()
+ {
+    let mut terminal = Scripted::new([Step::Event(Event::Resize(10, 10))]);
+    terminal.reported_size = None;
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (run.error, run.sent),
+        (Some("no size".to_string()), Vec::new())
+    );
+}
+
+#[test]
+fn given_a_resize_event_when_the_input_runs_then_the_emu_gets_the_size_the_terminal_reports() {
+    let mut terminal = Scripted::new([Step::Event(Event::Resize(10, 10))]);
+    terminal.stop_at = Some(2);
+    let run = run_scripted(&mut terminal, Vec::new(), 0, false);
+    assert_eq!(
+        (run.error, run.sent),
+        (None, vec![HostEvent::Resize(size())])
+    );
+}
+
+/// Runs `finishes_within` on a clock that only `sleep` moves. `done` turns true after
+/// `done_after` asks (never, for `None`). Returns the answer and every duration slept.
+fn waited(done_after: Option<u32>, limit: Duration) -> (bool, Vec<Duration>) {
+    let clock = Cell::new(Instant::now());
+    let slept = RefCell::new(Vec::new());
+    let asks = Cell::new(0_u32);
+    let done = || {
+        asks.set(asks.get() + 1);
+        done_after.is_some_and(|after| asks.get() > after)
+    };
+    let sleep = |wait: Duration| {
+        slept.borrow_mut().push(wait);
+        clock.set(clock.get() + wait);
+    };
+    let finished = finishes_within(done, limit, || clock.get(), sleep);
+    (finished, slept.into_inner())
+}
+
+#[test]
+fn given_a_done_check_true_at_once_when_waiting_then_it_is_true_and_never_sleeps() {
+    assert_eq!(waited(Some(0), INPUT_GRACE), (true, Vec::new()));
+}
+
+#[test]
+fn given_a_done_check_true_after_three_asks_when_waiting_then_it_is_true_after_three_join_polls() {
+    assert_eq!(waited(Some(3), INPUT_GRACE), (true, vec![JOIN_POLL; 3]));
+}
+
+#[test]
+fn given_a_done_check_never_true_when_waiting_then_it_is_false_after_sleeping_the_limit() {
+    let limit = Duration::from_millis(10);
+    let (finished, slept) = waited(None, limit);
+    assert_eq!(
+        (
+            finished,
+            slept.iter().sum::<Duration>() >= limit,
+            slept.iter().all(|wait| *wait == JOIN_POLL)
+        ),
+        (false, true, true)
+    );
+}
+
+#[test]
+fn given_a_zero_limit_and_a_done_check_false_when_waiting_then_it_is_false_without_sleeping() {
+    assert_eq!(waited(None, Duration::ZERO), (false, Vec::new()));
 }
 
 #[test]

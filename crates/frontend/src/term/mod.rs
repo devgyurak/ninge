@@ -5,6 +5,14 @@
 //! and input, #218) and joins them; what each does is in [`crate::threads`], tested with a test
 //! backend and no thread. OS-specific pieces stay here so a Windows backend is an addition
 //! (AGENTS.md §2).
+//!
+//! # A terminal that goes away
+//!
+//! A terminal that closes normally sends a hangup signal and the process dies with it. When the
+//! signal is ignored (`nohup`) or never sent, the terminal is simply gone: writes fail and reads
+//! return nothing. The input loop asks for that before it reads an event (`hung_up`,
+//! [`crate::threads::run_input`]) and ends the run, and the run does not depend on the input
+//! thread ending (`run_threads`).
 
 use crate::app::App;
 use crate::audio::device::{Device, use_audio};
@@ -18,14 +26,14 @@ use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
 use crate::source::Source;
 use crate::threads::{
-    HostEvent, INPUT_POLL, Pace, StopGuard, forward_event, forward_pads, run_emu_and_save,
+    INPUT_GRACE, Pace, StopGuard, TerminalInput, finishes_within, run_emu_and_save, run_input,
     run_render,
 };
 use crate::transfer::{ShmSink, Transfer};
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
-    self, DisableFocusChange, EnableFocusChange, KeyboardEnhancementFlags,
+    self, DisableFocusChange, EnableFocusChange, Event, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
@@ -36,7 +44,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
@@ -44,6 +52,7 @@ use {
     crate::shm::ShmWriter,
     rustix::event::{PollFd, PollFlags, Timespec, poll},
     rustix::io::Errno,
+    std::io::IsTerminal as _,
     std::os::fd::AsFd,
 };
 
@@ -275,33 +284,85 @@ fn outcome(result: anyhow::Result<()>, note: Option<String>) -> anyhow::Result<O
     }
 }
 
-/// Reads terminal events and the pads and sends them to the emu thread until `stop` is set.
+/// Waits up to `wait` (a short one: the input loop's poll) for `fd` to become readable and says
+/// whether what it leads to has hung up: the terminal's window closed or the connection dropped
+/// (the other end of a pipe, in a test). An error on the descriptor counts as gone; an
+/// interrupted wait does not, and the caller asks again.
 ///
-/// The poll's timeout is [`INPUT_POLL`]: it bounds how fast the thread sees `stop` and how late a
-/// pad event is seen.
-fn input_loop(
-    pads: &mut Gamepads,
-    tx: &Sender<HostEvent>,
-    stop: &AtomicBool,
-) -> anyhow::Result<()> {
-    let mut connected = pads.connected();
-    while !stop.load(Ordering::SeqCst) {
-        if event::poll(INPUT_POLL)? && !forward_event(&event::read()?, size, tx)? {
-            break;
-        }
-        if !forward_pads(pads.poll(), pads.connected(), &mut connected, tx) {
-            break;
-        }
+/// A descriptor `poll` cannot watch (some terminal devices cannot be) tells nothing: the wait is
+/// slept out and the answer is no, so a healthy run is never ended by a guess.
+#[cfg(unix)]
+fn hung_up(fd: impl AsFd, wait: Duration) -> bool {
+    let timeout = Timespec {
+        tv_sec: wait.as_secs().cast_signed(),
+        tv_nsec: i64::from(wait.subsec_nanos()),
+    };
+    let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+    let ready = poll(&mut fds, Some(&timeout));
+    let state = fds[0].revents();
+    if state.contains(PollFlags::NVAL) {
+        thread::sleep(wait);
+        return false;
     }
-    Ok(())
+    matches!(ready, Ok(count) if count > 0) && state.intersects(PollFlags::HUP | PollFlags::ERR)
 }
 
-/// Runs the emu, render and input threads until one of them ends, then joins all three. The emu
+/// Whether the terminal is gone, after waiting up to `wait` for input from it. The event reader
+/// reads the standard input when that is a terminal, so that is what is asked; when it is not,
+/// the reader opens the terminal itself and there is nothing here to ask, so this only waits. A
+/// terminal that goes away is then noticed by the render thread's failed write alone.
+#[cfg(unix)]
+fn terminal_gone(wait: Duration) -> bool {
+    let stdin = io::stdin();
+    if stdin.is_terminal() {
+        hung_up(&stdin, wait)
+    } else {
+        thread::sleep(wait);
+        false
+    }
+}
+
+/// No hangup check off POSIX yet (Windows is planned, AGENTS.md §2): this only waits.
+#[cfg(not(unix))]
+fn terminal_gone(wait: Duration) -> bool {
+    thread::sleep(wait);
+    false
+}
+
+/// The real terminal as the input loop reads it.
+struct Tty;
+
+impl TerminalInput for Tty {
+    fn gone(&mut self, wait: Duration) -> bool {
+        terminal_gone(wait)
+    }
+
+    fn next_event(&mut self) -> io::Result<Option<Event>> {
+        // A zero wait: `gone` has done the waiting, and has seen the terminal alive.
+        if event::poll(Duration::ZERO)? {
+            event::read().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn size(&self) -> io::Result<TermSize> {
+        size()
+    }
+}
+
+/// Runs the emu, render and input threads until one of them ends, then joins them. The emu
 /// thread keeps time by `device`'s ring when there is one; the device's own thread is `cpal`'s.
 ///
 /// A thread that returns, fails or panics sets `stop` through its [`StopGuard`], so the other two
 /// end too; the emu thread still writes the save first. The first failure of render, input and
 /// emu, in that order, is the result.
+///
+/// The input thread is not a scoped one, and is waited for only [`INPUT_GRACE`]: the event
+/// reader can be handed a terminal that hung up between the loop's check and its read, and then
+/// never returns. Such a thread is left behind; the process ends right after the run. Leaving it
+/// is not a failure of the run: what ended the run is in the other two threads' results (a
+/// failed write, when the terminal went away).
 fn run_threads<S: ShmSink + Send>(
     app: &mut App,
     renderer: &mut Renderer<S>,
@@ -310,8 +371,8 @@ fn run_threads<S: ShmSink + Send>(
     mut pads: Gamepads,
     device: Option<&Device>,
 ) -> anyhow::Result<()> {
-    let stop = AtomicBool::new(false);
-    let handoff = Handoff::new(Snapshot::default);
+    let stop = Arc::new(AtomicBool::new(false));
+    let handoff = Arc::new(Handoff::new(Snapshot::default));
     let (tx, rx) = mpsc::channel();
     let (mut pacer, mut sink) = paced(
         device.map(|device| {
@@ -328,37 +389,59 @@ fn run_threads<S: ShmSink + Send>(
             .join()
             .unwrap_or_else(|_| Err(anyhow::anyhow!("the {name} thread panicked")))
     };
-    thread::scope(|scope| {
+    let input = {
+        let (stop, handoff) = (Arc::clone(&stop), Arc::clone(&handoff));
+        let connected = pads.connected();
+        thread::Builder::new()
+            .name("input".to_string())
+            .spawn(move || {
+                let _stop = StopGuard::new(&stop, &handoff);
+                let poll = || (pads.poll(), pads.connected());
+                run_input(&mut Tty, poll, connected, &tx, &stop)
+            })
+            .context("starting the input thread")?
+    };
+    let (stop, handoff) = (&*stop, &*handoff);
+    let (rendered, saved) = thread::scope(|scope| {
         let emu = scope.spawn(|| {
-            let _stop = StopGuard::new(&stop, &handoff);
+            let _stop = StopGuard::new(stop, handoff);
             // A `Receiver` is `Send` but not `Sync`: the emu thread takes it by value.
             let rx = rx;
             run_emu_and_save(
                 app,
                 &rx,
-                &handoff,
+                handoff,
                 &mut Pace {
                     pacer: &mut pacer,
                     sink: &mut sink,
                 },
-                &stop,
+                stop,
                 Instant::now,
                 thread::sleep,
             )
         });
         let render = scope.spawn(|| {
-            let _stop = StopGuard::new(&stop, &handoff);
-            run_render(renderer, terminal, gfx, &handoff, &stop)
+            let _stop = StopGuard::new(stop, handoff);
+            run_render(renderer, terminal, gfx, handoff, stop)
         });
-        let input = scope.spawn(|| {
-            let _stop = StopGuard::new(&stop, &handoff);
-            input_loop(&mut pads, &tx, &stop)
-        });
-        let rendered = joined(render, "render");
-        let read = joined(input, "input");
-        let saved = joined(emu, "emu");
-        rendered.and(read).and(saved)
-    })
+        (joined(render, "render"), joined(emu, "emu"))
+    });
+    // Both have ended, so `stop` is set and the input thread is on its way out, unless the
+    // event reader holds it.
+    let ended = finishes_within(
+        || input.is_finished(),
+        INPUT_GRACE,
+        Instant::now,
+        thread::sleep,
+    );
+    let read = if ended {
+        input
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the input thread panicked")))
+    } else {
+        Ok(())
+    };
+    rendered.and(read).and(saved)
 }
 
 #[cfg(all(test, unix))]

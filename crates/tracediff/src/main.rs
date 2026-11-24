@@ -2,7 +2,8 @@
 //! The `ninge-tracediff` binary: files and a socket in, one report out. All logic is in
 //! [`ninge_tracediff::cli`]; this only opens files and `127.0.0.1:<port>`.
 //!
-//! Exit codes: 0 no divergence, 1 a divergence was found, 2 a usage error, 3 any other error.
+//! Exit codes: 0 no divergence, 1 a divergence was found or the oracle ended early, 2 a usage
+//! error, 3 any other error.
 
 use std::net::TcpStream;
 use std::path::Path;

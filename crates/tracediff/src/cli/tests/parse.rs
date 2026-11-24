@@ -373,3 +373,21 @@ fn given_a_usage_error_when_displayed_then_the_reason_comes_before_the_usage() {
     let text = CliError::Usage("missing command".to_string()).to_string();
     assert_eq!(text, format!("missing command\n{USAGE}"));
 }
+
+#[test]
+fn given_a_doubled_hex_prefix_when_parsing_the_breakpoint_then_it_is_a_usage_error() {
+    let result = parse(
+        [
+            "boundaries",
+            "n.trace",
+            "--port",
+            "1",
+            "--cpu",
+            "9",
+            "--breakpoint",
+            "0x0x10",
+        ]
+        .map(Into::into),
+    );
+    assert!(matches!(result, Err(CliError::Usage(_))));
+}

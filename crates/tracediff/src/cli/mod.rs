@@ -24,7 +24,8 @@ pub const USAGE: &str = "usage: ninge-tracediff files <ninge.trace> <oracle.trac
        ninge-tracediff live <ninge.trace> --port P --cpu 9|7 [--breakpoint ADDR --from-hit K] [--max N]
        ninge-tracediff boundaries <ninge.trace> --port P --cpu 9|7 --breakpoint ADDR [--hits K]
 ADDR is hex and an ARM-state address (breakpoints are set as 32-bit; Thumb is not supported yet).
-A trace made with --from-frame starts after boot while the oracle starts at boot, so `live` and
+Exit status: 0 no divergence, 1 a divergence was found or the oracle's stream ended early, 2 usage,
+3 any other error. A trace made with --from-frame starts after boot while the oracle starts at boot, so `live` and
 `boundaries` compare different moments unless the oracle is first brought to the same one.
 The oracle must be on 127.0.0.1. A trace of a ROM that is not yours to share holds
 that ROM's bytes (the opcode column): run this tool on it only yourself, locally, and never
@@ -139,7 +140,7 @@ fn number(value: Option<&OsStr>, flag: &str) -> Result<u32, CliError> {
 fn address(value: Option<&OsStr>) -> Result<u32, CliError> {
     value
         .and_then(OsStr::to_str)
-        .map(|text| text.trim_start_matches("0x"))
+        .map(|text| text.strip_prefix("0x").unwrap_or(text))
         .and_then(|text| u32::from_str_radix(text, 16).ok())
         .ok_or_else(|| usage("--breakpoint needs a hex address"))
 }
@@ -298,11 +299,16 @@ pub fn run_files(
     let mut diverged = false;
     for cpu in cpus {
         let mine = of_cpu(&ninge, cpu);
+        let theirs = of_cpu(&oracle, cpu);
         if mine.is_empty() {
-            lines.push(format!("{}: no ninge records", label(cpu)));
+            // Records on the oracle's side only is a difference, not a skipped CPU.
+            lines.push(match theirs.len() {
+                0 => format!("{}: no ninge records", label(cpu)),
+                n => format!("{}: no ninge records, but {n} oracle records", label(cpu)),
+            });
+            diverged |= !theirs.is_empty();
             continue;
         }
-        let theirs = of_cpu(&oracle, cpu);
         let outcome = match compare::<std::convert::Infallible>(mine, theirs.into_iter().map(Ok)) {
             Ok(outcome) => outcome,
             Err(never) => match never {},

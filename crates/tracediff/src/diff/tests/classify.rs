@@ -275,6 +275,13 @@ fn mismatch_cases() -> Vec<Case> {
             Class::Mismatch,
         ),
         after_arm(
+            "an opcode in the unconditional space with an SWI-like word is no SWI",
+            0xFF00_0005,
+            next(),
+            r0(next()),
+            Class::Mismatch,
+        ),
+        after_arm(
             "a branch is no SWI",
             0xEA00_0000,
             next(),

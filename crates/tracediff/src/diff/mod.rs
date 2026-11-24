@@ -149,7 +149,9 @@ pub fn differing_fields(a: &TraceRecord, b: &TraceRecord) -> [Option<Field>; LOW
 /// Whether `opcode` is a software interrupt: the BIOS call after which registers may differ.
 fn is_swi(opcode: Opcode) -> bool {
     match opcode {
-        Opcode::Arm(word) => word & 0x0F00_0000 == 0x0F00_0000,
+        // Condition 1111 is the unconditional space (and `0xFF......` is no SWI there), so a
+        // software interrupt has a condition 0-14.
+        Opcode::Arm(word) => word >> 28 != 0xF && word & 0x0F00_0000 == 0x0F00_0000,
         Opcode::Thumb(half) => half >> 8 == 0xDF,
     }
 }

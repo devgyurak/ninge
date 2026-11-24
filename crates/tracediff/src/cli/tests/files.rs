@@ -110,15 +110,15 @@ fn given_the_cpu_filter_when_that_cpu_differs_then_only_it_is_reported() {
 }
 
 #[test]
-fn given_a_cpu_with_no_ninge_records_when_compared_then_it_is_noted_and_is_not_a_divergence() {
+fn given_a_cpu_with_records_only_on_the_oracle_side_when_compared_then_it_is_a_divergence() {
     let ninge = trace_text(&nine(2));
     let oracle = trace_text(&both(2, 5));
     let report = run_files(&ninge, &oracle, None).unwrap();
     assert_eq!(
         parts(report),
         (
-            "ARM9: 2 instructions match\nARM7: no ninge records".to_string(),
-            false
+            "ARM9: 2 instructions match\nARM7: no ninge records, but 5 oracle records".to_string(),
+            true
         )
     );
 }
@@ -235,6 +235,19 @@ fn given_empty_traces_with_the_header_when_compared_then_neither_cpu_has_records
         parts(report),
         (
             "ARM9: no ninge records\nARM7: no ninge records".to_string(),
+            false
+        )
+    );
+}
+
+#[test]
+fn given_a_cpu_with_no_records_on_either_side_when_compared_then_it_is_not_a_divergence() {
+    let text = trace_text(&nine(2));
+    let report = run_files(&text, &text, None).unwrap();
+    assert_eq!(
+        parts(report),
+        (
+            "ARM9: 2 instructions match\nARM7: no ninge records".to_string(),
             false
         )
     );

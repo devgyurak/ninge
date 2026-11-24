@@ -519,7 +519,9 @@ oracle.
 - **BOX_TEST** (the interpretation of the three offsets as the box's size, "presumably" in GBATEK;
   the face test; the result when the box surrounds the view volume; the precondition on POLYGON_ATTR
   bits 12-13). — `gpu3d/`.
-- **VEC_TEST result width**: a 12-bit fraction with a 4-bit sign copy. — `gpu3d/`.
+- **VEC_TEST result width**: the 9-bit-fraction components go through the vector matrix, shift
+  left by 3 to 12 fraction bits and the 13-bit signed value is sign-extended into the 16 bits
+  GBATEK describes (so 1.0 reads as -1.0). — `gpu3d/mod.rs` (`vector_test`).
 - **GXSTAT bit 0 and the tests**: the busy flag covers the whole test's time. — `gpu3d/`.
 - **The matrix stack busy bit** (GXSTAT bit 14) is modelled as set during PUSH, POP, STORE and
   RESTORE and clear otherwise. — `gpu3d/`.

@@ -30,9 +30,9 @@ is no per-command cycle cost, no stall on a full FIFO, and SWAP_BUFFERS does not
 `TODO(phase7)` (#48): `geometry-engine.md` replaces this with the real FIFO, the PIPE, the command
 timings and the swap at VBlank.
 
-**Not implemented (`TODO(phase7)`):** vertices and polygons, lighting, textures,
-POS_TEST, VEC_TEST and BOX_TEST results, RAM_COUNT and the lock-up SWAP_BUFFERS has after an
-incomplete polygon list; all in `geometry-engine.md`. The rendering registers' effect is #49-#52.
+**Not implemented (`TODO(phase7)`):** the rendering registers' effect, #49-#52. Everything else the
+stub dropped (the matrices, vertices and polygons, lighting, textures, the three test commands,
+RAM_COUNT and the lock-up) is in `geometry-engine.md`.
 
 ## Registers
 
@@ -322,10 +322,10 @@ The ARM7 has no start mode 7. A channel of the ARM7 with the same bits does not 
 ## Model (not hardware)
 
 - **Instant drain** (see "Scope").
-- **The BOX_TEST result.** GXSTAT bit 1 reads 0 until a BOX_TEST has been executed and 1 after it.
-  Hardware computes it from the box and the matrices; the stub has no matrices and answers "inside",
-  which keeps a program on its draw path. This is a stub value, not a hardware fact. `TODO(phase7)`.
-- **The results read 0:** POS_RESULT, VEC_RESULT, RAM_COUNT (CLIPMTX_RESULT and VECMTX_RESULT are real since #48 PR C).
+- **The BOX_TEST result** and the results of POS_TEST and VEC_TEST are real since #48 PR F
+  (`geometry-engine.md`); the stub's "always inside" and its zero reads are gone.
+- **The results read 0:** none are left of the stub's: CLIPMTX_RESULT, VECMTX_RESULT, RAM_COUNT,
+  POS_RESULT and VEC_RESULT are all real (`geometry-engine.md`).
 - **The rendering registers drop their writes and read 0.** They are write-only on hardware, and the
   stub has nothing to store them for. `TODO(phase7)` (#49-#52).
 - **GXSTAT bit 15 and the pointers** are the only state the commands change: the matrix mode, the

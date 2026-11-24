@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_479_799;
-const PINNED_HASH: u64 = 0xa45a7a07acceecdd;
+const PINNED_LEN: usize = 5_479_806;
+const PINNED_HASH: u64 = 0x61c9055cc75a487a;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -110,8 +110,8 @@ const PINNED_HASH: u64 = 0xa45a7a07acceecdd;
 /// period, three one-byte varints at power-on) in place of the one period it latched, because a
 /// TMR write while a channel plays now moves it (`spu.md`, "Position"), so both lengths grew by
 /// 16 x 2 = 32 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_069_720;
-const PINNED_BOOTED_HASH: u64 = 0x2330a9b93ab441e1;
+const PINNED_BOOTED_LEN: usize = 6_069_727;
+const PINNED_BOOTED_HASH: u64 = 0x5f8fb039bd7d5506;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

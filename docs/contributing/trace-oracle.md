@@ -14,8 +14,8 @@ instructions.
 
 ## The trace format
 
-A trace is UTF-8 text, written by `ninge-runner trace` and by the oracle adapter in
-`ninge-tracediff`, and parsed by `ninge_core::trace` (pure types plus encode and parse, no IO, so
+A trace is UTF-8 text, written by `ninge-runner trace`, produced live by the oracle adapter in
+`ninge-tracediff` (which compares it in memory and writes no file), and parsed by `ninge_core::trace` (pure types plus encode and parse, no IO, so
 the runner can write what the diff tool reads without a dependency between them).
 
 ```
@@ -54,9 +54,12 @@ The oracle sits behind GDB, so it can report registers and memory but not a fram
 has three levels:
 
 1. **Frame.** A person picks the frame where the symptom shows, from the runner's frame hashes or
-   from looking at the screen. The runner can start tracing at that frame.
-2. **Event boundary.** At the k-th hit of an address breakpoint (default: the user IRQ handler's
-   entry; any PC can be given) both sides' registers are compared; the first boundary that
+   from looking at the screen. The runner can start tracing at that frame, but the oracle runs from boot, so a trace
+   started at frame F lines up with it only if the oracle is brought to the same moment (an
+   event-boundary hit does that); `live` and `boundaries` on a trace that starts later than boot
+   compare different moments.
+2. **Event boundary.** At the k-th hit of an address breakpoint (the PC is given with
+   `--breakpoint`; the user IRQ handler's entry is the usual choice) both sides' registers are compared; the first boundary that
    differs is found.
 3. **Instruction.** From the last agreeing boundary both sides step one instruction at a time
    until the first divergence.
@@ -65,9 +68,11 @@ has three levels:
 
 IRQ timing is approximate by design (`AGENTS.md` §2 rule 7), so the report separates:
 
-- **timing**: an IRQ is taken at a different instruction on the two sides. Not a bug by itself.
-- **after BIOS call**: registers differ right after a collapsed BIOS call, where the two BIOS
-  implementations may legitimately leave scratch registers different.
+- **timing**: the two pcs part and the two sides are in different modes: an IRQ is taken at a
+  different instruction. Not a bug by itself. (Both sides in the same mode, say a return from
+  an IRQ to the wrong address, is a mismatch.)
+- **after BIOS call**: only r0-r3 and r12 differ right after a collapsed BIOS call, where the
+  two BIOS implementations may legitimately leave scratch registers different.
 - **mismatch**: anything else (PC, opcode, a register, CPSR).
 
 ## Running the oracle

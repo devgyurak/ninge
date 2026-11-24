@@ -6,7 +6,7 @@ members = ["crates/core", "crates/runner", "crates/frontend", "crates/tracediff"
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
-# Publishable since 0.1.0 (AGENTS.md §7). ninge-runner and ninge-tracediff say `publish = false`
+# Publishable since 0.1.0 (docs/contributing/ci-and-release.md). ninge-runner and ninge-tracediff say `publish = false`
 # themselves and stay unpublished; the release workflow checks that only ninge-core and ninge
 # are publishable. The next release bumps `version` here and the `ninge-core` entry below, and
 # refreshes `Cargo.lock` (`cargo update -w`).

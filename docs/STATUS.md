@@ -57,7 +57,7 @@ gates; reopening one is a new `decision` issue.
 - [x] **BlocksDS is required** — the official Docker image pinned by digest, the same locally
       and in CI. macOS CI cannot run Docker: the ubuntu `testroms` job builds the ROMs, the
       ubuntu verify job rebuilds and must match them, and the macOS job verifies the
-      artifact's checksums. (AGENTS.md §7, decision #65.)
+      artifact's checksums. (AGENTS.md §7, docs/contributing/ci-and-release.md, decision #65.)
 - [x] **Platforms** — macOS first-class, Linux CI-verified, **Windows planned**: no Windows
       code path yet, OS-specific frontend pieces stay behind one module. (AGENTS.md §2.)
 - [x] **Savestate format** — binary serde encoding with a magic number and a format version;

@@ -10,7 +10,7 @@ use super::dma::{
 use super::*;
 use crate::cpu::Bus;
 use crate::io::dma::Trigger;
-use crate::scheduler::Participants;
+use crate::scheduler::{Participants, run_round};
 
 const GXFIFO: u32 = 0x0400_0400;
 const GXSTAT: u32 = 0x0400_0600;
@@ -459,4 +459,25 @@ fn given_a_geometry_burst_pause_when_saved_and_loaded_then_the_next_start_is_due
     let mut loaded = machine();
     loaded.load_state(&state).expect("a state of this machine");
     assert_eq!(dma_events(&loaded), vec![(5_000, true, 0)]);
+}
+
+#[test]
+fn given_a_geometry_burst_while_the_arm9_is_held_when_it_ends_then_the_next_burst_waits_for_the_hold()
+ {
+    // A mode-7 channel of 300 words on an empty FIFO: the first burst of 112 leaves the FIFO below
+    // half, so the next is due right after its words (224 master cycles), but the ARM9 is held far
+    // longer, so the next burst is due when the hold ends.
+    let mut m = machine();
+    poke_words(&mut m, SRC, &[MTX_PUSH; 300]);
+    set9(
+        &mut m,
+        0,
+        SRC,
+        GXFIFO,
+        ENABLE | WORD | DEST_FIXED | 7 << 27 | 300,
+    );
+    let hold = m.scheduler.now() + 1_000_000;
+    m.arm9_hold_until = hold;
+    run_round(&mut m);
+    assert_eq!(dma_events(&m), vec![(hold, true, 0)]);
 }

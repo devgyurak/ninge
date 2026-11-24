@@ -8,8 +8,9 @@
 
 use ninge_core::{Buttons, Input, Machine};
 use ninge_runner::golden::{
-    InputLog, assert_deterministic_with_input, assert_savestate_round_trip_with_input,
+    assert_deterministic_with_input, assert_savestate_round_trip_with_input,
 };
+use ninge_runner::log::InputLog;
 use ninge_runner::{load_rom_file, testrom_path};
 
 const ARM9_RECORD: u32 = 0x0200_4000;

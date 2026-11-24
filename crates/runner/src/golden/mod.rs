@@ -11,33 +11,11 @@ use std::path::{Path, PathBuf};
 use ninge_core::cart::SaveType;
 use ninge_core::{Input, Machine, Screen};
 
+use crate::log::InputLog;
 use crate::{
     RunReport, RunnerError, frame_hash, load_rom_file, run_with_audio, run_with_blank_save,
     testrom_path,
 };
-
-/// The host's input for each frame of a run: entry `n` is set before the run's frame `n + 1`
-/// (counting from 1) and a frame past the end gets [`Input::default`] (nothing held, hinge open).
-/// One [`Input`] per frame is a complete input log: the same ROM and the same log give the same
-/// frames and savestate bytes (`docs/hw/keypad.md`, "Where the bits come from").
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct InputLog(Vec<Input>);
-
-impl InputLog {
-    /// A log of `inputs`, one for each frame from the first.
-    pub fn new(inputs: Vec<Input>) -> Self {
-        Self(inputs)
-    }
-
-    /// The input for the frame with 0-based index `frame`.
-    pub fn input_for(&self, frame: u64) -> Input {
-        usize::try_from(frame)
-            .ok()
-            .and_then(|index| self.0.get(index))
-            .copied()
-            .unwrap_or_default()
-    }
-}
 
 /// Why a golden file or a comparison against it failed.
 #[derive(Debug, PartialEq, Eq)]

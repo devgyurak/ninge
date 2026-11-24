@@ -187,6 +187,8 @@ impl Machine {
             // VCOUNT and the HBlank flag are what the line events up to the time make them. A
             // machine with no program runs no events, so its time says nothing about them.
             || (loaded.header.is_some() && !loaded.io.timing().follows(loaded.events_from()))
+            // A latched touch is on the screen: the latch clamps it (`Touch::MAX_Y`).
+            || loaded.io.input().touch.is_some_and(|touch| touch != touch.clamped())
             // A booted machine between rounds is settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up. In a round a stop
             // interrupted the ARM7 has not caught up yet, and lags by up to a slice.

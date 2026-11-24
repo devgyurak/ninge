@@ -13,9 +13,10 @@
 use ninge_core::input_log;
 use ninge_core::{Input, Machine, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{
-    GoldenError, InputLog, assert_deterministic_with_input, assert_savestate_round_trip_with_input,
+    GoldenError, assert_deterministic_with_input, assert_savestate_round_trip_with_input,
     check_frame_hash, golden_path, parse_golden, run_frame_hashes,
 };
+use ninge_runner::log::InputLog;
 use ninge_runner::replay::Replay;
 use ninge_runner::{RunReport, load_rom_file, testrom_path};
 use std::path::{Path, PathBuf};

@@ -22,9 +22,10 @@
 
 use ninge_core::{Buttons, Input, Machine, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{
-    InputLog, assert_deterministic_with_input, assert_frame_hash_with_input,
+    assert_deterministic_with_input, assert_frame_hash_with_input,
     assert_savestate_round_trip_with_input,
 };
+use ninge_runner::log::InputLog;
 use ninge_runner::{load_rom_file, testrom_path};
 
 const REC: u32 = 0x0200_8000;

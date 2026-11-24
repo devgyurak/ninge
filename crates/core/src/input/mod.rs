@@ -72,13 +72,32 @@ impl BitOr for Buttons {
     }
 }
 
-/// A press on the touch panel, in pixels of the lower screen: `x` 0-255, `y` 0-191.
+/// A press on the touch panel, in pixels of the lower screen: `x` 0-255, `y` 0-191. A machine
+/// latches a `y` below the last row as the last row ([`Touch::MAX_Y`]), so what a host passes and
+/// what an input log records and replays are the same input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Touch {
     /// Column, left to right.
     pub x: u8,
     /// Row, top to bottom.
     pub y: u8,
+}
+
+impl Touch {
+    /// The lower screen's last row.
+    pub const MAX_Y: u8 = 191;
+
+    /// This press with its row no lower than the last row of the screen.
+    pub(crate) const fn clamped(self) -> Self {
+        Self {
+            x: self.x,
+            y: if self.y > Self::MAX_Y {
+                Self::MAX_Y
+            } else {
+                self.y
+            },
+        }
+    }
 }
 
 /// The host's state for one frame. The default is the console untouched with the lid open.

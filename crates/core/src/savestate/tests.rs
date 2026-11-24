@@ -2264,3 +2264,16 @@ fn given_many_arm7_steps_when_the_machine_is_saved_and_loaded_then_the_master_cl
         (true, Ok(()))
     );
 }
+
+#[test]
+fn given_a_latched_touch_below_the_last_row_when_loaded_then_it_is_corrupt() {
+    let mut saved = fresh_counter();
+    saved.io.latch_input_unclamped_for_test(
+        crate::Input::new().with_touch(Some(crate::Touch { x: 1, y: 200 })),
+    );
+    let bytes = saved.save_state();
+    assert_eq!(
+        fresh_counter().load_state(&bytes),
+        Err(SavestateError::Corrupt)
+    );
+}

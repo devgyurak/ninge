@@ -18,7 +18,7 @@ pub const FORMAT_VERSION: u32 = 1;
 const MAGIC: &str = "ninge-input";
 
 /// The lower screen's last row; a touch below it is out of range (`keypad.md`).
-const TOUCH_MAX_Y: u8 = 191;
+const TOUCH_MAX_Y: u8 = Touch::MAX_Y;
 
 /// The button names in bit order, A at bit 0.
 const BUTTON_NAMES: [(&str, Buttons); 12] = [
@@ -196,7 +196,10 @@ pub fn encode_header(header: &LogHeader) -> String {
 }
 
 /// The line for frame `number` (1 for the first), newline included. A field at its default is
-/// left out, so a frame with nothing happening is just `f=<n>`.
+/// left out, so a frame with nothing happening is just `f=<n>`. A touch below the last row is
+/// written as the last row, so that whatever this writes the reader accepts (the format holds
+/// y 0-191). That is also what a machine latches for it ([`Touch::MAX_Y`]), so the live run and
+/// the replay of what this wrote agree for any host.
 pub fn encode_frame(number: u32, input: &Input) -> String {
     let mut line = format!("f={number}");
     if input.buttons.bits() != 0 {
@@ -208,7 +211,7 @@ pub fn encode_frame(number: u32, input: &Input) -> String {
         line.push_str(&format!(" b={}", names.join(",")));
     }
     if let Some(touch) = input.touch {
-        line.push_str(&format!(" t={},{}", touch.x, touch.y));
+        line.push_str(&format!(" t={},{}", touch.x, touch.y.min(TOUCH_MAX_Y)));
     }
     if input.hinge_closed {
         line.push_str(" hinge");

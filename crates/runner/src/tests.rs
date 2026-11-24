@@ -163,6 +163,7 @@ fn describe(parsed: Result<Command, RunnerError>) -> String {
     match parsed {
         Ok(Command::Run(args)) => format!("run {} {}", args.rom().display(), args.frames()),
         Ok(Command::CpuSuite(dir)) => format!("cpu-suite {}", dir.display()),
+        Ok(Command::Trace(args)) => format!("trace {}", args.rom().display()),
         Err(RunnerError::Usage(message)) => {
             format!("usage: {}", message.lines().next().unwrap_or(""))
         }

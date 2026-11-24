@@ -7,6 +7,7 @@
 //! ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE]    # N defaults to 1
 //! ninge-runner <rom> [--frames N] --audio [--wav PATH]  # also hash (and write) the audio
 //! ninge-runner cpu-suite <dir>       # run the ARM7TDMI JSON suite files in <dir>
+//! ninge-runner trace <rom> --frames N [--from-frame F] [--cpu arm9|arm7|both] --out <file>
 //! ```
 //!
 //! A ROM path that starts with `-` is read as a flag and refused; pass `./-x.nds` instead. A
@@ -33,6 +34,7 @@
 
 pub mod cpu_suite;
 pub mod golden;
+pub mod trace;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -118,6 +120,8 @@ pub enum Command {
     Run(Args),
     /// Run the ARM7TDMI JSON suite files in a directory.
     CpuSuite(PathBuf),
+    /// Run a ROM and write its instruction trace (`docs/contributing/trace-oracle.md`).
+    Trace(trace::TraceArgs),
 }
 
 /// Parses the arguments after the program name into a [`Command`].
@@ -125,6 +129,10 @@ pub enum Command {
 /// `cpu-suite <dir>` selects the suite; anything else is a ROM run as in [`parse_args`].
 pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command, RunnerError> {
     let mut args = args.into_iter().peekable();
+    if args.peek().is_some_and(|first| first == "trace") {
+        args.next();
+        return trace::parse_trace_args(args).map(Command::Trace);
+    }
     if args.peek().is_none_or(|first| first != "cpu-suite") {
         return parse_args(args).map(Command::Run);
     }
@@ -188,7 +196,7 @@ impl Args {
     }
 }
 
-const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE] [--audio] [--wav PATH]\n       ninge-runner cpu-suite <dir>";
+const USAGE: &str = "usage: ninge-runner <rom> [--frames N] [--save PATH] [--save-type TYPE] [--audio] [--wav PATH]\n       ninge-runner cpu-suite <dir>\n       ninge-runner trace <rom> --frames N [--from-frame F] [--cpu arm9|arm7|both] --out <file>";
 
 /// Parses the arguments after the program name.
 ///

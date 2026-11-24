@@ -41,6 +41,7 @@ fn execute() -> Result<String, RunnerError> {
             Ok(report.to_string())
         }
         Command::CpuSuite(dir) => Ok(report_dir(&dir)?),
+        Command::Trace(args) => Ok(ninge_runner::trace::write_trace_file(&args)?.to_string()),
     }
 }
 

@@ -9,7 +9,8 @@ use crate::rsp::{Reader, RspError, frame, hex_bytes};
 
 /// The 16 MiB block of addresses a CPU's BIOS sits in: `FF000000h` up to the top for the ARM9,
 /// `0` to `00FFFFFFh` for the ARM7. The last byte of the ARM9 block is left out because the
-/// range's end is a `u32`; a read of it alone is a one-byte read at the wrap, which is refused.
+/// range's end is a `u32`; `read_memory` refuses any read that reaches the top of the address
+/// space, so it is covered.
 fn bios_block(cpu: ninge_core::trace::TraceCpu) -> Range<u32> {
     match cpu {
         ninge_core::trace::TraceCpu::Arm9 => 0xFF00_0000..0xFFFF_FFFF,
@@ -172,8 +173,9 @@ impl<T: Read + Write> GdbClient<T> {
     pub fn read_memory(&mut self, addr: u32, len: u32) -> Result<Vec<u8>, RspError> {
         let end = u64::from(addr) + u64::from(len);
         // A read that wraps past the top of the address space would reach the area at 0 without
-        // the range check seeing it, so it is refused outright.
-        if end > 1 << 32 {
+        // the range check seeing it, and a read of the last byte is outside the ARM9 block's
+        // range (its end is a `u32`): both are refused outright.
+        if end >= 1 << 32 {
             return Err(RspError::Forbidden(addr));
         }
         let overlaps = |range: &Range<u32>| {

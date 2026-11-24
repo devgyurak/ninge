@@ -99,7 +99,8 @@ Pending: the melonDS stub's behavior (both CPUs reachable, register layout, step
 reset, throughput) is recorded here after the probe, which needs the maintainer to enable the
 stub.
 
-Unverified until then, and marked `TODO(hw-unverified)` in `ninge-tracediff`:
+Unverified until then (only the first one carries a `TODO(hw-unverified)` in
+`ninge-tracediff`):
 
 - the position of the CPSR in the `g` packet (the adapter's default is word 16, the common GDB ARM
   layout);

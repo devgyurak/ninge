@@ -509,3 +509,16 @@ fn given_a_read_that_wraps_past_the_top_of_memory_when_made_then_it_is_forbidden
         (Some(0xFFFF_FFFE), Vec::<String>::new())
     );
 }
+
+#[test]
+fn given_a_one_byte_read_of_the_last_address_when_made_then_it_is_forbidden_and_no_m_is_sent() {
+    // 0xFFFF_FFFF is outside the ARM9 block's range (its end is a u32), so the top-of-memory
+    // rule is what refuses it.
+    let (fake, log) = Fake::new(vec![State::at(0x0200_0000)]);
+    let mut client = GdbClient::for_cpu(fake, ninge_core::trace::TraceCpu::Arm9);
+    let outcome = client.read_memory(0xFFFF_FFFF, 1);
+    assert_eq!(
+        (forbidden_address(outcome), requests(&log, 'm')),
+        (Some(0xFFFF_FFFF), Vec::<String>::new())
+    );
+}

@@ -8,6 +8,7 @@ mod copy;
 mod lz77;
 mod math;
 mod misc;
+mod sound;
 
 use super::bios::{SwiRecord, flag_address};
 use crate::cpu::{Bus, Cpu};
@@ -30,6 +31,10 @@ const GET_CRC16: u8 = 0x0E;
 const IS_DEBUGGER: u8 = 0x0F;
 const LZ77_WRAM: u8 = 0x11;
 const LZ77_VRAM: u8 = 0x12;
+/// The sound tables, ARM7 only (`hle-swi.md`, "The sound table SWIs").
+const GET_SINE_TABLE: u8 = 0x1A;
+const GET_PITCH_TABLE: u8 = 0x1B;
+const GET_VOLUME_TABLE: u8 = 0x1C;
 /// SOUNDBIAS level 200h, the medium level.
 const BIAS_MID: u32 = 0x200;
 /// The V-blank bit of IE, IF and the IRQ check flags.
@@ -77,6 +82,10 @@ pub(super) fn run<const ARM9: bool, B: Bus>(
             sound_bias(cpu, bus);
             Next::Return
         }
+        GET_SINE_TABLE | GET_PITCH_TABLE | GET_VOLUME_TABLE if !ARM9 => {
+            sound_table(number, cpu);
+            Next::Return
+        }
         DIV | CPU_SET | CPU_FAST_SET | SQRT | GET_CRC16 | IS_DEBUGGER | LZ77_WRAM | LZ77_VRAM => {
             data_routine(number, cpu, bus);
             Next::Return
@@ -118,6 +127,20 @@ fn data_routine<const ARM9: bool, B: Bus>(number: u8, cpu: &mut Cpu<ARM9>, bus: 
         // `run` sends only the numbers in its data arm, each matched above.
         _ => unreachable!("`run` sends data_routine only the numbers it matches itself"),
     }
+}
+
+/// The sound tables: `R0` becomes the entry of the table `number` names at the index it held, 0 for
+/// an index outside the table; nothing else changes (`hle-swi.md`, "The sound table SWIs").
+fn sound_table<const ARM9: bool>(number: u8, cpu: &mut Cpu<ARM9>) {
+    let index = cpu.regs().get(0);
+    let entry = match number {
+        GET_SINE_TABLE => sound::sine(index),
+        GET_PITCH_TABLE => sound::pitch(index),
+        GET_VOLUME_TABLE => sound::volume(index),
+        // `run` sends only the numbers in its table arm, each matched above.
+        _ => unreachable!("`run` sends sound_table only the numbers it matches itself"),
+    };
+    cpu.regs_mut().set(0, entry);
 }
 
 /// SoundBias: SOUNDBIAS bits 0-9 become `000h` for `R0 = 0` and `200h` otherwise, the bits above

@@ -22,8 +22,8 @@ The mixer, the volume and panning, the PSG and noise generation, reading the sam
 PCM16, ADPCM) and the gates (SOUNDCNT, POWCNT2, the sound amplifier of the power-management device)
 are in `spu.md` (#45), and what the capture units write to memory is in `sound-capture.md` (#46).
 The addition of channel 1 or 3 into channel 0 or 2 (SNDCAPxCNT bit 0) is in `sound-capture.md` too.
-Not implemented (`TODO(phase6)`): the BIOS table SWIs (sine, pitch and volume tables, which are BIOS
-data and need a plan of their own).
+The BIOS table SWIs (the sine, pitch and volume tables a sound driver reads) are in `hle-swi.md`,
+"The sound table SWIs".
 
 ## Who sees them
 

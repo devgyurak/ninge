@@ -211,7 +211,7 @@ the first gate is `(bias - 200h) * 64`.
   is specified in `sound-capture.md` (#46), the writes to memory and the addition mode. The
   mixer of this note is the one without addition; with it on, `sound-capture.md` says which
   channels move.
-- **BIOS table SWIs** (sine, pitch and volume tables): BIOS data, see `sound-registers.md`.
+- **BIOS table SWIs** (sine, pitch and volume tables): see `hle-swi.md`, "The sound table SWIs".
 - **The 15 ms rule**: GBATEK says no sound is to be output during the first 15 ms after the sound
   circuit is powered. That is a rule for the program, not a behavior to model.
 

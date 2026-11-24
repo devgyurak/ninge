@@ -448,6 +448,8 @@ oracle.
 - **A command abandoned midway.** When another port is written while a command waits for
   parameters, the model drops the entries the abandoned command already queued (the engine takes a
   command only when all its entries are there, so they would otherwise block the queue for ever).
+  After a lock-up (see "SWAP_BUFFERS") the queue is frozen and keeps what it has: entries that
+  found the FIFO full were dropped, so how many the abandoned command queued is not known.
   GBATEK says nothing of an abandoned command. — `gpu3d/` (`Gpu3d::abandon`) — verify by writing
   part of a MTX_LOAD_4x4 to its port and then another port's command, and reading GXSTAT's busy bit
   and FIFO count.

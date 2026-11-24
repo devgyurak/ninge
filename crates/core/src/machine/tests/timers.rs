@@ -573,14 +573,15 @@ fn given_an_event_queued_at_now_for_a_lagging_arm7_when_the_state_is_saved_and_l
 fn given_a_late_event_when_it_fires_then_the_next_overflow_is_on_the_timers_own_tick_grid() {
     let mut m = lagging_arm7_timer(START | IRQ);
     step(&mut m, 1);
-    // Overflows were due at 2, 4, ... 128 (one event settles at most SLICE of them), so the
-    // next is 130 on the timer's own grid, not late-based.
+    // Overflows were due at 2, 4, ... 1000 (one event settles at most SLICE of them, so the step
+    // fires the event again until none is due), so the next is 1002 on the timer's own grid, not
+    // late-based.
     assert_eq!(
         (
             m.inspect().irq7().if_(),
             m.inspect().timers7().overflow_time(0)
         ),
-        (IF_TIMER0, Some(130))
+        (IF_TIMER0, Some(1002))
     );
 }
 

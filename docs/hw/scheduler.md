@@ -172,9 +172,14 @@ fidelity and per-round overhead, not a hardware fact.
 ### Debugger single-step
 
 `Machine::step_arm9` advances the ARM9 by one instruction and `now` by its cost (1). With a
-program booted it then settles: the ARM7 runs up to `now` and every event that became due
-fires, so the queue never holds an event before `now` and a step across a frame end draws and
-counts the frame. A machine with no program steps only the ARM9.
+program booted it then settles: the ARM7 runs up to `now` and every event due at or before `now`
+fires, oldest first, so the queue never holds an event before `now` and a step across a frame end
+draws and counts the frame. The events fire in passes until none is due: a step can move `now`
+over many events (a held ARM9 runs its whole hold, and a line start schedules the next), and VCOUNT
+and the HBlank flag must be those of `now`, since a line start only adds one to VCOUNT and a
+wrong value would stay wrong. A pass fires the events due when it began; an event that keeps
+rescheduling itself at its own time ends the settle after 64 passes. A machine with no program
+steps only the ARM9.
 
 Stepping therefore catches the ARM7 up after every ARM9 instruction, where `run_frame` does it
 once per slice. A program whose two CPUs race over the same memory can behave differently when
@@ -215,9 +220,67 @@ A saved machine is refused on load when:
 - `now` is above `MAX_TIME` (2^62 master cycles, about 2,180 years of emulated time, which no
   real run reaches). A smaller margin below `u64::MAX` cannot work: a frame end would
   eventually saturate at the maximum and stay due;
-- a program is booted and the ARM7 clock is behind `now` or two or more master cycles ahead of
-  it. A booted machine is always settled, so the ARM7 is at `now` or one master cycle past it.
-  (A machine with no program steps only the ARM9, so its ARM7 clock may lag.)
+- a program is booted, no round is in progress, and the ARM7 clock is behind `now`; or the ARM7 clock
+  is two or more master cycles ahead of `now`. A booted machine between rounds is settled, so the
+  ARM7 is at `now` or one master cycle past it. (A machine with no program steps only the ARM9, so
+  its ARM7 clock may lag, and so does the ARM7 in a round a stop interrupted.)
+- a round is in progress and no program is booted, or its times are above `MAX_TIME`;
+- a program is booted and VCOUNT or the HBlank flag is not what the line events up to the time
+  make them: the line is `(t / LINE_CYCLES) % 263` and the flag is set from
+  `HBLANK_START_CYCLES` into the line, for `t` = `now`, or `now - 1` in a round a stop interrupted
+  after the ARM9 ran (the events due at `now` have not fired there). A step settles by firing every
+  due event (see "Debugger single-step"), so a state a run reaches always has this.
+
+## Run control
+
+A host can stop the run anywhere, not only at a frame end: `Machine::run_until(input, &StopSet)`
+runs until a frame is complete or a condition is met and returns why (`StopReason::FrameEnd`,
+`InstructionLimit`, or `Breakpoint { arm9, pc }`). `run_frame` is `run_until` with nothing but the
+frame end, with the same behavior. The conditions are an instruction limit (instructions of either
+CPU in the call) and up to eight PC breakpoints for each CPU; a breakpoint stops the run before the
+instruction at its address runs.
+
+A stop in the middle of a round must not change what the rest of the run does. A round is the ARM9
+up to a target, then the ARM7 up to where the ARM9 stopped, then the events due there. The model
+keeps the interrupted round (`Machine::round`: its target, and where the ARM9 stopped once it has)
+as plain, saved state, and the next call finishes that round with the same target. The ARM7 and the
+events are not run at the stop, so the interleaving, the frames, the audio and the savestate bytes
+after stop and continue are the uninterrupted run's. A frame's input is latched when the frame
+begins, so a call that resumes a frame ignores its input.
+
+What the host asked for is not state. The `StopSet`, what it has counted and the breakpoint to run
+over live in the call (`machine::run::Running`, which hands the scheduler the machine and the
+conditions); the machine keeps none of them. To go on from a breakpoint the host passes the reason
+back in (`StopSet::resuming(reason)`): the instruction at that address runs once, then breakpoints
+apply again. A host that does not pass it stops at the same breakpoint again. The reason applies
+only while its CPU is still at that address: a host that kept an old reason across a step does not
+skip the breakpoint's next hit. A savestate taken at
+a stop therefore holds the round and nothing of the debugger.
+
+A load rebuilds the event queue from the saved state. The rebuild looks at the round in one place
+(`Machine::events_from`): in a round a stop interrupted after the ARM9 ran, the events due at `now`
+have not fired (the round fires them last), so they are queued at `now`, not after it.
+
+`step_arm9` and the public `step_arm7` first finish the round a stop interrupted (with no stop
+conditions), so the step lands on the state the uninterrupted run has at the end of that round; the
+step itself is one extra instruction between two rounds, which the uninterrupted run does not have.
+Then the other CPU and the events catch up to it: after `step_arm7` the master clock follows the
+ARM7's until the ARM7 leads by less than one instruction (`scheduler::catch_up`), the settled state
+a load accepts; a pass that moves neither the clock nor an event ends it, and a pass that only
+fires events keeps going, since the ARM9 may run on afterwards. This is the model's choice, not
+hardware behavior. Expressing a step as a run with
+a per-CPU instruction limit would make it one more stop of the same run, with no extra instruction;
+it would change what every stepping test sees (a step would no longer settle the other CPU and the
+events), so it is left to the work that moves the debugger onto `run_until` (#53).
+
+That leaves a side effect a debugger would see, so #53 must remove it before it binds a step key:
+a step taken at a breakpoint first finishes the round the stop interrupted, which is up to one
+slice (64 master cycles, so up to about 64 ARM9 instructions) of the ARM9 running before the one
+instruction the user asked for. It is the same run an uninterrupted one makes up to the round's
+end, but it is not one step to the user. The per-CPU instruction limit is what removes it. The address of
+the instruction about to run is the fetch address (`r15`) less 8 in ARM state or 4 in Thumb state,
+for both CPUs. The debugger's CPU panel and breakpoint list (#53, #56) read and set these through
+the same calls.
 
 ## Edge cases
 

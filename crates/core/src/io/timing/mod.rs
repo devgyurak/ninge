@@ -12,7 +12,7 @@
 
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use crate::io::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
-use crate::scheduler::{FRAME_CYCLES, LINE_CYCLES};
+use crate::scheduler::{FRAME_CYCLES, HBLANK_START_CYCLES, LINE_CYCLES};
 use serde::{Deserialize, Serialize};
 
 /// DISPSTAT, at `0400_0004h` (`display-timing.md`, "Registers").
@@ -233,6 +233,15 @@ impl Timing {
         }
     }
 
+    /// Whether VCOUNT and the HBlank flag are what the line events have made them by master time
+    /// `time`: every line start up to it has fired, and so has every HBlank start. A machine that is
+    /// settled has this at its master time; `line_started` adds one to VCOUNT and never looks at
+    /// the time, so a value that is wrong stays wrong (`state-contents.md`).
+    pub(crate) fn follows(&self, time: u64) -> bool {
+        let line = (time / LINE_CYCLES) % u64::from(LINES);
+        u64::from(self.vcount) == line && self.hblank == (time % LINE_CYCLES >= HBLANK_START_CYCLES)
+    }
+
     /// Whether decoded state could have been reached: VCOUNT is a line, the VBlank flag agrees
     /// with it, and each DISPSTAT holds only writable bits. A savestate that decodes to
     /// anything else is corrupt (`savestate`).
@@ -255,6 +264,11 @@ impl Timing {
         self.vblank = vblank;
     }
 
+    /// Sets the HBlank flag unchecked, to build a corrupt state in a test.
+    pub(crate) fn set_hblank_for_test(&mut self, hblank: bool) {
+        self.hblank = hblank;
+    }
+
     /// Sets the ARM7's stored DISPSTAT bits unchecked, to build a corrupt state in a test.
     pub(crate) fn set_arm7_control_for_test(&mut self, control: u16) {
         self.arm7.control = control;
@@ -262,9 +276,8 @@ impl Timing {
 }
 
 impl Checked for Timing {
-    /// VCOUNT and the HBlank flag follow the master time, but a state saved between two events can
-    /// hold either a line behind it (a lone step settles one event at a time), so they are not
-    /// compared with the time: a known unchecked derived value (`state-contents.md`).
+    /// The line and the HBlank flag against the time are checked by [`Timing::follows`], which needs
+    /// the time the line events have reached and not `now` (`state-contents.md`).
     fn well_formed(&self, _now: u64) -> bool {
         self.is_well_formed()
     }

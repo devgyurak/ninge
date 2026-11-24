@@ -4,6 +4,7 @@
 //! it are the line, HBlank and DMA starts those events lead to (`docs/hw/scheduler.md`).
 
 use super::AUDIO_CAPACITY;
+use super::run::RunControl;
 use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
 use crate::bus::{Arm7View, Arm9View, TcmConfig, peek};
 use crate::io::dma::Trigger;
@@ -11,12 +12,55 @@ use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
 use crate::spu::{CAPTURES, CaptureWrites, OUTPUT_SAMPLE_CYCLES};
 
+/// The scheduler's view of a machine with no host stop conditions: what `step_arm7` and the tests
+/// that run a round drive.
 impl Participants for Machine {
     fn scheduler(&mut self) -> &mut Scheduler {
         &mut self.scheduler
     }
 
-    fn run_arm9_until(&mut self, target: u64) {
+    fn run_arm9_until(&mut self, target: u64) -> bool {
+        self.arm9_until(target, &mut RunControl::default())
+    }
+
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.arm7_until(target, &mut RunControl::default())
+    }
+
+    fn dispatch(&mut self, event: Event) {
+        self.dispatch_event(event);
+    }
+}
+
+/// A machine run under a host's stop conditions: what [`Machine::run_until`] hands the scheduler.
+/// The conditions live and die with the call, so the machine holds none of them.
+pub(crate) struct Running<'a> {
+    pub(crate) machine: &'a mut Machine,
+    pub(crate) control: RunControl,
+}
+
+impl Participants for Running<'_> {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        &mut self.machine.scheduler
+    }
+
+    fn run_arm9_until(&mut self, target: u64) -> bool {
+        self.machine.arm9_until(target, &mut self.control)
+    }
+
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.machine.arm7_until(target, &mut self.control)
+    }
+
+    fn dispatch(&mut self, event: Event) {
+        self.machine.dispatch_event(event);
+    }
+}
+
+impl Machine {
+    /// Runs the ARM9 until the master clock reaches `target` or the earliest queued event; false
+    /// when a stop condition of `control` ended it first.
+    fn arm9_until(&mut self, target: u64, control: &mut RunControl) -> bool {
         // An instruction can queue an event before `target` (a timer write, #109); stop at it so
         // it sees every earlier instruction and none after (`scheduler.md`, "Interleaving").
         // See #118. `next_event_time` is a heap peek: O(1), no allocation.
@@ -33,6 +77,7 @@ impl Participants for Machine {
             TcmConfig::from_cp15(self.arm9.cp15()),
         )
         .with_hold(self.arm9_hold_until);
+        let mut completed = true;
         while view.clock() < target
             && view
                 .next_event_time()
@@ -59,6 +104,10 @@ impl Participants for Machine {
                 view.advance(stop - view.clock());
                 break;
             }
+            if control.is_active() && control.stops_before(true, self.arm9.next_instruction()) {
+                completed = false;
+                break;
+            }
             arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
             let key = self.arm9.cp15().tcm_key();
             if key != tcm_key {
@@ -67,9 +116,12 @@ impl Participants for Machine {
             }
         }
         self.arm9_hold_until = view.hold_until();
+        completed
     }
 
-    fn run_arm7_until(&mut self, target: u64) {
+    /// Runs the ARM7 until its clock reaches `target`; false when a stop condition of `control`
+    /// ended it first.
+    fn arm7_until(&mut self, target: u64, control: &mut RunControl) -> bool {
         let mut view = Arm7View::new(
             &mut self.memory,
             &mut self.io,
@@ -77,17 +129,24 @@ impl Participants for Machine {
             &self.rom,
             self.arm7_clock,
         );
+        let mut completed = true;
         while view.clock() < target {
             if self.arm7.halted() && !view.io().irq7().wakes() {
                 view.advance(target - view.clock());
                 break;
             }
+            if control.is_active() && control.stops_before(false, self.arm7.next_instruction()) {
+                completed = false;
+                break;
+            }
             arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
         }
         self.arm7_clock = view.clock();
+        completed
     }
 
-    fn dispatch(&mut self, event: Event) {
+    /// Handles a fired event.
+    fn dispatch_event(&mut self, event: Event) {
         match event.kind {
             EventKind::Line(LineEvent::Start) => self.line_started(event.time),
             EventKind::Line(LineEvent::HBlank) => self.hblank_started(event.time),

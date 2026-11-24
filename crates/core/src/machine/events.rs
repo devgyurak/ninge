@@ -112,24 +112,16 @@ impl Machine {
     fn sample_due(&mut self, time: u64) {
         let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
         let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
-        let decoders = std::array::from_fn(|x| io.spu().channel(x).advanced(time, read));
-        self.io.spu_mut().set_decoders(decoders);
-        let (memory, io, rom) = (&self.memory, &self.io, &self.rom[..]);
-        let read = |addr: u32| peek::<false, 1>(memory, io, &TcmConfig::NONE, rom, time, addr)[0];
-        let spu = io.spu();
-        let samples = std::array::from_fn(|x| spu.channel(x).sample(time, read));
-        let mix = spu.mix(&samples, spu.adding(time));
         // The gates outside the unit: the speakers and the sound amplifier (`spu.md`, "The gates").
         let audible = io.power().speakers_on() && io.spi().power().amplifier_audible();
-        let pair = spu.output_mixed(&mix, audible);
-        // What the capture units write, worked out from the same samples and the same mix; the
-        // writes themselves come after, so the one-sample delay of a capture played back by channel
-        // 1 or 3 is the model (`docs/hw/sound-capture.md`, "Model").
-        let captures = spu.capture_writes(&mix, &samples, time);
+        let tick = io.spu().tick(time, audible, read);
+        self.io.spu_mut().set_decoders(tick.decoders);
         if self.audio.len() < AUDIO_CAPACITY {
-            self.audio.extend(pair);
+            self.audio.extend(tick.output);
         }
-        self.write_captures(captures);
+        // The capture writes come after the mix, so the one-sample delay of a capture played back by
+        // channel 1 or 3 is the model (`docs/hw/sound-capture.md`, "Model").
+        self.write_captures(tick.captures);
         self.scheduler
             .schedule(time.saturating_add(OUTPUT_SAMPLE_CYCLES), EventKind::Sample);
     }

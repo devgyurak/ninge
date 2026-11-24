@@ -75,6 +75,18 @@ ninge                       # ROM 없음: 테스트 패턴 표시
 `--focus-pause`를 주면 터미널이 포커스를 잃는 동안 ninge는 소리를 포함해 일시정지하고,
 포커스가 돌아오면 이어서 실행합니다.
 
+**알려진 한계: macOS의 Ghostty에서 탭이나 창 닫기.** Ghostty는 닫기를 되돌릴 수 있도록 닫힌
+탭의 프로그램을 `undo-timeout`(기본 5초) 동안 살려 두었다가 그 뒤에 종료합니다. 그래서 ninge는
+그동안 소리를 포함해 계속 실행됩니다. 이 사이에 ninge가 받는 것은 다른 탭으로 옮겨 갈 때와
+같은 포커스 잃음 알림뿐이라, 닫기와 탭 전환을 구분할 수 없습니다. 닫는 즉시 조용해지게
+하려면 다음 중 하나를 쓰세요.
+
+- ninge를 `--focus-pause`로 실행합니다. 다른 탭으로 옮겨 갈 때도 일시정지합니다.
+- Ghostty 설정에 `undo-timeout = 0`을 넣습니다. ninge는 즉시 종료되지만 모든 탭에서 되돌리기가
+  꺼집니다.
+- 다른 탭의 되돌리기는 살리고 ninge만 별도 Ghostty 인스턴스에서 실행합니다:
+  `open -na Ghostty.app --args --undo-timeout=0 -e "$(command -v ninge)" /path/to/program.nds`
+
 `Ctrl-C`나 `Ctrl-Q`로 종료합니다. ninge로는 직접 빌드한 홈브루처럼 실행할 권리가 있는
 프로그램을 실행합니다. ninge는 ROM을 포함하지 않으며 BIOS나 펌웨어 파일도 필요하지 않습니다.
 

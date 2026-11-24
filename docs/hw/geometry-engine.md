@@ -229,7 +229,8 @@ The VTX commands set the current vertex position (16-bit signed, 1.3.12) and the
   gains `sign_extend_10(field)` and the range is about +-0.125. The sum is a 16-bit value.
 
 Every VTX command ends by transforming the vertex: *(xx, yy, zz, ww) = (x, y, z, 1.0) x ClipMatrix*,
-and storing it in Vertex RAM. Screen position is derived at render time by the rasterizer:
+and storing it in Vertex RAM. The rasterizer derives the screen position from the clip coordinates
+and the VIEWPORT of the vertex's polygon (see "VIEWPORT"):
 *screen_x = (xx+ww) x viewport_width / (2 ww) + viewport_x1*, the same for y. A VTX command that
 completes a polygon also writes an entry in Polygon RAM.
 
@@ -302,9 +303,60 @@ and `0400_0330h`-`0400_03BFh`) are not swapped.
 The set the last SWAP_BUFFERS handed on (`Gpu3d::render_ram`): its polygons in the order they were
 completed, each with its attributes (POLYGON_ATTR as of BEGIN_VTXS, TEXIMAGE_PARAM, PLTT_BASE) and
 3 to 10 indices into the same set's vertices, in drawing order; each vertex has clip coordinates
-(1.19.12), an RGB555 colour and S, T (1.11.4). Screen coordinates are derived from the VIEWPORT
-value (`Gpu3d::viewport`) at render time, as the formula above says. Vertex RAM is filled in the
-order the vertices arrived, a vertex shared by a strip once.
+(1.19.12), an RGB555 colour and S, T (1.11.4), and each polygon carries the VIEWPORT that was in
+force when it was completed. Vertex RAM is filled in the order the vertices arrived, a vertex shared
+by a strip once. That set, the two SWAP_BUFFERS parameter bits that came with the swap and the
+rendering registers below are everything the rasterizer reads from the geometry side; the model
+hands the first two on as one value (`Scene`) and keeps the registers in one struct (`RenderRegs`).
+
+### VIEWPORT
+
+VIEWPORT is a command in the FIFO, so it is ordered with the vertices around it. GBATEK says only
+that it "should not be issued within Begin/End" (a recommendation, not a rule the hardware
+enforces) and that it does not move or size the rear-plane. It also says that on each VTX command
+"the viewport coordinates of the vertex are calculated and stored in Vertex RAM", which reads as
+the hardware keeping a screen position per vertex, taken with the VIEWPORT in force at that VTX.
+It says nothing about when the rasterizer samples the value. The commands of frame N+1 run while
+frame N is drawn, so a single live register read at render time would see the wrong frame's value;
+the model therefore keeps **one value per polygon**: the VIEWPORT in force when the polygon is
+completed. For a program that follows the recommendation every vertex of a polygon sees the same
+value, so this equals what a per-vertex value would give; a program that issues VIEWPORT inside a
+vertex list gets the value at completion, which may differ from the hardware (see "Unverified").
+A value latched at the swap would differ for a frame that changes VIEWPORT part way through; the
+model does not use it. The command's four bytes are X1, Y1, X2, Y2 with the origin at the lower
+left, so the y axis is flipped against the 2D screen (the rasterizer's, #49). GBATEK does not say
+how the width and height in the formula above follow from X1, X2, Y1, Y2 (X2-X1 or one more);
+that is the rasterizer's too. GBATEK adds that a vertex can land one pixel beyond X2 or Y1 because
+of rounding; how is the rasterizer's (#49).
+
+### The rendering registers
+
+DISP3DCNT (`0400_0060h`) and `0400_0320h`-`0400_03BFh` are the rendering engine's own registers.
+SWAP_BUFFERS does not copy them (GBATEK: they must be kept intact during rendering), so the model
+reads them live while a frame is drawn. What
+each one does stays with #49-#51; the geometry model stores them so a write is not lost and a read
+returns what the hardware does. All are write-only except RDLINES_COUNT and DISP3DCNT.
+
+| Address | Register | Width | Stored bits |
+| --- | --- | --- | --- |
+| `0400_0320h` | RDLINES_COUNT (R) | 1 | read only (46 until #49) |
+| `0400_0330h` | EDGE_COLOR 0-7 (W) | 8 x 2 | bits 0-14 of each |
+| `0400_0340h` | ALPHA_TEST_REF (W) | 1 | bits 0-4 |
+| `0400_0350h` | CLEAR_COLOR (W) | 4 | bits 0-20 and 24-29 |
+| `0400_0354h` | CLEAR_DEPTH (W) | 2 | bits 0-14 |
+| `0400_0356h` | CLRIMAGE_OFFSET (W) | 2 | bits 0-14 (X in 0-7, Y in 8-14) |
+| `0400_0358h` | FOG_COLOR (W) | 4 | bits 0-14 and 16-20 |
+| `0400_035Ch` | FOG_OFFSET (W) | 2 | bits 0-14 |
+| `0400_0360h` | FOG_TABLE 0-31 (W) | 32 x 1 | bits 0-6 of each |
+| `0400_0380h` | TOON_TABLE 0-31 (W) | 32 x 2 | bits 0-14 of each |
+
+A register is stored with the unused bits cleared. A write of any width lands on the bytes it
+covers, as for DISP3DCNT (`TODO(hw-unverified)`, see "Unverified"). A read of a write-only
+register returns 0, as for the rest of the block,
+and RDLINES_COUNT reads 46 until the rasterizer exists (`gx-stub.md`). POWCNT1 bit 2 clear makes
+the block read-only, so the writes are dropped (`gx-stub.md`, "Power control"; DISP3DCNT is
+outside that range). CLEAR_DEPTH and CLRIMAGE_OFFSET are one word: a word write to `0400_0354h`
+stores both halves.
 
 ### SWAP_BUFFERS
 
@@ -489,8 +541,23 @@ oracle.
   the next line-192 start, which is the next frame's when the command begins inside VBlank (lines
   192-262); GBATEK says only "until next VBlank". — `gpu3d/`.
 - **VIEWPORT, TEXIMAGE_PARAM and PLTT_BASE** are stored and copied into each polygon; what they do
-  is the rasterizer's and the texture unit's (#49, #50). POLYGON_ATTR bit 13 (1-dot polygons) and
+  is the rasterizer's and the texture unit's (#49, #50). Whether the hardware keeps the viewport or
+  the screen coordinates per vertex cannot be told from GBATEK, and no program that follows its
+  advice (no VIEWPORT inside a vertex list) can see the difference ("VIEWPORT"). POLYGON_ATTR bit
+  13 (1-dot polygons) and
   DISP_1DOT_DEPTH are not applied by the geometry engine. — `gpu3d/polygon.rs`.
+- **VIEWPORT sampling**: the power-on value (the model holds 0), whether the hardware keeps the
+  viewport or screen coordinates per vertex, when the rasterizer samples the value, and what a
+  VIEWPORT inside a vertex list does. The model keeps the value in force at the polygon's
+  completion; the viewport width and height in the screen formula (X2-X1 or one more) are left to
+  the rasterizer. — `gpu3d/polygon.rs`.
+- **CLRIMAGE_OFFSET**: GBATEK gives the Y offset as bits 8-14 and also as 0..255, which does not
+  fit 7 bits. The model stores bits 0-14. — `gpu3d/`.
+- **The rendering block's write width**: that a byte or halfword write to a register stores just
+  those bytes (as DISP3DCNT does) is assumed. — `gpu3d/`.
+- **The rendering block**: reads of its write-only registers (the model returns 0), and whether a
+  bit GBATEK marks "not used" is stored or reads back (the model stores 0). A write to
+  RDLINES_COUNT is dropped. — `gpu3d/`.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.

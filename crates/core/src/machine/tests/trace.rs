@@ -463,3 +463,336 @@ fn given_an_arm9_that_jumps_into_its_bios_area_when_traced_then_no_record_has_a_
         (0, true, 3)
     );
 }
+
+// ------------------------------------------------------- traced equals untraced: halted CPUs, TCM
+//
+// `traced.rs` repeats the untraced loops of `events.rs`, so the paths a plain counting loop never
+// takes (a halted core, a TCM mapping the guest moves mid-run) need their own equality tests.
+// Expected values: a halted core runs nothing and wakes on `IE & IF != 0` whatever IME is
+// (`hle-swi.md`, "Halt, and what wakes a CPU"; `cp15.md`, "C7"; `interrupts.md`, "HALTCNT"); a CP15
+// change takes effect for the next instruction and a disabled or moved TCM lets the access reach the
+// memory underneath (`arm9-memory-map.md`, "TCM").
+
+/// `mcr p15, 0, r2, c7, c0, 4` (wait-for-interrupt; r2 is never written by these programs).
+const WFI: u32 = 0xEE07_2F90;
+/// `mov r1, #0x66`, `mov r2, #0x66` and `b .`.
+const MARK_R1: u32 = 0xE3A0_1066;
+const MARK_R2: u32 = 0xE3A0_2066;
+const SPIN_WORD: u32 = 0xEAFF_FFFE;
+/// `mov r0, #0x04000000`, `mov r1, #1`, `str r1, [r0, #0x210]` (IE: V-blank), `mov r1, #8`,
+/// `strh r1, [r0, #4]` (DISPSTAT: V-blank IRQ enable): the V-blank of the frame sets IF, which wakes
+/// a halted core with IME still 0. The program then halts, so the wake comes ~192 lines in.
+const ENABLE_VBLANK_IRQ: [u32; 5] = [
+    0xE3A0_0301,
+    0xE3A0_1001,
+    0xE580_1210,
+    0xE3A0_1008,
+    0xE1C0_10B4,
+];
+/// `mov r0, #0x04000000`, `mov r1, #0x80`, `strb r1, [r0, #0x301]`: HALTCNT mode 2 (halt).
+const WRITE_HALTCNT: [u32; 3] = [0xE3A0_0301, 0xE3A0_1080, 0xE5C0_1301];
+/// SWI 06h, Halt.
+const SWI_HALT: u32 = 0xEF06_0000;
+
+fn concat(parts: &[&[u32]]) -> Vec<u32> {
+    parts.iter().flat_map(|part| part.iter().copied()).collect()
+}
+
+/// The first 64 records of each CPU: enough to see a program's start and what follows a wake.
+#[derive(Default)]
+struct Heads {
+    nine: Vec<TraceRecord>,
+    seven: Vec<TraceRecord>,
+}
+
+impl TraceSink for Heads {
+    fn record(&mut self, record: &TraceRecord) {
+        let kept = match record.cpu {
+            TraceCpu::Arm9 => &mut self.nine,
+            TraceCpu::Arm7 => &mut self.seven,
+        };
+        if kept.len() < 64 {
+            kept.push(*record);
+        }
+    }
+}
+
+/// What running two identical machines, one traced and one not, frame by frame, shows.
+struct Comparison {
+    /// The frames after which the two machines' screens, audio or savestate bytes differ.
+    differing: Vec<usize>,
+    nine: Vec<TraceRecord>,
+    seven: Vec<TraceRecord>,
+    traced: Machine,
+}
+
+fn compare_traced_with_untraced(arm9: &[u32], arm7: &[u32], frames: usize) -> Comparison {
+    let mut untraced = machine_with(arm9, arm7);
+    let mut traced = machine_with(arm9, arm7);
+    let mut tracer = Tracer::new(Heads::default(), TraceCpus::Both);
+    let differing = (0..frames)
+        .filter(|_| {
+            untraced.run_frame(crate::Input::new());
+            traced.run_frame_traced(crate::Input::new(), &mut tracer);
+            observable(&untraced) != observable(&traced)
+        })
+        .collect();
+    let heads = tracer.into_sink();
+    Comparison {
+        differing,
+        nine: heads.nine,
+        seven: heads.seven,
+        traced,
+    }
+}
+
+/// `base + 4 * i` for each index.
+fn word_addresses(base: u32, indices: &[u32]) -> Vec<u32> {
+    indices.iter().map(|i| base + 4 * i).collect()
+}
+
+fn arm9_wfi_without_wake() -> Vec<u32> {
+    vec![WFI, MARK_R1, SPIN_WORD]
+}
+
+fn arm9_wfi_with_wake() -> Vec<u32> {
+    concat(&[&ENABLE_VBLANK_IRQ, &[WFI, MARK_R1, SPIN_WORD]])
+}
+
+fn arm7_haltcnt_without_wake() -> Vec<u32> {
+    concat(&[&WRITE_HALTCNT, &[MARK_R2, SPIN_WORD]])
+}
+
+fn arm7_haltcnt_with_wake() -> Vec<u32> {
+    concat(&[&ENABLE_VBLANK_IRQ, &WRITE_HALTCNT, &[MARK_R2, SPIN_WORD]])
+}
+
+fn arm7_swi_halt_without_wake() -> Vec<u32> {
+    vec![SWI_HALT, MARK_R2, SPIN_WORD]
+}
+
+fn arm7_swi_halt_with_wake() -> Vec<u32> {
+    concat(&[&ENABLE_VBLANK_IRQ, &[SWI_HALT, MARK_R2, SPIN_WORD]])
+}
+
+// ------------------------------------------------------------------------------------ ARM9 WFI
+
+#[test]
+fn given_an_arm9_in_wfi_with_nothing_pending_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&arm9_wfi_without_wake(), &PROGRAM, 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_an_arm9_in_wfi_with_nothing_pending_when_run_traced_then_only_the_wfi_is_recorded_and_the_core_stays_halted()
+ {
+    let c = compare_traced_with_untraced(&arm9_wfi_without_wake(), &PROGRAM, 3);
+    assert_eq!(
+        (pcs(&c.nine), c.traced.inspect().arm9().halted()),
+        (vec![ENTRY9], true)
+    );
+}
+
+#[test]
+fn given_an_arm9_in_wfi_with_a_vblank_wake_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&arm9_wfi_with_wake(), &PROGRAM, 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_an_arm9_in_wfi_with_a_vblank_wake_when_run_traced_then_no_record_falls_in_the_halt_and_the_next_pc_is_after_the_wfi()
+ {
+    // Instructions 0-4 set up, 5 is the WFI, 6 the marker and 7 the spin; the spin repeats.
+    let c = compare_traced_with_untraced(&arm9_wfi_with_wake(), &PROGRAM, 3);
+    let want = word_addresses(ENTRY9, &[0, 1, 2, 3, 4, 5, 6, 7, 7]);
+    assert_eq!(
+        (
+            pcs(&c.nine[..9]),
+            steps_of(&c.nine[..9]),
+            c.traced.inspect().arm9().regs().get(1),
+            c.traced.inspect().arm9().halted()
+        ),
+        (want, (0..9).collect::<Vec<u32>>(), 0x66, false)
+    );
+}
+
+// ------------------------------------------------------------------------------------ ARM7 halt
+
+#[test]
+fn given_an_arm7_halted_by_haltcnt_with_nothing_pending_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_haltcnt_without_wake(), 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_an_arm7_halted_by_haltcnt_with_nothing_pending_when_run_traced_then_records_stop_after_the_haltcnt_store()
+ {
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_haltcnt_without_wake(), 3);
+    assert_eq!(
+        (pcs(&c.seven), c.traced.inspect().arm7().halted()),
+        (word_addresses(ENTRY7, &[0, 1, 2]), true)
+    );
+}
+
+#[test]
+fn given_an_arm7_halted_by_haltcnt_with_a_vblank_wake_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_haltcnt_with_wake(), 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_an_arm7_halted_by_haltcnt_with_a_vblank_wake_when_run_traced_then_no_record_falls_in_the_halt_and_the_next_pc_is_after_the_store()
+ {
+    // 0-4 set up, 5-7 write HALTCNT, 8 is the marker and 9 the spin; the spin repeats.
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_haltcnt_with_wake(), 3);
+    let want = word_addresses(ENTRY7, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9]);
+    assert_eq!(
+        (
+            pcs(&c.seven[..11]),
+            steps_of(&c.seven[..11]),
+            c.traced.inspect().arm7().regs().get(2),
+            c.traced.inspect().arm7().halted()
+        ),
+        (want, (0..11).collect::<Vec<u32>>(), 0x66, false)
+    );
+}
+
+#[test]
+fn given_an_arm7_halted_by_swi_halt_with_nothing_pending_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_swi_halt_without_wake(), 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_an_arm7_halted_by_swi_halt_with_nothing_pending_when_run_traced_then_only_the_swi_is_recorded_and_the_core_stays_halted()
+ {
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_swi_halt_without_wake(), 3);
+    assert_eq!(
+        (pcs(&c.seven), c.traced.inspect().arm7().halted()),
+        (vec![ENTRY7], true)
+    );
+}
+
+#[test]
+fn given_an_arm7_halted_by_swi_halt_with_a_vblank_wake_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_swi_halt_with_wake(), 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_an_arm7_halted_by_swi_halt_with_a_vblank_wake_when_run_traced_then_no_record_falls_in_the_halt_and_the_next_pc_is_after_the_swi()
+ {
+    // 0-4 set up, 5 is the SWI, 6 the marker and 7 the spin; the spin repeats.
+    let c = compare_traced_with_untraced(&COUNTING_LOOP, &arm7_swi_halt_with_wake(), 3);
+    let want = word_addresses(ENTRY7, &[0, 1, 2, 3, 4, 5, 6, 7, 7]);
+    assert_eq!(
+        (
+            pcs(&c.seven[..9]),
+            steps_of(&c.seven[..9]),
+            c.traced.inspect().arm7().regs().get(2),
+            c.traced.inspect().arm7().halted()
+        ),
+        (want, (0..9).collect::<Vec<u32>>(), 0x66, false)
+    );
+}
+
+// ------------------------------------------------------------- a TCM the guest moves mid-run
+
+/// `MCR p15, 0, r0, c9, c1, 0` (DTCM region), `MCR p15, 0, r0, c9, c1, 1` (ITCM region) and
+/// `MCR p15, 0, r1, c1, c0, 0` (control register).
+const MCR_DTCM_REGION: u32 = 0xEE09_0F11;
+const MCR_ITCM_REGION: u32 = 0xEE09_0F31;
+const MCR_CONTROL_R1: u32 = 0xEE01_1F10;
+/// Where the DTCM first sits, and the 16 KiB region value (size field 5) that puts it there.
+const DTCM_FIRST: u32 = 0x0210_0000;
+
+/// The guest enables a DTCM at `DTCM_FIRST`, stores 0x55 through it, moves it 1 MiB up, and stores
+/// 0x66 at `DTCM_FIRST + 4`, which the DTCM no longer covers, so it reaches main RAM.
+const MOVING_DTCM: [u32; 14] = [
+    0xE3A0_0621, // mov r0, #0x02100000
+    0xE380_000A, // orr r0, r0, #0xA (size field 5)
+    MCR_DTCM_REGION,
+    0xE3A0_1801, // mov r1, #1 << 16 (DTCM enable)
+    MCR_CONTROL_R1,
+    0xE3A0_2621, // mov r2, #0x02100000
+    0xE3A0_3055, // mov r3, #0x55
+    0xE582_3000, // str r3, [r2]: into the DTCM
+    0xE280_0601, // add r0, r0, #0x00100000
+    MCR_DTCM_REGION,
+    0xE3A0_3066, // mov r3, #0x66
+    0xE582_3004, // str r3, [r2, #4]: the DTCM is gone from here
+    0xE592_4004, // ldr r4, [r2, #4]
+    SPIN_WORD,
+];
+
+/// The guest sets the ITCM to 32 KiB (size field 6), enables it, then stores and loads 0x55 at
+/// 0x100: only an enabled ITCM holds the word (nothing else is mapped there).
+const ENABLING_ITCM: [u32; 9] = [
+    0xE3A0_000C, // mov r0, #0xC
+    MCR_ITCM_REGION,
+    0xE3A0_1701, // mov r1, #1 << 18 (ITCM enable)
+    MCR_CONTROL_R1,
+    0xE3A0_2C01, // mov r2, #0x100
+    0xE3A0_3055, // mov r3, #0x55
+    0xE582_3000, // str r3, [r2]
+    0xE592_4000, // ldr r4, [r2]
+    SPIN_WORD,
+];
+
+#[test]
+fn given_a_guest_that_moves_the_dtcm_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&MOVING_DTCM, &PROGRAM, 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_a_guest_that_moves_the_dtcm_when_run_traced_then_the_store_after_the_move_reaches_ram_and_the_one_before_stayed_in_the_tcm()
+ {
+    let c = compare_traced_with_untraced(&MOVING_DTCM, &PROGRAM, 1);
+    let view = c.traced.inspect();
+    assert_eq!(
+        (
+            view.arm9_peek32(DTCM_FIRST),
+            view.arm9_peek32(DTCM_FIRST + 4),
+            view.arm9().regs().get(4)
+        ),
+        (0, 0x66, 0x66)
+    );
+}
+
+#[test]
+fn given_a_guest_that_moves_the_dtcm_when_run_traced_then_records_follow_the_program_without_a_gap()
+{
+    let c = compare_traced_with_untraced(&MOVING_DTCM, &PROGRAM, 1);
+    let want = word_addresses(ENTRY9, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 13]);
+    assert_eq!(
+        (pcs(&c.nine[..15]), steps_of(&c.nine[..15])),
+        (want, (0..15).collect::<Vec<u32>>())
+    );
+}
+
+#[test]
+fn given_a_guest_that_enables_the_itcm_when_run_traced_then_frames_audio_and_savestate_equal_an_untraced_run()
+ {
+    let c = compare_traced_with_untraced(&ENABLING_ITCM, &PROGRAM, 3);
+    assert_eq!(c.differing, Vec::<usize>::new());
+}
+
+#[test]
+fn given_a_guest_that_enables_the_itcm_when_run_traced_then_the_next_store_and_load_use_the_itcm() {
+    let c = compare_traced_with_untraced(&ENABLING_ITCM, &PROGRAM, 1);
+    assert_eq!(
+        (
+            c.traced.inspect().arm9_peek32(0x100),
+            c.traced.inspect().arm9().regs().get(4)
+        ),
+        (0x55, 0x55)
+    );
+}

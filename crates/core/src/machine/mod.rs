@@ -94,6 +94,8 @@ pub(crate) const AUDIO_CAPACITY: usize = 2 * (FRAME_CYCLES / OUTPUT_SAMPLE_CYCLE
 /// TCM when CP15 changes (`run_arm9_until`).
 // TODO(hw-unverified): the line is sampled before each instruction and an IME or IE write reaches
 // it at once, here and in `arm7_instruction` (`docs/hw/interrupts.md`, "Unverified").
+// `traced.rs` repeats this function with a trace record; change both together (a test pins
+// traced = untraced).
 fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9View<'_>) {
     if arm9.halted() {
         if !view.io().irq9().wakes() {
@@ -127,6 +129,8 @@ fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9V
 /// "HALTCNT").
 // TODO(hw-unverified): the IRQ line is sampled before each instruction, as for the ARM9
 // (`docs/hw/interrupts.md`, "Unverified").
+// `traced.rs` repeats this function with a trace record; change both together (a test pins
+// traced = untraced).
 fn arm7_instruction(arm7: &mut Cpu<false>, bios: &mut SwiRecord, view: &mut Arm7View<'_>) {
     if arm7.halted() {
         if !view.io().irq7().wakes() {

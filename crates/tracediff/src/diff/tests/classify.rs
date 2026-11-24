@@ -146,17 +146,10 @@ fn bios_cases() -> Vec<Case> {
             Class::AfterBiosCall,
         ),
         after_arm(
-            "the CPSR flags after an ARM SWI",
+            "r3 and r12 after an ARM SWI",
             0xEF00_0006,
             next(),
-            with_cpsr(next(), 0x2000_001F),
-            Class::AfterBiosCall,
-        ),
-        after_arm(
-            "several registers after an ARM SWI",
-            0xEF00_0006,
-            next(),
-            with_reg(with_reg(r0(next()), 12, 1), 14, 2),
+            with_reg(with_reg(next(), 3, 1), 12, 2),
             Class::AfterBiosCall,
         ),
         after_thumb(
@@ -185,6 +178,8 @@ fn bios_cases() -> Vec<Case> {
 
 fn mismatch_cases() -> Vec<Case> {
     let r0 = |record: TraceRecord| with_reg(record, 0, 0x1234);
+    // Both sides left the user mode for IRQ mode: an IRQ return to the wrong address, not timing.
+    let both_irq = |record: TraceRecord| with_cpsr(record, IRQ_MODE_CPSR);
     let other_op = arm(1, 0x0200_0004, 0xE3A0_0001);
     let taken = with_cpsr(arm(1, 0x0000_0018, NOP), IRQ_MODE_CPSR);
     vec![
@@ -235,6 +230,34 @@ fn mismatch_cases() -> Vec<Case> {
             0xEF00_0005,
             next(),
             arm(1, 0x0200_0100, NOP),
+            Class::Mismatch,
+        ),
+        after_arm(
+            "the CPSR flags after an ARM SWI",
+            0xEF00_0006,
+            next(),
+            with_cpsr(next(), 0x2000_001F),
+            Class::Mismatch,
+        ),
+        after_arm(
+            "r4 after an ARM SWI",
+            0xEF00_0006,
+            next(),
+            with_reg(next(), 4, 1),
+            Class::Mismatch,
+        ),
+        after_arm(
+            "r14 after an ARM SWI",
+            0xEF00_0006,
+            next(),
+            with_reg(next(), 14, 1),
+            Class::Mismatch,
+        ),
+        after_arm(
+            "the pcs part while both sides are in the same mode",
+            NOP,
+            both_irq(next()),
+            both_irq(arm(1, 0x0200_0100, NOP)),
             Class::Mismatch,
         ),
         after_arm(

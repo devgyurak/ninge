@@ -24,6 +24,8 @@ pub const USAGE: &str = "usage: ninge-tracediff files <ninge.trace> <oracle.trac
        ninge-tracediff live <ninge.trace> --port P --cpu 9|7 [--breakpoint ADDR --from-hit K] [--max N]
        ninge-tracediff boundaries <ninge.trace> --port P --cpu 9|7 --breakpoint ADDR [--hits K]
 ADDR is hex and an ARM-state address (breakpoints are set as 32-bit; Thumb is not supported yet).
+A trace made with --from-frame starts after boot while the oracle starts at boot, so `live` and
+`boundaries` compare different moments unless the oracle is first brought to the same one.
 The oracle must be on 127.0.0.1. A trace of a ROM that is not yours to share holds
 that ROM's bytes (the opcode column): run this tool on it only yourself, locally, and never
 commit it, paste it into an issue or a PR, or hand it to an agent.";

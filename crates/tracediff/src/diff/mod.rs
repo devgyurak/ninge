@@ -154,19 +154,31 @@ fn is_swi(opcode: Opcode) -> bool {
     }
 }
 
+/// The registers a BIOS call may legitimately leave different: its scratch registers, r0-r3 and
+/// r12 (the two BIOSes need not agree on what they leave there). A difference in any other
+/// register, or in the CPSR, is a bug in one of the two.
+fn is_scratch(field: Field) -> bool {
+    matches!(field, Field::Register(0..=3 | 12))
+}
+
 /// How the first difference after `previous` (the last record both sides agreed on) is to be read.
-fn classify(previous: Option<&TraceRecord>, ninge: &TraceRecord, oracle: &TraceRecord) -> Class {
+fn classify(
+    previous: Option<&TraceRecord>,
+    ninge: &TraceRecord,
+    oracle: &TraceRecord,
+    fields: &[Option<Field>],
+) -> Class {
     let pc_differs = ninge.pc() != oracle.pc();
-    // An exception entry changes the mode: if either side's mode moved while the two pcs
-    // parted, one side took an interrupt the other did not take yet.
-    let mode_moved = previous.is_some_and(|prev| {
-        let before = prev.cpsr & MODE_MASK;
-        ninge.cpsr & MODE_MASK != before || oracle.cpsr & MODE_MASK != before
-    });
+    // An interrupt taken on one side only leaves the two sides in different modes while their
+    // pcs part. Both sides in the same mode (a return from an IRQ to the wrong address, say) is
+    // a bug, not timing.
+    // With no agreed record before it there is nothing for an interrupt to have interrupted.
+    let modes_differ = previous.is_some() && ninge.cpsr & MODE_MASK != oracle.cpsr & MODE_MASK;
     let after_bios = previous.is_some_and(|prev| is_swi(prev.opcode));
-    match (pc_differs, mode_moved, after_bios) {
-        (true, true, _) => Class::Timing,
-        (false, _, true) if ninge.opcode == oracle.opcode => Class::AfterBiosCall,
+    let only_scratch = fields.iter().flatten().all(|field| is_scratch(*field));
+    match (pc_differs && modes_differ, after_bios && only_scratch) {
+        (true, _) => Class::Timing,
+        (false, true) => Class::AfterBiosCall,
         _ => Class::Mismatch,
     }
 }
@@ -190,7 +202,7 @@ pub fn compare<E>(
         };
         let fields = differing_fields(&ninge, &oracle);
         if fields.iter().any(Option::is_some) {
-            let class = classify(previous.as_ref(), &ninge, &oracle);
+            let class = classify(previous.as_ref(), &ninge, &oracle, &fields);
             return Ok(Outcome::Diverged(Box::new(Divergence {
                 class,
                 fields,

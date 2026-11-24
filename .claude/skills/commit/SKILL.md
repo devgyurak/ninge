@@ -127,8 +127,10 @@ cancelled, and wanted six macOS jobs at once where the plan allows five across a
 - A PR above the bottom has **no CI result** until it reaches the bottom. Until then
   `./scripts/verify.sh`, run locally, is the only evidence — say in the PR that it passed.
 - When the PR below merges, retarget the next one to `develop`
-  (`gh pr edit <n> --base develop`). If no CI run starts, update its branch
-  (`gh pr update-branch <n>`): a push to the head branch starts one.
+  (`gh pr edit <n> --base develop`). `retarget.yml` sees the change of base and starts `ci`
+  and `agents` on the PR's merge commit with `develop`. A branch cut before `retarget.yml`
+  existed has no `workflow_dispatch` in its `ci.yml`, so its `retarget` check fails: update
+  that branch (`gh pr update-branch <n>`), and the push runs CI.
 
 ## 6. PR body
 

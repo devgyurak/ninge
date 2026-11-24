@@ -8,12 +8,24 @@ on:
     branches: [develop, main]
   pull_request:
     branches: [develop, main]
+  # retarget.yml starts it for a pull request whose base changed to develop or main, with the
+  # pull request's merge commit; see ci.yml for why that is not an `edited` trigger here.
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: The pull request whose base changed (retarget.yml)
+        required: true
+        type: string
+      merge_sha:
+        description: Its merge commit with the new base
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: agents-${{ github.ref }}
+  group: agents-${{ inputs.pull_request && format('refs/pull/{0}/merge', inputs.pull_request) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.merge_sha }}
 
       - uses: actions/setup-python@v6
         with:

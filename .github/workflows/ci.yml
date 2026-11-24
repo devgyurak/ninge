@@ -19,27 +19,58 @@ name: ci
 # on its merge with develop, and the release pull request runs it on develop as a whole. The
 # one exception is cache.yml, which calls this workflow for a push to develop that changes
 # the dependencies, because only a run on develop may save the caches pull requests restore.
+#
+# A pull request whose base changes to develop or main (the next PR of a stack, retargeted
+# once the one below it merges) gets no pull_request run: GitHub sends that as `edited`, which
+# also means a new title or body. Listening for `edited` here would rerun everything on every
+# title change, or skip it — and a skipped job reports success, so a title change would turn a
+# failed required check green. retarget.yml starts this workflow instead (workflow_dispatch),
+# only for a change of base, with the pull request's merge commit: every job checks out
+# `inputs.merge_sha`, so the run tests what a pull_request run would, and its checks land on
+# the head commit, where the branch rulesets look for them. The inputs are empty otherwise.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [develop, main]
+  # cache.yml passes neither input: they are empty, as for a push or a pull request.
   workflow_call:
+    inputs:
+      pull_request:
+        required: false
+        type: string
+        default: ""
+      merge_sha:
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: The pull request whose base changed (retarget.yml)
+        required: true
+        type: string
+      merge_sha:
+        description: Its merge commit with the new base
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+# A run started by retarget.yml shares the pull request's group, so a push to its branch
+# cancels it like any other run of that pull request.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ inputs.pull_request && format('refs/pull/{0}/merge', inputs.pull_request) || github.ref }}
   cancel-in-progress: true
 
 jobs:
   # Whether the change is documentation only, and the commit it was compared with. A pull
-  # request is checked out as its merge commit, whose first parent is the base branch, so the
-  # comparison is the whole pull request and not its last commit; a push is compared with the
-  # commit the branch pointed at before. The step cannot fail: anything docs_only.py is not
-  # sure of is a full run.
+  # request (and a run retarget.yml starts) is checked out as its merge commit, whose first
+  # parent is the base branch, so the comparison is the whole pull request and not its last
+  # commit; a push is compared with the commit the branch pointed at before. The step cannot
+  # fail: anything docs_only.py is not sure of is a full run.
   #
   # It also says how many shards each OS splits its tests over. SHARDS below is the one place
   # that number lives. A documentation-only change runs no tests and gets a single shard.
@@ -54,12 +85,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.merge_sha }}
           fetch-depth: 0
 
       - name: Change scope
         id: scope
         env:
-          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+          BASE: ${{ (github.event_name == 'pull_request' || inputs.merge_sha) && 'HEAD^1' || github.event.before }}
           # macOS runs at most five jobs at once on this plan, across every run in progress.
           # Two is enough since the integration tests stopped being instrumented: a shard's
           # tests take well under a minute, and the rest of a job (setup, lint, the two builds)
@@ -88,6 +120,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.merge_sha }}
 
       - name: Build test ROMs
         run: ./scripts/build_testroms.sh
@@ -130,6 +164,7 @@ jobs:
       # false in an expression and `&& 0 || 1` would always give 1.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.merge_sha }}
           fetch-depth: ${{ needs.scope.outputs.docs_only == 'true' && '0' || '1' }}
 
       - uses: actions/setup-python@v6
@@ -245,6 +280,8 @@ jobs:
 
       - uses: actions/checkout@v5
         if: env.DOCS_ONLY != 'true'
+        with:
+          ref: ${{ inputs.merge_sha }}
 
       - name: Download the shards' coverage
         if: env.DOCS_ONLY != 'true'

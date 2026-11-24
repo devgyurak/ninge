@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 
 /// Writes one log line per frame, flushed as it is written, so a program that ends any way at
 /// all leaves a log that is a valid prefix.
+///
+/// The cost is one write per frame on the emu thread: a slow disk or a pipe that is not read can
+/// delay the frame pacing. A write that fails ends the recording, not the run.
 pub struct Recorder {
     /// The writer; `None` after a write failed.
     sink: Option<Box<dyn Write + Send>>,

@@ -90,6 +90,17 @@ impl fmt::Display for RunnerError {
             Self::Rom(error) => write!(f, "the ROM was refused: {error}"),
             Self::Save(error) => write!(f, "the save was refused: {error}"),
             Self::Log(error) => write!(f, "the input log was refused: {error}"),
+            Self::LogMismatch(
+                error @ (MismatchError::SaveType { .. } | MismatchError::SaveHash { .. }),
+            ) => {
+                write!(
+                    f,
+                    "the input log does not fit: {error}\n\
+                     (a replay reads the save file as it is now: pass the save as it was before \
+                     recording with --save, or a path that does not exist if the log began with \
+                     no save)"
+                )
+            }
             Self::LogMismatch(error) => write!(f, "the input log does not fit: {error}"),
         }
     }

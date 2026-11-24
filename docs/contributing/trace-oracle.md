@@ -95,5 +95,13 @@ print and use as test data.
 
 ## Oracle probe findings
 
-Pending: the melonDS stub's behavior (both CPUs reachable, register layout, step,
-breakpoints, reset, throughput) is recorded here after the probe in the next stack step.
+Pending: the melonDS stub's behavior (both CPUs reachable, register layout, step, breakpoints,
+reset, throughput) is recorded here after the probe, which needs the maintainer to enable the
+stub.
+
+Unverified until then, and marked `TODO(hw-unverified)` in `ninge-tracediff`:
+
+- the position of the CPSR in the `g` packet (the adapter's default is word 16, the common GDB ARM
+  layout);
+- that `r15` in the `g` packet is the address of the next instruction, not the pipeline value;
+- that one port serves one CPU.

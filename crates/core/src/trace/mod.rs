@@ -9,6 +9,7 @@
 use crate::bus::{BIOS7_BASE, BIOS7_SIZE, BIOS9_BASE, BIOS9_SIZE};
 use crate::cpu::Cpu;
 use core::fmt;
+use core::ops::Range;
 use thiserror::Error;
 
 /// The first line of a trace: the format name and its version. A reader refuses another version.
@@ -311,13 +312,23 @@ impl<S: TraceSink> Tracer<S> {
     }
 }
 
-/// Whether `pc` lies in CPU `ARM9`'s BIOS area (`docs/hw/hle-swi.md`, "The BIOS area").
+impl TraceCpu {
+    /// The addresses of this CPU's BIOS area (`docs/hw/hle-swi.md`, "The BIOS area"): execution
+    /// there leaves no trace line, on either side of a comparison. Defined once here so the
+    /// oracle adapter and the traced run agree.
+    pub fn bios_area(self) -> Range<u32> {
+        let (base, size) = match self {
+            Self::Arm9 => (BIOS9_BASE, BIOS9_SIZE),
+            Self::Arm7 => (BIOS7_BASE, BIOS7_SIZE),
+        };
+        base..base + size
+    }
+}
+
+/// Whether `pc` lies in CPU `ARM9`'s BIOS area.
 fn in_bios<const ARM9: bool>(pc: u32) -> bool {
-    let (base, size) = match ARM9 {
-        true => (BIOS9_BASE, BIOS9_SIZE),
-        false => (BIOS7_BASE, BIOS7_SIZE),
-    };
-    pc.wrapping_sub(base) < size
+    let cpu = if ARM9 { TraceCpu::Arm9 } else { TraceCpu::Arm7 };
+    cpu.bios_area().contains(&pc)
 }
 
 #[cfg(test)]

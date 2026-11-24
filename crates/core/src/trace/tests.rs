@@ -295,3 +295,92 @@ proptest! {
         prop_assert_eq!(parse_trace(&format!("{HEADER}\n{body}")), Ok(rs));
     }
 }
+
+// ---- The BIOS area (`docs/hw/hle-swi.md`, "The BIOS area"; `arm9-memory-map.md`) ----
+
+/// Addresses at and around both edges of both areas, so an off-by-one on either side shows.
+const EDGE_PCS: [u32; 12] = [
+    0x0000_0000,
+    0x0000_0001,
+    0x0000_3FFF,
+    0x0000_4000,
+    0x0200_0000,
+    0xFFFE_FFFF,
+    0xFFFF_0000,
+    0xFFFF_0018,
+    0xFFFF_7FFF,
+    0xFFFF_8000,
+    0xFFFF_FFFF,
+    0x0000_4001,
+];
+
+/// The edge addresses inside the ARM9 BIOS (32 KiB at `FFFF0000h`), written by hand from the
+/// memory map and not derived from the code under test.
+const ARM9_EDGES_INSIDE: [u32; 3] = [0xFFFF_0000, 0xFFFF_0018, 0xFFFF_7FFF];
+
+/// The edge addresses inside the ARM7 BIOS (16 KiB at 0).
+const ARM7_EDGES_INSIDE: [u32; 3] = [0x0000_0000, 0x0000_0001, 0x0000_3FFF];
+
+/// The edge addresses where `inside` is the hand-written list of members, for which `contains`
+/// gives a different answer. Empty when the two agree on every edge.
+fn membership_disagreements(inside: &[u32], contains: impl Fn(u32) -> bool) -> Vec<u32> {
+    EDGE_PCS
+        .iter()
+        .copied()
+        .filter(|pc| contains(*pc) != inside.contains(pc))
+        .collect()
+}
+
+#[test]
+fn given_the_arm9_when_asked_for_its_bios_area_then_it_is_32_kib_at_ffff0000() {
+    assert_eq!(TraceCpu::Arm9.bios_area(), 0xFFFF_0000..0xFFFF_8000);
+}
+
+#[test]
+fn given_the_arm7_when_asked_for_its_bios_area_then_it_is_16_kib_at_zero() {
+    assert_eq!(TraceCpu::Arm7.bios_area(), 0..0x4000);
+}
+
+#[test]
+fn given_the_edge_addresses_when_the_arm9_area_is_asked_then_only_the_hand_listed_ones_are_inside()
+{
+    let area = TraceCpu::Arm9.bios_area();
+    let wrong = membership_disagreements(&ARM9_EDGES_INSIDE, |pc| area.contains(&pc));
+    assert_eq!(wrong, Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_edge_addresses_when_the_arm7_area_is_asked_then_only_the_hand_listed_ones_are_inside()
+{
+    let area = TraceCpu::Arm7.bios_area();
+    let wrong = membership_disagreements(&ARM7_EDGES_INSIDE, |pc| area.contains(&pc));
+    assert_eq!(wrong, Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_edge_addresses_when_the_traced_arm9_filter_runs_then_it_agrees_with_the_hand_list() {
+    let wrong = membership_disagreements(&ARM9_EDGES_INSIDE, in_bios::<true>);
+    assert_eq!(wrong, Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_edge_addresses_when_the_traced_arm7_filter_runs_then_it_agrees_with_the_hand_list() {
+    let wrong = membership_disagreements(&ARM7_EDGES_INSIDE, in_bios::<false>);
+    assert_eq!(wrong, Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_edge_addresses_when_the_oracle_area_and_the_traced_filter_are_compared_then_they_agree()
+ {
+    let area9 = TraceCpu::Arm9.bios_area();
+    let area7 = TraceCpu::Arm7.bios_area();
+    let differ: Vec<u32> = EDGE_PCS
+        .iter()
+        .copied()
+        .filter(|pc| {
+            area9.contains(pc) != in_bios::<true>(*pc)
+                || area7.contains(pc) != in_bios::<false>(*pc)
+        })
+        .collect();
+    assert_eq!(differ, Vec::<u32>::new());
+}

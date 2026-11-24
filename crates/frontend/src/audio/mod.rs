@@ -49,6 +49,13 @@ pub enum Sink {
 }
 
 impl AudioSink for Sink {
+    fn resumed(&mut self) {
+        match self {
+            Self::Ring(sink) => sink.resumed(),
+            Self::None(sink) => sink.resumed(),
+        }
+    }
+
     fn push(&mut self, samples: &[i16]) {
         match self {
             Self::Ring(sink) => sink.push(samples),

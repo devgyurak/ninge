@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Where the emu loop sends each frame's audio (#47).
 
+use super::prefill;
 use super::resample::{Resampler, trim_for_fill};
 use super::ring::AudioRing;
 use std::sync::Arc;
@@ -10,6 +11,10 @@ pub trait AudioSink {
     /// A frame is about to run. The emulation takes a good part of a frame's time, in which the
     /// device keeps playing, so a sink that wants the ring's level reads it here.
     fn frame_started(&mut self) {}
+
+    /// The run goes on after a pause, in which nothing was pushed and the device played what was
+    /// left. Called before the first frame after it.
+    fn resumed(&mut self) {}
 
     /// Handles one frame's samples. Never called with an empty slice.
     fn push(&mut self, samples: &[i16]);
@@ -53,6 +58,16 @@ impl RingSink {
 impl AudioSink for RingSink {
     fn frame_started(&mut self) {
         self.level = self.ring.fill();
+    }
+
+    /// Fills the ring back up to its target with silence, as before the first frame of a run
+    /// ([`prefill`]): the device has played it empty, and the frames that follow would otherwise
+    /// arrive at a device with nothing in hand. The level read at this frame's start
+    /// ([`AudioSink::frame_started`]) was the drained ring's, so it is put at the target: the
+    /// next trim must not take the pause for a clock that drifted.
+    fn resumed(&mut self) {
+        prefill(&self.ring, self.target.saturating_sub(self.ring.fill()));
+        self.level = self.target;
     }
 
     fn push(&mut self, samples: &[i16]) {

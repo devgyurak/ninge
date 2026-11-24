@@ -45,6 +45,7 @@ fn given_save_flags_when_parsing_then_the_options_carry_the_path_and_the_type() 
             save: Some(PathBuf::from("s.bin")),
             save_type: Some(SaveType::Flash512K),
             no_audio: false,
+            focus_pause: false,
         })
     );
 }
@@ -58,6 +59,7 @@ fn given_the_flags_before_the_rom_when_parsing_then_the_rom_is_still_found() {
             save: None,
             save_type: Some(SaveType::None),
             no_audio: false,
+            focus_pause: false,
         })
     );
 }
@@ -134,4 +136,41 @@ fn given_no_audio_twice_when_parsing_then_it_is_a_usage_error() {
 #[test]
 fn given_no_arguments_when_parsing_then_audio_is_on() {
     assert!(!parse(&[]).unwrap().no_audio);
+}
+
+#[test]
+fn given_no_arguments_when_parsing_then_the_run_does_not_pause_without_focus() {
+    assert!(!parse(&[]).unwrap().focus_pause);
+}
+
+#[test]
+fn given_focus_pause_alone_when_parsing_then_it_is_set_and_there_is_no_rom() {
+    assert_eq!(
+        parse(&["--focus-pause"]),
+        Ok(Options {
+            focus_pause: true,
+            ..Options::default()
+        })
+    );
+}
+
+#[test]
+fn given_focus_pause_after_a_rom_and_no_audio_when_parsing_then_all_of_them_are_kept() {
+    assert_eq!(
+        parse(&["--no-audio", "a.nds", "--focus-pause"]),
+        Ok(Options {
+            rom: Some(PathBuf::from("a.nds")),
+            no_audio: true,
+            focus_pause: true,
+            ..Options::default()
+        })
+    );
+}
+
+#[test]
+fn given_focus_pause_twice_when_parsing_then_it_is_a_usage_error() {
+    let message = parse(&["--focus-pause", "--focus-pause"])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(message, format!("unknown option --focus-pause\n{USAGE}"));
 }

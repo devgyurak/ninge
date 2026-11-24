@@ -69,3 +69,20 @@ fn given_no_device_sink_when_a_frame_is_pushed_then_nothing_happens() {
     sink.push(&[100; 547 * 2]);
     assert!(matches!(sink, Sink::None(_)));
 }
+
+#[test]
+fn given_a_ring_sink_on_an_empty_ring_when_resumed_through_the_enum_then_the_ring_holds_the_target()
+{
+    let ring = Arc::new(AudioRing::new(ring_capacity(48_000)));
+    let target = target_pairs(48_000);
+    let mut sink = Sink::Ring(RingSink::new(Arc::clone(&ring), 48_000, target));
+    sink.resumed();
+    assert_eq!(ring.fill(), target);
+}
+
+#[test]
+fn given_no_device_sink_when_resumed_through_the_enum_then_it_is_still_the_dropping_sink() {
+    let mut sink = Sink::None(NoAudio);
+    sink.resumed();
+    assert!(matches!(sink, Sink::None(_)));
+}

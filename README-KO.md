@@ -72,6 +72,9 @@ ninge path/to/program.nds   # ROM 실행
 ninge                       # ROM 없음: 테스트 패턴 표시
 ```
 
+`--focus-pause`를 주면 터미널이 포커스를 잃는 동안 ninge는 소리를 포함해 일시정지하고,
+포커스가 돌아오면 이어서 실행합니다.
+
 `Ctrl-C`나 `Ctrl-Q`로 종료합니다. ninge로는 직접 빌드한 홈브루처럼 실행할 권리가 있는
 프로그램을 실행합니다. ninge는 ROM을 포함하지 않으며 BIOS나 펌웨어 파일도 필요하지 않습니다.
 

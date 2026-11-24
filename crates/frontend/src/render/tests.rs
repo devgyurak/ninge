@@ -307,3 +307,26 @@ fn given_a_machine_when_a_snapshot_is_filled_again_then_its_buffers_are_reused()
     app.fill(&mut snapshot);
     assert_eq!(snapshot.top.as_ptr(), before);
 }
+
+#[test]
+fn given_a_paused_run_when_drawing_then_the_panel_says_the_terminal_is_not_focused() {
+    let mut app = App::new(size()).with_focus_pause(true);
+    app.apply(Action::FocusLost);
+    // The note is short enough for one line of the Registers panel, 24 cells wide at this size.
+    assert!(panel_of(app).contains("paused: not focused"));
+}
+
+#[test]
+fn given_a_run_not_asked_to_pause_when_focus_is_lost_then_the_panel_does_not_say_paused() {
+    let mut app = App::new(size());
+    app.apply(Action::FocusLost);
+    assert!(!panel_of(app).contains("paused:"));
+}
+
+#[test]
+fn given_a_focused_run_when_drawing_then_the_panel_does_not_say_paused() {
+    let mut app = App::new(size()).with_focus_pause(true);
+    app.apply(Action::FocusLost);
+    app.apply(Action::FocusGained);
+    assert!(!panel_of(app).contains("paused:"));
+}

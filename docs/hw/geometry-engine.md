@@ -319,13 +319,31 @@ emission colours), the shininess table (128 entries of 8 bits), the current norm
   shininess table (0 = a linear ramp is used instead of the table).
 - **SHININESS**: 32 words, entries 0-3 in the first word, 124-127 in the last; 8 bits each, an
   unsigned 0.8 fraction.
-- **NORMAL**: the normal (1.0.9 per component) is multiplied by the vector matrix, and the vertex
-  colour is recalculated for each light enabled in POLYGON_ATTR bits 0-3. The 5-bit colour fed to
+- **NORMAL**: the normal (1.0.9 per component) goes through the vector matrix and the vertex colour
+  is recalculated for each light enabled in POLYGON_ATTR bits 0-3, as below. The 5-bit colour fed to
   the pipeline is expanded to 6 bits first as `x*2 + (x+31)/32`, i.e. 0 stays 0 and every other
   value becomes `2x+1` (GBATEK's COLOR paragraph).
 
-GBATEK names the registers and says what each colour stands for, but it **does not give the
-equation** that combines them, nor the rounding of the dot products. The model equation is in
+GBATEK gives the order of the work in "Internal Operation on Normal Command" and "... on
+Light_Vector Command", which this note restates:
+
+1. In texture transformation mode 2 the texture coordinates are calculated from the normal **as it
+   arrives**, before the vector matrix turns it (see "Texture coordinates").
+2. The normal is multiplied by the vector matrix.
+3. The colour starts as the emission colour. For each enabled light *i*, per colour channel:
+   - diffuse level = `max(0, -(L_i . N))`;
+   - shininess level = `max(0, (-H_i) . N)` **squared**, and, when the table is enabled, the
+     table entry it selects replaces the level;
+   - colour += specular x light colour x shininess level;
+   - colour += diffuse x light colour x diffuse level;
+   - colour += ambient x light colour.
+4. LIGHT_VECTOR stores `L_i` = the vector times the vector matrix and `H_i = (L_i + S) / 2`, where
+   the line of sight `S` is always `(0, 0, -1.0)`: the hardware cannot normalize, so it leaves out
+   the projection matrix, and specular reflection does not work when the projection matrix is
+   rotated.
+
+GBATEK does not give the fixed-point precision and rounding of these products and of the squaring,
+how a squared level selects a table entry, or how the clamp to 5 bits is made; those are in
 "Unverified". Lighting is calculated for the front face only: the back side takes the same colour.
 
 ### Texture coordinates
@@ -337,7 +355,7 @@ transformation mode:
 |---|---|---|
 | 0 | at TEXCOORD | S', T' = S, T |
 | 1 | at TEXCOORD | (S, T, 1/16, 1/16) times the first two columns of the texture matrix |
-| 2 | at NORMAL | (Nx, Ny, Nz, 1.0) times the first two columns, the bottom row replaced by (S, T) |
+| 2 | at NORMAL | the normal as it arrives (before the vector matrix), (Nx, Ny, Nz, 1.0), times the first two columns, the bottom row replaced by (S, T) |
 | 3 | at each VTX | (Vx, Vy, Vz, 1.0) times the first two columns, the bottom row replaced by (S, T) |
 
 Operand formats: matrix 1.19.12, vertex 1.3.12, normal 1.0.9, the constant 1.0 a single integer
@@ -395,7 +413,8 @@ PR that implements it. None claims to be how the silicon works.
   delay. (PR B)
 - **The stall.** The ARM9 pays for engine time itself; see "The FIFO IRQ, the DMA start and the
   stall". (PR B)
-- **Lighting equation** and its rounding. (PR E; see "Unverified")
+- **Lighting rounding**: the precision of the products, the squaring and the table index. (PR E; see
+  "Unverified")
 - **Clipping interpolation** and the guard band. (PR D; see "Unverified")
 - **Polygon RAM layout.** A polygon is a fixed-size record: attributes, texture parameters, the
   vertex count and the first vertex index, with the vertices in Vertex RAM in order. The renderer
@@ -432,8 +451,8 @@ oracle.
   takes 9 plus the light count, capped at 12. — `gpu3d/`.
 - **SWAP_BUFFERS timing**: the wait is "until VBlank (scanline 192)" plus 392 cycles; whether the
   392 starts at the line's start, and how a swap issued during VBlank behaves. The model waits for
-  the next line-192 start, or runs at once if the current line is already in 192-262 (see
-  `display-timing.md`). — `gpu3d/`.
+  the next line-192 start, which is the next frame's when the command begins inside VBlank (lines
+  192-262); GBATEK says only "until next VBlank". — `gpu3d/`.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.
@@ -458,20 +477,20 @@ oracle.
 - **RAM overflow behavior**: what is dropped (the polygon, the vertex, or both), and when bit 13 is
   set. The model drops the whole polygon that does not fit and sets the flag. — `gpu3d/`.
 - **RAM_COUNT** when a swap and a VBlank clear coincide. — `gpu3d/`.
-- **The lighting equation.** GBATEK lists the inputs and the registers but gives no equation. The
-  model is the usual sum: the emission colour, plus for each enabled light the light colour times
-  (diffuse reflection times a diffuse factor, plus specular reflection times a specular factor,
-  plus ambient reflection), clamped to 5 bits per channel. The diffuse factor is the dot product
-  of the normal and the negated light direction, floored at 0. The specular factor is taken from
-  the shininess table (or the linear ramp) at an index derived from the dot product of the normal
-  and the half-way direction between the light and the view direction, floored at 0. The fixed-point
-  precision and the rounding of every step, and the exact specular index, are open, and the
-  specular term is the one most likely to differ from hardware. — `gpu3d/` (the lighting
-  function) — verify by an oracle trace of vertex colours for one light and a table of normals.
+- **The precision of the lighting products.** GBATEK gives the equation (see "Lighting") but not
+  the widths: the model keeps the normal and the light as 1.0.9, takes a dot product as an
+  18-bit-fraction sum shifted right by 9 and clamped to `0..=1.0`, squares the shininess level
+  (`level * level >> 9`), indexes the 128-entry table by the squared level divided by 4, and forms
+  each colour term as an integer product divided by `31 x 512`, `31 x 256` or `31` with every
+  division truncating. The rounding of each step and the table index are open. — `gpu3d/`
+  (the lighting function) — verify by an oracle trace of vertex colours for one light and a table
+  of normals.
 - **Shininess table off**: "linear increasing numbers" is taken as entry *i* = *i*·2 for *i* in
   0..127. — `gpu3d/`.
-- **Texture matrix modes**: the 1/16 constant's use, the shift that leaves 4 fraction bits, and
-  whether mode 2 runs at NORMAL for lit and unlit polygons alike. — `gpu3d/`.
+- **Texture matrix modes**: the 1/16 constant's use, the shift that leaves 4 fraction bits, the
+  units of the bottom row S, T in modes 2 and 3, and whether mode 2 runs at NORMAL for lit and
+  unlit polygons alike. Mode 2 takes the normal as it arrives, before the vector matrix (GBATEK's
+  "Internal Operation on Normal Command"). — `gpu3d/`.
 - **POS_TEST and the current vertex**: that it replaces the position without touching the
   colour. — `gpu3d/`.
 - **BOX_TEST** (the interpretation of the three offsets as the box's size, "presumably" in GBATEK;

@@ -248,10 +248,17 @@ impl<const ARM9: bool> Device<ARM9> for InterruptController<ARM9> {
     }
 
     fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
-        write_bytes(offset, width, value, |at, byte| {
+        // IE, IME and IF all ask: an acknowledge or a newly enabled bit may meet a level IRQ whose
+        // condition still holds, which the device holding it raises again
+        // ([`Device::held_requests`]; `gx-stub.md`, "GXSTAT and the FIFO IRQ"). The ARM7 has none.
+        let effect = write_bytes(offset, width, value, |at, byte| {
             self.write_byte(at, byte);
             Effect::default()
-        })
+        });
+        Effect {
+            recheck_held_requests: true,
+            ..effect
+        }
     }
 }
 

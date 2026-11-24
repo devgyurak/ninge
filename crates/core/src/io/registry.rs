@@ -219,13 +219,23 @@ macro_rules! registry {
             }
 
             /// The signals every device the CPU `ARM9` reaches holds as a level, merged
-            /// ([`Device::levels`]). A device only the other CPU sees holds none for this one.
-            pub(crate) fn levels<const ARM9: bool>(&self) -> Signals {
+            /// ([`Device::held_signals`]). A device only the other CPU sees holds none for it.
+            pub(crate) fn held_signals<const ARM9: bool>(&self) -> Signals {
                 Signals::default()
-                    $( .merge(Device::<ARM9>::levels(&self.$sf)) )*
-                    $( .merge(if ARM9 { Device::<true>::levels(&self.$af) } else { Signals::default() }) )*
-                    $( .merge(if ARM9 { Signals::default() } else { Device::<false>::levels(&self.$bf) }) )*
-                    $( .merge(if ARM9 { Device::<true>::levels(&self.$ef9) } else { Device::<false>::levels(&self.$ef7) }) )*
+                    $( .merge(Device::<ARM9>::held_signals(&self.$sf)) )*
+                    $( .merge(if ARM9 { Device::<true>::held_signals(&self.$af) } else { Signals::default() }) )*
+                    $( .merge(if ARM9 { Signals::default() } else { Device::<false>::held_signals(&self.$bf) }) )*
+                    $( .merge(if ARM9 { Device::<true>::held_signals(&self.$ef9) } else { Device::<false>::held_signals(&self.$ef7) }) )*
+            }
+
+            /// The IF bits every device the CPU `ARM9` reaches holds up as a level, merged
+            /// ([`Device::held_requests`]). A device only the other CPU sees holds none for it.
+            pub(crate) fn held_requests<const ARM9: bool>(&self) -> Requests {
+                Requests::default()
+                    $( .merge(Device::<ARM9>::held_requests(&self.$sf)) )*
+                    $( .merge(if ARM9 { Device::<true>::held_requests(&self.$af) } else { Requests::default() }) )*
+                    $( .merge(if ARM9 { Requests::default() } else { Device::<false>::held_requests(&self.$bf) }) )*
+                    $( .merge(if ARM9 { Device::<true>::held_requests(&self.$ef9) } else { Device::<false>::held_requests(&self.$ef7) }) )*
             }
 
             /// Queues the event of every slot of every device, as at `now`. A load calls it on

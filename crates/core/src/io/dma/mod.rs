@@ -561,14 +561,14 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
         read_bytes(offset, width, |at| self.read_byte(at))
     }
 
-    /// A write to a channel's registers asks `Io` to recheck the levels: a channel set to start on
-    /// a condition that already holds takes it at once (`dma.md`, "Starting"). The fill registers
-    /// do not start anything.
+    /// A write to a channel's registers asks `Io` to recheck what the devices hold: a channel set
+    /// to start on a condition that already holds takes it at once (`dma.md`, "Starting"). The
+    /// fill registers do not start anything.
     // TODO(hw-unverified): the request is held while the word is ready (`dma.md`, "Unverified").
     fn write(&mut self, offset: u32, width: Width, value: u32, _cx: Cx<'_>) -> Effect {
         let effect = write_bytes(offset, width, value, |at, byte| self.write_byte(at, byte));
         Effect {
-            recheck_levels: offset < CHANNELS_BYTES,
+            recheck_held_signals: offset < CHANNELS_BYTES,
             ..effect
         }
     }

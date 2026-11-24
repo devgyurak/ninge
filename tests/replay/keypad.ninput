@@ -1,0 +1,8 @@
+# Input for testroms/keypad: A with the hinge closed, then B and Up, then Select and Start, then
+# nothing. The ROM records what it reads in main RAM (crates/runner/tests/replay.rs checks the
+# record); its screens do not show it, so this log has no golden frame hash. Hand-written.
+ninge-input 1 rom=2101 save=none:cbf29ce484222325
+f=1 b=A hinge
+f=2 b=B,UP
+f=3 b=SELECT,START
+f=4

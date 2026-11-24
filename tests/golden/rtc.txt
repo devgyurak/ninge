@@ -1,3 +1,5 @@
 # Golden frames for testroms/rtc. Format and review flow: tests/golden/README.md.
 # Top: engine B's black placeholder (same hash as vramdisp, cartread and savechip). Bottom: six 32-row bands, all green, so the same uniform green screen as firmware's and savechip's: the hash cannot tell the bands apart, and crates/runner/tests/rtc.rs checks the record and each band itself.
 frames=3 top=1a0564b2e8de2325 bottom=f4b3a251ac302325
+# frames=4 is the replay of tests/replay/rtc-wall.ninput (crates/runner/tests/replay.rs): the host's clock is 366 days into 2000 on every frame, so the chip starts on 2001-01-01 and the ROM's first check, which expects 2000-01-01, fails. Only band 1 is red; the other five stay green because the later checks write their own time, and the top screen is the same black placeholder, so the bottom hash differs from the all-green line above and the top hash does not.
+frames=4 top=1a0564b2e8de2325 bottom=9cbb924c01e22325

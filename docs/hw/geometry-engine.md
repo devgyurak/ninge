@@ -196,15 +196,16 @@ a_y2 b_2x + a_y3 b_3x + a_y4 b_4x* with *A = M* and *B = C*.
 
 **Precision.** Each product is the sum of four full products with a 24-bit fraction; the sum is
 shifted right by 12 once, at the end. The shift is arithmetic (it rounds toward negative infinity).
-The sum must not be cut short in between. A 32-bit result that overflows wraps (see "Unverified").
+The sum must not be cut short in between. The model sums in 64 bits, wrapping, and a 32-bit result
+that overflows wraps too (see "Unverified").
 
 **The stack commands** are in `gx-stub.md` ("Matrix mode and the stack pointers"): the pointer
 arithmetic and the error flag are unchanged. What the real model adds is the matrices themselves:
 the stack holds a matrix in each valid entry, PUSH writes the current matrix at the pointer, POP
 loads from the entry the pointer reaches, STORE and RESTORE address an entry by number. Entry 31
 exists and can be written and read although it raises the error flag (GBATEK). The projection and
-texture stacks each have one entry, 0; the access to entry 1 sets the flag and has no other effect
-(see "Unverified"). The vector stack moves with the coordinate stack and has the same size.
+texture stacks each have one entry, 0; GBATEK says the upper half of every stack mirrors the lower,
+so entry 1 is entry 0 and an access to it sets the flag and uses entry 0 (see "Unverified"). The vector stack moves with the coordinate stack and has the same size.
 
 **The clip matrix** is *position x projection*, kept up to date whenever either of them changes
 (GBATEK). CLIPMTX_RESULT reads it. VECMTX_RESULT reads the vector matrix; GBATEK says the fourth row
@@ -478,11 +479,21 @@ oracle.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.
-- **Matrix overflow** (a 32-bit element result). The model wraps. — `gpu3d/`.
+- **Matrix overflow.** The width of the accumulator and what an element does that does not fit 32
+  bits after the shift. The model sums four products in a wrapping 64-bit accumulator (so a guest's
+  extreme values never panic the core) and wraps the shifted result to 32 bits. — `gpu3d/matrix.rs`
+  (`multiply`).
+- **The coordinate stack's storage.** The 6-bit pointer's upper half mirrors the lower, so the model
+  keeps 32 entries and an access to entry *e* uses slot *e* mod 32, error flag or not; the
+  directional stack moves with it. — `gpu3d/matrix.rs` (`Matrices::store`).
+- **VECMTX_RESULT layout.** The nine words are the vector matrix's upper 3x3 row by row, taken from
+  GBATEK's "3x3 matrix format"; the fourth row and column are not read. — `gpu3d/matrix.rs`
+  (`Matrices::vector_word`).
 - **Matrix reset state.** The model starts all matrices as the identity. — `gpu3d/`.
-- **Stack entries beyond the valid ones** and the texture stack. Entry 31 exists; the projection
-  and texture stacks' invalid entry 1: whether a matrix is stored there. The model stores nothing
-  there. — `gpu3d/`.
+- **Stack entries beyond the valid ones** and the texture stack. Entry 31 exists; entry 1 of the
+  projection and texture stacks mirrors entry 0 (GBATEK's "upper half mirrors the lower"), and the
+  texture stack follows the projection stack's rules, which GBATEK does not give ("one..none?"). —
+  `gpu3d/matrix.rs` (`Matrices::store`).
 - **VTX_DIFF** field format. The reading above (the field added as a sign-extended 12-bit-fraction
   count) follows from GBATEK's "divided by 8" and its stated range of +-0.125; the text does not
   say it in one line. What happens when the sum leaves the 16-bit range is not stated; the model

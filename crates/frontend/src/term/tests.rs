@@ -110,3 +110,41 @@ fn given_two_notes_when_joined_then_they_are_on_two_lines_and_one_alone_is_kept(
         )
     );
 }
+
+#[test]
+fn given_a_dropped_writer_when_hung_up_is_asked_then_it_is_true_well_before_the_wait() {
+    let (reader, writer) = pipe().expect("pipe");
+    drop(writer);
+    let started = Instant::now();
+    let gone = hung_up(&reader, Duration::from_secs(30));
+    assert_eq!(
+        (gone, started.elapsed() < Duration::from_secs(10)),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_an_open_silent_writer_when_hung_up_is_asked_then_it_is_false_after_the_wait() {
+    let (reader, _writer) = pipe().expect("pipe");
+    assert!(!hung_up(&reader, Duration::from_millis(50)));
+}
+
+#[test]
+fn given_data_waiting_and_an_open_writer_when_hung_up_is_asked_then_it_is_false_at_once() {
+    let (reader, mut writer) = pipe().expect("pipe");
+    writer.write_all(b"x").expect("write");
+    let started = Instant::now();
+    let gone = hung_up(&reader, Duration::from_secs(30));
+    assert_eq!(
+        (gone, started.elapsed() < Duration::from_secs(10)),
+        (false, true)
+    );
+}
+
+#[test]
+fn given_data_waiting_and_a_dropped_writer_when_hung_up_is_asked_then_it_is_true() {
+    let (reader, mut writer) = pipe().expect("pipe");
+    writer.write_all(b"x").expect("write");
+    drop(writer);
+    assert!(hung_up(&reader, Duration::from_secs(30)));
+}

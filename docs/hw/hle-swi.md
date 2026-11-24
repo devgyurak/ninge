@@ -1,11 +1,12 @@
 # HLE BIOS: the BIOS area, the vectors, SWI entry and the IRQ dispatcher
 
-Sources: GBATEK "DS Memory Maps" (the NDS9 and NDS7 BIOS rows and the BIOS ROM sizes) and GBATEK
-"DS Interrupts" (the handler pointer and IRQ check flag addresses), both read; GBATEK "BIOS
-Interrupt Handling" for the GBA (the register set the BIOS saves around the user handler and the
-`SUBS PC, LR, #4` return), read for the GBA only. Two more are recalled from memory of GBATEK,
-not read, so each is under "Unverified": the SWI comment field ("ARM Opcodes ... SWI", "THUMB
-Opcodes ... SWI") and the DS function numbers ("BIOS Function Summary"). Also
+Sources: GBATEK "DS Memory Maps" (the NDS9 and NDS7 BIOS rows and the BIOS ROM sizes) and GBATEK "DS
+Interrupts" (the handler pointer and IRQ check flag addresses), both read; GBATEK "BIOS Interrupt
+Handling" for the GBA (the register set the BIOS saves around the user handler and the
+`SUBS PC, LR, #4` return), read for the GBA only; GBATEK "BIOS Misc Functions" (WaitByLoop: the
+loop it runs and the counts that make one millisecond), read. Two more are recalled from memory of
+GBATEK, not read, so each is under "Unverified": the SWI comment field ("ARM Opcodes ... SWI",
+"THUMB Opcodes ... SWI") and the DS function numbers ("BIOS Function Summary"). Also
 `arm-exceptions-modes.md` for the exception entry.
 Used by: `crates/core/src/hle/`, `crates/core/src/bus/memory/mod.rs`,
 `crates/core/src/machine/mod.rs`   Phase: 3 (#27, parts 1 to 3 of 3); SoundBias: 5 (#42)
@@ -37,7 +38,7 @@ debugger can tell it from unmapped space; its bytes carry no BIOS data.
 ## The vectors
 
 The exception vectors are at the base, 4 bytes apart (`arm-exceptions-modes.md`, "Vector
-table"). Of them the machine looks at two, plus two addresses of its own:
+table"). Of them the machine looks at two, plus six addresses of its own:
 
 | Offset | Name | Taken by |
 |---|---|---|
@@ -45,12 +46,15 @@ table"). Of them the machine looks at two, plus two addresses of its own:
 | `+18h` | IRQ vector | an interrupt (`interrupts.md`) |
 | `+20h` | IRQ return | ninge's own address (below); the user handler returns to it |
 | `+24h` | IntrWait loop | ninge's own address (below); IntrWait waits here |
+| `+28h`-`+34h` | WaitByLoop loop | ninge's own four addresses (below); the delay is spent here |
 
-`+20h` and `+24h` are not hardware vectors. On hardware the BIOS IRQ code gives the user handler a
-return address inside the BIOS, and GBATEK does not state the DS address; ninge picks `+20h` (an
-address past the FIQ vector that nothing uses) and says so in "Unverified". `+24h` is the place
-where the IntrWait code of this model loops. The other vectors (reset, undefined, prefetch and data abort, FIQ) are not handled:
-the CPU enters them and executes the zero words of the synthetic area.
+`+20h`, `+24h` and `+28h`-`+34h` are not hardware vectors. On hardware the BIOS IRQ code gives the
+user handler a return address inside the BIOS, and GBATEK does not state the DS address; ninge
+picks `+20h` (an address past the FIQ vector that nothing uses) and says so in "Unverified". `+24h`
+is the place where the IntrWait code of this model loops, and `+28h`, `+2Ch`, `+30h`, `+34h` are
+the four steps of one pass of the WaitByLoop loop ("The wait SWIs"). The other vectors (reset,
+undefined, prefetch and data abort, FIQ) are not handled: the CPU enters them and executes the zero
+words of the synthetic area.
 
 ## How the machine takes the BIOS's place
 
@@ -62,7 +66,8 @@ synthetic area.
 Before it executes an instruction, the machine compares R15 with the trap addresses. R15 reads
 the address of the next instruction + 8 in ARM state (`arm-branch-pipeline.md`); a refill from
 the vector `V` leaves R15 = `V + 8`, so the trap addresses in R15 terms are base + `10h` (SWI),
-base + `20h` (IRQ), base + `28h` (IRQ return) and base + `2Ch` (IntrWait loop). When R15 is one of them, T is clear and the CPU
+base + `20h` (IRQ), base + `28h` (IRQ return), base + `2Ch` (IntrWait loop) and base + `30h`,
+`34h`, `38h`, `3Ch` (the WaitByLoop loop). When R15 is one of them, T is clear and the CPU
 is the one that owns the BIOS area, the machine does the BIOS's work and then leaves exactly as
 the BIOS's return instruction would. The check is one compare on the common path (R15 outside
 the span of the BIOS vectors).
@@ -130,10 +135,41 @@ instructions; this is the model's order, as GBATEK does not describe it (see "Un
 
 | Number | Name | Arguments | Effect |
 |---|---|---|---|
-| `03h` | WaitByLoop | `R0` = loop count | a delay; no effect here beyond the entry cost (see "Unverified") |
+| `03h` | WaitByLoop | `R0` = loop count | a delay of four of the CPU's cycles per count (below) |
 | `04h` | IntrWait | `R0` = discard old flags, `R1` = flags to wait for | waits until one of the flags is set (below) |
 | `05h` | VBlankIntrWait | none | IntrWait with `R0 = 1`, `R1 = 1` (the V-blank bit) |
 | `06h` | Halt | none | halts the CPU (above) and returns at once; execution resumes after the wake |
+
+**WaitByLoop.** GBATEK gives the function as a two-instruction loop inside the BIOS (a subtraction
+of 1 from `R0`, then a branch back on "greater than"), run from BIOS memory so that its timing does
+not depend on where the caller's code is. The branch tests the flags the subtraction left
+(`arm-data-processing.md`), so it is taken while the count before the subtraction was greater than
+1 as a signed number: a count of 1 makes one pass, and so does a count of zero or less
+(`8000_0000h` included, whose subtraction overflows). GBATEK asks for a count of 1 to `7FFF_FFFFh`,
+so the counts outside that are under "Unverified". GBATEK lists the counts that make one
+millisecond: `20BAh` (8,378) on the ARM7 and twice that (`4174h`, 16,756) on the ARM9 with the cache
+on. A millisecond is 33,514 ARM7 cycles and 67,028 ARM9 cycles, so one pass is **four cycles of the
+calling CPU** in both cases. Without the cache GBATEK's ARM9 count is `105Dh`, sixteen cycles a
+pass; ninge models no cache and runs the ARM9 at its full clock everywhere (`scheduler.md`, "Cost
+per instruction"), so it uses the cached figure (see "Unverified"). GBATEK names no return value.
+
+A program can depend on the delay: one CPU writes a value the other is to answer, waits by loop,
+and then reads the answer once. With no delay the answer cannot arrive in time, whatever the other
+CPU does.
+
+In ninge WaitByLoop is a small state machine whose state is the CPU's own, like IntrWait: `R0` is
+the count and R15 is the position inside a pass, so no extra state is saved.
+
+1. The SWI trap (`03h`) jumps to the first loop address (`+28h`) in SVC mode, leaving `LR_svc`,
+   `SPSR_svc` and the CPSR as the SWI entry made them (I set).
+2. The traps at `+28h`, `+2Ch` and `+30h` each only move on to the next address.
+3. The trap at `+34h` subtracts 1 from `R0`. If `R0` was greater than 1 as a signed number before
+   that, it goes back to `+28h`; otherwise it returns to the caller as the SWI return does.
+
+Each trap costs one instruction (see "Cost"), which is one cycle of the CPU in this model, so a
+call with count `n` takes the entry plus `4n` instructions (four for `n` of zero or less) and
+leaves `R0` at zero (at `n - 1`, wrapped, for `n` of zero or less). An interrupt that becomes
+pending during the wait is taken after the return, because I stays set (see "Unverified").
 
 **IntrWait.** This description is recalled from GBATEK's text (and from how the GBA text
 describes the same function), not read from the page; "Unverified" lists what is least certain.
@@ -275,11 +311,12 @@ IntrWait works.
 
 ## Cost
 
-The HLE routines take no real cycles. Each BIOS entry (the SWI vector, the IRQ vector, the IRQ
-return) costs one instruction of the CPU that took it (ARM9 1 master cycle, ARM7 2;
-`scheduler.md`), the same as the exception entry itself costs (`interrupts.md`, "Behavior"). This
-is a model, not a measurement (see "Unverified"); it also keeps a step from costing more than one
-instruction, which the savestate's check of the ARM7 clock relies on (`scheduler.md`, "Savestate
+The HLE routines take no real cycles, except WaitByLoop, whose delay is what it is for ("The wait
+SWIs"). Each BIOS entry (the SWI vector, the IRQ vector, the IRQ return, each address of the
+IntrWait and WaitByLoop loops) costs one instruction of the CPU that took it (ARM9 1 master cycle,
+ARM7 2; `scheduler.md`), the same as the exception entry itself costs (`interrupts.md`, "Behavior").
+This is a model, not a measurement (see "Unverified"); it also keeps a step from costing more than
+one instruction, which the savestate's check of the ARM7 clock relies on (`scheduler.md`, "Savestate
 checks").
 
 ## Edge cases
@@ -343,11 +380,19 @@ checks").
   the wait and the caller's CPSR comes back through `SPSR_svc` are taken from how the BIOS and
   the GBA text describe the function; whether a wait that is already satisfied halts at all is
   not stated. — `hle::bios::intr_wait_loop` — verify likewise.
-- **WaitByLoop.** The delay is not modeled: the SWI costs one instruction. A delay would stall the
-  CPU's clock past events, which the scheduler does not support (`scheduler.md`). —
-  `hle::swi::run` — `TODO(hw-unverified)`; revisit with the Phase 8 timing work.
-- **The IntrWait loop address `base + 24h`.** ninge's own. — `hle::bios::INTR_WAIT_VECTOR` —
-  invisible to a game unless it reads `LR` inside IntrWait.
+- **WaitByLoop.** Four cycles a pass is GBATEK's figure for the ARM7 and for the ARM9 with the cache
+  on; the ARM9 without the cache (sixteen cycles a pass by GBATEK's table) is not modeled, as the
+  model has no cache. That `R0` is left at zero, that a count of zero or less (outside the range
+  GBATEK asks for) makes one pass, and that the other registers are unchanged follow from the loop
+  as GBATEK writes it, not from a measurement. Whether the BIOS lets interrupts in during the delay
+  is not stated (GBATEK, "How BIOS Processes SWIs", says only that it may in some cases); the model
+  keeps I set, so an interrupt waits for the return. — `hle::bios::wait_loop` —
+  `TODO(hw-unverified)`; verify by a test ROM on hardware timing the call against a timer, and one
+  taking a timer interrupt inside it.
+- **The IntrWait loop address `base + 24h` and the WaitByLoop loop addresses `base + 28h`-`34h`.**
+  ninge's own. — `hle::bios::INTR_WAIT_VECTOR`, `hle::bios::WAIT_LOOP_VECTOR` —
+  invisible to a game unless it reads `LR` inside IntrWait, or takes an interrupt inside the
+  model's WaitByLoop (it cannot: I is set).
 - **Div by zero and `-80000000h / -1`.** The model
   returns, for a zero denominator, `R0 = 1` (`-1` for a negative numerator), `R1` = the numerator,
   `R3 = 1`, and for the overflow case the wrapped result (`R0 = 80000000h`, `R1 = 0`,
@@ -367,7 +412,7 @@ checks").
   in `R3` (`LZ77UnCompReadByCallbackWrite16bit`) and the model reads memory directly and ignores
   `R3`, as it also treats `11h`. — `hle::swi::lz77` — verify likewise.
 - **SoundBias.** The BIOS steps SOUNDBIAS toward the target with a delay between steps (`R1`
-  counts it); the model writes the target at once and has no delay, as for WaitByLoop. Which `R1`
+  counts it); the model writes the target at once and has no delay. Which `R1`
   values are valid, and what the BIOS does on a target equal to the current level, are not
   described by GBATEK. — `hle::swi` — `TODO(hw-unverified)`; verify by a test ROM reading
   SOUNDBIAS from a timer interrupt during the call.

@@ -20,11 +20,19 @@ const IRQ_RETURN_VECTOR: u32 = 0x20;
 /// ninge's own address where IntrWait loops (`hle-swi.md`, "The wait SWIs").
 // TODO(hw-unverified): the address is ninge's, invisible unless a game reads `LR` inside IntrWait.
 const INTR_WAIT_VECTOR: u32 = 0x24;
+/// ninge's own addresses where WaitByLoop spends its delay: one for each of the four cycles a pass
+/// of the BIOS's loop takes, the last of which counts the pass (`hle-swi.md`, "The wait SWIs").
+// TODO(hw-unverified): the addresses are ninge's, and four cycles a pass is GBATEK's figure for the
+// ARM7 and for the ARM9 with the cache on (`hle-swi.md`, "Unverified").
+const WAIT_LOOP_VECTOR: u32 = 0x28;
+const WAIT_LOOP_LAST: u32 = WAIT_LOOP_VECTOR + 4 * (WAIT_LOOP_CYCLES - 1);
+/// The cycles of the calling CPU one pass of WaitByLoop takes.
+const WAIT_LOOP_CYCLES: u32 = 4;
 /// R15 reads this far past the instruction at the head of the pipeline (`arm-branch-pipeline.md`).
 const PIPELINE_AHEAD: u32 = 8;
 /// The farthest trap address from the base, in R15 terms: a compare against it is the whole cost
 /// of the check for any R15 outside the vectors.
-const TRAP_SPAN: u32 = INTR_WAIT_VECTOR + PIPELINE_AHEAD;
+const TRAP_SPAN: u32 = WAIT_LOOP_LAST + PIPELINE_AHEAD;
 
 /// Where the I/O area starts; the BIOS reaches the handler pointer through it (`hle-swi.md`).
 // TODO(hw-unverified): the value in R0 at the user handler (`hle-swi.md`, "Unverified").
@@ -83,6 +91,10 @@ pub(crate) enum Trap {
     Irq,
     IrqReturn,
     IntrWaitLoop,
+    /// One cycle of a WaitByLoop pass; `last` is the one that counts the pass.
+    WaitLoop {
+        last: bool,
+    },
 }
 
 /// The trap R15 is at for CPU `ARM9`, if any. The common case, R15 outside the vectors, costs
@@ -99,6 +111,12 @@ pub(crate) fn trap_at<const ARM9: bool>(pc: u32) -> Option<Trap> {
         IRQ_VECTOR => Some(Trap::Irq),
         IRQ_RETURN_VECTOR => Some(Trap::IrqReturn),
         INTR_WAIT_VECTOR => Some(Trap::IntrWaitLoop),
+        // The range is tested whole: an R15 below `PIPELINE_AHEAD` wraps to a large `at`.
+        at if (WAIT_LOOP_VECTOR..=WAIT_LOOP_LAST).contains(&at) && at % 4 == 0 => {
+            Some(Trap::WaitLoop {
+                last: at == WAIT_LOOP_LAST,
+            })
+        }
         _ => None,
     }
 }
@@ -120,6 +138,7 @@ pub(crate) fn enter<const ARM9: bool, B: Bus>(
         Trap::Irq => irq_enter(cpu, bus),
         Trap::IrqReturn => irq_return(cpu, bus),
         Trap::IntrWaitLoop => intr_wait_loop(cpu, bus),
+        Trap::WaitLoop { last } => wait_loop(cpu, bus, last),
     }
     Some(ENTRY_INSTRUCTIONS * Cpu::<ARM9>::INSTRUCTION_COST)
 }
@@ -138,6 +157,9 @@ fn software_interrupt<const ARM9: bool, B: Bus>(
     record.last = Some(number);
     match swi::run(number, cpu, bus, record) {
         Next::Return => cpu.return_from_exception(bus, 0),
+        // The delay runs in SVC mode with I set, as the entry left the CPSR (`hle-swi.md`, "The
+        // wait SWIs").
+        Next::WaitByLoop => cpu.jump_to(bus, bios_base::<ARM9>().wrapping_add(WAIT_LOOP_VECTOR)),
         Next::IntrWait => {
             // TODO(hw-unverified): I is cleared during the wait (`hle-swi.md`, "Unverified").
             // The BIOS waits with interrupts open (`hle-swi.md`, "The wait SWIs", step 1); the
@@ -181,6 +203,28 @@ fn intr_wait_loop<const ARM9: bool, B: Bus>(cpu: &mut Cpu<ARM9>, bus: &mut B) {
         true => cpu.return_from_exception(bus, 0),
         // The pipeline is left alone: after the wake the next step is this trap again.
         false => cpu.set_halted(true),
+    }
+}
+
+/// One cycle of WaitByLoop's loop (`hle-swi.md`, "The wait SWIs"): the first three of a pass only
+/// move on; the last subtracts 1 from R0 and goes round again while R0 was above 1 as a signed
+/// number, the test the BIOS's `BGT` makes on the flags of its subtraction. Otherwise the SWI
+/// returns. R15 is the position, so the wait needs no state of its own.
+// TODO(hw-unverified): R0 ends at zero, a count of zero or less makes one pass, and an interrupt
+// waits for the return because I stays set (`hle-swi.md`, "Unverified").
+fn wait_loop<const ARM9: bool, B: Bus>(cpu: &mut Cpu<ARM9>, bus: &mut B, last: bool) {
+    if !last {
+        // R15 is 8 past the address of this cycle, so 4 less is the next cycle's address.
+        let next = cpu.regs().get(PC).wrapping_sub(PIPELINE_AHEAD - 4);
+        cpu.jump_to(bus, next);
+        return;
+    }
+    let count = cpu.regs().get(0);
+    cpu.regs_mut().set(0, count.wrapping_sub(1));
+    // The count is signed; the cast reinterprets the register bits.
+    match count as i32 > 1 {
+        true => cpu.jump_to(bus, bios_base::<ARM9>().wrapping_add(WAIT_LOOP_VECTOR)),
+        false => cpu.return_from_exception(bus, 0),
     }
 }
 

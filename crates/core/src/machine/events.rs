@@ -163,11 +163,14 @@ impl Machine {
     /// units reach RAM, VRAM and the I/O registers (the DMA registers too) as an instruction's
     /// accesses would. The channel then repeats or ends and raises its IRQ.
     ///
-    /// The transfer is atomic: all units move at the event's master time and neither CPU stalls.
-    /// An ARM7 start comes late by what the ARM7 lags the master clock, under one slice.
-    // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
-    // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
-    // revisit with the Phase 8 timing work.
+    /// The transfer is atomic: all units move at the event's master time and take no cycles of
+    /// their own. The one thing that holds a CPU is an ARM9 word that finds the geometry FIFO
+    /// full: it holds the ARM9 for the engine's wait (`geometry-engine.md`, "The FIFO IRQ, the DMA
+    /// start and the stall"). An ARM7 start comes late by what the ARM7 lags the master clock, under
+    /// one slice.
+    // TODO(hw-unverified): the transfer takes no cycles, holds no CPU but through a full geometry
+    // FIFO and cannot be pre-empted by a lower channel, and an ARM7 start can be late
+    // (`docs/hw/dma.md`, "Unverified"); revisit with the Phase 8 timing work.
     fn run_dma(&mut self, transfer: crate::io::dma::Transfer) {
         let end = if transfer.arm9 {
             let mut view = Arm9View::new(

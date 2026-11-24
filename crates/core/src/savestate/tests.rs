@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_479_657;
-const PINNED_HASH: u64 = 0xe42d9b53153ab726;
+const PINNED_LEN: usize = 5_479_808;
+const PINNED_HASH: u64 = 0xa62f30484d6d9807;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -124,8 +124,11 @@ const PINNED_HASH: u64 = 0xe42d9b53153ab726;
 /// the texture coordinates 2, five attribute words 5, the list state 2, four held vertices of 8
 /// bytes, two empty RAM sets 4, and the buffer index, the overflow flag, the swap bits and the
 /// lock-up flag 4. The booted state grew by the same 55. Both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_069_581;
-const PINNED_BOOTED_HASH: u64 = 0xafe8f877f82f0bd2;
+/// Version 51 (#48): the geometry engine's four lights (a direction of three words and a colour
+/// each), the material (four colours and the table switch), the 128-byte shininess table and the
+/// effective texture coordinates grew both states by 151: 12 + 4 + 4 + 1 + 128 + 2.
+const PINNED_BOOTED_LEN: usize = 6_069_732;
+const PINNED_BOOTED_HASH: u64 = 0x248be3cfa50d4509;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

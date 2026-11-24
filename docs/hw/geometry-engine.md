@@ -543,11 +543,26 @@ oracle.
   (the lighting function) — verify by an oracle trace of vertex colours for one light and a table
   of normals.
 - **Shininess table off**: "linear increasing numbers" is taken as entry *i* = *i*·2 for *i* in
-  0..127. — `gpu3d/`.
-- **Texture matrix modes**: the 1/16 constant's use, the shift that leaves 4 fraction bits, the
-  units of the bottom row S, T in modes 2 and 3, and whether mode 2 runs at NORMAL for lit and
-  unlit polygons alike. Mode 2 takes the normal as it arrives, before the vector matrix (GBATEK's
-  "Internal Operation on Normal Command"). — `gpu3d/`.
+  0..127. — `gpu3d/lighting.rs` (`Lighting::shininess`).
+- **The model's terms in detail.** Diffuse = `max(0, -(N . L)) >> 9` (of 512); specular dot =
+  `max(0, -(N . H)) >> 9` with `H = (L + (0, 0, -1.0)) / 2`, shininess level = dot squared (`dot x dot
+  >> 9`), table index = level / 4 (the linear ramp, with the table off, is twice that index); per channel
+  `diffuse_reflection x light x diffuse / (31 x 512) + specular_reflection x light x shininess /
+  (31 x 256) + ambient_reflection x light / 31`, summed over the enabled lights with the emission and
+  clamped to 31; every division truncates. LIGHT_VECTOR and NORMAL are multiplied by the vector
+  matrix at the time they run (a light is not turned again when the matrix later changes). Lights
+  are taken from POLYGON_ATTR as latched at BEGIN_VTXS. — `gpu3d/lighting.rs` (`vertex_color`).
+- **NORMAL's cycles** are 9 bus cycles plus one for each enabled light up to 12, a reading of
+  GBATEK's "9..12 for 0..4 lights" that has four settings for five light counts. —
+  `gpu3d/cycles.rs`.
+- **Texture matrix modes.** Mode 1 is GBATEK's formula with the two `1/16` constants as a raw 1
+  and one shift right by 12 (S, T have 4 fraction bits, the matrix 12). Modes 2 and 3 replace the
+  matrix's bottom row by S and T, whose units GBATEK does not give; the model shifts the vector
+  terms right by 17 (a normal, 9 fraction bits) or 20 (a position, 12) to leave 4 fraction bits and
+  adds S and T as they are, masked to 16 bits. Mode 2 runs at NORMAL (lit or not), mode 3 at each
+  vertex; the mode is read from TEXIMAGE_PARAM when the command runs. Mode 2 takes the normal as
+  it arrives, before the vector matrix (GBATEK's "Internal Operation on Normal Command"). —
+  `gpu3d/polygon.rs` (`map_texcoord`, `texture_from`).
 - **POS_TEST and the current vertex**: that it replaces the position without touching the
   colour. — `gpu3d/`.
 - **BOX_TEST** (the interpretation of the three offsets as the box's size, "presumably" in GBATEK;

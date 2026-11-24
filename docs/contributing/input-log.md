@@ -79,6 +79,17 @@ Only newline-terminated lines count. A final line with no `\n` is dropped, becau
 may have been cut off in the middle of it, and the parser reports that it dropped one. This is
 not an error: a log cut off mid-write replays as its prefix.
 
+### Replaying a log you just recorded
+
+The frontend writes `<rom>.sav` while it runs, and `replay` reads the same default path, so a
+game that saved during the recording (or a `save=auto` recording that had no `.sav` yet) leaves a
+file that no longer matches the header: the replay is refused with exit 5. Keep a copy of the
+save as it was before recording and pass it with `--save`. For a log with `save=auto` and no
+save file at the start, pass a path that does not exist.
+
+Exit 4 and exit 5 differ: 4 means the save file does not fit the chip the log names (wrong size);
+5 means the log is malformed, or its ROM CRC, save type, or save hash does not match.
+
 ## Compatibility
 
 A new field gets a new key and a default, so an old log stays valid; an old reader refuses the

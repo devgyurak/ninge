@@ -44,10 +44,11 @@ fn given_the_arm7_wrote_soundcnt_when_each_cpu_reads_it_then_only_the_arm7_sees_
 
 #[test]
 fn given_the_arm9_writes_to_the_sound_window_when_the_arm7_reads_then_nothing_changed() {
+    // SOUNDBIAS keeps its start value, 200h (`sound-registers.md`, "Start values").
     let mut m = machine();
     m.bus9().write32(SOUNDBIAS, 0x1FF);
     let at = m.inspect().arm7_clock() + 1;
-    assert_eq!(m.bus7(at).read32(SOUNDBIAS), 0);
+    assert_eq!(m.bus7(at).read32(SOUNDBIAS), 0x200);
 }
 
 #[test]
@@ -174,8 +175,33 @@ fn given_the_mixer_on_and_no_channel_started_when_a_frame_runs_then_every_sample
 fn given_the_master_enable_off_when_a_frame_runs_then_every_sample_is_the_bias_alone() {
     // Bias 0 is level 0, which is -8000h; bias 200h would be 0 (`spu.md`, "The gates").
     let mut m = machine();
+    m.bus7(1).write16(SOUNDBIAS, 0);
     m.run_frame(crate::Input::new());
     assert_eq!(m.audio().iter().filter(|&&s| s != -0x8000).count(), 0);
+}
+
+#[test]
+fn given_a_program_that_never_sets_the_bias_when_only_the_master_is_enabled_then_silence_is_zero() {
+    // `sound-registers.md`, "Start values": a program finds the bias at 200h, the medium level.
+    let mut m = machine();
+    m.bus7(1).write16(SOUNDCNT, MASTER_ON);
+    m.run_frame(crate::Input::new());
+    assert_eq!(m.audio().iter().filter(|&&s| s != 0).count(), 0);
+}
+
+#[test]
+fn given_a_program_that_never_sets_the_bias_when_a_channel_plays_then_its_level_is_not_clipped() {
+    // As `looping`, without the write to SOUNDBIAS: the channel's `4000h` comes out as `4000h`.
+    // With a bias of 0 the same level would sit 200h lower, and anything below it would be cut.
+    let mut m = machine();
+    m.bus7(3_000).write16(SOUNDCNT, MASTER_ON);
+    super::dma::poke_words(&mut m, DATA_ADDR, &[PCM8_QUARTER; 4]);
+    m.bus7(3_000).write32(SOUND0SAD, DATA_ADDR);
+    m.bus7(3_000).write16(SOUND0TMR, 0xFFF0);
+    m.bus7(3_000).write32(SOUND0LEN, 4);
+    m.bus7(3_000).write32(SOUND0CNT, LOOP_PCM8 | FULL_LEFT);
+    m.run_frame(crate::Input::new());
+    assert_eq!(audio_ends(&m), (0, 0x4000, FRAME_AUDIO_LEN));
 }
 
 #[test]

@@ -720,8 +720,15 @@ pub(crate) struct Mix {
     sum: [i64; 2],
 }
 
+/// SOUNDBIAS as a program finds it after direct boot: `200h`, the medium level, so a program that
+/// never sets the bias is not clipped (`sound-registers.md`, "Start values"). The device starts
+/// with it: direct boot is the only way a program starts, so no earlier state is modeled.
+// TODO(hw-unverified): GBATEK calls 200h usual and gives no value at a program's entry; the choice
+// rests on a program seen to play sound without setting it (`sound-registers.md`, "Unverified").
+const START_BIAS: u16 = 0x200;
+
 /// The ARM7's sound registers.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spu {
     channels: [Channel; CHANNELS],
     cnt: u16,
@@ -735,12 +742,24 @@ const fn with_byte(old: u32, index: u32, byte: u8) -> u32 {
     (old & !(0xFF << shift)) | ((byte as u32) << shift)
 }
 
+impl Default for Spu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Spu {
-    /// The registers at power-on: all zero.
-    // TODO(hw-unverified): the values after direct boot are not known; all zero here
-    // (`sound-registers.md`, "Unverified").
+    /// The registers as a program finds them after direct boot: SOUNDBIAS at the medium level and
+    /// every other register zero (`direct-boot.md`, "Devices at entry").
+    // TODO(hw-unverified): the values after direct boot are not known; the bias is a choice and
+    // the rest is zero (`sound-registers.md`, "Unverified").
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            channels: [Channel::default(); CHANNELS],
+            cnt: 0,
+            bias: START_BIAS,
+            captures: [Capture::default(); CAPTURES],
+        }
     }
 
     /// Stores the generator states [`Channel::advanced`] returned, one per channel.

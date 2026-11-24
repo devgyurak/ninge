@@ -48,6 +48,8 @@ pub struct Polygon {
     pub texture: u32,
     /// PLTT_BASE when the polygon was completed.
     pub palette: u32,
+    /// VIEWPORT when the polygon was completed (`geometry-engine.md`, "VIEWPORT").
+    pub viewport: u32,
     /// How many of `vertices` are used, 3 to 10.
     pub count: u8,
     /// Indices into the same set's `vertices`, in drawing order.
@@ -131,7 +133,7 @@ pub(super) struct Geometry {
     attr: u32,
     pub(super) texture: u32,
     pub(super) palette: u32,
-    /// VIEWPORT as written; the rasterizer (#49) scales to it.
+    /// VIEWPORT as written; each polygon copies it when it is completed.
     pub(super) viewport: u32,
     /// The primitive of the open list, if a BEGIN_VTXS has run.
     primitive: Option<u8>,
@@ -446,6 +448,9 @@ impl Geometry {
             attr: self.attr,
             texture: self.texture,
             palette: self.palette,
+            // TODO(hw-unverified): VIEWPORT is sampled at polygon completion
+            // (`geometry-engine.md`, "Unverified").
+            viewport: self.viewport,
             count: count as u8,
             vertices,
         };

@@ -186,9 +186,11 @@ pub(crate) struct Lines {
     /// (`touch-power.md`, "The pen bit").
     pub(crate) pen_irq_enabled: bool,
     /// POWCNT1 bit 3 powers the geometry engine: with it clear its ports (`0400_0400h`-`0400_06FFh`)
-    /// are read-only (`gx-stub.md`, "Power control"). The bit 2 of the rendering engine gates ports
-    /// that hold no state in the stub, so it has no line.
+    /// are read-only (`gx-stub.md`, "Power control").
     pub(crate) geometry_powered: bool,
+    /// POWCNT1 bit 2 powers the rendering engine: with it clear its registers (`0400_0320h`-
+    /// `0400_03BFh`) are read-only.
+    pub(crate) rendering_powered: bool,
 }
 
 /// The wires at power-on: the touch controller starts in power-down mode 0, so the pen output is
@@ -198,6 +200,7 @@ impl Default for Lines {
         Self {
             pen_irq_enabled: true,
             geometry_powered: true,
+            rendering_powered: true,
         }
     }
 }

@@ -21,6 +21,7 @@ mod lighting;
 mod matrix;
 mod polygon;
 mod queue;
+mod render;
 
 use crate::io::device::{
     Checked, Cx, Device, Effect, Fired, Signal, Signals, SlotMask, Width, read_bytes, write_bytes,
@@ -33,6 +34,7 @@ use matrix::{IDENTITY, Matrices, Matrix, Target, shape};
 use polygon::Geometry;
 pub use polygon::{MAX_POLYGON_VERTICES, POLYGON_RAM, Polygon, Ram, VERTEX_RAM, Vertex};
 use queue::{Entry, FIFO_CAPACITY, HALF_FULL, Queue};
+pub use render::{RenderRegs, Scene};
 use serde::{Deserialize, Serialize};
 
 /// DISP3DCNT, the first register of the device, at `0400_0060h` (`gx-stub.md`, "Registers").
@@ -234,6 +236,9 @@ pub struct Gpu3d {
     owed: u8,
     /// The FIFO and the PIPE, in front of the engine.
     queue: Queue,
+    /// The rendering registers, stored for the rasterizer (`geometry-engine.md`, "The rendering
+    /// registers").
+    render: RenderRegs,
     /// The matrices and their stacks (`geometry-engine.md`, "Matrices").
     matrices: Matrices,
     /// The vertex attributes, the list being assembled and the two sets of Polygon and Vertex RAM
@@ -334,20 +339,23 @@ impl Gpu3d {
         self.geometry.filling()
     }
 
-    /// Polygon RAM and Vertex RAM the last SWAP_BUFFERS handed on: what the rasterizer (#49)
-    /// draws.
-    pub fn render_ram(&self) -> &Ram {
-        self.geometry.rendering()
+    /// What the last SWAP_BUFFERS handed on: the set of RAM the rasterizer (#49) draws and the
+    /// swap's two parameter bits.
+    pub fn scene(&self) -> Scene<'_> {
+        Scene {
+            ram: self.geometry.rendering(),
+            swap_bits: self.geometry.swap_bits,
+        }
+    }
+
+    /// The rendering registers as written: the rasterizer's inputs besides the scene.
+    pub fn render_regs(&self) -> &RenderRegs {
+        &self.render
     }
 
     /// DISP3DCNT bit 13: a polygon or vertex was dropped because a RAM was full.
     pub fn ram_overflow(&self) -> bool {
         self.geometry.overflow
-    }
-
-    /// SWAP_BUFFERS' two parameter bits (manual sort, W-buffering) as of the last swap.
-    pub fn swap_bits(&self) -> u8 {
-        self.geometry.swap_bits
     }
 
     /// VIEWPORT as written.
@@ -893,6 +901,7 @@ impl Checked for Gpu3d {
             && waiting
             && self.queue.well_formed()
             && self.geometry.well_formed()
+            && self.render.well_formed()
             && (self.running.is_some() || !self.locked)
             && executing
     }
@@ -1010,6 +1019,16 @@ impl Gpu3d {
                 self.write_byte(at, byte);
                 Effect::default()
             }),
+            // The rendering block, unless POWCNT1 bit 2 has made it read-only.
+            // TODO(hw-unverified): the power gate (`gx-stub.md`, "Power control").
+            _ if (RENDER_OFFSET..RENDER_OFFSET + RENDER_BYTES).contains(&offset)
+                && cx.lines.rendering_powered =>
+            {
+                write_bytes(offset, width, value, |at, byte| {
+                    self.render.write_byte(at - RENDER_OFFSET, byte);
+                    Effect::default()
+                })
+            }
             _ => Effect::default(),
         }
     }

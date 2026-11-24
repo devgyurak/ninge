@@ -127,6 +127,7 @@ impl Io {
         Lines {
             pen_irq_enabled: self.spi.pen_irq_enabled(),
             geometry_powered: self.gpu2d.geometry_engine_on(),
+            rendering_powered: self.gpu2d.rendering_engine_on(),
         }
     }
 

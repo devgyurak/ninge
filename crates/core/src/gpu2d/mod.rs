@@ -135,6 +135,8 @@ const DISPCNT_BLOCK_SHIFT: u32 = 18;
 const DISPCNT_BLOCK_MASK: u32 = 0x3;
 /// POWCNT1 bit 3: the 3D geometry engine (`gx-stub.md`, "Power control").
 const POWCNT1_GEOMETRY: u16 = 1 << 3;
+/// POWCNT1 bit 2: the 3D rendering engine.
+const POWCNT1_RENDERING: u16 = 1 << 2;
 /// POWCNT1 bit 9: engine B (2D) power.
 const POWCNT1_ENGINE_B: u16 = 1 << 9;
 /// POWCNT1 bit 15: display swap. Set sends engine A to the upper screen.
@@ -356,10 +358,14 @@ impl Gpu2d {
         self.powcnt1 & POWCNT1_SWAP != 0
     }
 
+    /// Whether POWCNT1 bit 2 powers the 3D rendering engine: with it clear its registers
+    /// (`0400_0320h`-`0400_03BFh`) are read-only (`gx-stub.md`, "Power control").
+    pub fn rendering_engine_on(&self) -> bool {
+        self.powcnt1 & POWCNT1_RENDERING != 0
+    }
+
     /// Whether POWCNT1 bit 3 powers the 3D geometry engine: with it clear the ports
     /// `0400_0400h`-`0400_06FFh` are read-only (`gx-stub.md`, "Power control").
-    // TODO(phase7): bit 2, the rendering engine, gates ports that hold no state until the
-    // rasterizer (#49-#52) gives them some.
     pub fn geometry_engine_on(&self) -> bool {
         self.powcnt1 & POWCNT1_GEOMETRY != 0
     }

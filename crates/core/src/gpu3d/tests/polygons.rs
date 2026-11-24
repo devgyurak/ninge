@@ -491,8 +491,8 @@ fn given_a_swap_when_it_ends_then_the_polygons_are_in_the_render_set_and_the_fil
     let gpu = swapped(0);
     assert_eq!(
         (
-            gpu.render_ram().polygons.len(),
-            gpu.render_ram().vertices.len(),
+            gpu.scene().ram.polygons.len(),
+            gpu.scene().ram.vertices.len(),
             gpu.geometry_ram().polygons.len(),
             read(&gpu, RAM_COUNT, Width::Word)
         ),
@@ -508,8 +508,8 @@ fn given_two_swaps_when_the_second_ends_then_the_render_set_is_the_one_after_the
     send_command(&mut gpu, SWAP, &[0]);
     assert_eq!(
         (
-            gpu.render_ram().polygons[0].count,
-            gpu.render_ram().polygons.len()
+            gpu.scene().ram.polygons[0].count,
+            gpu.scene().ram.polygons.len()
         ),
         (4, 1)
     );
@@ -527,7 +527,7 @@ fn given_a_swap_when_it_is_executing_then_the_polygons_are_still_in_the_filling_
 fn given_a_swap_with_the_parameter_bits_set_when_it_ends_then_the_renderer_flags_are_kept() {
     // Not visible through a register: the debugger reads them with the render set.
     let gpu = swapped(3);
-    assert_eq!(gpu.swap_bits(), 3);
+    assert_eq!(gpu.scene().swap_bits, 3);
 }
 
 #[test]
@@ -577,7 +577,7 @@ fn given_polygons_in_both_sets_when_saved_and_loaded_then_they_are_kept_and_well
         (
             restored == original,
             restored.well_formed(0),
-            restored.render_ram().polygons.len()
+            restored.scene().ram.polygons.len()
         ),
         (true, true, 1)
     );
@@ -591,7 +591,7 @@ fn given_a_cloned_gpu_when_its_ram_is_inspected_then_it_still_has_room_for_a_ful
     assert_eq!(
         (
             copy.geometry_ram().vertices.capacity() >= VERTEX_RAM,
-            copy.render_ram().polygons.capacity() >= POLYGON_RAM
+            copy.scene().ram.polygons.capacity() >= POLYGON_RAM
         ),
         (true, true)
     );
@@ -612,4 +612,40 @@ fn given_a_locked_up_engine_when_a_command_is_abandoned_then_the_queue_is_left_a
     let len = gpu.fifo_len() + gpu.pipe_len();
     gpu.write(port(0x10), Width::Word, 0, cx_at(0));
     assert_eq!(gpu.fifo_len() + gpu.pipe_len(), len + 1);
+}
+
+const VIEWPORT: u32 = 0x60;
+
+/// The VIEWPORT of each polygon in the drawn set, after a swap.
+fn drawn_viewports(gpu: &Gpu3d) -> Vec<u32> {
+    gpu.scene()
+        .ram
+        .polygons
+        .iter()
+        .map(|polygon| polygon.viewport)
+        .collect()
+}
+
+#[test]
+fn given_a_viewport_before_each_triangle_when_swapped_then_each_polygon_keeps_its_own() {
+    let mut gpu = Gpu3d::new();
+    send_command(&mut gpu, VIEWPORT, &[0x0100_0000]);
+    begin(&mut gpu, TRIANGLES);
+    vtxs(&mut gpu, &[(0, 0, 0), (0x800, 0, 0), (0, 0x800, 0)]);
+    send_command(&mut gpu, VIEWPORT, &[0xBF_FF_00_00]);
+    begin(&mut gpu, TRIANGLES);
+    vtxs(&mut gpu, &[(0, 0, 0), (0x800, 0, 0), (0, 0x800, 0)]);
+    send_command(&mut gpu, SWAP, &[0]);
+    assert_eq!(drawn_viewports(&gpu), vec![0x0100_0000, 0xBFFF_0000]);
+}
+
+#[test]
+fn given_a_viewport_after_the_triangle_when_swapped_then_the_drawn_polygon_keeps_the_old_one() {
+    let mut gpu = Gpu3d::new();
+    send_command(&mut gpu, VIEWPORT, &[0x1234]);
+    begin(&mut gpu, TRIANGLES);
+    vtxs(&mut gpu, &[(0, 0, 0), (0x800, 0, 0), (0, 0x800, 0)]);
+    send_command(&mut gpu, VIEWPORT, &[0x5678]);
+    send_command(&mut gpu, SWAP, &[0]);
+    assert_eq!(drawn_viewports(&gpu), vec![0x1234]);
 }

@@ -12,7 +12,7 @@ and `ninge-runner replay` reads them.
 ## Shape
 
 Line-oriented UTF-8 text, one frame per line. The same text can go to a file or to a pipe
-unchanged, and a file cut off at any point is still a valid prefix.
+unchanged, and a file cut off at any point after the header line is still a valid prefix.
 
 ```
 ninge-input 1 rom=1a2b save=flash-512k:00112233aabbccdd

@@ -341,6 +341,112 @@ impl<'a> ExtPalette<'a> {
     }
 }
 
+/// Bytes of one texture image slot: a whole 128 KiB bank (`docs/hw/vram-banks.md`).
+const TEX_IMAGE_SLOT_BYTES: u32 = 0x2_0000;
+/// Texture image slots, and bytes of the whole image space.
+const TEX_IMAGE_SLOTS: usize = 4;
+const TEX_IMAGE_BYTES: u32 = TEX_IMAGE_SLOTS as u32 * TEX_IMAGE_SLOT_BYTES;
+/// Bytes of one texture palette slot, and how many there are (6 slots, 96 KiB).
+const TEX_PALETTE_SLOT_BYTES: u32 = 0x4000;
+const TEX_PALETTE_SLOTS: usize = 6;
+const TEX_PALETTE_BYTES: u32 = TEX_PALETTE_SLOTS as u32 * TEX_PALETTE_SLOT_BYTES;
+
+/// Where the banks back the texture slots: the byte offset of each slot in the VRAM buffer, `None`
+/// where no bank does. Plain data built from the VRAMCNT registers when it is read, so it is never
+/// saved (`docs/hw/vram-banks.md`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TexSlots {
+    pub(crate) image: [Option<u32>; TEX_IMAGE_SLOTS],
+    pub(crate) palette: [Option<u32>; TEX_PALETTE_SLOTS],
+}
+
+/// The texture slots the nine banks back, given what each is mapped as, A first. When two banks
+/// back one slot the earlier letter wins, as for the other slot mappings.
+// TODO(hw-unverified): the earlier letter wins for textures too (`vram-banks.md`, "Unverified").
+pub(crate) fn tex_slots(mappings: &[VramMapping; BANK_COUNT]) -> TexSlots {
+    let mut slots = TexSlots::default();
+    for (bank, mapping) in mappings.iter().enumerate() {
+        let base = BANK_BASE[bank] as u32;
+        match *mapping {
+            VramMapping::Texture { slot } => {
+                if let Some(slot) = slots.image.get_mut(usize::from(slot)) {
+                    slot.get_or_insert(base);
+                }
+            }
+            VramMapping::TexPalette { first, count } => (0..u32::from(count)).for_each(|n| {
+                if let Some(slot) = slots.palette.get_mut(usize::from(first) + n as usize) {
+                    slot.get_or_insert(base + n * TEX_PALETTE_SLOT_BYTES);
+                }
+            }),
+            _ => {}
+        }
+    }
+    slots
+}
+
+/// The texture memory as the rasterizer reads it: the image space (4 slots of 128 KiB) by byte
+/// offset, and the palette space (6 slots of 16 KiB) by byte offset. A slot no bank backs reads 0.
+#[derive(Clone, Copy)]
+pub struct Textures<'a> {
+    vram: &'a [u8],
+    slots: TexSlots,
+}
+
+/// What the slots map and how much VRAM backs them, not the 656 KiB itself: a `{:?}` of a reader
+/// stays readable in a log or a failed assertion.
+impl std::fmt::Debug for Textures<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Textures")
+            .field("vram_len", &self.vram.len())
+            .field("slots", &self.slots)
+            .finish()
+    }
+}
+
+impl<'a> Textures<'a> {
+    pub(super) fn new(vram: &'a [u8], slots: TexSlots) -> Self {
+        Self { vram, slots }
+    }
+
+    /// The byte at `offset` (0 to 512 KiB) of the texture image space; past it, 0.
+    // TODO(hw-unverified): a slot no bank backs, and an offset past the space, read 0
+    // (`vram-banks.md`, "Unverified").
+    pub fn image_byte(&self, offset: u32) -> u8 {
+        let slot = (offset / TEX_IMAGE_SLOT_BYTES) as usize;
+        let within = offset % TEX_IMAGE_SLOT_BYTES;
+        self.byte(
+            offset < TEX_IMAGE_BYTES,
+            self.slots.image.get(slot).copied().flatten(),
+            within,
+        )
+    }
+
+    /// The 15-bit colour at byte `offset` (0 to 96 KiB) of the texture palette space. An odd offset
+    /// reads the colour that holds it.
+    // TODO(hw-unverified): a slot no bank backs, and an offset past the 96 KiB, read colour 0, and
+    // an odd offset is aligned down (`vram-banks.md`, "Unverified").
+    pub fn palette_color(&self, offset: u32) -> u16 {
+        let offset = offset & !1;
+        let slot = (offset / TEX_PALETTE_SLOT_BYTES) as usize;
+        let within = offset % TEX_PALETTE_SLOT_BYTES;
+        let start = self.slots.palette.get(slot).copied().flatten();
+        let in_range = offset < TEX_PALETTE_BYTES;
+        u16::from_le_bytes([
+            self.byte(in_range, start, within),
+            self.byte(in_range, start, within + 1),
+        ])
+    }
+
+    /// The byte `within` bytes into a slot that starts at `start` in VRAM, 0 when there is none.
+    fn byte(&self, in_range: bool, start: Option<u32>, within: u32) -> u8 {
+        start
+            .filter(|_| in_range)
+            .and_then(|start| self.vram.get((start + within) as usize))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
 /// Which bank (A = 0 to I = 8) backs each extended-palette slot of one engine, `None` where no bank
 /// does. A debugger's VRAM panel (#58) shows it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

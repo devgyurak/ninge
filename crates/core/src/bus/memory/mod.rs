@@ -13,7 +13,7 @@
 mod vram;
 
 pub(crate) use vram::{ExtPalette, ExtSlots};
-pub use vram::{ExtPaletteBanks, VramMapping, VramWindow, VramWindowKind};
+pub use vram::{ExtPaletteBanks, Textures, VramMapping, VramWindow, VramWindowKind};
 
 use super::TcmConfig;
 use crate::cpu::Tcm;
@@ -334,8 +334,8 @@ impl Memory {
     /// savestate load (`savestate`) only: a VRAMCNT write rebuilds just the VRAM block
     /// (`build_vram_pages`) and a WRAMCNT write just the shared WRAM block (`build_wram_pages`).
     // Per-CPU tables: the decision is recorded in the PR that added #22.
-    // TODO(phase7): texture slots are decoded but not read; the extended-palette slots are read by
-    // the 2D engines (`ext_slots`, #32).
+    // The extended-palette slots are read by the 2D engines (`ext_slots`, #32) and the texture slots
+    // by the rasterizer (`textures`, #50).
     // TODO(hw-unverified): main RAM mirrors through its whole 16 MiB block, GBATEK's general
     // rule (`arm9-memory-map.md`, "Unverified").
     // TODO(hw-unverified): the palette RAM repeats through its 16 MiB block, and the ARM7 has
@@ -484,6 +484,14 @@ impl Memory {
         let slots = self.ext_slots();
         let slot = if engine_b { slots.obj_b } else { slots.obj_a };
         ExtPalette::new(&self.vram, [slot, None, None, None])
+    }
+
+    /// The texture image and palette slots, from the nine VRAMCNT registers as they are now: what
+    /// the rasterizer (#49-#50) reads (`vram-banks.md`).
+    pub fn textures(&self) -> Textures<'_> {
+        let mappings: [VramMapping; BANK_COUNT] =
+            std::array::from_fn(|bank| self.vram_bank(bank).mapping);
+        Textures::new(&self.vram, vram::tex_slots(&mappings))
     }
 
     /// The BG extended palettes of engine A, or of engine B when `engine_b`.

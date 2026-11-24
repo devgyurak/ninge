@@ -3,6 +3,7 @@
 //! is touched.
 
 use crate::cli::{Options, UsageError};
+use crate::record::{Recorder, create_new};
 use crate::savefile::{SaveFile, default_path, read_optional};
 use ninge_core::cart::{SaveError, resolve_save};
 use ninge_core::{Machine, RomError};
@@ -40,6 +41,13 @@ pub enum StartError {
     },
     /// The save file does not fit the save type, or no type has its size (exit 4).
     Save(SaveError),
+    /// The input log could not be created or its header written (exit 1).
+    Record {
+        /// The path asked for with `--record`.
+        path: PathBuf,
+        /// The underlying failure; an existing file is refused.
+        source: std::io::Error,
+    },
     /// The terminal loop failed (exit 1).
     Run(String),
 }
@@ -51,7 +59,7 @@ impl StartError {
             Self::Usage(_) => 2,
             Self::Rom(_) => 3,
             Self::Save(_) => 4,
-            Self::Io { .. } | Self::Run(_) => 1,
+            Self::Io { .. } | Self::Record { .. } | Self::Run(_) => 1,
         }
     }
 }
@@ -63,6 +71,9 @@ impl fmt::Display for StartError {
             Self::Rom(e) => write!(f, "ROM refused: {e}"),
             Self::Io { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             Self::Save(e) => write!(f, "the save was refused: {e}"),
+            Self::Record { path, source } => {
+                write!(f, "cannot record to {}: {source}", path.display())
+            }
             Self::Run(e) => write!(f, "{e}"),
         }
     }
@@ -94,6 +105,24 @@ pub fn start(options: &Options) -> Result<(Source, Option<SaveFile>), StartError
     match &options.rom {
         Some(path) => load(path.clone(), options).map(|(source, save)| (source, Some(save))),
         None => Ok((Source::Pattern, None)),
+    }
+}
+
+/// Opens the input log `--record` asks for, with its header for the machine as `start` made it
+/// (before the first frame). The file is new: an existing path is refused.
+pub fn open_recording(options: &Options, source: &Source) -> Result<Option<Recorder>, StartError> {
+    match (&options.record, source) {
+        (Some(path), Source::Machine(machine)) => {
+            let failed = |source| StartError::Record {
+                path: path.clone(),
+                source,
+            };
+            let file = create_new(path).map_err(failed)?;
+            Recorder::begin(Box::new(file), path.clone(), machine)
+                .map(Some)
+                .map_err(failed)
+        }
+        _ => Ok(None),
     }
 }
 

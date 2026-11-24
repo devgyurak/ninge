@@ -44,6 +44,7 @@ fn given_save_flags_when_parsing_then_the_options_carry_the_path_and_the_type() 
             rom: Some(PathBuf::from("a.nds")),
             save: Some(PathBuf::from("s.bin")),
             save_type: Some(SaveType::Flash512K),
+            record: None,
             no_audio: false,
             focus_pause: false,
         })
@@ -58,6 +59,7 @@ fn given_the_flags_before_the_rom_when_parsing_then_the_rom_is_still_found() {
             rom: Some(PathBuf::from("a.nds")),
             save: None,
             save_type: Some(SaveType::None),
+            record: None,
             no_audio: false,
             focus_pause: false,
         })
@@ -173,4 +175,32 @@ fn given_focus_pause_twice_when_parsing_then_it_is_a_usage_error() {
         .unwrap_err()
         .to_string();
     assert_eq!(message, format!("unknown option --focus-pause\n{USAGE}"));
+}
+
+#[test]
+fn given_record_and_a_path_when_parsing_then_the_options_carry_it() {
+    assert_eq!(
+        parse(&["a.nds", "--record", "run.ninput"]),
+        Ok(Options {
+            record: Some(PathBuf::from("run.ninput")),
+            ..rom_only("a.nds")
+        })
+    );
+}
+
+#[test]
+fn given_a_bad_record_flag_when_parsing_then_each_case_is_a_usage_error() {
+    let cases: [&[&str]; 3] = [
+        &["a.nds", "--record"],
+        &["a.nds", "--record", "a", "--record", "b"],
+        &["--record", "run.ninput"],
+    ];
+    let failures: Vec<_> = cases.iter().filter(|case| parse(case).is_ok()).collect();
+    assert_eq!(failures, Vec::<&&[&str]>::new());
+}
+
+#[test]
+fn given_record_without_a_rom_when_parsing_then_the_message_says_it_needs_one() {
+    let message = parse(&["--record", "run.ninput"]).unwrap_err().to_string();
+    assert_eq!(message, format!("--record needs a ROM\n{USAGE}"));
 }

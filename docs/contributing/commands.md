@@ -19,6 +19,8 @@ python3 scripts/agent_hooks/check_tests.py --all           # GWT names · no con
 python3 scripts/agent_hooks/check_language.py --all        # English-only text · translations have an original
 ```
 
+Recording and replaying input: the log format is in [input-log.md](input-log.md).
+
 Until Phase 0 landed the Cargo workspace, `verify.sh` ran the Python gates and said plainly
 that it skipped the cargo gates; a skipped step is never reported as passed.
 

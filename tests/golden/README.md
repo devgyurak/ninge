@@ -23,7 +23,7 @@ format were decided in [#68](https://github.com/devgyurak/ninge/issues/68).
 
 ## File format
 
-`tests/golden/<rom>.txt`, where `<rom>` is the name of a ROM in `testroms/`:
+`tests/golden/<rom>.txt`, where `<rom>` is the name of a ROM in `testroms/` (one exception: a replay of an input log whose run differs from the ROM's run with no input has its own file named after the log, such as `rtc-wall.txt`, so the two never share a file):
 
 ```text
 # Comment lines start with '#'; blank lines are allowed.

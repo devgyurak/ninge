@@ -56,9 +56,9 @@ fn report(name: &str, file: &str) -> RunReport {
     begin(name, &log_text(file)).run(None).report
 }
 
-/// Whether the report matches the golden line for its frame count in `tests/golden/<name>.txt`.
-fn golden_result(name: &str, file: &str) -> Result<(), GoldenError> {
-    let text = std::fs::read_to_string(golden_path(name)).expect("the golden file exists");
+/// Whether the report matches the golden line for its frame count in `tests/golden/<golden>.txt`.
+fn golden_result(golden: &str, name: &str, file: &str) -> Result<(), GoldenError> {
+    let text = std::fs::read_to_string(golden_path(golden)).expect("the golden file exists");
     check_frame_hash(&parse_golden(&text)?, &report(name, file))
 }
 
@@ -108,7 +108,7 @@ fn given_the_keyirq_log_when_checked_against_the_rom_then_its_header_fits() {
 
 #[test]
 fn given_the_keyirq_log_when_replayed_then_the_final_frame_matches_the_golden() {
-    assert_eq!(golden_result("keyirq", "keyirq.ninput"), Ok(()));
+    assert_eq!(golden_result("keyirq", "keyirq", "keyirq.ninput"), Ok(()));
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn given_the_touch_log_when_checked_against_the_rom_then_its_header_fits() {
 
 #[test]
 fn given_the_touch_log_when_replayed_then_the_final_frame_matches_the_golden() {
-    assert_eq!(golden_result("touch", "touch.ninput"), Ok(()));
+    assert_eq!(golden_result("touch", "touch", "touch.ninput"), Ok(()));
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn given_the_rtc_log_when_checked_against_the_rom_then_its_header_fits() {
 
 #[test]
 fn given_the_rtc_log_when_replayed_then_the_final_frame_matches_the_golden() {
-    assert_eq!(golden_result("rtc", "rtc-wall.ninput"), Ok(()));
+    assert_eq!(golden_result("rtc-wall", "rtc", "rtc-wall.ninput"), Ok(()));
 }
 
 #[test]

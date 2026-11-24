@@ -201,7 +201,7 @@ impl Io {
         offset: u32,
         width: Width,
         value: u32,
-    ) {
+    ) -> u64 {
         let cx = Cx {
             now: at.now,
             host: &self.input,
@@ -216,7 +216,7 @@ impl Io {
             write(offset, width, value, cx),
             Effect::default()
         );
-        self.apply::<ARM9>(scheduler, at, port, effect);
+        self.apply::<ARM9>(scheduler, at, port, effect)
     }
 
     /// Hands an access's effect on: its IF bits to the controllers, the event slots it names to
@@ -229,7 +229,7 @@ impl Io {
         at: At<'_>,
         port: Port,
         effect: Effect,
-    ) {
+    ) -> u64 {
         self.request_irq(effect.requests);
         if effect.reschedule != 0 {
             self.schedule_slots::<ARM9>(scheduler, port, effect.reschedule, at.floor);
@@ -245,6 +245,7 @@ impl Io {
         if effect.recheck_held_requests {
             self.request_irq(self.held_requests::<ARM9>());
         }
+        effect.stall
     }
 
     /// Delivers `signals` at master time `time`, one signal at a time in the order of
@@ -261,6 +262,8 @@ impl Io {
                 let (arm9, arm7) = match signal {
                     Signal::CardWordArm9 => (Some(Trigger::CardWord { arm9: true }), None),
                     Signal::CardWordArm7 => (None, Some(Trigger::CardWord { arm9: false })),
+                    // The geometry engine is the ARM9's, so only its channels see the FIFO.
+                    Signal::GeometryFifoHalf => (Some(Trigger::GeometryFifo), None),
                 };
                 self.start_dma(scheduler, arm9, arm7, time);
             });
@@ -365,21 +368,44 @@ impl Io {
         time: u64,
     ) {
         let floor = time.max(scheduler.now());
-        let queued9 = arm9.map_or(0, |trigger| self.dma9.trigger(trigger));
-        let queued7 = arm7.map_or(0, |trigger| self.dma7.trigger(trigger));
+        let queued9 = arm9.map_or(0, |trigger| self.dma9.trigger(trigger, time));
+        let queued7 = arm7.map_or(0, |trigger| self.dma7.trigger(trigger, time));
         self.schedule_slots::<true>(scheduler, Port::Dma, queued9, floor);
         self.schedule_slots::<false>(scheduler, Port::Dma, queued7, floor);
     }
 
     /// The transfer of a CPU's channel ended at `end`: the channel repeats or is disabled, and
     /// its IRQ is raised (`dma.md`, "The end of a transfer").
-    pub(crate) fn dma_finished(&mut self, transfer: &Transfer, end: End) {
+    pub(crate) fn dma_finished(
+        &mut self,
+        scheduler: &mut Scheduler,
+        transfer: &Transfer,
+        end: End,
+        arm9_held_until: u64,
+    ) {
         let effect = if transfer.arm9 {
             self.dma9.finish(transfer, end)
         } else {
             self.dma7.finish(transfer, end)
         };
         self.request_irq(effect.requests);
+        // A burst into the geometry FIFO ended with the FIFO still less than half full: the channel
+        // goes on, once the burst's words have gone by at a bus cycle each. The pause keeps a channel
+        // that never fills the FIFO from restarting at the very same time for ever.
+        // TODO(hw-unverified): one word a bus cycle (`geometry-engine.md`, "Unverified").
+        if transfer.is_geometry_burst()
+            && self
+                .held_signals::<true>()
+                .contains(Signal::GeometryFifoHalf)
+        {
+            // The next burst waits for its words to have gone by and for the ARM9 hold the burst
+            // may have caused (a DMA that stalled paused the ARM9 with it).
+            let time = scheduler
+                .now()
+                .saturating_add(transfer.duration())
+                .max(arm9_held_until);
+            self.route(scheduler, Signals::of(Signal::GeometryFifoHalf), time);
+        }
     }
 
     /// Replaces the SPI bus, to build a corrupt state in a test.

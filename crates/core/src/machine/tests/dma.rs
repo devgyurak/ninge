@@ -56,9 +56,9 @@ const fn fill_addr(n: u32) -> u32 {
     0x0400_00E0 + 4 * n
 }
 
-const B_SELF: u32 = 0xEAFF_FFFE;
+pub(super) const B_SELF: u32 = 0xEAFF_FFFE;
 /// `mov r0, #0x55`, `mov r1, #0x66`, `b .`.
-const SPIN: [u32; 3] = [0xE3A0_0055, 0xE3A0_1066, B_SELF];
+pub(super) const SPIN: [u32; 3] = [0xE3A0_0055, 0xE3A0_1066, B_SELF];
 /// `MCR p15, 0, R0, C9, C1, 0` (DTCM region register) and `MCR p15, 0, R1, C1, C0, 0` (control).
 const MCR_DTCM_REGION: u32 = 0xEE09_0F11;
 const MCR_CONTROL_R1: u32 = 0xEE01_1F10;
@@ -67,7 +67,7 @@ const DTCM: u32 = 0x0210_0000;
 /// The same main-RAM byte one 4 MiB mirror up, outside the 16 KiB DTCM.
 const DTCM_BEHIND: u32 = DTCM + 0x40_0000;
 
-fn rom_with(arm9: &[u32], arm7: &[u32]) -> Vec<u8> {
+pub(super) fn rom_with(arm9: &[u32], arm7: &[u32]) -> Vec<u8> {
     let mut image = Image::valid();
     image.arm9_code = words(arm9);
     image.arm7_code = words(arm7);
@@ -151,7 +151,7 @@ pub(super) fn run_frames(m: &mut Machine, frames: u32) {
 }
 
 /// The pending DMA start events as `(time, arm9, channel)`, in firing order.
-fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
+pub(super) fn dma_events(m: &Machine) -> Vec<(u64, bool, u8)> {
     m.inspect()
         .scheduler()
         .pending()

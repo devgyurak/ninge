@@ -413,9 +413,11 @@ fn given_slots_above_bit_7_when_effects_merged_then_the_high_bits_are_kept() {
 }
 
 #[test]
-fn given_timers_dma_the_card_and_spi_when_event_slots_counted_then_there_are_eighteen() {
-    // Eight timers, eight DMA channels, the one card slot both CPUs share and the ARM7's SPI bus.
-    assert_eq!(EVENT_SLOTS, 18);
+fn given_timers_dma_the_card_spi_and_the_geometry_engine_when_event_slots_counted_then_there_are_nineteen()
+ {
+    // Eight timers, eight DMA channels, the one card slot both CPUs share, the ARM7's SPI bus and
+    // the geometry engine's command end.
+    assert_eq!(EVENT_SLOTS, 19);
 }
 
 /// The kinds queued after each CPU's timer 0 is started through `Io` (TM0CNT_H, START).
@@ -582,9 +584,10 @@ fn given_every_signal_when_the_routing_order_is_listed_then_none_is_missing() {
         (
             all.contains(Signal::CardWordArm9),
             all.contains(Signal::CardWordArm7),
+            all.contains(Signal::GeometryFifoHalf),
             Signal::ALL.len()
         ),
-        (true, true, 2)
+        (true, true, true, 3)
     );
 }
 
@@ -708,4 +711,67 @@ fn given_a_write_that_rechecks_only_requests_when_merged_with_one_that_rechecks_
         (merged.recheck_held_signals, merged.recheck_held_requests),
         (true, true)
     );
+}
+
+/// An `Io` whose geometry engine waits in SWAP_BUFFERS with 132 pushes queued behind it: the PIPE
+/// holds four and the FIFO 128, which is not less than half full.
+fn io_with_a_half_full_geometry_fifo(scheduler: &mut Scheduler) -> Io {
+    const GXFIFO_OFFSET: u32 = 0x3A0;
+    let mut io = Io::new();
+    let at = At {
+        now: 0,
+        floor: 1,
+        rom: &[],
+    };
+    let mut send = |word: u32| {
+        io.write::<true>(scheduler, at, Port::Gpu3d, GXFIFO_OFFSET, Width::Word, word);
+    };
+    send(0x50);
+    send(0);
+    (0..132).for_each(|_| send(0x11));
+    io
+}
+
+/// Channel 0 of the ARM9 set to start by the geometry FIFO (mode 7), through `Io`.
+fn enable_geometry_channel(io: &mut Io, scheduler: &mut Scheduler) {
+    const ENABLE: u32 = 1 << 31;
+    let at = At {
+        now: 0,
+        floor: 1,
+        rom: &[],
+    };
+    io.write::<true>(
+        scheduler,
+        at,
+        Port::Dma,
+        8,
+        Width::Word,
+        ENABLE | 7 << 27 | 1,
+    );
+}
+
+#[test]
+fn given_a_half_full_geometry_fifo_when_a_mode_7_channel_is_enabled_then_it_does_not_start() {
+    let mut scheduler = Scheduler::new();
+    let mut io = io_with_a_half_full_geometry_fifo(&mut scheduler);
+    enable_geometry_channel(&mut io, &mut scheduler);
+    assert!(!io.dma9().pending(0));
+}
+
+#[test]
+fn given_a_waiting_mode_7_channel_when_the_fifo_signal_is_routed_then_the_arm9_channel_starts() {
+    let mut scheduler = Scheduler::new();
+    let mut io = io_with_a_half_full_geometry_fifo(&mut scheduler);
+    enable_geometry_channel(&mut io, &mut scheduler);
+    io.route(&mut scheduler, Signals::of(Signal::GeometryFifoHalf), 1);
+    assert!(io.dma9().pending(0));
+}
+
+#[test]
+fn given_an_empty_geometry_fifo_when_a_mode_7_channel_is_enabled_through_io_then_it_starts_at_once()
+{
+    let mut scheduler = Scheduler::new();
+    let mut io = Io::new();
+    enable_geometry_channel(&mut io, &mut scheduler);
+    assert!(io.dma9().pending(0));
 }

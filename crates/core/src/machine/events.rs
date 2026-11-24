@@ -31,12 +31,23 @@ impl Participants for Machine {
             &mut self.scheduler,
             &self.rom,
             TcmConfig::from_cp15(self.arm9.cp15()),
-        );
+        )
+        .with_hold(self.arm9_hold_until);
         while view.clock() < target
             && view
                 .next_event_time()
                 .is_none_or(|time| view.clock() < time)
         {
+            // A held ARM9 (a full geometry FIFO) runs nothing either: its clock skips to the hold's
+            // end, to `target` or to an event, whichever is first, so the events keep firing.
+            if view.hold_until() > view.clock() {
+                let stop = view
+                    .next_event_time()
+                    .map_or(target, |time| time.min(target))
+                    .min(view.hold_until());
+                view.advance(stop - view.clock());
+                continue;
+            }
             // A halted ARM9 runs nothing, so its clock skips in one step to `target` or to an event
             // queued before it (by the instruction that halted it, say a timer write), whichever is
             // earlier: the event fires on time and the wake is tested after it
@@ -55,6 +66,7 @@ impl Participants for Machine {
                 view.set_tcm(TcmConfig::from_cp15(self.arm9.cp15()));
             }
         }
+        self.arm9_hold_until = view.hold_until();
     }
 
     fn run_arm7_until(&mut self, target: u64) {
@@ -151,11 +163,14 @@ impl Machine {
     /// units reach RAM, VRAM and the I/O registers (the DMA registers too) as an instruction's
     /// accesses would. The channel then repeats or ends and raises its IRQ.
     ///
-    /// The transfer is atomic: all units move at the event's master time and neither CPU stalls.
-    /// An ARM7 start comes late by what the ARM7 lags the master clock, under one slice.
-    // TODO(hw-unverified): the transfer takes no cycles, holds no CPU and cannot be pre-empted
-    // by a lower channel, and an ARM7 start can be late (`docs/hw/dma.md`, "Unverified");
-    // revisit with the Phase 8 timing work.
+    /// The transfer is atomic: all units move at the event's master time and take no cycles of
+    /// their own. The one thing that holds a CPU is an ARM9 word that finds the geometry FIFO
+    /// full: it holds the ARM9 for the engine's wait (`geometry-engine.md`, "The FIFO IRQ, the DMA
+    /// start and the stall"). An ARM7 start comes late by what the ARM7 lags the master clock, under
+    /// one slice.
+    // TODO(hw-unverified): the transfer takes no cycles, holds no CPU but through a full geometry
+    // FIFO and cannot be pre-empted by a lower channel, and an ARM7 start can be late
+    // (`docs/hw/dma.md`, "Unverified"); revisit with the Phase 8 timing work.
     fn run_dma(&mut self, transfer: crate::io::dma::Transfer) {
         let end = if transfer.arm9 {
             let mut view = Arm9View::new(
@@ -170,7 +185,14 @@ impl Machine {
             // A DMA unit's write is not an instruction, so the view's floor stays at `now`: an
             // event it queues waits for the next round and fires at `now`, which is where a load
             // rebuilds it (`dma.md`, "Model").
-            transfer.run(&mut view)
+            let end = transfer.run(&mut view);
+            // A word that found the geometry FIFO full paused the DMA and the ARM9 together
+            // (GBATEK, "GXFIFO DMA Overkill"): the ARM9 is held for the same time.
+            let stall = view.take_stall();
+            self.arm9_hold_until = self
+                .arm9_hold_until
+                .max(self.scheduler.now().saturating_add(stall));
+            end
         } else {
             let mut view = Arm7View::new(
                 &mut self.memory,
@@ -185,7 +207,8 @@ impl Machine {
         if self.io.power_mut().take_halt() {
             self.arm7.set_halted(true);
         }
-        self.io.dma_finished(&transfer, end);
+        self.io
+            .dma_finished(&mut self.scheduler, &transfer, end, self.arm9_hold_until);
     }
 
     /// A line begins at `time` (`docs/hw/display-timing.md`). VBlank starts here too, when the

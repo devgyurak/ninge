@@ -114,7 +114,7 @@ fn started_by<const A: bool>(
     trigger: Trigger,
 ) -> Transfer {
     arm(dma, ch, source, destination, control);
-    dma.trigger(trigger);
+    dma.trigger(trigger, 0);
     dma.begin(ch as usize).expect("the trigger queued a start")
 }
 
@@ -432,21 +432,113 @@ fn given_a_register_read_when_done_through_the_device_read_then_it_has_no_effect
 // ---------------------------------------------------------------------- the enable edge
 
 #[test]
-fn given_an_arm9_geometry_fifo_channel_when_enable_is_written_then_a_start_is_queued_on_its_own_slot()
- {
+fn given_an_arm9_geometry_fifo_channel_when_enable_is_written_then_it_waits_for_the_fifo_level() {
     let mut dma = Arm9Dma::new();
     let effect = arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    assert_eq!((effect, dma.pending(2)), (rechecked(), false));
+}
+
+#[test]
+fn given_an_arm9_geometry_fifo_channel_when_the_fifo_level_triggers_it_then_its_own_slot_is_queued()
+{
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(7) | 4);
     assert_eq!(
-        (effect, dma.pending(2), dma.pending(0)),
-        (slot_effect(2), true, false)
+        (dma.trigger(Trigger::GeometryFifo, 0), dma.pending(2)),
+        (1 << 2, true)
     );
 }
 
 #[test]
-fn given_an_arm9_geometry_fifo_channel_when_it_starts_then_the_transfer_moves_its_whole_count() {
+fn given_an_arm9_geometry_fifo_channel_when_it_starts_then_the_transfer_moves_a_burst_of_112_words()
+{
     let mut dma = Arm9Dma::new();
-    let transfer = started(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
-    assert_eq!(transfer.count, 300);
+    let transfer = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | timing9(7) | 300,
+        Trigger::GeometryFifo,
+    );
+    assert_eq!(transfer.count, 112);
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_with_fewer_words_than_a_burst_when_it_starts_then_it_moves_the_count()
+ {
+    let mut dma = Arm9Dma::new();
+    let transfer = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | timing9(7) | 40,
+        Trigger::GeometryFifo,
+    );
+    assert_eq!(transfer.count, 40);
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_when_a_burst_ends_with_words_left_then_it_waits_with_the_rest() {
+    let mut dma = Arm9Dma::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | IRQ | WORD | timing9(7) | 300,
+        Trigger::GeometryFifo,
+    );
+    let effect = dma.finish(&t, t.run(&mut MockBus::default()));
+    let next = dma.trigger(Trigger::GeometryFifo, 0);
+    let again = dma.begin(0).map(|t| t.count);
+    assert_eq!(
+        (
+            read32(&dma, cnt(0)) >> 31,
+            effect.requests.arm9,
+            next,
+            again
+        ),
+        (1, 0, 1, Some(112))
+    );
+}
+
+/// The word counts of three geometry bursts of channel 0, each triggered, begun and finished.
+fn three_bursts(dma: &mut Arm9Dma) -> Vec<u32> {
+    (0..3)
+        .map(|_| {
+            dma.trigger(Trigger::GeometryFifo, 0);
+            let t = dma.begin(0).expect("a burst");
+            dma.finish(&t, t.run(&mut MockBus::default()));
+            t.count
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_when_a_start_is_triggered_for_later_then_its_slot_is_due_at_that_time_and_survives_a_save()
+ {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
+    dma.trigger(Trigger::GeometryFifo, 224);
+    let bytes = postcard::to_allocvec(&dma).unwrap();
+    let restored: Arm9Dma = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        (dma.slot_due(0), restored.slot_due(0), restored == dma),
+        (Some(224), Some(224), true)
+    );
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_when_its_last_burst_ends_then_the_whole_list_was_moved_in_three() {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
+    let counts = three_bursts(&mut dma);
+    assert_eq!(
+        (counts, read32(&dma, cnt(0)) >> 31),
+        (vec![112, 112, 76], 0)
+    );
 }
 
 #[test]
@@ -463,7 +555,7 @@ fn given_a_geometry_fifo_channel_without_repeat_when_it_finishes_then_enable_cle
  {
     let mut dma = Arm9Dma::new();
     let control = ENABLE | IRQ | WORD | timing9(7) | 4;
-    let t = started(&mut dma, 1, MAIN, OTHER, control);
+    let t = started_by(&mut dma, 1, MAIN, OTHER, control, Trigger::GeometryFifo);
     let effect = dma.finish(&t, END);
     assert_eq!(
         (read32(&dma, cnt(1)) >> 31, effect.requests.arm9),
@@ -472,13 +564,17 @@ fn given_a_geometry_fifo_channel_without_repeat_when_it_finishes_then_enable_cle
 }
 
 #[test]
-fn given_a_geometry_fifo_channel_with_repeat_when_it_finishes_then_it_stays_enabled_and_is_not_restarted()
+fn given_a_geometry_fifo_channel_with_repeat_when_it_finishes_then_it_stays_enabled_until_the_next_trigger()
  {
     let mut dma = Arm9Dma::new();
     let control = ENABLE | REPEAT | WORD | timing9(7) | 4;
-    let t = started(&mut dma, 0, MAIN, OTHER, control);
+    let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::GeometryFifo);
     dma.finish(&t, END);
-    assert_eq!((read32(&dma, cnt(0)) >> 31, dma.pending(0)), (1, false));
+    let restarted = dma.trigger(Trigger::GeometryFifo, 0);
+    assert_eq!(
+        (read32(&dma, cnt(0)) >> 31, restarted, dma.pending(0)),
+        (1, 1, true)
+    );
 }
 
 #[test]
@@ -574,7 +670,7 @@ fn given_a_channel_whose_registers_change_while_enabled_when_it_starts_then_it_u
         OTHER + 0x10_0000,
         ENABLE | timing9(1) | 9,
     );
-    dma.trigger(Trigger::VBlank);
+    dma.trigger(Trigger::VBlank, 0);
     let transfer = dma.begin(0).expect("triggered");
     assert_eq!(
         (transfer.source, transfer.destination, transfer.count),
@@ -650,7 +746,7 @@ fn given_a_triggered_start_when_enable_is_cleared_through_the_top_byte_then_the_
 {
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(2) | 4);
-    dma.trigger(Trigger::HBlank);
+    dma.trigger(Trigger::HBlank, 0);
     let effect = write8(&mut dma, cnt(0) + 3, 0x10);
     assert_eq!(
         (effect, dma.pending(0), dma.begin(0)),
@@ -663,7 +759,7 @@ fn given_a_channel_waiting_for_its_trigger_when_enable_is_cleared_then_the_trigg
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | 4);
     let effect = write32(&mut dma, cnt(0), timing9(1) | 4);
-    assert_eq!((effect, dma.trigger(Trigger::VBlank)), (rechecked(), 0));
+    assert_eq!((effect, dma.trigger(Trigger::VBlank, 0)), (rechecked(), 0));
 }
 
 // ------------------------------------------------------------------------------ triggers
@@ -672,7 +768,7 @@ fn given_a_channel_waiting_for_its_trigger_when_enable_is_cleared_then_the_trigg
 fn trigger_mask<const A: bool>(control: u32, trigger: Trigger) -> SlotMask {
     let mut dma = Dma::<A>::new();
     arm(&mut dma, 0, MAIN, OTHER, control);
-    dma.trigger(trigger)
+    dma.trigger(trigger, 0)
 }
 
 /// `(timing, VBlank mask, HBlank mask)` for each timing value whose masks differ from `want`.
@@ -746,8 +842,8 @@ fn given_channels_with_mixed_timings_when_vblank_is_raised_then_the_mask_names_t
     arm(&mut dma, 1, MAIN, OTHER, ENABLE | timing9(2) | 4);
     arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(1) | 4);
     arm(&mut dma, 3, MAIN, OTHER, timing9(1) | 4);
-    let vblank = dma.trigger(Trigger::VBlank);
-    let hblank = dma.trigger(Trigger::HBlank);
+    let vblank = dma.trigger(Trigger::VBlank, 0);
+    let hblank = dma.trigger(Trigger::HBlank, 0);
     assert_eq!(
         (
             vblank,
@@ -765,8 +861,8 @@ fn given_channels_with_mixed_timings_when_vblank_is_raised_then_the_mask_names_t
 fn given_a_channel_already_marked_when_the_trigger_is_raised_again_then_it_is_not_marked_twice() {
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | 4);
-    let first = dma.trigger(Trigger::VBlank);
-    let second = dma.trigger(Trigger::VBlank);
+    let first = dma.trigger(Trigger::VBlank, 0);
+    let second = dma.trigger(Trigger::VBlank, 0);
     assert_eq!((first, second), (1, 0));
 }
 
@@ -774,9 +870,9 @@ fn given_a_channel_already_marked_when_the_trigger_is_raised_again_then_it_is_no
 fn given_a_triggered_channel_when_its_start_is_taken_then_a_second_trigger_marks_it_again() {
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(1) | REPEAT | 4);
-    dma.trigger(Trigger::VBlank);
+    dma.trigger(Trigger::VBlank, 0);
     dma.begin(0);
-    assert_eq!(dma.trigger(Trigger::VBlank), 1);
+    assert_eq!(dma.trigger(Trigger::VBlank, 0), 1);
 }
 
 // ------------------------------------------------------------------------------- begin
@@ -1162,7 +1258,11 @@ fn given_a_one_shot_channel_when_it_finishes_then_enable_clears_and_the_other_bi
     let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::VBlank);
     dma.finish(&t, END);
     assert_eq!(
-        (dma.control(0), dma.pending(0), dma.trigger(Trigger::VBlank)),
+        (
+            dma.control(0),
+            dma.pending(0),
+            dma.trigger(Trigger::VBlank, 0)
+        ),
         (control & !ENABLE, false, 0)
     );
 }
@@ -1178,7 +1278,7 @@ fn given_a_repeating_vblank_channel_when_it_finishes_then_enable_stays_and_the_n
         (
             read32(&dma, cnt(0)) >> 31,
             dma.pending(0),
-            dma.trigger(Trigger::VBlank)
+            dma.trigger(Trigger::VBlank, 0)
         ),
         (1, false, 1)
     );
@@ -1193,7 +1293,7 @@ fn given_a_repeating_channel_when_it_finishes_then_the_count_reloads_and_the_sou
     let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::VBlank);
     write32(&mut dma, cnt(0), ENABLE | REPEAT | timing9(1) | 9);
     dma.finish(&t, END);
-    dma.trigger(Trigger::VBlank);
+    dma.trigger(Trigger::VBlank, 0);
     let next = dma.begin(0).expect("restarted by the trigger");
     assert_eq!(
         (next.count, next.source, next.destination),
@@ -1208,7 +1308,7 @@ fn given_a_repeating_channel_with_destination_control_3_when_it_finishes_then_th
     let control = ENABLE | REPEAT | dest(3) | timing9(1) | 5;
     let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::VBlank);
     dma.finish(&t, END);
-    dma.trigger(Trigger::VBlank);
+    dma.trigger(Trigger::VBlank, 0);
     let next = dma.begin(0).expect("restarted by the trigger");
     assert_eq!((next.source, next.destination), (END.source, OTHER));
 }
@@ -1220,7 +1320,7 @@ fn given_a_repeating_arm7_channel_with_count_zero_when_it_finishes_then_the_coun
     let control = ENABLE | REPEAT | timing7(1);
     let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::VBlank);
     dma.finish(&t, END);
-    dma.trigger(Trigger::VBlank);
+    dma.trigger(Trigger::VBlank, 0);
     assert_eq!(dma.begin(0).expect("restarted").count, 0x4000);
 }
 
@@ -1231,7 +1331,7 @@ fn given_an_immediate_channel_with_repeat_when_it_finishes_then_enable_clears_un
     let t = started(&mut dma, 0, MAIN, OTHER, ENABLE | REPEAT | 5);
     dma.finish(&t, END);
     assert_eq!(
-        (read32(&dma, cnt(0)) >> 31, dma.trigger(Trigger::VBlank)),
+        (read32(&dma, cnt(0)) >> 31, dma.trigger(Trigger::VBlank, 0)),
         (0, 0)
     );
 }
@@ -1245,7 +1345,7 @@ fn given_a_repeating_channel_disabled_during_its_transfer_when_it_finishes_then_
     write32(&mut dma, cnt(0), REPEAT | timing9(1) | 5);
     dma.finish(&t, END);
     assert_eq!(
-        (read32(&dma, cnt(0)) >> 31, dma.trigger(Trigger::VBlank)),
+        (read32(&dma, cnt(0)) >> 31, dma.trigger(Trigger::VBlank, 0)),
         (0, 0)
     );
 }
@@ -1514,7 +1614,7 @@ fn given_a_vblank_transfer_that_re_arms_its_own_channel_when_it_finishes_then_th
     write32(&mut dma, cnt(0), control);
     dma.finish(&t, END);
     let relatched = dma.begin(0);
-    let next = dma.trigger(Trigger::VBlank);
+    let next = dma.trigger(Trigger::VBlank, 0);
     let t2 = dma.begin(0).map(|t| t.source);
     assert_eq!(
         (relatched, dma.control(0) >> 31, next, t2),
@@ -1569,9 +1669,9 @@ fn given_a_channel_enabled_during_the_frame_when_the_frame_starts_then_it_starts
  {
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(4) | 4);
-    let frame = dma.trigger(Trigger::MainMemory { frame_start: true });
+    let frame = dma.trigger(Trigger::MainMemory { frame_start: true }, 0);
     let taken = dma.begin(0).is_some();
-    let line = dma.trigger(Trigger::MainMemory { frame_start: false });
+    let line = dma.trigger(Trigger::MainMemory { frame_start: false }, 0);
     assert_eq!((frame, taken, line), (1, true, 1));
 }
 
@@ -1579,10 +1679,13 @@ fn given_a_channel_enabled_during_the_frame_when_the_frame_starts_then_it_starts
 fn given_a_channel_enabled_again_when_a_line_request_comes_then_it_waits_for_a_frame_start_again() {
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | timing9(4) | 4);
-    dma.trigger(Trigger::MainMemory { frame_start: true });
+    dma.trigger(Trigger::MainMemory { frame_start: true }, 0);
     write32(&mut dma, cnt(0), timing9(4) | 4);
     write32(&mut dma, cnt(0), ENABLE | timing9(4) | 4);
-    assert_eq!(dma.trigger(Trigger::MainMemory { frame_start: false }), 0);
+    assert_eq!(
+        dma.trigger(Trigger::MainMemory { frame_start: false }, 0),
+        0
+    );
 }
 
 #[test]
@@ -1633,7 +1736,7 @@ const CARD7: u32 = 2 << 28;
 fn queued_by<const A: bool>(control: u32, trigger: Trigger) -> SlotMask {
     let mut dma = Dma::<A>::new();
     arm(&mut dma, 0, MAIN, OTHER, control);
-    dma.trigger(trigger)
+    dma.trigger(trigger, 0)
 }
 
 #[test]
@@ -1693,7 +1796,7 @@ fn requests_to_finish(count: u32, extra: u32) -> (u32, u32, u32) {
     arm(&mut dma, 0, MAIN, OTHER, control);
     let (mut requests, mut early, mut last) = (0, 0, 0);
     for _ in 0..count + 2 {
-        if dma.trigger(Trigger::CardWord { arm9: true }) == 0 {
+        if dma.trigger(Trigger::CardWord { arm9: true }, 0) == 0 {
             break;
         }
         let t = dma.begin(0).expect("the trigger queued a start");
@@ -1741,7 +1844,7 @@ fn given_a_card_channel_with_units_left_when_a_unit_finishes_then_it_stays_enabl
             destination: OTHER + 4,
         },
     );
-    dma.trigger(Trigger::CardWord { arm9: true });
+    dma.trigger(Trigger::CardWord { arm9: true }, 0);
     let next = dma.begin(0).expect("the second word queued a start");
     assert_eq!(
         (dma.control(0) >> 31, next.source, next.destination),
@@ -1761,7 +1864,7 @@ fn given_a_repeating_card_channel_when_its_last_unit_finishes_then_it_waits_for_
         Trigger::CardWord { arm9: true },
     );
     dma.finish(&t, END);
-    assert_eq!(dma.trigger(Trigger::CardWord { arm9: true }), 0b1);
+    assert_eq!(dma.trigger(Trigger::CardWord { arm9: true }, 0), 0b1);
 }
 
 #[test]

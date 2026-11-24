@@ -1,20 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The 3D engine stub: DISP3DCNT, the geometry command decoder (GXFIFO and the command ports), the
-//! matrix mode and stack pointers, GXSTAT and the FIFO IRQ condition (`docs/hw/gx-stub.md`).
+//! The geometry engine's front: DISP3DCNT, the command decoder (GXFIFO and the command ports), the
+//! 256-entry FIFO and 4-entry PIPE, the engine's command timing, the matrix mode and stack pointers,
+//! GXSTAT and the FIFO IRQ (`docs/hw/geometry-engine.md`, `docs/hw/gx-stub.md`).
 //!
-//! Nothing is drawn and no matrix is computed. The model is "instant drain": a command is consumed
-//! the moment its last parameter arrives, so the FIFO and the PIPE never hold an entry and GXSTAT
-//! always reads empty. A program that waits for the FIFO to drain therefore finishes waiting.
+//! The engine takes one command at a time from the queue, holds for the command's cycles and then
+//! applies its effect: each command's end is a scheduler event of this device (slot 0). Nothing is
+//! drawn and no matrix is computed yet; the matrix mode, the stack pointers and the BOX_TEST result
+//! are the only effects. A writer that finds the FIFO full waits for the engine, and the engine
+//! cycles that takes are charged to it (`Effect::stall`).
 //!
 //! Only the ARM9 sees these registers, so [`Gpu3d`] is a plain type implementing `Device<true>`
 //! (`AGENTS.md` §4, "Per-CPU devices"): the "seen by one CPU" class. It registers directly with its
 //! own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
-// TODO(phase7): the geometry engine (#48) replaces the instant drain with the real FIFO, the PIPE,
-// the command timings, the matrices and the swap at VBlank; the rendering engine is #49-#52
-// (`gx-stub.md`, "Scope").
+// TODO(phase7): the matrices (#48 PR C), vertices and polygons (PR D), lighting (PR E) and the
+// position, vector and box tests (PR F) give the commands their effects; the rendering engine is
+// #49-#52 (`geometry-engine.md`).
 
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+mod cycles;
+mod queue;
+
+use crate::io::device::{
+    Checked, Cx, Device, Effect, Fired, Signal, Signals, SlotMask, Width, read_bytes, write_bytes,
+};
 use crate::io::irq::{GXFIFO_IRQ, Requests};
+use crate::io::timing::next_vblank_start;
+use cycles::command_cycles;
+use queue::{Entry, FIFO_CAPACITY, HALF_FULL, Queue};
 use serde::{Deserialize, Serialize};
 
 /// DISP3DCNT, the first register of the device, at `0400_0060h` (`gx-stub.md`, "Registers").
@@ -59,6 +70,8 @@ pub const DISP3DCNT_MASK: u16 = 0x4FFF;
 // TODO(hw-unverified): the real value depends on the renderer (`gx-stub.md`, "Unverified").
 const RDLINES_COUNT: u8 = 46;
 
+/// GXSTAT bit 0: a BOX_TEST, POS_TEST or VEC_TEST is executing.
+const GXSTAT_TEST_BUSY: u32 = 1;
 /// GXSTAT bit 1: the BOX_TEST result, 1 = parts or all inside the view volume.
 const GXSTAT_BOX_RESULT: u32 = 1 << 1;
 /// GXSTAT bits 8-12: the low 5 bits of the coordinate stack pointer.
@@ -66,12 +79,21 @@ const GXSTAT_COORD_SHIFT: u32 = 8;
 const GXSTAT_COORD_MASK: u8 = 0x1F;
 /// GXSTAT bit 13: the projection stack pointer.
 const GXSTAT_PROJECTION_SHIFT: u32 = 13;
+/// GXSTAT bit 14: a MTX_PUSH, MTX_POP, MTX_STORE or MTX_RESTORE is executing.
+const GXSTAT_STACK_BUSY: u32 = 1 << 14;
 /// GXSTAT bit 15: the stack error flag, write 1 to clear.
 const GXSTAT_ERROR: u32 = 1 << 15;
-/// GXSTAT bit 25: the FIFO is less than half full. The stub's FIFO is never occupied.
+/// GXSTAT bits 16-23: the low 8 bits of the FIFO's entry count.
+const GXSTAT_COUNT_SHIFT: u32 = 16;
+const GXSTAT_COUNT_MASK: u32 = 0xFF;
+/// GXSTAT bit 24: the FIFO is full (the entry count is 256).
+const GXSTAT_FIFO_FULL: u32 = 1 << 24;
+/// GXSTAT bit 25: the FIFO is less than half full.
 const GXSTAT_FIFO_HALF: u32 = 1 << 25;
 /// GXSTAT bit 26: the FIFO is empty.
 const GXSTAT_FIFO_EMPTY: u32 = 1 << 26;
+/// GXSTAT bit 27: the engine is busy: a command is executing, or the PIPE or FIFO holds data.
+const GXSTAT_BUSY: u32 = 1 << 27;
 /// GXSTAT bits 30-31: the FIFO IRQ mode.
 const GXSTAT_IRQ_SHIFT: u32 = 30;
 
@@ -101,7 +123,13 @@ const CMD_MTX_PUSH: u8 = 0x11;
 const CMD_MTX_POP: u8 = 0x12;
 const CMD_MTX_STORE: u8 = 0x13;
 const CMD_MTX_RESTORE: u8 = 0x14;
+const CMD_SWAP_BUFFERS: u8 = 0x50;
 const CMD_BOX_TEST: u8 = 0x70;
+const CMD_POS_TEST: u8 = 0x71;
+const CMD_VEC_TEST: u8 = 0x72;
+
+/// The engine's one event slot: the end of the command it executes.
+const ENGINE_SLOT: SlotMask = 1;
 
 /// How many parameter words follow command `id`, or `None` for an ID that is not a command
 /// (`gx-stub.md`, "The command set"). `00h` (NOP) is not a command either: it has no port.
@@ -151,6 +179,22 @@ pub struct Gpu3d {
     command: u8,
     /// How many parameter words `command` still needs.
     owed: u8,
+    /// The FIFO and the PIPE, in front of the engine.
+    queue: Queue,
+    /// The command the engine executes, if any (`geometry-engine.md`, "Executing a command").
+    running: Option<Running>,
+}
+
+/// The command the engine is executing: its effect is applied when `ends` is reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Running {
+    /// The command ID.
+    command: u8,
+    /// The command's last parameter, the one its effect reads (0 for a command with none).
+    // TODO(phase7): the matrix commands (#48 PR C) need all their parameters.
+    param: u32,
+    /// The master time the command ends.
+    ends: u64,
 }
 
 impl Gpu3d {
@@ -196,7 +240,34 @@ impl Gpu3d {
         self.irq_mode
     }
 
-    /// GXSTAT as a read sees it (`gx-stub.md`, "GXSTAT bits").
+    /// Entries in the FIFO (GXSTAT's count), 0-256.
+    pub fn fifo_len(&self) -> usize {
+        self.queue.fifo_len()
+    }
+
+    /// Entries in the PIPE, 0-4.
+    pub fn pipe_len(&self) -> usize {
+        self.queue.pipe_len()
+    }
+
+    /// The `index`th queued entry as `(command, parameter)`, the PIPE first: for the debugger.
+    pub fn queued(&self, index: usize) -> Option<(u8, u32)> {
+        self.queue
+            .get(index)
+            .map(|entry| (entry.command, entry.param))
+    }
+
+    /// The command the engine is executing and the master time it ends: for the debugger.
+    pub fn running(&self) -> Option<(u8, u64)> {
+        self.running.map(|running| (running.command, running.ends))
+    }
+
+    /// Whether a command is executing or the PIPE or FIFO holds data: GXSTAT bit 27.
+    pub fn busy(&self) -> bool {
+        self.running.is_some() || self.queue.len() > 0
+    }
+
+    /// GXSTAT as a read sees it (`geometry-engine.md`, "GXSTAT").
     fn gxstat(&self) -> u32 {
         let coordinate = u32::from(self.coordinate_sp & GXSTAT_COORD_MASK) << GXSTAT_COORD_SHIFT;
         let projection = u32::from(self.projection_sp) << GXSTAT_PROJECTION_SHIFT;
@@ -206,14 +277,42 @@ impl Gpu3d {
         } else {
             0
         };
-        // Bits 0, 14, 16-24 and 27 read 0 and bits 25-26 read 1: the instant-drain FIFO is empty
-        // and nothing is busy.
-        box_result
+        let executing = |ids: &[u8]| {
+            self.running
+                .is_some_and(|running| ids.contains(&running.command))
+        };
+        let test_busy = if executing(&[CMD_BOX_TEST, CMD_POS_TEST, CMD_VEC_TEST]) {
+            GXSTAT_TEST_BUSY
+        } else {
+            0
+        };
+        let stack_busy = if executing(&[CMD_MTX_PUSH, CMD_MTX_POP, CMD_MTX_STORE, CMD_MTX_RESTORE])
+        {
+            GXSTAT_STACK_BUSY
+        } else {
+            0
+        };
+        let len = self.queue.fifo_len();
+        let count = (len as u32 & GXSTAT_COUNT_MASK) << GXSTAT_COUNT_SHIFT;
+        let full = if len == FIFO_CAPACITY {
+            GXSTAT_FIFO_FULL
+        } else {
+            0
+        };
+        let half = if len < HALF_FULL { GXSTAT_FIFO_HALF } else { 0 };
+        let empty = if len == 0 { GXSTAT_FIFO_EMPTY } else { 0 };
+        let busy = if self.busy() { GXSTAT_BUSY } else { 0 };
+        test_busy
+            | box_result
             | coordinate
             | projection
+            | stack_busy
             | error
-            | GXSTAT_FIFO_HALF
-            | GXSTAT_FIFO_EMPTY
+            | count
+            | full
+            | half
+            | empty
+            | busy
             | u32::from(self.irq_mode) << GXSTAT_IRQ_SHIFT
     }
 
@@ -264,16 +363,17 @@ impl Gpu3d {
     }
 
     /// A word written to GXFIFO: a parameter when the decoder still owes some, a command word
-    /// otherwise (`gx-stub.md`, "GXFIFO: packed and unpacked words").
+    /// otherwise (`gx-stub.md`, "GXFIFO: packed and unpacked words"). `at` is the master time of
+    /// the write and moves on when the write waits for room.
     // TODO(hw-unverified): a GXFIFO word while a port command owes parameters is that command's
     // parameter (`gx-stub.md`, "Unverified").
-    fn gxfifo_word(&mut self, word: u32) {
+    fn gxfifo_word(&mut self, word: u32, at: &mut u64) {
         match self.owed {
             0 => {
                 self.pending = word;
-                self.run_pending();
+                self.run_pending(at);
             }
-            _ => self.parameter(word),
+            _ => self.parameter(word, at),
         }
     }
 
@@ -281,41 +381,60 @@ impl Gpu3d {
     /// one parameter. A port no command uses drops the write.
     // TODO(hw-unverified): a port write while another command waits for parameters abandons it,
     // and a write narrower than a word is one entry (`gx-stub.md`, "Unverified").
-    fn port_word(&mut self, id: u8, word: u32) {
+    fn port_word(&mut self, id: u8, word: u32, at: &mut u64) {
         let Some(count) = parameter_count(id) else {
             return;
         };
         if self.owed == 0 || self.command != id {
+            self.abandon();
             self.pending = 0;
             self.command = id;
             self.owed = count;
             if count == 0 {
-                self.execute(id, word);
+                self.enqueue(Entry::new(id, 0), at);
                 return;
             }
         }
-        self.parameter(word);
+        self.parameter(word, at);
     }
 
-    /// One parameter word of the current command; the last one runs it.
-    fn parameter(&mut self, word: u32) {
+    /// Drops the command that waits for parameters, with the entries it already queued: the engine
+    /// takes a command only when all its entries are there, so they would otherwise stay in the
+    /// queue for ever and shift every later command boundary.
+    // TODO(hw-unverified): an abandoned command's entries are taken back (`geometry-engine.md`,
+    // "Unverified").
+    fn abandon(&mut self) {
+        let count = parameter_count(self.command).map_or(0, usize::from);
+        let queued = count.saturating_sub(usize::from(self.owed));
+        if self.owed > 0 {
+            self.queue.drop_newest(queued);
+        }
+        self.owed = 0;
+    }
+
+    /// One parameter word of the current command, queued as an entry; the last one frees the
+    /// decoder for the rest of its packed word.
+    fn parameter(&mut self, word: u32, at: &mut u64) {
         self.owed = self.owed.saturating_sub(1);
+        self.enqueue(Entry::new(self.command, word), at);
         if self.owed == 0 {
-            self.execute(self.command, word);
-            self.run_pending();
+            self.run_pending(at);
         }
     }
 
     /// Runs the IDs of the packed word in order, up to the first that needs parameters. A byte of 0
-    /// (NOP) and an ID that is not a command take none.
+    /// (NOP) and an ID that is not a command take none and queue nothing; a command with no
+    /// parameters queues one entry.
     // TODO(hw-unverified): the last non-zero command of a packed word may have no parameters;
     // the hardware's behavior is not stated (`gx-stub.md`, "Unverified").
-    fn run_pending(&mut self) {
+    // TODO(hw-unverified): NOP and an invalid ID take no queue entry (`geometry-engine.md`,
+    // "Unverified").
+    fn run_pending(&mut self, at: &mut u64) {
         while self.owed == 0 && self.pending != 0 {
             let id = self.pending as u8;
             self.pending >>= 8;
             match parameter_count(id) {
-                Some(0) => self.execute(id, 0),
+                Some(0) => self.enqueue(Entry::new(id, 0), at),
                 Some(count) => {
                     self.command = id;
                     self.owed = count;
@@ -325,8 +444,67 @@ impl Gpu3d {
         }
     }
 
-    /// A command whose last parameter (`param`, 0 for none) has arrived. Only the matrix mode, the
-    /// stack pointers and the BOX_TEST result have an effect; the rest is consumed and dropped.
+    /// Queues `entry` at master time `at`. A full FIFO holds the writer: the engine runs on until it
+    /// takes an entry, `at` moves to that time, and the difference is what the write stalls
+    /// (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+    // TODO(hw-unverified): a writer stuck on a FIFO the engine can never drain would hang the
+    // hardware; the entry is dropped here (`geometry-engine.md`, "Unverified").
+    fn enqueue(&mut self, entry: Entry, at: &mut u64) {
+        self.advance(*at);
+        while self.queue.fifo_full() {
+            let Some(running) = self.running else {
+                return;
+            };
+            *at = (*at).max(running.ends);
+            self.advance(running.ends);
+        }
+        self.queue.push(entry);
+        self.start(*at);
+    }
+
+    /// Runs the engine up to master time `time`: every command that ends by then takes effect, and
+    /// the next starts where it ended.
+    fn advance(&mut self, time: u64) {
+        while let Some(running) = self.running.filter(|running| running.ends <= time) {
+            self.running = None;
+            self.execute(running.command, running.param);
+            self.start(running.ends);
+        }
+    }
+
+    /// Starts the next command at master time `at` if the engine is idle and the queue holds all
+    /// its entries: they leave the queue now and the command ends after its cycles.
+    // TODO(hw-unverified): a command starts only when all its entries are queued, and takes them at
+    // once (`geometry-engine.md`, "Unverified").
+    fn start(&mut self, at: u64) {
+        if self.running.is_some() {
+            return;
+        }
+        let Some(front) = self.queue.front() else {
+            return;
+        };
+        let entries = parameter_count(front.command).map_or(1, |count| usize::from(count.max(1)));
+        if self.queue.len() < entries {
+            return;
+        }
+        let param = (0..entries).fold(0, |last, _| self.queue.pop().map_or(last, |e| e.param));
+        // SWAP_BUFFERS is held until VBlank begins; the engine counts as busy meanwhile.
+        // TODO(hw-unverified): the wait ends at the first line-192 start at or after the command
+        // begins, the next frame's inside VBlank (`geometry-engine.md`, "Unverified").
+        let begins = match front.command {
+            CMD_SWAP_BUFFERS => at.max(next_vblank_start(at)),
+            _ => at,
+        };
+        self.running = Some(Running {
+            command: front.command,
+            param,
+            ends: begins.saturating_add(command_cycles(front.command, self.mtx_mode)),
+        });
+    }
+
+    /// A command that has ended, with its last parameter (`param`, 0 for none). Only the matrix
+    /// mode, the stack pointers and the BOX_TEST result have an effect; the rest is consumed and
+    /// dropped.
     // TODO(phase7): the geometry engine (#48) gives every command its effect.
     fn execute(&mut self, id: u8, param: u32) {
         match id {
@@ -419,13 +597,17 @@ const fn sign_extend_6(value: u32) -> u8 {
 }
 
 impl Checked for Gpu3d {
-    /// Every register and pointer holds a value it can reach, and a decoder that waits for
-    /// parameters waits for a command that takes that many.
+    /// Every register and pointer holds a value it can reach, a decoder that waits for parameters
+    /// waits for a command that takes that many, the queue is whole and the command the engine
+    /// executes is one the decoder queues, due no later than the model's last time.
     fn well_formed(&self, _now: u64) -> bool {
         let waiting = match self.owed {
             0 => true,
             owed => parameter_count(self.command).is_some_and(|count| owed <= count),
         };
+        let executing = self.running.is_none_or(|running| {
+            parameter_count(running.command).is_some() && running.ends <= crate::scheduler::MAX_TIME
+        });
         self.disp3dcnt & !DISP3DCNT_MASK == 0
             && self.mtx_mode <= MODE_TEXTURE
             && self.projection_sp <= SMALL_POINTER_MASK
@@ -433,6 +615,8 @@ impl Checked for Gpu3d {
             && self.coordinate_sp <= COORD_POINTER_MASK
             && self.irq_mode <= 3
             && waiting
+            && self.queue.well_formed()
+            && executing
     }
 }
 
@@ -441,18 +625,31 @@ impl Device<true> for Gpu3d {
         read_bytes(offset, width, |at| self.byte_at(at))
     }
 
-    /// The FIFO IRQ is a level: IF bit 21 is held up while the mode is 1 (less than half full) or 2
-    /// (empty), a condition the stub's always-empty FIFO keeps true. A write to this block or to
-    /// the interrupt controller asks `Io` to recheck, which raises the bit again after an acknowledge,
-    /// so an acknowledge has no effect while the condition holds. No other path can make the
-    /// condition true or clear an IF bit (`gx-stub.md`, "GXSTAT and the FIFO IRQ").
+    /// The FIFO IRQ is a level: IF bit 21 is held up while the mode is 1 and the FIFO is less than
+    /// half full, or the mode is 2 and the FIFO is empty. A write to this block or to the interrupt
+    /// controller, and the end of a command, ask `Io` to recheck, which raises the bit again after
+    /// an acknowledge, so an acknowledge has no effect while the condition holds. No other path can
+    /// make the condition true or clear an IF bit (`geometry-engine.md`, "The FIFO IRQ, the DMA
+    /// start and the stall").
     // TODO(hw-unverified): a bit already set stays after the mode goes to 0 until it is
     // acknowledged (`gx-stub.md`, "Unverified").
     // TODO(hw-unverified): mode 3 (reserved) raises nothing (`gx-stub.md`, "Unverified").
     fn held_requests(&self) -> Requests {
+        let len = self.queue.fifo_len();
         match self.irq_mode {
-            IRQ_HALF_FULL | IRQ_EMPTY => Requests::for_cpu::<true>(GXFIFO_IRQ),
+            IRQ_HALF_FULL if len < HALF_FULL => Requests::for_cpu::<true>(GXFIFO_IRQ),
+            IRQ_EMPTY if len == 0 => Requests::for_cpu::<true>(GXFIFO_IRQ),
             _ => Requests::default(),
+        }
+    }
+
+    /// The FIFO is less than half full: a DMA channel in start mode 7 takes a burst
+    /// (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+    fn held_signals(&self) -> Signals {
+        if self.queue.fifo_len() < HALF_FULL {
+            Signals::of(Signal::GeometryFifoHalf)
+        } else {
+            Signals::default()
         }
     }
 
@@ -464,9 +661,43 @@ impl Device<true> for Gpu3d {
             ..self.write_registers(offset, width, value, cx)
         }
     }
+
+    const SLOTS: u8 = 1;
+
+    /// The engine's slot is due when the command it executes ends.
+    fn slot_due(&self, _slot: u8) -> Option<u64> {
+        self.running.map(|running| running.ends)
+    }
+
+    /// The command ended: its effect is applied, the next command starts, and the levels the FIFO
+    /// feeds (the IRQ and the DMA start) are asked again.
+    fn slot_fire(&mut self, _slot: u8, now: u64) -> Fired {
+        self.advance(now);
+        Fired {
+            effect: Effect {
+                reschedule: ENGINE_SLOT,
+                signals: self.held_signals(),
+                recheck_held_requests: true,
+                ..Effect::default()
+            },
+            transfer: None,
+        }
+    }
 }
 
 impl Gpu3d {
+    /// A write that queues entries at master time `now`: its effect replaces the engine's event,
+    /// as a command may have started, and carries the cycles a full FIFO held the writer.
+    fn queued_write(&mut self, now: u64, write: impl FnOnce(&mut Self, &mut u64)) -> Effect {
+        let mut at = now;
+        write(self, &mut at);
+        Effect {
+            reschedule: ENGINE_SLOT,
+            stall: at.saturating_sub(now),
+            ..Effect::default()
+        }
+    }
+
     /// The register write itself, without the recheck request (`write`).
     fn write_registers(&mut self, offset: u32, width: Width, value: u32, cx: Cx<'_>) -> Effect {
         // POWCNT1 bit 3 clear makes the whole geometry block read-only: GXFIFO, the ports and
@@ -480,17 +711,13 @@ impl Gpu3d {
             // GXFIFO and its mirrors: one write, one word, whatever its width.
             // TODO(hw-unverified): all 16 words mirror GXFIFO and a narrow write is one entry
             // (`gx-stub.md`, "Unverified").
-            ..GXFIFO_BYTES => {
-                self.gxfifo_word(value);
-                Effect::default()
-            }
+            ..GXFIFO_BYTES => self.queued_write(cx.now, |gpu, at| gpu.gxfifo_word(value, at)),
             // The command ports, `4 * id` bytes into the block. A port no command uses drops the
             // write (`port_word`).
             // TODO(hw-unverified): writes to unused ports are dropped (`gx-stub.md`, "Unverified").
             PORTS_REL..GXSTAT_REL => {
                 let id = ((offset - GEOMETRY_OFFSET) >> PORT_SHIFT) as u8;
-                self.port_word(id, value);
-                Effect::default()
+                self.queued_write(cx.now, |gpu, at| gpu.port_word(id, value, at))
             }
             // GXSTAT and DISP3DCNT take a byte at a time; every other register drops the write.
             rel if (GXSTAT_REL..GXSTAT_REL + GXSTAT_BYTES).contains(&rel) => {

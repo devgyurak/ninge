@@ -67,6 +67,8 @@ pub struct Machine {
     // The ARM7 and its clock in master cycles; the scheduler (`docs/hw/scheduler.md`).
     pub(crate) arm7: Cpu<false>,
     pub(crate) arm7_clock: u64,
+    // The master time the ARM9 is held until by a full geometry FIFO; 0 or the past: not held.
+    pub(crate) arm9_hold_until: u64,
     pub(crate) scheduler: Scheduler,
     // What the HLE BIOS records of each CPU's SWIs (`docs/hw/hle-swi.md`).
     pub(crate) bios: BiosState,
@@ -118,6 +120,11 @@ fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9V
         },
     };
     view.advance(cost);
+    // A write to a full geometry FIFO held the ARM9 for the engine's cycles: it runs no instruction
+    // until then, while the events in between still fire (`geometry-engine.md`, "The FIFO IRQ, the
+    // DMA start and the stall").
+    let stall = view.take_stall();
+    view.hold(view.clock().saturating_add(stall));
 }
 
 /// One ARM7 instruction through `view` at the view's ARM7 clock, which it advances by the cost;
@@ -175,6 +182,7 @@ impl Machine {
             io: Io::new(),
             arm7: Cpu::new(),
             arm7_clock: 0,
+            arm9_hold_until: 0,
             scheduler: Scheduler::new(),
             bios: BiosState::default(),
             header: None,
@@ -364,8 +372,16 @@ impl Machine {
             &mut self.scheduler,
             &self.rom,
             TcmConfig::from_cp15(self.arm9.cp15()),
-        );
+        )
+        .with_hold(self.arm9_hold_until);
+        // A hold that is already on ends before the step: the ARM9 runs no instruction in it.
+        let waiting = view.hold_until().saturating_sub(view.clock());
+        view.advance(waiting);
         arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
+        // A lone step runs the whole hold: a debugger step is one instruction and what it cost.
+        let rest = view.hold_until().saturating_sub(view.clock());
+        view.advance(rest);
+        self.arm9_hold_until = 0;
     }
 
     /// One ARM7 instruction and its cost, with nothing else; see [`arm7_instruction`]. The run

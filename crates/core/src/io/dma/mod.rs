@@ -50,6 +50,13 @@ const CONTROL_BITS_ARM7: u32 = 0xF7E0_0000;
 /// (`display-capture.md`, "The main-memory display").
 const MAIN_MEMORY_REQUESTS: u32 = 32;
 
+/// The words a mode 7 channel moves each time the geometry FIFO is less than half full
+/// (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+const GEOMETRY_BURST_WORDS: u32 = 112;
+/// Master cycles a DMA word takes in the model: one bus cycle, two master cycles (`scheduler.md`,
+/// "Clocks"). Only the pause before a channel's next burst uses it.
+const WORD_CYCLES: u64 = 2;
+
 /// A start timing as the model sees it (`dma.md`, "Start timing").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Start {
@@ -63,11 +70,8 @@ enum Start {
     /// The DS cartridge slot, ARM9 mode 5 and ARM7 mode 2: one unit for each word the card makes
     /// ready (`cart-protocol.md`, "DMA start").
     Card,
-    /// The ARM9's geometry command FIFO, mode 7: the FIFO is less than half full, a condition the
-    /// stub's always-empty FIFO keeps true, so the channel starts when it is enabled
-    /// (`gx-stub.md`, "ARM9 DMA start mode 7").
-    // TODO(phase7): the geometry engine (#48) has a real FIFO that fills, and the start waits for
-    // it to drain below half, 112 words a burst.
+    /// The ARM9's geometry command FIFO, mode 7: a burst of up to 112 words each time the FIFO is
+    /// less than half full (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
     GeometryFifo,
     /// A start timing no phase implements: the channel is enabled and busy but never starts.
     // The GBA slot and the ARM7's wireless start have no phase.
@@ -92,6 +96,8 @@ pub(crate) enum Trigger {
     /// The cartridge slot has a word ready for the CPU that owns the slot (`arm9`): only that
     /// CPU's channels see it (`cart-protocol.md`, "DMA start").
     CardWord { arm9: bool },
+    /// The geometry command FIFO is less than half full (the ARM9's mode 7 channels).
+    GeometryFifo,
 }
 
 impl Trigger {
@@ -102,6 +108,7 @@ impl Trigger {
             Self::StartOfDisplay => Start::Display,
             Self::MainMemory { .. } => Start::MainMemory,
             Self::CardWord { .. } => Start::Card,
+            Self::GeometryFifo => Start::GeometryFifo,
         }
     }
 }
@@ -157,6 +164,10 @@ struct Channel {
     // A DMA-start event is queued for this channel. Enable stays set while it is true and
     // while the transfer runs, so a polling CPU waits (`dma.md`, "Enabling").
     pending: bool,
+    // The master time the waiting start is due: 0 for "at once" (the caller raises it to the time
+    // the start was raised), later for the pause between two geometry bursts. Kept in the channel so
+    // a load rebuilds the start event at the same time (`dma.md`, "Savestate").
+    due: u64,
     // The channel's transfer is running (between `begin` and `finish`), and its own enable went
     // 0 -> 1 meanwhile. Neither outlives the atomic transfer, so a savestate never holds them.
     #[serde(skip)]
@@ -299,7 +310,7 @@ impl<const ARM9: bool> Dma<ARM9> {
     /// times fire 0 to 3 (`dma.md`, "Starting").
     // TODO(hw-unverified): channels that start together go in ascending order (`dma.md`,
     // "Unverified").
-    pub(crate) fn trigger(&mut self, trigger: Trigger) -> SlotMask {
+    pub(crate) fn trigger(&mut self, trigger: Trigger, time: u64) -> SlotMask {
         let frame_start = matches!(trigger, Trigger::MainMemory { frame_start: true });
         let main_memory = matches!(trigger, Trigger::MainMemory { .. });
         self.channels
@@ -314,6 +325,7 @@ impl<const ARM9: bool> Dma<ARM9> {
                 let held = main_memory && channel.frame_wait;
                 if waiting && !held && !channel.pending {
                     channel.pending = true;
+                    channel.due = time;
                     mask | 1 << index
                 } else {
                     mask
@@ -329,6 +341,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             .get_mut(index)
             .filter(|channel| channel.pending)?;
         channel.pending = false;
+        channel.due = 0;
         channel.running = true;
         channel.rearmed = false;
         let word = channel.control & CONTROL_WORD != 0;
@@ -343,6 +356,8 @@ impl<const ARM9: bool> Dma<ARM9> {
         let count = match Self::start_of(channel.control) {
             Start::MainMemory => channel.count_now.saturating_mul(MAIN_MEMORY_REQUESTS),
             Start::Card => channel.count_now.min(1),
+            // A geometry start moves a burst; the channel waits for the FIFO again with the rest.
+            Start::GeometryFifo => channel.count_now.min(GEOMETRY_BURST_WORDS),
             _ => channel.count_now,
         };
         // Addresses are aligned down to the unit (`dma.md`, "Transferring").
@@ -361,6 +376,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             destination_reload: destination_field & 0b11 == 3,
             source_mask: Self::source_mask(index),
             destination_mask: Self::destination_mask(index),
+            geometry_burst: Self::start_of(channel.control) == Start::GeometryFifo,
         })
     }
 
@@ -392,6 +408,19 @@ impl<const ARM9: bool> Dma<ARM9> {
         // waits for the next word; the last unit ends the transfer as any other does.
         if !rearmed && Self::start_of(control) == Start::Card && channel.count_now > 1 {
             channel.count_now -= 1;
+            channel.source_now = end.source;
+            channel.destination_now = end.destination;
+            return Effect::default();
+        }
+        // A burst into the geometry FIFO leaves the rest of the count for the next burst, which
+        // starts when the FIFO is less than half full again, and a repeating channel starts again
+        // at each such level.
+        // TODO(hw-unverified): repeat on in start mode 7 (`geometry-engine.md`, "Unverified").
+        if !rearmed
+            && Self::start_of(control) == Start::GeometryFifo
+            && channel.count_now > GEOMETRY_BURST_WORDS
+        {
+            channel.count_now -= GEOMETRY_BURST_WORDS;
             channel.source_now = end.source;
             channel.destination_now = end.destination;
             return Effect::default();
@@ -512,14 +541,12 @@ impl<const ARM9: bool> Dma<ARM9> {
                 channel.destination_now = channel.destination;
                 channel.count_now = Self::count_of(new, index);
                 channel.frame_wait = true;
-                // The geometry FIFO start is a level that already holds when the channel is
-                // enabled, so it is queued like an Immediate one.
-                // TODO(hw-unverified): a repeating mode 7 channel is not started again: no trigger
-                // follows the first start (`gx-stub.md`, "Unverified").
-                // TODO(phase7): with the real FIFO (#48) a repeating channel restarts when the FIFO
-                // drains below half again.
-                if matches!(Self::start_of(new), Start::Immediate | Start::GeometryFifo) {
+                // A geometry FIFO start is a level, not queued here: the write asks `Io` to recheck
+                // what the devices hold, and the FIFO's "less than half full" starts the channel
+                // then (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+                if Self::start_of(new) == Start::Immediate {
                     channel.pending = true;
+                    channel.due = 0;
                     slot
                 } else {
                     Effect::default()
@@ -527,6 +554,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             }
             (true, false) if channel.pending => {
                 channel.pending = false;
+                channel.due = 0;
                 slot
             }
             _ => Effect::default(),
@@ -544,6 +572,10 @@ impl<const ARM9: bool> Dma<ARM9> {
                 && channel.destination_now & !Self::destination_mask(index) == 0
                 && channel.count_now <= Self::count_mask(index) + 1
                 && (!channel.pending || channel.control & CONTROL_ENABLE != 0)
+                // A start's due time is a master time a state can hold, and only a waiting start
+                // has one.
+                && channel.due <= crate::scheduler::MAX_TIME
+                && (channel.pending || channel.due == 0)
         }) && (ARM9 || self.fill == [0; CHANNEL_COUNT])
     }
 }
@@ -577,7 +609,10 @@ impl<const ARM9: bool> Device<ARM9> for Dma<ARM9> {
 
     /// A waiting start is due at once: the caller raises it to the time the start was raised.
     fn slot_due(&self, slot: u8) -> Option<u64> {
-        self.pending(usize::from(slot)).then_some(0)
+        self.channels
+            .get(usize::from(slot))
+            .filter(|channel| channel.pending)
+            .map(|channel| channel.due)
     }
 
     fn slot_fire(&mut self, slot: u8, _now: u64) -> Fired {
@@ -612,6 +647,7 @@ pub(crate) struct Transfer {
     destination_reload: bool,
     source_mask: u32,
     destination_mask: u32,
+    geometry_burst: bool,
 }
 
 /// Where a transfer left its two addresses.
@@ -622,6 +658,16 @@ pub(crate) struct End {
 }
 
 impl Transfer {
+    /// Whether the transfer is a burst into the geometry FIFO.
+    pub(crate) fn is_geometry_burst(&self) -> bool {
+        self.geometry_burst
+    }
+
+    /// Master cycles the transfer's words take, for the pause before the channel's next burst.
+    pub(crate) fn duration(&self) -> u64 {
+        u64::from(self.count) * WORD_CYCLES
+    }
+
     /// Moves every unit through `bus`: a read at the source, then a write at the destination,
     /// each address then stepping by the unit's size (`dma.md`, "Transferring"). Nothing in it
     /// allocates, and a guest value only ever picks addresses and counts, so nothing panics.

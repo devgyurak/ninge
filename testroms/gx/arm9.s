@@ -74,9 +74,12 @@
     strh r1, [r8, #((20 + \idx) * 4)]
     .endm
 
-    @ Record GXSTAT in slot \slot.
+    @ Record GXSTAT in slot \slot, once the geometry engine is idle (GXSTAT bit 27 clear): a
+    @ command takes effect when its cycles are up (docs/hw/geometry-engine.md).
     .macro REC_GXSTAT slot
-    ldr r0, [r9]
+1:  ldr r0, [r9]
+    tst r0, #0x08000000
+    bne 1b
     str r0, [r8, #(\slot * 4)]
     .endm
 

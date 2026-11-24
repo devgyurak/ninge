@@ -414,12 +414,14 @@ and END_VTXS, except POS_TEST (GBATEK: "anywhere, except within strips, huh?").
 - Reading CLIPMTX_RESULT or VECMTX_RESULT while a command that changes the matrix is executing
   returns the matrix from before that command.
 - A write to the FIFO that holds the ARM9 may hold it for a whole frame when the engine is waiting
-  for VBlank (its events still fire); a program that fills the FIFO behind a SWAP_BUFFERS therefore waits.
+  for VBlank (its events still fire); a program that fills the FIFO behind a SWAP_BUFFERS therefore
+  waits.
 - The FIFO count reaches 256 and bit 24 is set; the low 8 bits (bits 16-23) then read 0.
 
 ## Model (not hardware)
 
-These are decisions that GBATEK does not state and that the emulator needs. None claims to be how the silicon works.
+These are decisions that GBATEK does not state and that the emulator needs. None claims to be how
+the silicon works.
 
 - **Command start.** A command starts when all its entries are queued, takes them at once and has
   its effect at the end.

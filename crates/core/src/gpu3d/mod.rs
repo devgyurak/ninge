@@ -554,7 +554,9 @@ impl Gpu3d {
     fn abandon(&mut self) {
         let count = parameter_count(self.command).map_or(0, usize::from);
         let queued = count.saturating_sub(usize::from(self.owed));
-        if self.owed > 0 {
+        // After a lock-up entries that found the FIFO full were dropped, so the count of queued ones
+        // is not known; the queue is frozen then and keeps what it has.
+        if self.owed > 0 && !self.locked {
             self.queue.drop_newest(queued);
         }
         self.owed = 0;

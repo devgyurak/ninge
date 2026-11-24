@@ -192,7 +192,8 @@ a_y2 b_2x + a_y3 b_3x + a_y4 b_4x* with *A = M* and *B = C*.
 
 **Precision.** Each product is the sum of four full products with a 24-bit fraction; the sum is
 shifted right by 12 once, at the end. The shift is arithmetic (it rounds toward negative infinity).
-The sum must not be cut short in between. A 32-bit result that overflows wraps (see "Unverified").
+The sum must not be cut short in between. The model sums in 64 bits, wrapping, and a 32-bit result
+that overflows wraps too (see "Unverified").
 
 **The stack commands** are in `gx-stub.md` ("Matrix mode and the stack pointers"): the pointer
 arithmetic and the error flag are unchanged. What the real model adds is the matrices themselves:
@@ -437,7 +438,16 @@ oracle.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.
-- **Matrix overflow** (a 32-bit element result). The model wraps. — `gpu3d/`.
+- **Matrix overflow.** The width of the accumulator and what an element does that does not fit 32
+  bits after the shift. The model sums four products in a wrapping 64-bit accumulator (so a guest's
+  extreme values never panic the core) and wraps the shifted result to 32 bits. — `gpu3d/matrix.rs`
+  (`multiply`).
+- **The coordinate stack's storage.** The 6-bit pointer's upper half mirrors the lower, so the model
+  keeps 32 entries and an access to entry *e* uses slot *e* mod 32, error flag or not; the
+  directional stack moves with it. — `gpu3d/matrix.rs` (`Matrices::store`).
+- **VECMTX_RESULT layout.** The nine words are the vector matrix's upper 3x3 row by row, taken from
+  GBATEK's "3x3 matrix format"; the fourth row and column are not read. — `gpu3d/matrix.rs`
+  (`Matrices::vector_word`).
 - **Matrix reset state.** The model starts all matrices as the identity. — `gpu3d/`.
 - **Stack entries beyond the valid ones** and the texture stack. Entry 31 exists; the projection
   and texture stacks' invalid entry 1: whether a matrix is stored there. The model stores nothing

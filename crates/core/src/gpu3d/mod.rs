@@ -17,6 +17,7 @@
 // #49-#52 (`geometry-engine.md`).
 
 mod cycles;
+mod matrix;
 mod queue;
 
 use crate::io::device::{
@@ -25,6 +26,7 @@ use crate::io::device::{
 use crate::io::irq::{GXFIFO_IRQ, Requests};
 use crate::io::timing::next_vblank_start;
 use cycles::command_cycles;
+use matrix::{IDENTITY, Matrices, Target, shape};
 use queue::{Entry, FIFO_CAPACITY, HALF_FULL, Queue};
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +59,9 @@ const PORTS_REL: u32 = 0x40;
 const GXSTAT_REL: u32 = 0x200;
 /// The bytes of GXSTAT.
 const GXSTAT_BYTES: u32 = 4;
+/// CLIPMTX_RESULT, `0400_0640h`, 16 words; VECMTX_RESULT, `0400_0680h`, 9 words.
+const CLIPMTX_REL: u32 = 0x240;
+const VECMTX_REL: u32 = 0x280;
 /// Bytes of a port: one word, so the ID is the offset from the block divided by this.
 const PORT_SHIFT: u32 = 2;
 
@@ -115,6 +120,7 @@ const STORE_ADDRESS_MASK: u32 = 0x1F;
 /// MTX_MODE keeps bits 0-1.
 const MTX_MODE_MASK: u32 = 0b11;
 const MODE_PROJECTION: u8 = 0;
+const MODE_SIMULTANEOUS: u8 = 2;
 const MODE_TEXTURE: u8 = 3;
 
 /// The command IDs the stub gives an effect to; the others are consumed and dropped.
@@ -123,6 +129,14 @@ const CMD_MTX_PUSH: u8 = 0x11;
 const CMD_MTX_POP: u8 = 0x12;
 const CMD_MTX_STORE: u8 = 0x13;
 const CMD_MTX_RESTORE: u8 = 0x14;
+const CMD_MTX_IDENTITY: u8 = 0x15;
+const CMD_MTX_LOAD_4X4: u8 = 0x16;
+const CMD_MTX_LOAD_4X3: u8 = 0x17;
+const CMD_MTX_MULT_4X4: u8 = 0x18;
+const CMD_MTX_MULT_4X3: u8 = 0x19;
+const CMD_MTX_MULT_3X3: u8 = 0x1A;
+const CMD_MTX_SCALE: u8 = 0x1B;
+const CMD_MTX_TRANS: u8 = 0x1C;
 const CMD_SWAP_BUFFERS: u8 = 0x50;
 const CMD_BOX_TEST: u8 = 0x70;
 const CMD_POS_TEST: u8 = 0x71;
@@ -130,6 +144,8 @@ const CMD_VEC_TEST: u8 = 0x72;
 
 /// The engine's one event slot: the end of the command it executes.
 const ENGINE_SLOT: SlotMask = 1;
+/// The most parameters a command takes: SHININESS has 32.
+const MAX_PARAMS: usize = 32;
 
 /// How many parameter words follow command `id`, or `None` for an ID that is not a command
 /// (`gx-stub.md`, "The command set"). `00h` (NOP) is not a command either: it has no port.
@@ -181,6 +197,8 @@ pub struct Gpu3d {
     owed: u8,
     /// The FIFO and the PIPE, in front of the engine.
     queue: Queue,
+    /// The matrices and their stacks (`geometry-engine.md`, "Matrices").
+    matrices: Matrices,
     /// The command the engine executes, if any (`geometry-engine.md`, "Executing a command").
     running: Option<Running>,
 }
@@ -190,9 +208,9 @@ pub struct Gpu3d {
 struct Running {
     /// The command ID.
     command: u8,
-    /// The command's last parameter, the one its effect reads (0 for a command with none).
-    // TODO(phase7): the matrix commands (#48 PR C) need all their parameters.
-    param: u32,
+    /// The command's parameters in order, the first `entries` of them; a command with none has one
+    /// entry of 0.
+    params: [u32; MAX_PARAMS],
     /// The master time the command ends.
     ends: u64,
 }
@@ -262,6 +280,31 @@ impl Gpu3d {
         self.running.map(|running| (running.command, running.ends))
     }
 
+    /// The projection matrix, 16 elements row by row in 1.19.12: for the debugger.
+    pub fn projection_matrix(&self) -> &[i32; 16] {
+        &self.matrices.projection
+    }
+
+    /// The position (model-view) matrix.
+    pub fn position_matrix(&self) -> &[i32; 16] {
+        &self.matrices.position
+    }
+
+    /// The directional vector matrix.
+    pub fn vector_matrix(&self) -> &[i32; 16] {
+        &self.matrices.vector
+    }
+
+    /// The texture matrix.
+    pub fn texture_matrix(&self) -> &[i32; 16] {
+        &self.matrices.texture
+    }
+
+    /// The clip matrix: the position matrix times the projection matrix.
+    pub fn clip_matrix(&self) -> &[i32; 16] {
+        &self.matrices.clip
+    }
+
     /// Whether a command is executing or the PIPE or FIFO holds data: GXSTAT bit 27.
     pub fn busy(&self) -> bool {
         self.running.is_some() || self.queue.len() > 0
@@ -327,8 +370,26 @@ impl Gpu3d {
             RENDER_OFFSET => RDLINES_COUNT,
             _ => match offset.wrapping_sub(GEOMETRY_OFFSET + GXSTAT_REL) {
                 0..GXSTAT_BYTES => byte(self.gxstat(), GEOMETRY_OFFSET + GXSTAT_REL),
-                _ => 0,
+                _ => self.matrix_byte(offset.wrapping_sub(GEOMETRY_OFFSET)),
             },
+        }
+    }
+
+    /// The byte of CLIPMTX_RESULT or VECMTX_RESULT at `rel` bytes into the geometry block, 0 where
+    /// neither is (`geometry-engine.md`, "Matrices"). The matrices are read as they stand: a command
+    /// that is still executing has not changed them yet.
+    fn matrix_byte(&self, rel: u32) -> u8 {
+        let word_byte = |base: u32, word: u32| (word >> (8 * ((rel - base) % 4))) as u8;
+        match rel {
+            CLIPMTX_REL..VECMTX_REL => word_byte(
+                CLIPMTX_REL,
+                self.matrices.clip_word(((rel - CLIPMTX_REL) / 4) as usize),
+            ),
+            VECMTX_REL..GEOMETRY_BYTES => word_byte(
+                VECMTX_REL,
+                self.matrices.vector_word(((rel - VECMTX_REL) / 4) as usize),
+            ),
+            _ => 0,
         }
     }
 
@@ -452,7 +513,7 @@ impl Gpu3d {
     fn advance(&mut self, time: u64) {
         while let Some(running) = self.running.filter(|running| running.ends <= time) {
             self.running = None;
-            self.execute(running.command, running.param);
+            self.execute(running.command, &running.params);
             self.start(running.ends);
         }
     }
@@ -472,7 +533,11 @@ impl Gpu3d {
         if self.queue.len() < entries {
             return;
         }
-        let param = (0..entries).fold(0, |last, _| self.queue.pop().map_or(last, |e| e.param));
+        let mut params = [0; MAX_PARAMS];
+        params
+            .iter_mut()
+            .take(entries)
+            .for_each(|slot| *slot = self.queue.pop().map_or(0, |entry| entry.param));
         // SWAP_BUFFERS is held until VBlank begins; the engine counts as busy meanwhile.
         let begins = match front.command {
             CMD_SWAP_BUFFERS => at.max(next_vblank_start(at)),
@@ -480,25 +545,62 @@ impl Gpu3d {
         };
         self.running = Some(Running {
             command: front.command,
-            param,
+            params,
             ends: begins.saturating_add(command_cycles(front.command, self.mtx_mode)),
         });
     }
 
-    /// A command that has ended, with its last parameter (`param`, 0 for none). Only the matrix
-    /// mode, the stack pointers and the BOX_TEST result have an effect; the rest is consumed and
-    /// dropped.
-    // TODO(phase7): the geometry engine (#48) gives every command its effect.
-    fn execute(&mut self, id: u8, param: u32) {
+    /// A command that has ended, with its parameters (`params`, one 0 for none). The matrix mode,
+    /// the matrices and their stacks, the stack pointers and the BOX_TEST result have an effect;
+    /// the rest is consumed and dropped.
+    // TODO(phase7): vertices and polygons (#48 PR D), lighting (PR E) and the tests (PR F) give
+    // the other commands their effects.
+    fn execute(&mut self, id: u8, params: &[u32; MAX_PARAMS]) {
+        let param = params[0];
         match id {
             CMD_MTX_MODE => self.mtx_mode = (param & MTX_MODE_MASK) as u8,
             CMD_MTX_PUSH => self.push(),
             CMD_MTX_POP => self.pop(param),
-            CMD_MTX_STORE | CMD_MTX_RESTORE => self.store_or_restore(param),
+            CMD_MTX_STORE | CMD_MTX_RESTORE => self.store_or_restore(id, param),
+            CMD_MTX_IDENTITY => self.matrices.load(self.target(true), &IDENTITY),
+            CMD_MTX_LOAD_4X4 | CMD_MTX_LOAD_4X3 => {
+                self.matrices.load(self.target(true), &shape(id, params));
+            }
+            CMD_MTX_MULT_4X4 | CMD_MTX_MULT_4X3 | CMD_MTX_MULT_3X3 | CMD_MTX_TRANS => {
+                self.matrices
+                    .multiply_by(self.target(true), &shape(id, params));
+            }
+            // MTX_SCALE leaves the vector matrix alone even in mode 2, so a light vector keeps its
+            // length (`geometry-engine.md`, "Matrices").
+            CMD_MTX_SCALE => self
+                .matrices
+                .multiply_by(self.target(false), &shape(id, params)),
             // TODO(phase7): the result comes from the box and the matrices; the stub answers
             // "inside" so a program keeps its draw path (`gx-stub.md`, "Model").
             CMD_BOX_TEST => self.box_result = true,
             _ => {}
+        }
+    }
+
+    /// The matrices a matrix command reaches in the current mode. `with_vector` says whether mode
+    /// 2 includes the vector matrix (every command but MTX_SCALE).
+    const fn target(&self, with_vector: bool) -> Target {
+        match self.mtx_mode {
+            MODE_PROJECTION => Target::Projection,
+            MODE_TEXTURE => Target::Texture,
+            mode => Target::Coordinate {
+                vector: with_vector && mode == MODE_SIMULTANEOUS,
+            },
+        }
+    }
+
+    /// The matrices a stack command reaches: modes 1 and 2 both act on the position and the vector
+    /// stack.
+    const fn stack_target(&self) -> Target {
+        match self.mtx_mode {
+            MODE_PROJECTION => Target::Projection,
+            MODE_TEXTURE => Target::Texture,
+            _ => Target::Coordinate { vector: true },
         }
     }
 
@@ -543,6 +645,7 @@ impl Gpu3d {
         let entry = *pointer;
         *pointer = entry.wrapping_add(1) & mask;
         self.stack_error |= entry >= valid;
+        self.matrices.store(self.stack_target(), entry);
     }
 
     /// MTX_POP: `S` moves down by the signed 6-bit offset in the parameter (always 1 off the
@@ -558,17 +661,22 @@ impl Gpu3d {
         *pointer = pointer.wrapping_sub(offset) & mask;
         let entry = *pointer;
         self.stack_error |= entry >= valid;
+        self.matrices.restore(self.stack_target(), entry);
     }
 
     /// MTX_STORE and MTX_RESTORE: entry `N` (bits 0-4 of the parameter; 0 off the coordinate
     /// stack) is used and the pointer is left alone; an invalid entry raises the error flag.
-    fn store_or_restore(&mut self, param: u32) {
+    fn store_or_restore(&mut self, id: u8, param: u32) {
         let entry = match self.is_coordinate() {
             true => (param & STORE_ADDRESS_MASK) as u8,
             false => 0,
         };
         let (_, _, valid) = self.stack();
         self.stack_error |= entry >= valid;
+        match id {
+            CMD_MTX_STORE => self.matrices.store(self.stack_target(), entry),
+            _ => self.matrices.restore(self.stack_target(), entry),
+        }
     }
 }
 

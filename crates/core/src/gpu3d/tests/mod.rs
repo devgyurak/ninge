@@ -623,7 +623,7 @@ fn given_a_word_write_to_disp3dcnt_when_the_upper_half_is_set_then_it_is_not_sto
 /// `(address low bits, value read)` of the registers that must read 0 whatever was written to them.
 fn zero_registers() -> Vec<(u32, u32)> {
     let result_offsets = [
-        0x604, 0x620, 0x62C, 0x630, 0x634, 0x640, 0x67C, 0x680, 0x6A0, 0x610, 0x330, 0x3B8, 0x350,
+        0x604, 0x620, 0x62C, 0x630, 0x634, 0x610, 0x330, 0x3B8, 0x350,
     ];
     result_offsets
         .into_iter()
@@ -782,4 +782,6 @@ fn given_a_gxstat_write_when_it_returns_then_it_does_not_ask_for_the_signals() {
 }
 
 mod engine;
+mod matrices;
+mod matrix;
 mod queue;

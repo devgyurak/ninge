@@ -30,7 +30,7 @@ is no per-command cycle cost, no stall on a full FIFO, and SWAP_BUFFERS does not
 `TODO(phase7)` (#48): `geometry-engine.md` replaces this with the real FIFO, the PIPE, the command
 timings and the swap at VBlank.
 
-**Not implemented (`TODO(phase7)`):** matrix arithmetic, vertices and polygons, lighting, textures,
+**Not implemented (`TODO(phase7)`):** vertices and polygons, lighting, textures,
 POS_TEST, VEC_TEST and BOX_TEST results, RAM_COUNT and the lock-up SWAP_BUFFERS has after an
 incomplete polygon list; all in `geometry-engine.md`. The rendering registers' effect is #49-#52.
 
@@ -51,8 +51,8 @@ All of these are ARM9 only. The ARM7 does not see them: the ARM7 has the sound r
 | `0400_0610h` | DISP_1DOT_DEPTH | 16 | W | write dropped |
 | `0400_0620h`-`0400_062Fh` | POS_RESULT | 4 words | R | reads 0 |
 | `0400_0630h`-`0400_0635h` | VEC_RESULT | 3 halfwords | R | reads 0 |
-| `0400_0640h`-`0400_067Fh` | CLIPMTX_RESULT | 16 words | R | reads 0 |
-| `0400_0680h`-`0400_06A3h` | VECMTX_RESULT | 9 words | R | reads 0 |
+| `0400_0640h`-`0400_067Fh` | CLIPMTX_RESULT | 16 words | R | the clip matrix (`geometry-engine.md`, "Matrices") |
+| `0400_0680h`-`0400_06A3h` | VECMTX_RESULT | 9 words | R | the vector matrix (`geometry-engine.md`, "Matrices") |
 
 GBATEK heads GXFIFO as "mirrored up to 400043Fh?" with a question mark, and the text under it relies
 on the mirror for `STRD` and `STM` (see "Unverified"). The geometry block therefore ends at
@@ -325,7 +325,7 @@ The ARM7 has no start mode 7. A channel of the ARM7 with the same bits does not 
 - **The BOX_TEST result.** GXSTAT bit 1 reads 0 until a BOX_TEST has been executed and 1 after it.
   Hardware computes it from the box and the matrices; the stub has no matrices and answers "inside",
   which keeps a program on its draw path. This is a stub value, not a hardware fact. `TODO(phase7)`.
-- **The results read 0:** POS_RESULT, VEC_RESULT, CLIPMTX_RESULT, VECMTX_RESULT, RAM_COUNT.
+- **The results read 0:** POS_RESULT, VEC_RESULT, RAM_COUNT (CLIPMTX_RESULT and VECMTX_RESULT are real since #48 PR C).
 - **The rendering registers drop their writes and read 0.** They are write-only on hardware, and the
   stub has nothing to store them for. `TODO(phase7)` (#49-#52).
 - **GXSTAT bit 15 and the pointers** are the only state the commands change: the matrix mode, the

@@ -517,7 +517,7 @@ fn three_bursts(dma: &mut Arm9Dma) -> Vec<u32> {
 }
 
 #[test]
-fn given_a_geometry_fifo_channel_when_a_start_is_triggered_for_later_then_its_slot_is_due_then_and_it_survives_a_save()
+fn given_a_geometry_fifo_channel_when_a_start_is_triggered_for_later_then_its_slot_is_due_at_that_time_and_survives_a_save()
  {
     let mut dma = Arm9Dma::new();
     arm(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);

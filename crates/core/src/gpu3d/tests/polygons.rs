@@ -596,3 +596,20 @@ fn given_a_cloned_gpu_when_its_ram_is_inspected_then_it_still_has_room_for_a_ful
         (true, true)
     );
 }
+
+/// Three raw writes to the MTX_LOAD_4x4 port at time 0: a command left midway.
+fn three_load_writes(gpu: &mut Gpu3d) {
+    gpu.write(port(0x16), Width::Word, 0, cx_at(0));
+    gpu.write(port(0x16), Width::Word, 0, cx_at(0));
+    gpu.write(port(0x16), Width::Word, 0, cx_at(0));
+}
+
+#[test]
+fn given_a_locked_up_engine_when_a_command_is_abandoned_then_the_queue_is_left_as_it_is() {
+    let mut gpu = list(TRIANGLES, &[(0, 0, 0), (0x800, 0, 0)]);
+    send_command(&mut gpu, SWAP, &[0]);
+    three_load_writes(&mut gpu);
+    let len = gpu.fifo_len() + gpu.pipe_len();
+    gpu.write(port(0x10), Width::Word, 0, cx_at(0));
+    assert_eq!(gpu.fifo_len() + gpu.pipe_len(), len + 1);
+}

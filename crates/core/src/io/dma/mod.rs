@@ -341,6 +341,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             .get_mut(index)
             .filter(|channel| channel.pending)?;
         channel.pending = false;
+        channel.due = 0;
         channel.running = true;
         channel.rearmed = false;
         let word = channel.control & CONTROL_WORD != 0;
@@ -553,6 +554,7 @@ impl<const ARM9: bool> Dma<ARM9> {
             }
             (true, false) if channel.pending => {
                 channel.pending = false;
+                channel.due = 0;
                 slot
             }
             _ => Effect::default(),
@@ -570,6 +572,10 @@ impl<const ARM9: bool> Dma<ARM9> {
                 && channel.destination_now & !Self::destination_mask(index) == 0
                 && channel.count_now <= Self::count_mask(index) + 1
                 && (!channel.pending || channel.control & CONTROL_ENABLE != 0)
+                // A start's due time is a master time a state can hold, and only a waiting start
+                // has one.
+                && channel.due <= crate::scheduler::MAX_TIME
+                && (channel.pending || channel.due == 0)
         }) && (ARM9 || self.fill == [0; CHANNEL_COUNT])
     }
 }

@@ -399,10 +399,30 @@ fn given_a_held_arm9_when_the_machine_runs_then_no_instruction_runs_until_the_ho
 fn given_a_hold_when_the_target_is_past_its_end_then_the_clock_stops_at_the_hold_and_the_cpu_goes_on()
  {
     let mut m = machine();
+    let before = m.arm9.clone();
     let start = m.scheduler.now();
     m.arm9_hold_until = start + 100;
     Participants::run_arm9_until(&mut m, start + 200);
-    assert_eq!(m.scheduler.now(), start + 200);
+    // The clock reached the target and the ARM9 ran instructions after the hold (its registers
+    // changed), none during it.
+    assert_eq!((m.scheduler.now(), m.arm9 != before), (start + 200, true));
+}
+
+#[test]
+fn given_a_hold_that_is_on_when_the_debugger_steps_then_the_instruction_runs_after_the_hold() {
+    let mut m = machine();
+    let before = m.arm9.clone();
+    let start = m.scheduler.now();
+    m.arm9_hold_until = start + 1_000;
+    m.step_arm9_instruction();
+    assert_eq!(
+        (
+            m.scheduler.now() > start + 1_000,
+            m.arm9 != before,
+            m.arm9_hold_until
+        ),
+        (true, true, 0)
+    );
 }
 
 #[test]
@@ -423,7 +443,8 @@ fn given_a_dma_burst_into_a_full_fifo_when_it_runs_then_the_arm9_is_held_for_the
     poke_words(&mut m, SRC, &[MTX_PUSH; 300]);
     set9(&mut m, 0, SRC, GXFIFO, ENABLE | WORD | DEST_FIXED | 300);
     run_frames(&mut m, 1);
-    assert!(m.arm9_hold_until > 0);
+    // The word that did not fit waited for SWAP_BUFFERS (line 192 plus 392 bus cycles) at least.
+    assert!(m.arm9_hold_until >= 192 * 4_260 + 784);
 }
 
 #[test]

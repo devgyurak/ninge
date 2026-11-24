@@ -146,10 +146,14 @@ impl<'a, const ARM9: bool> Access<'a, ARM9> {
             .unwrap_or_else(|| self.read_registers(addr))
     }
 
-    fn write<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
+    /// A data write. It returns the master cycles the access held its CPU, which only a write to a
+    /// full geometry FIFO does (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+    fn write<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> u64 {
         let addr = addr & !(N as u32 - 1);
-        if !self.memory.store::<ARM9, N>(&self.tcm, addr, bytes) {
-            self.write_registers(addr, bytes);
+        if self.memory.store::<ARM9, N>(&self.tcm, addr, bytes) {
+            0
+        } else {
+            self.write_registers(addr, bytes)
         }
     }
 
@@ -170,19 +174,20 @@ impl<'a, const ARM9: bool> Access<'a, ARM9> {
     /// The slow path for a write: the address is decoded once and one device takes the access
     /// (or `Memory`, for the memory-control block); an unmapped address ignores the write.
     // TODO(hw-unverified): a byte on no register is dropped (`arm9-memory-map.md`, "Unverified").
-    fn write_registers<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) {
+    fn write_registers<const N: usize>(&mut self, addr: u32, bytes: [u8; N]) -> u64 {
         let width = Width::of::<N>();
         let value = pack(bytes);
         match decode::<ARM9>(addr) {
             Some(Owner::Memory(offset)) => {
                 self.memory.write_control::<ARM9>(offset, width, value);
+                0
             }
             Some(Owner::Io(port, offset)) => {
                 let at = self.at();
                 self.io
-                    .write::<ARM9>(self.scheduler, at, port, offset, width, value);
+                    .write::<ARM9>(self.scheduler, at, port, offset, width, value)
             }
-            None => {}
+            None => 0,
         }
     }
 
@@ -223,6 +228,9 @@ pub struct Arm9View<'a> {
     tcm: TcmConfig,
     now: u64,
     floor: u64,
+    /// Master cycles the step's writes have held the ARM9 so far; the run loop adds them to the
+    /// instruction's cost ([`Arm9View::take_stall`]).
+    stalled: u64,
 }
 
 impl<'a> Arm9View<'a> {
@@ -247,7 +255,22 @@ impl<'a> Arm9View<'a> {
             tcm,
             now,
             floor: now,
+            stalled: 0,
         }
+    }
+
+    /// The master cycles the step's writes held the ARM9, which the caller adds to the instruction's
+    /// cost; reading it clears it.
+    pub(crate) fn take_stall(&mut self) -> u64 {
+        std::mem::take(&mut self.stalled)
+    }
+
+    /// A write held the ARM9 for `cycles`: later accesses of the step happen that much later, and
+    /// an event the step schedules cannot fire before the step's new end.
+    fn stall(&mut self, cycles: u64) {
+        self.stalled = self.stalled.saturating_add(cycles);
+        self.now = self.now.saturating_add(cycles);
+        self.floor = self.floor.saturating_add(cycles);
     }
 
     /// A new instruction starts at the ARM9 clock `now`; an event it schedules fires no earlier
@@ -313,13 +336,16 @@ impl Bus for Arm9View<'_> {
         u32::from_le_bytes(self.access().read(addr))
     }
     fn write8(&mut self, addr: u32, value: u8) {
-        self.access().write(addr, value.to_le_bytes());
+        let stall = self.access().write(addr, value.to_le_bytes());
+        self.stall(stall);
     }
     fn write16(&mut self, addr: u32, value: u16) {
-        self.access().write(addr, value.to_le_bytes());
+        let stall = self.access().write(addr, value.to_le_bytes());
+        self.stall(stall);
     }
     fn write32(&mut self, addr: u32, value: u32) {
-        self.access().write(addr, value.to_le_bytes());
+        let stall = self.access().write(addr, value.to_le_bytes());
+        self.stall(stall);
     }
 }
 

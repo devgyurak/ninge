@@ -117,7 +117,10 @@ fn arm9_instruction(arm9: &mut Cpu<true>, bios: &mut SwiRecord, view: &mut Arm9V
             None => arm9.step(view),
         },
     };
-    view.advance(cost);
+    // A write to a full geometry FIFO held the ARM9 meanwhile: the engine's cycles are its cost
+    // (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+    let stall = view.take_stall();
+    view.advance(cost.saturating_add(stall));
 }
 
 /// One ARM7 instruction through `view` at the view's ARM7 clock, which it advances by the cost;

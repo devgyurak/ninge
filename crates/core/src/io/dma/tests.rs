@@ -432,21 +432,94 @@ fn given_a_register_read_when_done_through_the_device_read_then_it_has_no_effect
 // ---------------------------------------------------------------------- the enable edge
 
 #[test]
-fn given_an_arm9_geometry_fifo_channel_when_enable_is_written_then_a_start_is_queued_on_its_own_slot()
- {
+fn given_an_arm9_geometry_fifo_channel_when_enable_is_written_then_it_waits_for_the_fifo_level() {
     let mut dma = Arm9Dma::new();
     let effect = arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(7) | 4);
+    assert_eq!((effect, dma.pending(2)), (rechecked(), false));
+}
+
+#[test]
+fn given_an_arm9_geometry_fifo_channel_when_the_fifo_level_triggers_it_then_its_own_slot_is_queued()
+{
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 2, MAIN, OTHER, ENABLE | timing9(7) | 4);
     assert_eq!(
-        (effect, dma.pending(2), dma.pending(0)),
-        (slot_effect(2), true, false)
+        (dma.trigger(Trigger::GeometryFifo), dma.pending(2)),
+        (1 << 2, true)
     );
 }
 
 #[test]
-fn given_an_arm9_geometry_fifo_channel_when_it_starts_then_the_transfer_moves_its_whole_count() {
+fn given_an_arm9_geometry_fifo_channel_when_it_starts_then_the_transfer_moves_a_burst_of_112_words()
+{
     let mut dma = Arm9Dma::new();
-    let transfer = started(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
-    assert_eq!(transfer.count, 300);
+    let transfer = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | timing9(7) | 300,
+        Trigger::GeometryFifo,
+    );
+    assert_eq!(transfer.count, 112);
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_with_fewer_words_than_a_burst_when_it_starts_then_it_moves_the_count()
+ {
+    let mut dma = Arm9Dma::new();
+    let transfer = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | WORD | timing9(7) | 40,
+        Trigger::GeometryFifo,
+    );
+    assert_eq!(transfer.count, 40);
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_when_a_burst_ends_with_words_left_then_it_waits_with_the_rest() {
+    let mut dma = Arm9Dma::new();
+    let t = started_by(
+        &mut dma,
+        0,
+        MAIN,
+        OTHER,
+        ENABLE | IRQ | WORD | timing9(7) | 300,
+        Trigger::GeometryFifo,
+    );
+    let effect = dma.finish(&t, t.run(&mut MockBus::default()));
+    let next = dma.trigger(Trigger::GeometryFifo);
+    let again = dma.begin(0).map(|t| t.count);
+    assert_eq!(
+        (
+            read32(&dma, cnt(0)) >> 31,
+            effect.requests.arm9,
+            next,
+            again
+        ),
+        (1, 0, 1, Some(112))
+    );
+}
+
+#[test]
+fn given_a_geometry_fifo_channel_when_its_last_burst_ends_then_the_whole_list_was_moved_in_three() {
+    let mut dma = Arm9Dma::new();
+    arm(&mut dma, 0, MAIN, OTHER, ENABLE | WORD | timing9(7) | 300);
+    let counts = (0..3)
+        .map(|_| {
+            dma.trigger(Trigger::GeometryFifo);
+            let t = dma.begin(0).expect("a burst");
+            dma.finish(&t, t.run(&mut MockBus::default()));
+            t.count
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        (counts, read32(&dma, cnt(0)) >> 31),
+        (vec![112, 112, 76], 0)
+    );
 }
 
 #[test]
@@ -463,7 +536,7 @@ fn given_a_geometry_fifo_channel_without_repeat_when_it_finishes_then_enable_cle
  {
     let mut dma = Arm9Dma::new();
     let control = ENABLE | IRQ | WORD | timing9(7) | 4;
-    let t = started(&mut dma, 1, MAIN, OTHER, control);
+    let t = started_by(&mut dma, 1, MAIN, OTHER, control, Trigger::GeometryFifo);
     let effect = dma.finish(&t, END);
     assert_eq!(
         (read32(&dma, cnt(1)) >> 31, effect.requests.arm9),
@@ -472,13 +545,17 @@ fn given_a_geometry_fifo_channel_without_repeat_when_it_finishes_then_enable_cle
 }
 
 #[test]
-fn given_a_geometry_fifo_channel_with_repeat_when_it_finishes_then_it_stays_enabled_and_is_not_restarted()
+fn given_a_geometry_fifo_channel_with_repeat_when_it_finishes_then_it_stays_enabled_until_the_next_trigger()
  {
     let mut dma = Arm9Dma::new();
     let control = ENABLE | REPEAT | WORD | timing9(7) | 4;
-    let t = started(&mut dma, 0, MAIN, OTHER, control);
+    let t = started_by(&mut dma, 0, MAIN, OTHER, control, Trigger::GeometryFifo);
     dma.finish(&t, END);
-    assert_eq!((read32(&dma, cnt(0)) >> 31, dma.pending(0)), (1, false));
+    let restarted = dma.trigger(Trigger::GeometryFifo);
+    assert_eq!(
+        (read32(&dma, cnt(0)) >> 31, restarted, dma.pending(0)),
+        (1, 1, true)
+    );
 }
 
 #[test]

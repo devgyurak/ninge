@@ -40,8 +40,18 @@ const fn pack(ids: [u8; 4]) -> u32 {
     u32::from_le_bytes(ids)
 }
 
+/// Runs the engine until it is idle, firing its event slot at each due time as the scheduler would.
+/// Most tests are about what a command does, not when, so `write` drains after each write;
+/// the timing tests below call `gpu.write` themselves and step the engine by hand.
+fn drain(gpu: &mut Gpu3d) {
+    while let Some(ends) = gpu.slot_due(0) {
+        gpu.slot_fire(0, ends);
+    }
+}
+
 fn write(gpu: &mut Gpu3d, offset: u32, width: Width, value: u32) {
     gpu.write(offset, width, value, cx_at(0));
+    drain(gpu);
 }
 
 fn read(gpu: &Gpu3d, offset: u32, width: Width) -> u32 {
@@ -770,3 +780,6 @@ fn given_a_gxstat_write_when_it_returns_then_it_does_not_ask_for_the_signals() {
     let mut gpu = Gpu3d::new();
     assert!(!write_effect(&mut gpu, GXSTAT, 1 << 30).recheck_held_signals);
 }
+
+mod engine;
+mod queue;

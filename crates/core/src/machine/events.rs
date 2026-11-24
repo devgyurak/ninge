@@ -185,7 +185,7 @@ impl Machine {
         if self.io.power_mut().take_halt() {
             self.arm7.set_halted(true);
         }
-        self.io.dma_finished(&transfer, end);
+        self.io.dma_finished(&mut self.scheduler, &transfer, end);
     }
 
     /// A line begins at `time` (`docs/hw/display-timing.md`). VBlank starts here too, when the

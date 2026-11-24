@@ -64,11 +64,18 @@ pub(crate) enum Signal {
     CardWordArm9,
     /// A word of the cartridge slot is ready for the ARM7.
     CardWordArm7,
+    /// The geometry command FIFO is less than half full: the ARM9's mode 7 DMA channels take a
+    /// burst (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall").
+    GeometryFifoHalf,
 }
 
 impl Signal {
     /// Every signal, in the fixed order `Io` routes a set of them: the bit order of [`Signals`].
-    pub(crate) const ALL: [Self; 2] = [Self::CardWordArm9, Self::CardWordArm7];
+    pub(crate) const ALL: [Self; 3] = [
+        Self::CardWordArm9,
+        Self::CardWordArm7,
+        Self::GeometryFifoHalf,
+    ];
 
     const fn bit(self) -> u8 {
         1 << self as u8
@@ -120,6 +127,10 @@ pub(crate) struct Effect {
     /// write that cannot change a signal does not route it again (an acknowledge would advance a
     /// stalled card DMA channel).
     pub(crate) recheck_held_requests: bool,
+    /// Master cycles the access held its CPU: a write to a full geometry FIFO waits for the engine
+    /// (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall"). The caller adds them
+    /// to the access's CPU as part of its cost.
+    pub(crate) stall: u64,
 }
 
 impl Effect {
@@ -139,6 +150,7 @@ impl Effect {
             signals: self.signals.merge(other.signals),
             recheck_held_signals: self.recheck_held_signals || other.recheck_held_signals,
             recheck_held_requests: self.recheck_held_requests || other.recheck_held_requests,
+            stall: self.stall.saturating_add(other.stall),
         }
     }
 }

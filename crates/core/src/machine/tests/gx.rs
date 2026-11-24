@@ -3,7 +3,10 @@
 //! still reaching the sound registers at the same addresses, POWCNT1 bit 3 gating the geometry
 //! block, the level-driven IF bit 21, and a savestate taken in the middle of a command.
 
-use super::dma::{DST, ENABLE, SRC, WORD, machine, peek_words, poke_words, run_frames, set7, set9};
+use super::dma::{
+    B_SELF, DST, ENABLE, SPIN, SRC, WORD, machine, peek_words, poke_words, rom_with, run_frames,
+    set7, set9,
+};
 use super::*;
 use crate::cpu::Bus;
 
@@ -54,6 +57,7 @@ fn given_the_arm7_writes_a_command_word_when_the_arm9_reads_gxstat_then_nothing_
 fn given_a_push_in_projection_mode_when_the_arm9_reads_gxstat_then_the_projection_level_is_one() {
     let mut m = machine();
     m.bus9().write32(GXFIFO, MTX_PUSH);
+    run_frames(&mut m, 1);
     assert_eq!(m.bus9().read32(GXSTAT), RESET | PROJECTION_LEVEL);
 }
 
@@ -61,6 +65,7 @@ fn given_a_push_in_projection_mode_when_the_arm9_reads_gxstat_then_the_projectio
 fn given_a_push_when_inspected_then_the_pointer_is_visible() {
     let mut m = machine();
     m.bus9().write32(GXFIFO, MTX_PUSH);
+    run_frames(&mut m, 1);
     assert_eq!(m.inspect().gpu3d().projection_pointer(), 1);
 }
 
@@ -85,6 +90,7 @@ fn given_an_error_and_the_engine_off_when_bit_15_is_written_then_the_error_stays
     let mut m = machine();
     m.bus9().write32(GXFIFO, MTX_PUSH);
     m.bus9().write32(GXFIFO, MTX_PUSH);
+    run_frames(&mut m, 1);
     m.bus9().write16(POWCNT1, POWCNT1_GEOMETRY_OFF);
     m.bus9().write32(GXSTAT, ERROR);
     assert_eq!(m.bus9().read32(GXSTAT), RESET | ERROR);
@@ -95,6 +101,7 @@ fn given_an_error_and_the_engine_on_when_bit_15_is_written_then_the_error_clears
     let mut m = machine();
     m.bus9().write32(GXFIFO, MTX_PUSH);
     m.bus9().write32(GXFIFO, MTX_PUSH);
+    run_frames(&mut m, 1);
     m.bus9().write32(GXSTAT, ERROR);
     assert_eq!(m.bus9().read32(GXSTAT), RESET);
 }
@@ -106,6 +113,7 @@ fn given_the_engine_was_off_when_it_is_powered_on_again_then_commands_run() {
     m.bus9().write32(GXFIFO, MTX_PUSH);
     m.bus9().write16(POWCNT1, 0x820F);
     m.bus9().write32(GXFIFO, MTX_PUSH);
+    run_frames(&mut m, 1);
     assert_eq!(m.bus9().read32(GXSTAT), RESET | PROJECTION_LEVEL);
 }
 
@@ -190,6 +198,7 @@ fn given_a_savestate_in_the_middle_of_a_packed_word_when_loaded_then_the_paramet
     let mut loaded = machine();
     let result = loaded.load_state(&state);
     loaded.bus9().write32(GXFIFO, 1);
+    run_frames(&mut loaded, 1);
     // Mode 1 and two pushes: the coordinate level is 2, GXSTAT bits 8-12.
     assert_eq!(
         (result, loaded.bus9().read32(GXSTAT)),
@@ -308,4 +317,66 @@ fn given_a_savestate_with_a_mode_7_start_queued_when_loaded_and_run_then_it_equa
 #[test]
 fn given_a_mode_7_channel_when_the_machine_runs_twice_then_the_savestate_bytes_are_identical() {
     assert_eq!(gx_dma_done().save_state(), gx_dma_done().save_state());
+}
+
+/// SWAP_BUFFERS (command word and parameter) then `pushes` unpacked pushes, through the ARM9's bus.
+fn hold_the_engine_with(m: &mut Machine, pushes: u32) {
+    m.bus9().write32(GXFIFO, 0x50);
+    m.bus9().write32(GXFIFO, 0);
+    (0..pushes).for_each(|_| m.bus9().write32(GXFIFO, MTX_PUSH));
+}
+
+#[test]
+fn given_a_full_geometry_fifo_when_the_arm9_writes_once_more_then_the_view_reports_the_wait() {
+    let mut m = machine();
+    hold_the_engine_with(&mut m, 260);
+    let mut bus = m.bus9();
+    bus.write32(GXFIFO, MTX_PUSH);
+    // SWAP_BUFFERS ends 392 bus cycles after line 192 starts, and the first push after it takes 17
+    // bus cycles more (`geometry-engine.md`, "Executing a command").
+    assert_eq!(bus.take_stall(), 192 * 4_260 + 784 + 34);
+}
+
+#[test]
+fn given_a_stall_when_it_is_taken_then_a_second_take_reports_none() {
+    let mut m = machine();
+    hold_the_engine_with(&mut m, 260);
+    let mut bus = m.bus9();
+    bus.write32(GXFIFO, MTX_PUSH);
+    bus.take_stall();
+    assert_eq!(bus.take_stall(), 0);
+}
+
+#[test]
+fn given_the_fifo_has_room_when_the_arm9_writes_then_the_view_reports_no_wait() {
+    let mut m = machine();
+    hold_the_engine_with(&mut m, 10);
+    assert_eq!(m.bus9().take_stall(), 0);
+}
+
+/// `STR r1, [r0]`.
+const STR_R1_R0: u32 = 0xE580_1000;
+
+/// The master cycles one `STR` of a push to GXFIFO takes on a machine whose engine waits in
+/// SWAP_BUFFERS with `queued` pushes behind it.
+fn str_cost_with(queued: u32) -> u64 {
+    let mut m = Machine::new();
+    m.load_rom(rom_with(&[STR_R1_R0, B_SELF], &SPIN))
+        .expect("synthetic image");
+    hold_the_engine_with(&mut m, queued);
+    m.arm9.regs_mut().set(0, GXFIFO);
+    m.arm9.regs_mut().set(1, MTX_PUSH);
+    let before = m.scheduler.now();
+    m.step_arm9_instruction();
+    m.scheduler.now() - before
+}
+
+#[test]
+fn given_an_str_to_a_full_geometry_fifo_when_the_arm9_steps_then_the_wait_is_part_of_its_cost() {
+    // The same instruction with room costs the instruction's own cycles; with a full FIFO it costs
+    // those plus the wait for SWAP_BUFFERS and the first push after it.
+    assert_eq!(
+        str_cost_with(260) - str_cost_with(10),
+        192 * 4_260 + 784 + 34
+    );
 }

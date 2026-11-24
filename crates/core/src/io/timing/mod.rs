@@ -12,6 +12,7 @@
 
 use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
 use crate::io::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
+use crate::scheduler::{FRAME_CYCLES, LINE_CYCLES};
 use serde::{Deserialize, Serialize};
 
 /// DISPSTAT, at `0400_0004h` (`display-timing.md`, "Registers").
@@ -29,6 +30,20 @@ pub const FIRST_VBLANK_LINE: u16 = 192;
 // TODO(hw-unverified): the exact cycle within the line is not stated
 // (`display-timing.md`, "Unverified").
 pub const VBLANK_END_LINE: u16 = 262;
+
+/// The first master time at or after `time` at which line 192 begins, the start of VBlank.
+/// Line *k* of the run starts at `k * LINE_CYCLES`, so the frame position is a function of the time
+/// alone (`scheduler.md`, "Savestate checks"). The geometry engine waits for it before it swaps
+/// buffers (`geometry-engine.md`, "SWAP_BUFFERS").
+pub(crate) const fn next_vblank_start(time: u64) -> u64 {
+    let vblank = FIRST_VBLANK_LINE as u64 * LINE_CYCLES;
+    let frame_start = time - time % FRAME_CYCLES;
+    if time - frame_start <= vblank {
+        frame_start + vblank
+    } else {
+        frame_start + FRAME_CYCLES + vblank
+    }
+}
 
 /// DISPSTAT bit 0: VBlank flag (`display-timing.md`, "DISPSTAT bits").
 pub const VBLANK_FLAG: u16 = 1 << 0;

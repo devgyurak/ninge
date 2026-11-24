@@ -369,9 +369,11 @@ and END_VTXS, except POS_TEST (GBATEK: "anywhere, except within strips, huh?").
 
 ## Edge cases
 
-- A command for which the entries never complete (a program stops writing mid-command) keeps the
-  engine waiting; GXSTAT bit 27 reads 0 then, because nothing is executing and nothing complete is
-  queued (the model; see "Unverified").
+- A command whose entries never all arrive (a program stops writing mid-command) keeps the engine
+  waiting; the entries it has sit in the PIPE and FIFO, so GXSTAT bit 27 reads 1 (it is set while
+  either holds data) and the engine does nothing.
+- NOP and an invalid ID queue no entry (see "Unverified"), so a packed word of NOPs leaves the FIFO
+  as it was.
 - An odd value is never an error to the host: stack pointers wrap by their width, a matrix product
   wraps in 32 bits, a full RAM drops the polygon, a bad ID is ignored.
 - A savestate taken mid-command keeps the queue, the PIPE, the command in execution and the time it
@@ -409,7 +411,9 @@ oracle.
   FIFO, nor whether a long command starts before its last parameter arrives. The model takes all
   entries at the start. — `gpu3d/` (the engine) — verify by reading GXSTAT bits 16-26 between two
   writes of one MTX_LOAD_4x4.
-- **The engine when a command is incomplete**: GXSTAT bit 27 value. — `gpu3d/`.
+- **NOP and invalid IDs queue no entry.** GBATEK says a no-parameter command takes one entry and
+  says nothing of NOP or of an invalid ID. — `gpu3d/` (`Gpu3d::run_pending`) — verify by counting
+  GXSTAT's FIFO count after a word of NOPs behind a busy engine.
 - **PIPE refill timing.** The 2-entry move is modelled as instant. — `gpu3d/`.
 - **FIFO entry for a command with parameters**: whether the command ID takes space of its own or
   rides with the first parameter, as the "40-bit entry" suggests. The model uses *N* entries. —
@@ -417,8 +421,12 @@ oracle.
 - **Whether the engine runs during the ARM9 stall in the real order** and whether the ARM7 and DMA
   stop (GBATEK says the bus is frozen, including for the ARM7). The model charges the ARM9 only. —
   `gpu3d/`, `machine/`.
-- **DMA mode 7 with repeat on.** Restart at each "less than half" edge is the natural reading and
-  the stub's first Unverified item is answered by it. — `io/dma/mod.rs`.
+- **DMA mode 7 with repeat on.** Restart at each "less than half" level is the natural reading and
+  answers the stub's Unverified item on a repeating channel. — `io/dma/mod.rs`.
+- **The pause between bursts.** A burst is one atomic transfer and the next one starts after the
+  words of the last have gone by at one bus cycle each, so a channel that never fills the FIFO does
+  not restart at the very same time for ever. DMA is not held by a full FIFO either: its writes
+  run the engine on for room but charge no CPU. — `io/mod.rs` (`Io::dma_finished`), `io/dma/mod.rs`.
 - **Cycle counts starred in GBATEK** (MULT and TRANS) and the +30 of mode 2: which commands it
   covers. NORMAL's 9..12 range for 0..4 lights, which is five settings for four timings. The model
   takes 9 plus the light count, capped at 12. — `gpu3d/`.

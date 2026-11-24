@@ -300,6 +300,10 @@ it.
 
 ### ARM9 DMA start mode 7
 
+(Phase 7 replaces the stub's instant-drain start described here with the real one: a burst of 112
+words each time the FIFO is less than half full, in `geometry-engine.md`, "The FIFO IRQ, the DMA
+start and the stall". The text below is the stub's and no longer what the code does.)
+
 A channel whose ARM9 start timing (control bits 27-29) is 7 starts when the geometry command FIFO is
 less than half full, and moves 112 words to GXFIFO, or fewer if the count runs out first. GBATEK
 gives the usual setup as 32-bit units, a fixed destination `0400_0400h`, repeat off.

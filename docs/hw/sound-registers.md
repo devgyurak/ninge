@@ -92,6 +92,12 @@ Bits 0-9 hold the bias (`000h`-`3FFh`, usually `200h`); the added value that tur
 output into an unsigned level. Bits 10-31 are unused and read 0. GBATEK notes that the bias output
 is on even when the master enable is off.
 
+With a bias of `000h` the medium level of the signal sits on the lowest level the output has, so
+the lower half of every wave is clipped away and what is left is heard as noise. A program that
+plays sound therefore needs the bias at `200h`, and one that never moves it (no SoundBias call, no
+write to this register) depends on finding it there when it starts: see "Start values" under
+"Model".
+
 ### The capture units: `0400_0508h`-`0400_051Fh`
 
 | Address | Name | Width | Access |
@@ -195,8 +201,13 @@ channel is not documented.
   shows them).
 - **Writing bit 31 as 1 while it is already 1** does not restart the channel: the end time stays.
 - **The SoundBias SWI** lands on the target level at once and has no delay.
-- **Start values.** SOUNDCNT, SOUNDBIAS and every channel and capture register start at 0. POWCNT2
-  starts at `0001h`, GBATEK's initial setting.
+- **Start values.** SOUNDCNT and every channel and capture register start at 0. POWCNT2
+  starts at `0001h`, GBATEK's initial setting. SOUNDBIAS starts at `200h`, the level GBATEK calls
+  usual: direct boot skips the firmware's boot code, and a program that starts after it is assumed
+  to find the bias already at the medium level (`direct-boot.md`, "Devices at entry"), as it finds
+  the sound amplifier on. A program that sets the bias itself (the SoundBias SWI) is not affected.
+  The value is the device's from the moment the machine is made, as for the power-management
+  device: direct boot is the only way a program starts, so no state before it is modeled.
 
 ## Edge cases
 
@@ -222,12 +233,17 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **PSG on channels 0-7 and noise on channels other than 14-15.** GBATEK says PSG works on 8-13 and
   noise on 14-15 only; the model keeps the busy bit set in format 3 on any channel. — `spu/`.
 - **What the write-only registers read.** 0 here; the real bus may return something else. — `spu/`.
-- **The values after direct boot** of SOUNDCNT, SOUNDBIAS and POWCNT2. Zero here (POWCNT2 `0001h`
-  per GBATEK's initial setting); the firmware's boot code probably sets some of them. — `spu/`,
-  `io/power/`.
-- **The SoundBias SWI's delay.** The BIOS delays between steps; here there is none (as for
-  WaitByLoop, `hle-swi.md`) and the register reaches the target at once, so the intermediate
-  values are never visible. — `hle::swi`.
+- **The values after direct boot** of SOUNDCNT, SOUNDBIAS and POWCNT2. SOUNDCNT is zero and POWCNT2
+  `0001h` (GBATEK's initial setting); the firmware's boot code may leave other values. SOUNDBIAS is
+  `200h`, GBATEK's "usually 200h": GBATEK does not say what a program finds at its entry, and the
+  value is chosen because a program that plays sound without ever setting the bias has been seen
+  (it makes no SoundBias call and no write to the register), which only works if the bias is
+  already at the medium level. That is an observation of a program, not of the register. — `spu/`
+  (`START_BIAS`), `io/power/` — verify by a test ROM on hardware that reads the three registers
+  first thing.
+- **The SoundBias SWI's delay.** The BIOS delays between steps; here there is none and the
+  register reaches the target at once, so the intermediate values are never visible. —
+  `hle::swi`.
 - **The timing of a capture**, in particular whether it starts at once or at the next sample of the
   shared channel, and that the rate is read at the start. — `spu/`.
 - **Unused addresses inside the window** read 0 and drop writes here; GBATEK gives no behavior for

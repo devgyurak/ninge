@@ -361,6 +361,19 @@ fn given_a_slowest_timer_and_the_longest_length_when_started_then_the_end_does_n
 }
 
 #[test]
+fn given_a_new_device_when_soundbias_is_read_then_it_is_the_medium_level() {
+    // `sound-registers.md`, "Start values": 200h, as a program finds it after direct boot.
+    let spu = Spu::new();
+    assert_eq!(
+        (
+            read(&spu, SOUNDBIAS_OFFSET, Width::Half, 0),
+            spu.soundbias()
+        ),
+        (0x200, 0x200)
+    );
+}
+
+#[test]
 fn given_a_new_device_when_checked_then_it_is_well_formed() {
     assert!(Spu::new().well_formed(0));
 }

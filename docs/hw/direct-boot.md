@@ -40,6 +40,7 @@ start in the state a program expects instead of the power-on one:
 | Device | State at entry | Source |
 |---|---|---|
 | Power-management register 0 (`touch-power.md`) | `0Dh`: sound amplifier and both backlights on | our choice (Unverified in `touch-power.md`) |
+| SOUNDBIAS (`sound-registers.md`) | `200h`: the medium level | our choice (Unverified in `sound-registers.md`) |
 
 ## ARM9 state at entry
 

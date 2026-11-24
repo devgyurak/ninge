@@ -15,8 +15,9 @@ instructions.
 ## The trace format
 
 A trace is UTF-8 text, written by `ninge-runner trace`, produced live by the oracle adapter in
-`ninge-tracediff` (which compares it in memory and writes no file), and parsed by `ninge_core::trace` (pure types plus encode and parse, no IO, so
-the runner can write what the diff tool reads without a dependency between them).
+`ninge-tracediff` (which compares it in memory and writes no file), and parsed by
+`ninge_core::trace` (pure types plus encode and parse, no IO, so the runner can write what the
+diff tool reads without a dependency between them).
 
 ```
 ninge-trace 1
@@ -46,7 +47,9 @@ until the PC leaves the region and then resumes recording. The regions are the A
 
 The adapter never reads memory in a BIOS region: an opcode fetched there would be BIOS data,
 and no BIOS byte may leave the oracle (`AGENTS.md` §3.2). Use the oracle's built-in free BIOS
-and firmware, not a dump.
+and firmware, not a dump. The guard is enforced in code, not left to the caller: the client
+refuses any read inside the CPU's 16 MiB BIOS address block, or one that reaches the top of the
+address space, before it sends a packet.
 
 ## Narrowing
 
@@ -54,13 +57,14 @@ The oracle sits behind GDB, so it can report registers and memory but not a fram
 has three levels:
 
 1. **Frame.** A person picks the frame where the symptom shows, from the runner's frame hashes or
-   from looking at the screen. The runner can start tracing at that frame, but the oracle runs from boot, so a trace
-   started at frame F lines up with it only if the oracle is brought to the same moment (an
-   event-boundary hit does that); `live` and `boundaries` on a trace that starts later than boot
-   compare different moments.
+   from looking at the screen. The runner can start tracing at that frame, but the oracle runs
+   from boot. Hit counts and instruction numbers of a `--from-frame` trace therefore count from
+   frame F on ninge's side and from boot on the oracle's: `live` and `boundaries` compare
+   different moments unless the oracle is first brought to the same one (a trace from frame 0
+   has no such gap).
 2. **Event boundary.** At the k-th hit of an address breakpoint (the PC is given with
-   `--breakpoint`; the user IRQ handler's entry is the usual choice) both sides' registers are compared; the first boundary that
-   differs is found.
+   `--breakpoint`; the user IRQ handler's entry is the usual choice) both sides' registers are
+   compared; the first boundary that differs is found.
 3. **Instruction.** From the last agreeing boundary both sides step one instruction at a time
    until the first divergence.
 
@@ -79,7 +83,8 @@ IRQ timing is approximate by design (`AGENTS.md` §2 rule 7), so the report sepa
 
 The maintainer starts the oracle by hand with its GDB stub enabled and gives the ARM9 and ARM7
 ports; an agent connects only to `127.0.0.1:<port>`. The clean-room guard blocks any command
-that names a GPL emulator's path, and that stays as it is.
+that names a GPL emulator's path, and that stays as it is: an agent never reads the oracle's
+source, its app bundle or its settings files, and enabling the stub is the maintainer's step.
 
 ## Traces of a user's ROM
 

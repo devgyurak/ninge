@@ -294,6 +294,45 @@ fn given_a_corner_beyond_the_right_plane_when_clipped_then_the_polygon_has_four_
     );
 }
 
+/// A vertex at `(x, y, 0)` with the colour (RGB555) `color` set before it.
+fn colored(gpu: &mut Gpu3d, color: u32, x: i16, y: i16) {
+    send_command(gpu, COLOR_CMD, &[color]);
+    vtx(gpu, x, y, 0);
+}
+
+/// The cut triangle again with a colour on each corner: A red, B green beyond the right plane, C
+/// blue.
+fn colored_cut_triangle() -> Gpu3d {
+    let mut gpu = Gpu3d::new();
+    begin(&mut gpu, TRIANGLES);
+    colored(&mut gpu, 0x001F, 0, 0);
+    colored(&mut gpu, 0x03E0, 0x2000, 0);
+    colored(&mut gpu, 0x7C00, 0, 0x800);
+    gpu
+}
+
+#[test]
+fn given_a_cut_triangle_with_a_colour_on_each_corner_when_clipped_then_the_new_corners_interpolate_it()
+ {
+    // The corners come out as [I1, C, A, I2] (see above), both new ones halfway along their edge:
+    // - I1 on B-C: each 5-bit channel is `from + (to - from) x da / (da - db)` truncated toward zero
+    //   with da / (da - db) = 1/2: green 31 + (-31 x 1/2 = -15) = 16, blue 0 + 15 = 15, red 0, so
+    //   `16 << 5 | 15 << 10 = 3E00h`.
+    // - I2 on A-B: red 31 - 15 = 16, green 0 + 15: `16 | 15 << 5 = 1F0h`.
+    let gpu = colored_cut_triangle();
+    let got: Vec<u16> = vertices(&gpu).iter().map(|v| v.color).collect();
+    assert_eq!(got, vec![0x3E00, 0x7C00, 0x001F, 0x01F0]);
+}
+
+#[test]
+fn given_an_edge_with_an_inexact_negative_step_when_clipped_then_the_coordinate_truncates_toward_zero()
+ {
+    // A (-2.0, 0, 0) is beyond the left plane and B (0, -3, 0) is inside: the edge crosses x = -w at
+    // half the way, and y = -3 x 1/2 = -1.5 truncates toward zero to -1 (not -2).
+    let gpu = list(TRIANGLES, &[(-0x2000, 0, 0), (0, -3, 0), (0, 0x100, 0)]);
+    assert!(vertices(&gpu).contains(&clip(-0x1000, -1, 0)));
+}
+
 #[test]
 fn given_a_clipped_polygon_when_stored_then_it_has_four_vertices_in_ram_and_one_polygon() {
     let gpu = cut_triangle();
@@ -541,5 +580,19 @@ fn given_polygons_in_both_sets_when_saved_and_loaded_then_they_are_kept_and_well
             restored.render_ram().polygons.len()
         ),
         (true, true, 1)
+    );
+}
+
+// ----------------------------------------------------------------- room for a full set
+
+#[test]
+fn given_a_cloned_gpu_when_its_ram_is_inspected_then_it_still_has_room_for_a_full_set() {
+    let copy = swapped(0).clone();
+    assert_eq!(
+        (
+            copy.geometry_ram().vertices.capacity() >= VERTEX_RAM,
+            copy.render_ram().polygons.capacity() >= POLYGON_RAM
+        ),
+        (true, true)
     );
 }

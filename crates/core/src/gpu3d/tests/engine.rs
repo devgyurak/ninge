@@ -240,13 +240,16 @@ fn given_swap_buffers_in_flight_when_the_cpu_goes_on_then_only_the_engine_is_bus
     assert_eq!(gxstat(&gpu), RESET | BUSY);
 }
 
+/// The first line-192 start at or after each time.
+fn next_vblanks(times: &[u64]) -> Vec<u64> {
+    times.iter().map(|&t| next_vblank_start(t)).collect()
+}
+
 #[test]
 fn given_any_time_when_the_next_vblank_is_asked_then_it_is_the_first_line_192_start_at_or_after() {
     let frame = 263 * 4_260;
-    let asked = [0, VBLANK - 1, VBLANK, VBLANK + 1, frame, frame + VBLANK];
-    let got: Vec<u64> = asked.iter().map(|&t| next_vblank_start(t)).collect();
     assert_eq!(
-        got,
+        next_vblanks(&[0, VBLANK - 1, VBLANK, VBLANK + 1, frame, frame + VBLANK]),
         vec![
             VBLANK,
             VBLANK,
@@ -268,7 +271,7 @@ fn given_a_waiting_engine_when_260_entries_are_queued_then_the_fifo_is_full() {
 }
 
 #[test]
-fn given_a_full_fifo_behind_swap_buffers_when_one_more_entry_is_written_then_the_write_stalls_until_two_pushes_ran()
+fn given_a_full_fifo_behind_swap_buffers_when_one_more_entry_is_written_then_the_write_stalls_until_the_swap_and_one_push_ran()
  {
     let mut gpu = waiting_with(260);
     let effect = raw(&mut gpu, MTX_PUSH.into());
@@ -278,7 +281,7 @@ fn given_a_full_fifo_behind_swap_buffers_when_one_more_entry_is_written_then_the
 }
 
 #[test]
-fn given_a_full_fifo_when_a_write_has_waited_then_its_entry_is_queued_and_the_fifo_is_full_again() {
+fn given_a_full_fifo_when_a_write_has_waited_then_its_entry_is_queued_and_the_fifo_holds_255() {
     let mut gpu = waiting_with(260);
     raw(&mut gpu, MTX_PUSH.into());
     assert_eq!(gpu.fifo_len(), 255);
@@ -354,7 +357,7 @@ fn given_a_command_in_flight_when_saved_and_loaded_then_it_ends_at_the_same_time
 }
 
 #[test]
-fn given_a_machine_state_with_commands_queued_when_checked_then_it_is_well_formed() {
+fn given_a_gpu_with_commands_queued_when_checked_then_it_is_well_formed() {
     assert!(waiting_with(200).well_formed(0));
 }
 
@@ -372,4 +375,50 @@ fn given_queued_entries_when_inspected_then_the_debugger_sees_the_pipe_first() {
         ),
         (Some((0x16, 0)), Some((0x16, 0)), None, 3, None)
     );
+}
+
+// ------------------------------------------------------------------ an abandoned command
+
+/// Three writes to the MTX_LOAD_4x4 port, then one to MTX_MODE's: the load is abandoned with three
+/// entries queued.
+fn abandoned_load() -> Gpu3d {
+    let mut gpu = Gpu3d::new();
+    raw_port(&mut gpu, 0x16, 3);
+    raw_port(&mut gpu, 0x10, 1);
+    gpu
+}
+
+#[test]
+fn given_a_command_abandoned_with_entries_queued_when_another_port_is_written_then_they_leave_the_queue()
+ {
+    let gpu = abandoned_load();
+    // Only MTX_MODE's entry was queued and the engine took it at once: nothing waits.
+    assert_eq!(
+        (gpu.fifo_len(), gpu.pipe_len(), gpu.slot_due(0)),
+        (0, 0, Some(2))
+    );
+}
+
+#[test]
+fn given_a_command_abandoned_with_entries_queued_when_the_engine_runs_then_it_goes_idle() {
+    let mut gpu = abandoned_load();
+    gpu.slot_fire(0, 2);
+    assert_eq!(gxstat(&gpu), RESET);
+}
+
+#[test]
+fn given_a_command_abandoned_with_entries_queued_when_the_next_command_arrives_then_it_runs_on_its_own()
+ {
+    let mut gpu = abandoned_load();
+    gpu.slot_fire(0, 2);
+    raw(&mut gpu, MTX_PUSH.into());
+    assert_eq!(gpu.slot_due(0), Some(34));
+}
+
+#[test]
+fn given_the_same_command_written_again_on_its_port_when_a_command_is_midway_then_it_goes_on() {
+    let mut gpu = Gpu3d::new();
+    raw_port(&mut gpu, 0x16, 15);
+    raw_port(&mut gpu, 0x16, 1);
+    assert_eq!(gpu.slot_due(0), Some(68));
 }

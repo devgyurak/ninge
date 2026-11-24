@@ -2,10 +2,11 @@
 //! The four lights, the material and the vertex colour NORMAL calculates
 //! (`docs/hw/geometry-engine.md`, "Lighting").
 //!
-//! GBATEK names the registers and what each colour stands for but gives no equation, so the sum
-//! here is the model of the note ("Unverified"): emission plus, for each enabled light, the light's
-//! colour times diffuse, specular and ambient terms, in integer arithmetic with the 5-bit colour
-//! channels of the hardware.
+//! The equation is GBATEK's ("Internal Operation on Normal Command"): emission plus, for each enabled
+//! light, the light's colour times a diffuse term, a specular term (the dot product squared, through
+//! the shininess table) and an ambient term. GBATEK does not give the widths and the rounding, so
+//! those are the model of the note ("Unverified"): integer arithmetic with the 5-bit colour channels
+//! of the hardware.
 
 use super::matrix::Matrix;
 use serde::{Deserialize, Serialize};
@@ -96,11 +97,16 @@ impl Lighting {
     /// with the lights in `enabled` (POLYGON_ATTR bits 0-3).
     ///
     /// Per channel: emission, plus for each enabled light its colour times diffuse x
-    /// `max(0, -(N . L))`, specular x the shininess of `max(0, -(N . H))` and ambient, clamped to
-    /// 5 bits; `H` is the halfway vector of the light and the view direction `(0, 0, -1)`.
-    // TODO(hw-unverified): the whole equation and its rounding (`geometry-engine.md`, "Unverified").
+    /// `max(0, -(N . L))`, specular x the shininess of `max(0, -H . N)` squared and ambient, clamped
+    /// to 5 bits; `H` is the halfway vector of the light and the view direction `(0, 0, -1)`.
+    // TODO(hw-unverified): the widths and the rounding of the equation (`geometry-engine.md`,
+    // "Unverified").
     pub(super) fn vertex_color(&self, normal: [i32; 3], enabled: u32) -> u16 {
-        let dot = |a: [i64; 3], b: [i64; 3]| (0..3).map(|i| a[i] * b[i]).sum::<i64>();
+        // A wrapping sum: the bound on the components depends on `direction`'s range, and a guest
+        // value must never panic the core.
+        let dot = |a: [i64; 3], b: [i64; 3]| {
+            (0..3).fold(0i64, |sum, i| sum.wrapping_add(a[i].wrapping_mul(b[i])))
+        };
         let n = normal.map(i64::from);
         let channel = |shift: u32, of: u16| i64::from((of >> shift) & 0x1F);
         let total = |shift: u32| {
@@ -124,11 +130,14 @@ impl Lighting {
         total(0) | total(5) << 5 | total(10) << 10
     }
 
-    /// The shininess for a specular dot product of `sdot` (0 to 512): the table entry at `sdot / 4`,
-    /// or a linear ramp when the table is off.
-    // TODO(hw-unverified): the index and the ramp (`geometry-engine.md`, "Unverified").
+    /// The shininess for a specular dot product of `sdot` (0 to 512, 512 being 1.0). GBATEK squares
+    /// the level (`max(0, -H . N) ^ 2`) and then looks it up in the table, or uses the level itself
+    /// when the table is off: here the squared level is `sdot x sdot >> 9`, the table entry is at a
+    /// quarter of it, and the ramp is twice that index.
+    // TODO(hw-unverified): the table index and the ramp (`geometry-engine.md`, "Unverified").
     fn shininess(&self, sdot: i64) -> i64 {
-        let index = ((sdot >> 2) as usize).min(TABLE_ENTRIES - 1);
+        let level = (sdot * sdot) >> VECTOR_FRACTION;
+        let index = ((level >> 2) as usize).min(TABLE_ENTRIES - 1);
         match self.use_table {
             true => i64::from(self.table[index / 32][index % 32]),
             false => 2 * index as i64,

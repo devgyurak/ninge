@@ -189,6 +189,10 @@ hardware behavior.
   (`scheduler.md`, "Interleaving"; `timers.md`, "Model" has the same lag for a timer).
 - **The transfer uses the owning CPU's bus view with no TCM**, and the ARM7 side uses the ARM7's
   clock for the register reads it makes.
+- **A geometry burst's pause is state.** The pause between two geometry bursts (the burst's words
+  at one bus cycle each) is the due time of the channel's next start, kept in the channel, so a load
+  rebuilds the start event at that time and not earlier (`geometry-engine.md`, "The FIFO IRQ, the
+  DMA start and the stall").
 - **A unit's write is floored at `now`.** A unit's write is not an instruction, so an event it
   queues (the start of a chained Immediate channel, written through DMAxCNT) may fire no earlier
   than the transfer's own master time. It waits for the next round and fires at `now`, the time a

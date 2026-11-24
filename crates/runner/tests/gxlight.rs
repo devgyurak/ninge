@@ -45,7 +45,7 @@ fn given_the_gxlight_rom_when_it_runs_then_the_two_triangles_have_the_note_colou
     assert_eq!(
         colors(&boot_for(FRAMES)),
         [
-            // TODO(hw-unverified): the lighting equation is the note's model
+            // TODO(hw-unverified): the fixed-point widths of the lighting equation are the note's model
             // (`geometry-engine.md`, "Unverified").
             0x7FDF, 0x7FDF, 0x7FDF, // facing the light: (31, 30, 31)
             0x0804, 0x0804, 0x0804, // turned away: ambient red 4, emission blue 2

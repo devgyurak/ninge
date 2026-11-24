@@ -123,6 +123,19 @@ impl Queue {
         Some(entry)
     }
 
+    /// Takes back the last `count` entries pushed, the newest first: the entries of a command that
+    /// was abandoned before its last parameter arrived. They are always the tail, because the
+    /// engine takes a command's entries only when all of them are queued.
+    pub(super) fn drop_newest(&mut self, count: usize) {
+        (0..count).for_each(|_| {
+            if self.fifo_len > 0 {
+                self.fifo_len -= 1;
+            } else {
+                self.pipe_len = self.pipe_len.saturating_sub(1);
+            }
+        });
+    }
+
     /// Moves the front of the FIFO to the back of the PIPE, if there is one and room for it.
     fn refill_one(&mut self) {
         if self.fifo_len == 0 || self.pipe_len() == PIPE_CAPACITY {

@@ -82,6 +82,18 @@ Sound plays through the default output device, and the device's clock keeps the 
 With `--focus-pause`, ninge pauses, sound included, while its terminal is not focused, and goes
 on when the focus comes back.
 
+**Known limitation: closing a Ghostty tab or window on macOS.** Ghostty keeps a closed tab's
+program running for `undo-timeout` (5 seconds by default) so that the close can be undone, and
+ends it only then, so ninge goes on, sound included, for about that long. In that time ninge
+is told only that it lost the focus, as when you switch to another tab, so it cannot tell a
+close from a switch. To make a close silent at once, either:
+
+- run ninge with `--focus-pause`, which also pauses it whenever you switch away; or
+- set `undo-timeout = 0` in Ghostty's config, which ends ninge at once but turns off undo for
+  every tab; or
+- keep undo elsewhere and give ninge a Ghostty instance of its own:
+  `open -na Ghostty.app --args --undo-timeout=0 -e "$(command -v ninge)" /path/to/program.nds`
+
 Quit with `Ctrl-C` or `Ctrl-Q`. ninge runs programs you have the right to run, such as
 homebrew you built yourself; it ships no ROMs and never needs a BIOS or firmware file.
 

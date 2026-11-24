@@ -111,7 +111,8 @@ pub struct Pace<'a, P, S> {
 /// while its pacer still feeds audio and there is any (none without a ROM), publishes a snapshot,
 /// and waits as `pacer` says. `sleep` is called once a turn; `now` is the pacer's clock.
 ///
-/// While the app is paused ([`App::paused`]: the terminal is not focused) a turn runs no frame
+/// While the app is stopped ([`App::stopped`]: the terminal is not focused, or the debugger has broken
+/// the run) a turn runs no frame
 /// and pushes no audio, so the device plays out what it has and falls silent. It publishes a
 /// snapshot only when an event came in (the pause itself, a resize), and waits [`PAUSED_POLL`]
 /// whatever the pacer says: an audio pacer sees an empty ring and would ask for the next frame at
@@ -130,9 +131,9 @@ pub fn run_emu<P: Pacer, S: AudioSink>(
     now: impl Fn() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) {
-    let mut was_paused = false;
+    let mut was_stopped = false;
     loop {
-        if !app.paused() {
+        if !app.stopped() {
             pace.pacer.frame_started(now());
             pace.sink.frame_started();
         }
@@ -146,8 +147,8 @@ pub fn run_emu<P: Pacer, S: AudioSink>(
         if app.should_quit() || stop.load(Ordering::SeqCst) {
             break;
         }
-        if app.paused() {
-            if !was_paused {
+        if app.stopped() {
+            if !was_stopped {
                 // A failed write is not lost: the memory stays pending, and the flush at the
                 // end of the run tries again and reports it.
                 let _ = app.finish();
@@ -155,11 +156,11 @@ pub fn run_emu<P: Pacer, S: AudioSink>(
             if changed {
                 handoff.publish(|snapshot| app.fill(snapshot));
             }
-            was_paused = true;
+            was_stopped = true;
             sleep(PAUSED_POLL);
             continue;
         }
-        if std::mem::take(&mut was_paused) {
+        if std::mem::take(&mut was_stopped) {
             // This turn began paused, so its start was not announced above.
             pace.pacer.frame_started(now());
             pace.sink.frame_started();

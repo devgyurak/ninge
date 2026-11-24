@@ -2450,3 +2450,19 @@ fn given_the_arm7_without_vram_banks_when_it_reads_the_vram_block_then_it_reads_
     m.write8(&plain(), 0x0400_0240, 0x80);
     assert_eq!(m.read32_arm7(0, 0x0680_0000), 0);
 }
+
+/// (the fetch of a word under an enabled DTCM, a data read of it): the code under the DTCM is
+/// what an instruction fetch finds, and the data bus finds the DTCM (empty).
+fn fetch_under_dtcm() -> (u32, u32) {
+    let mut m = Bench::new();
+    m.arm9(plain()).write32(DT, X);
+    let tcm = cfg(off(), on(DT, DTCM_PHYS));
+    let fetched = super::peek_fetch::<true, 4>(&m.memory, &m.io, &tcm, &[], m.scheduler.now(), DT);
+    let data = super::peek::<true, 4>(&m.memory, &m.io, &tcm, &[], m.scheduler.now(), DT);
+    (u32::from_le_bytes(fetched), u32::from_le_bytes(data))
+}
+
+#[test]
+fn given_code_under_an_enabled_dtcm_when_peeked_as_a_fetch_then_the_code_is_read_not_the_dtcm() {
+    assert_eq!(fetch_under_dtcm(), (X, 0));
+}

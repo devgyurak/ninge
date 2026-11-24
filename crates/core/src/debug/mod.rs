@@ -12,11 +12,14 @@
 //! minor release, [`Inspect`] and [`Machine::inspect`] included. The debugger panels (#56-#59)
 //! decide what becomes stable.
 //!
-//! Breakpoint and trace hooks (plan §4.1) are not here yet: the debugger is a parallel track, and
-//! they join this module with its stepping and trace panels (#56, #60).
+//! Breakpoints live in `Machine::run_until` (a `StopSet`, `machine/run.rs`), not here: the stop
+//! conditions belong to the call, so this view stays read-only. [`Inspect::disassemble_arm9`] is
+//! the disassembly the debugger's panel shows. Trace hooks (plan §4.1) are not here yet: they join
+//! this module with the trace panel (#60).
 
-use crate::bus::{BANK_COUNT, TcmConfig};
+use crate::bus::{BANK_COUNT, TcmConfig, peek_fetch};
 use crate::cpu::Cpu;
+use crate::cpu::{ArmDisassembly, ThumbDisassembly, disassemble_arm, disassemble_thumb};
 use crate::input::Input;
 use crate::machine::Machine;
 
@@ -42,6 +45,35 @@ pub use crate::io::timing::Timing;
 pub use crate::rtc::{Chip, Register, Session};
 pub use crate::scheduler::{Event, EventKind, LineEvent, Scheduler};
 pub use crate::spu::{Capture, Channel, Spu};
+
+/// One disassembled instruction: Copy and allocation-free, formatted by `Display` when drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Instruction {
+    /// A 32-bit ARM instruction.
+    Arm(ArmDisassembly),
+    /// A 16-bit Thumb instruction (a BL pair is one 32-bit instruction).
+    Thumb(ThumbDisassembly),
+}
+
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Arm(arm) => arm.fmt(f),
+            Self::Thumb(thumb) => thumb.fmt(f),
+        }
+    }
+}
+
+/// One line of a disassembly listing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Disassembled {
+    /// Its address.
+    pub addr: u32,
+    /// Its encoding: a Thumb halfword is in the low 16 bits.
+    pub word: u32,
+    /// The disassembled instruction.
+    pub instruction: Instruction,
+}
 
 /// A read-only view of one [`Machine`], from [`Machine::inspect`]. It borrows the machine, so the
 /// machine cannot run while a view of it is alive.
@@ -295,6 +327,19 @@ impl<'a> Inspect<'a> {
         )
     }
 
+    /// Reads `N` bytes as the ARM9 would fetch an instruction there, without side effects: the
+    /// DTCM does not answer a fetch, so code under it reads as the code it is.
+    fn arm9_peek_fetch<const N: usize>(&self, addr: u32) -> [u8; N] {
+        peek_fetch::<true, N>(
+            &self.machine.memory,
+            &self.machine.io,
+            &TcmConfig::from_cp15(self.machine.arm9.cp15()),
+            &self.machine.rom,
+            self.machine.scheduler.now(),
+            addr,
+        )
+    }
+
     /// Reads `N` bytes as the ARM7 data bus would at its clock `now`, without side effects. The
     /// ARM7 has no TCM.
     fn arm7_peek<const N: usize>(&self, now: u64, addr: u32) -> [u8; N] {
@@ -306,6 +351,51 @@ impl<'a> Inspect<'a> {
             now,
             addr,
         )
+    }
+
+    /// `count` instructions of the ARM9 as it would fetch them, the first one `scroll`
+    /// instructions past the next one to run (negative is before it), in the CPU's current
+    /// instruction set: 4 bytes apart in ARM state, 2 in Thumb state (`docs/hw/disassembly.md`).
+    /// Memory is read without side effects, the way an instruction fetch sees it (not the data
+    /// bus: the DTCM does not answer). Allocation-free: the host collects what it needs.
+    // The debugger's disassembly panel (#56) shows it.
+    pub fn disassemble_arm9(
+        &self,
+        scroll: i32,
+        count: usize,
+    ) -> impl Iterator<Item = Disassembled> + '_ {
+        let cpu = self.arm9();
+        let thumb = cpu.is_thumb();
+        let step: u32 = if thumb { 2 } else { 4 };
+        let first = cpu
+            .next_instruction()
+            .wrapping_add((scroll as u32).wrapping_mul(step));
+        (0..count as u32).map(move |n| {
+            let addr = first.wrapping_add(n.wrapping_mul(step));
+            match thumb {
+                true => {
+                    let half = u16::from_le_bytes(self.arm9_peek_fetch(addr));
+                    let next = u16::from_le_bytes(self.arm9_peek_fetch(addr.wrapping_add(2)));
+                    Disassembled {
+                        addr,
+                        word: u32::from(half),
+                        instruction: Instruction::Thumb(disassemble_thumb::<true>(
+                            half,
+                            Some(next),
+                            addr,
+                        )),
+                    }
+                }
+                false => {
+                    let word = u32::from_le_bytes(self.arm9_peek_fetch(addr));
+                    Disassembled {
+                        addr,
+                        word,
+                        instruction: Instruction::Arm(disassemble_arm::<true>(word, addr)),
+                    }
+                }
+            }
+        })
     }
 
     /// Reads a byte as the ARM9 data bus would, without side effects.

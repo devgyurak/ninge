@@ -1387,3 +1387,67 @@ fn given_a_render_loop_waiting_on_another_thread_when_a_frame_is_published_then_
         (true, true, true)
     );
 }
+
+fn debugger_break() -> Cue {
+    Cue::Send(HostEvent::Action(Action::Break))
+}
+
+fn debugger_resume() -> Cue {
+    Cue::Send(HostEvent::Action(Action::Resume))
+}
+
+#[test]
+fn given_a_break_before_the_first_turn_when_the_emu_runs_then_no_frame_runs_and_it_polls() {
+    let run = scripted_with(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![(0, debugger_break()), (3, quit())],
+    );
+    assert_eq!(
+        (frames(&run.app), run.waits),
+        (Some(0), vec![PAUSED_POLL; 3])
+    );
+}
+
+#[test]
+fn given_a_break_and_nothing_else_when_turns_pass_then_one_snapshot_is_published() {
+    let run = scripted_with(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![(0, debugger_break()), (3, quit())],
+    );
+    let published = |seen: &Option<Seen>| seen.is_some();
+    assert_eq!(
+        run.seen.iter().map(published).collect::<Vec<_>>(),
+        vec![true, false, false]
+    );
+}
+
+#[test]
+fn given_a_break_then_a_panel_event_when_turns_pass_then_the_change_is_published_while_broken() {
+    let scroll = Cue::Send(HostEvent::Action(Action::NextPanel));
+    let run = scripted_with(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![(0, debugger_break()), (2, scroll), (4, quit())],
+    );
+    let published = |seen: &Option<Seen>| seen.is_some();
+    assert_eq!(
+        run.seen.iter().map(published).collect::<Vec<_>>(),
+        vec![true, false, true, false]
+    );
+}
+
+#[test]
+fn given_a_break_then_a_resume_when_the_emu_runs_then_frames_go_on_from_the_resume() {
+    let run = scripted_with(
+        smoke_app(),
+        None,
+        &mut FramePacer::new(Instant::now()),
+        vec![(0, debugger_break()), (2, debugger_resume()), (4, quit())],
+    );
+    assert_eq!(frames(&run.app), Some(2));
+}

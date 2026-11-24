@@ -330,3 +330,67 @@ fn given_a_focused_run_when_drawing_then_the_panel_does_not_say_paused() {
     app.apply(Action::FocusGained);
     assert!(!panel_of(app).contains("paused:"));
 }
+
+// ------------------------------------------------------------------------- debugger panels
+
+/// An app running the smoke ROM.
+fn machine_app() -> App {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testroms/build/smoke.nds"),
+    )
+    .expect("smoke ROM is built");
+    let machine = crate::source::boot(rom).expect("valid header");
+    App::new(size()).with_source(Source::Machine(Box::new(machine)))
+}
+
+#[test]
+fn given_a_machine_when_drawing_then_the_registers_panel_lists_both_cpus() {
+    let text = panel_of(machine_app());
+    assert_eq!(
+        (text.contains("ARM9"), text.contains("ARM7 pc")),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_the_dummy_pattern_when_drawing_then_the_registers_panel_lists_no_cpu() {
+    assert!(!panel_of(App::new(size())).contains("ARM9"));
+}
+
+#[test]
+fn given_a_machine_when_drawing_then_the_disassembly_marks_the_next_instruction() {
+    let app = machine_app();
+    let marked = format!(
+        ">{:08x}",
+        app.machine()
+            .expect("a machine")
+            .inspect()
+            .arm9()
+            .next_instruction()
+    );
+    assert!(panel_of(app).contains(&marked));
+}
+
+#[test]
+fn given_a_broken_run_when_drawing_then_the_panel_says_break() {
+    let mut app = machine_app();
+    app.apply(Action::Break);
+    assert!(panel_of(app).contains("BREAK"));
+}
+
+#[test]
+fn given_a_run_that_is_not_broken_when_drawing_then_the_panel_does_not_say_break() {
+    assert!(!panel_of(machine_app()).contains("BREAK"));
+}
+
+#[test]
+fn given_the_registers_focus_when_drawing_then_its_title_is_marked() {
+    assert!(panel_of(machine_app()).contains("Registers *"));
+}
+
+#[test]
+fn given_the_disassembly_focus_when_drawing_then_its_title_is_marked() {
+    let mut app = machine_app();
+    app.apply(Action::NextPanel);
+    assert!(panel_of(app).contains("Disassembly *"));
+}

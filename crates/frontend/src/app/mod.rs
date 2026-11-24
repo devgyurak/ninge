@@ -21,6 +21,13 @@
 //!
 //! The model and the renderer share nothing but the snapshot.
 //!
+//! # The debugger (#322, part 5)
+//!
+//! The debugger's panels are data too: [`crate::debugger`] fills plain view models from
+//! `Machine::inspect` on this thread, they ride in the [`Snapshot`], and what a panel owns (which one
+//! has the focus, the disassembly's scroll) is [`App::panel`]. [`Action::Break`] stops the run like a
+//! pause does ([`App::stopped`]); the emu loop then publishes a snapshot only when an event came in.
+//!
 //! # Input (#44)
 //!
 //! Input mapping is a pure function from a terminal event to an [`Action`] ([`map_event`]) and
@@ -45,6 +52,7 @@
 
 use crate::clock::local_wall_time;
 use crate::cursor::{self, Cursor};
+use crate::debugger::{PanelState, Shown};
 use crate::gamepad::{Pad, PadEvent};
 use crate::input::Keys;
 use crate::layout::{Areas, TermSize, compute};
@@ -77,6 +85,16 @@ pub enum Action {
     FocusLost,
     /// The terminal has the focus again: a paused run goes on.
     FocusGained,
+    /// The debugger stops the run: no frame runs until [`Action::Resume`] (#53 binds it to a key).
+    Break,
+    /// The debugger lets the run go on.
+    Resume,
+    /// The debugger gives the focus to its other panel.
+    NextPanel,
+    /// The debugger scrolls the disassembly by this many instructions (negative is up).
+    Scroll(i32),
+    /// The debugger shows the next instruction to run again.
+    Recenter,
 }
 
 /// Whether `event` is the press of a quit key: Ctrl-C or Ctrl-Q (raw mode delivers them as keys).
@@ -145,6 +163,10 @@ pub struct App {
     pen: Pen,
     /// What a mouse report's column and row count.
     mouse_unit: Unit,
+    /// What the debugger panels own: which has the focus and how far the disassembly is scrolled.
+    panel: PanelState,
+    /// Whether the debugger has stopped the run (the break state).
+    broken: bool,
 }
 
 impl App {
@@ -168,6 +190,8 @@ impl App {
             pads_connected: 0,
             pen: Pen::new(),
             mouse_unit: Unit::Cells,
+            panel: PanelState::default(),
+            broken: false,
         }
     }
 
@@ -314,6 +338,11 @@ impl App {
                 self.focused = false;
             }
             Action::FocusGained => self.focused = true,
+            Action::Break => self.broken = true,
+            Action::Resume => self.broken = false,
+            Action::NextPanel => self.panel.next_panel(),
+            Action::Scroll(rows) => self.panel.scroll_by(rows),
+            Action::Recenter => self.panel.recenter(),
             Action::None | Action::Resized => {}
         }
     }
@@ -328,6 +357,22 @@ impl App {
     /// reported getting it back. The emu loop runs no frame while this holds.
     pub fn paused(&self) -> bool {
         self.focus_pause && !self.focused
+    }
+
+    /// Whether the debugger has stopped the run: the break state. Like a pause it runs no frame,
+    /// and the emu loop publishes a snapshot only when an event changed what the panels show.
+    pub fn broken(&self) -> bool {
+        self.broken
+    }
+
+    /// Whether the emu loop runs no frame: paused without the focus, or stopped by the debugger.
+    pub fn stopped(&self) -> bool {
+        self.paused() || self.broken
+    }
+
+    /// What the debugger panels own.
+    pub fn panel(&self) -> PanelState {
+        self.panel
     }
 
     /// The current layout, `None` when the terminal is too small.
@@ -387,6 +432,10 @@ impl App {
         snapshot.pad_available = self.pad_available;
         snapshot.pads_connected = self.pads_connected;
         snapshot.paused = self.paused();
+        let shown = Shown::when(self.areas.is_some());
+        snapshot
+            .debug
+            .fill(self.machine(), self.panel, self.broken, shown);
         if self.areas.is_some() {
             self.fill_screens(snapshot);
         } else {

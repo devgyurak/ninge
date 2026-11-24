@@ -71,9 +71,10 @@ drops writes.
 | 14 | Rear-plane mode: 0 = blank, 1 = bitmap |
 | 15-31 | Not used, read 0 |
 
-Bits 0-11 and 14 are plain read/write (mask `4FFFh`). Bits 12 and 13 are status flags raised by the
-rendering engine; there is no rendering engine in the stub, so they are not stored: they read 0 and
-a write of 1 to them changes nothing (see "Unverified"). A byte write changes only its byte.
+Bits 0-11 and 14 are plain read/write (mask `4FFFh`). Bits 12 and 13 are status flags, not stored
+bits: bit 13 is raised by the geometry engine when a Polygon or Vertex RAM is full and a write of 1
+clears it (`geometry-engine.md`, "DISP3DCNT bits 12 and 13"); bit 12 is the rendering engine's
+(#49) and reads 0 until it exists. A byte write changes only its byte.
 
 ### GXSTAT bits (`0400_0600h`)
 
@@ -323,7 +324,8 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **A dummy parameter in projection mode.** GBATEK is unsure whether POP, STORE and RESTORE in
   projection mode take a parameter word into the FIFO. The stub requires it. — `gpu3d/`.
 - **The texture stack.** GBATEK's table says "one..none?" and gives no error rule or GXSTAT bits. The
-  stub treats it like the projection stack (1-bit pointer, entry 1 invalid), and a write of 1 to
+  model treats it like the projection stack (1-bit pointer; entry 1 mirrors entry 0 and raises the
+  error flag, `geometry-engine.md`, "Matrices"), and a write of 1 to
   GXSTAT bit 15 resets it too ("probably", says GBATEK). — `gpu3d/` — verify by a test ROM pushing
   twice in mode 3.
 - **The invalid entries of the coordinate stack.** GBATEK says "entries 1 or 1Fh..3Fh" and also that
@@ -338,8 +340,9 @@ hardware, or a comparison with the reference emulator used as an oracle.
 - **RDLINES_COUNT.** A real value depends on the renderer. The stub reads 46, the largest the field
   can hold (a renderer that always keeps its 48-line buffer full), so a program that checks for
   underflow danger sees none. — `gpu3d/`.
-- **DISP3DCNT bits 12 and 13** are not stored and a write of 1 to them does nothing. GBATEK says only
-  "underflow/acknowledge". — `gpu3d/` — verify by a test ROM writing 1 to them.
+- **DISP3DCNT bits 12 and 13.** GBATEK says only "underflow/acknowledge". The model: bit 13 is
+  set by an overflow and cleared by a write of 1, bit 12 reads 0 (and a write of 1 to it does
+  nothing) until the rasterizer exists. — `gpu3d/` — verify by a test ROM writing 1 to them.
 - **Unnamed addresses** between `0320h` and `06A3h` (the gaps in the table above) read 0 and drop
   writes. — `gpu3d/`, `io/map.rs`.
 - **A write of 0 to GXSTAT bit 15** changes nothing, and the pointer moves even when a stack

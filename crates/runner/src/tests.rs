@@ -162,6 +162,9 @@ fn command(args: &[&str]) -> Result<Command, RunnerError> {
 fn describe(parsed: Result<Command, RunnerError>) -> String {
     match parsed {
         Ok(Command::Run(args)) => format!("run {} {}", args.rom().display(), args.frames()),
+        Ok(Command::Replay(args)) => {
+            format!("replay {} {}", args.rom().display(), args.log().display())
+        }
         Ok(Command::CpuSuite(dir)) => format!("cpu-suite {}", dir.display()),
         Err(RunnerError::Usage(message)) => {
             format!("usage: {}", message.lines().next().unwrap_or(""))
@@ -176,6 +179,19 @@ fn given_cpu_suite_and_a_directory_when_parsing_a_command_then_it_selects_the_su
         describe(command(&["cpu-suite", "some/dir"])),
         "cpu-suite some/dir"
     );
+}
+
+#[test]
+fn given_replay_a_rom_and_a_log_when_parsing_a_command_then_it_selects_a_replay() {
+    assert_eq!(
+        describe(command(&["replay", "game.nds", "run.ninput"])),
+        "replay game.nds run.ninput"
+    );
+}
+
+#[test]
+fn given_a_dot_slash_rom_named_replay_when_parsing_a_command_then_it_is_still_a_run() {
+    assert_eq!(describe(command(&["./replay"])), "run ./replay 1");
 }
 
 #[test]

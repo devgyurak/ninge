@@ -79,6 +79,19 @@ Only newline-terminated lines count. A final line with no `\n` is dropped, becau
 may have been cut off in the middle of it, and the parser reports that it dropped one. This is
 not an error: a log cut off mid-write replays as its prefix.
 
+## Replaying
+
+```bash
+ninge-runner replay <rom> <log> [--frames N] [--save PATH]
+```
+
+It runs the log's frames, or `N` frames: frames past the end of the log get no input. The
+save file is read the same way a plain run reads it (`--save`, else beside the ROM) and is
+**never written**, so a replay can be repeated; it must hold what it held when the recording
+began, which the header's hash checks. It prints the usual `frames=N top=... bottom=...` line.
+A log that is refused, or that was recorded for another ROM or save, exits 5 before any frame
+runs; a dropped partial last line is reported on stderr.
+
 ## Compatibility
 
 A new field gets a new key and a default, so an old log stays valid; an old reader refuses the

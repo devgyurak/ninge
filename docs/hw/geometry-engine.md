@@ -292,6 +292,15 @@ SWAP_BUFFERS also carries two parameter bits that apply to commands *after* it: 
 polygons sorted manually) and bit 1 (depth by W instead of Z). The rendering registers (DISP3DCNT
 and `0400_0330h`-`0400_03BFh`) are not swapped.
 
+### What the rasterizer reads
+
+The set the last SWAP_BUFFERS handed on (`Gpu3d::render_ram`): its polygons in the order they were
+completed, each with its attributes (POLYGON_ATTR as of BEGIN_VTXS, TEXIMAGE_PARAM, PLTT_BASE) and
+3 to 10 indices into the same set's vertices, in drawing order; each vertex has clip coordinates
+(1.19.12), an RGB555 colour and S, T (1.11.4). Screen coordinates are derived from the VIEWPORT
+value (`Gpu3d::viewport`) at render time, as the formula above says. Vertex RAM is filled in the
+order the vertices arrived, a vertex shared by a strip once.
+
 ### SWAP_BUFFERS
 
 The command is held until line 192 begins (VBlank), the engine counts as busy during the wait, and
@@ -435,6 +444,9 @@ oracle.
   392 starts at the line's start, and how a swap issued during VBlank behaves. The model waits for
   the next line-192 start, or runs at once if the current line is already in 192-262 (see
   `display-timing.md`). — `gpu3d/`.
+- **VIEWPORT, TEXIMAGE_PARAM and PLTT_BASE** are stored and copied into each polygon; what they do
+  is the rasterizer's and the texture unit's (#49, #50). POLYGON_ATTR bit 13 (1-dot polygons) and
+  DISP_1DOT_DEPTH are not applied by the geometry engine. — `gpu3d/polygon.rs`.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.
@@ -464,7 +476,12 @@ oracle.
   linearly in clip space along the edge and rounds toward negative infinity. The "one pixel below
   or right of the edge" exception is not modelled. — `gpu3d/`.
 - **Strip clipping**: a clipped polygon in a strip becomes separate polygons and the strip
-  continues from the unclipped vertices. The model does that. — `gpu3d/`.
+  continues from the unclipped vertices. The model stores the clipped polygon's corners afresh and
+  stores the strip's own vertices again when a later polygon uses them. — `gpu3d/polygon.rs`.
+- **The order of a clipped polygon's corners** (where the list starts after the six planes). The
+  model clips plane by plane in the order left, right, bottom, top, near, far, each pass starting
+  at the second corner of the first edge, so the first corner moves on by one for every plane; the
+  cycle is what hardware shows, the start is the model's. — `gpu3d/polygon.rs` (`clip`).
 - **RAM overflow behavior**: what is dropped (the polygon, the vertex, or both), and when bit 13 is
   set. The model drops the whole polygon that does not fit and sets the flag. — `gpu3d/`.
 - **RAM_COUNT** when a swap and a VBlank clear coincide. — `gpu3d/`.

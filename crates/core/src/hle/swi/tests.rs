@@ -11,6 +11,7 @@ use super::copy::{cpu_fast_set, cpu_set};
 use super::lz77::{Stream, decode, decode_vram, decode_wram};
 use super::math::{divide, sqrt};
 use super::misc::crc16_halfwords;
+use super::sound::{pitch, sine, volume};
 use crate::cpu::Bus;
 use proptest::prelude::*;
 
@@ -657,4 +658,191 @@ fn given_the_largest_size_when_the_source_is_all_zero_then_decoding_ends_after_t
     let mut stream = CountStream { count: 0 };
     decode(0x00FF_FFFF, &mut stream);
     assert_eq!(stream.count, 0x00FF_FFFF);
+}
+
+// ------------------------------------------------------------------------ the sound tables
+//
+// Expected values are worked out by hand from the formulas of `docs/hw/hle-swi.md` ("The sound
+// table SWIs"), never from running the code. Each anchor sits at least 0.05 away from a rounding
+// boundary, so the pinned value does not depend on how the product is computed.
+
+/// The `(index, expected)` pairs whose entry of `table` differs, as `(index, expected, got)`.
+fn table_mismatches(table: fn(u32) -> u32, anchors: &[(u32, u32)]) -> Vec<(u32, u32, u32)> {
+    anchors
+        .iter()
+        .map(|&(i, want)| (i, want, table(i)))
+        .filter(|&(_, want, got)| want != got)
+        .collect()
+}
+
+/// The volume divider factor `k` of entry `i` ("The volume table").
+fn volume_k(i: u32) -> u32 {
+    match i {
+        0..=482 => 16,
+        483..=602 => 4,
+        603..=662 => 2,
+        _ => 1,
+    }
+}
+
+/// Indices `i` in `0..len` where `entry(i + 1) < entry(i)`.
+fn falls(table: fn(u32) -> u32, len: u32) -> Vec<u32> {
+    (0..len - 1).filter(|&i| table(i + 1) < table(i)).collect()
+}
+
+/// Indices `i` in `0..len` where `entry(i + 1) <= entry(i)`.
+fn non_rises(table: fn(u32) -> u32, len: u32) -> Vec<u32> {
+    (0..len - 1).filter(|&i| table(i + 1) <= table(i)).collect()
+}
+
+/// Indices in `0..len` whose entry is above `max`.
+fn above(table: fn(u32) -> u32, len: u32, max: u32) -> Vec<u32> {
+    (0..len).filter(|&i| table(i) > max).collect()
+}
+
+/// Indices `i` inside one volume range (`first..=last`) where the entry falls.
+fn volume_falls_within(first: u32, last: u32) -> Vec<u32> {
+    (first..last)
+        .filter(|&i| volume(i + 1) < volume(i))
+        .collect()
+}
+
+/// Indices `i` where the level (entry over divider, in 16ths) falls from `i` to `i + 1`.
+fn volume_level_falls() -> Vec<u32> {
+    (0..723)
+        .filter(|&i| volume(i + 1) * (16 / volume_k(i + 1)) < volume(i) * (16 / volume_k(i)))
+        .collect()
+}
+
+#[test]
+fn given_the_sine_formula_when_anchor_entries_are_read_then_each_is_the_rounded_product() {
+    // entry i = round(sin(i * 90deg / 64) * 7FFFh)
+    // 1:  sin(1.40625deg) * 32767 = 0.0245412 * 32767 = 804.1   -> 804
+    // 16: sin(22.5deg)    * 32767 = 0.3826834 * 32767 = 12539.4 -> 12539
+    // 32: sin(45deg)      * 32767 = 0.7071068 * 32767 = 23169.8 -> 23170
+    // 48: sin(67.5deg)    * 32767 = 0.9238795 * 32767 = 30272.8 -> 30273
+    // 63: sin(88.59deg)   * 32767 = 0.9996988 * 32767 = 32757.1 -> 32757
+    let anchors = [
+        (0, 0),
+        (1, 804),
+        (16, 12539),
+        (32, 23170),
+        (48, 30273),
+        (63, 32757),
+    ];
+    assert_eq!(table_mismatches(sine, &anchors), vec![]);
+}
+
+#[test]
+fn given_the_pitch_formula_when_anchor_entries_are_read_then_each_is_the_rounded_product() {
+    // entry i = round((2^(i/768) - 1) * 10000h)
+    // 64:  (2^(1/12) - 1) * 65536 = 0.0594631 * 65536 = 3896.97  -> 3897
+    // 256: (2^(1/3) - 1)  * 65536 = 0.2599210 * 65536 = 17034.19 -> 17034
+    // 384: (sqrt 2 - 1)   * 65536 = 0.4142136 * 65536 = 27145.90 -> 27146
+    // 512: (2^(2/3) - 1)  * 65536 = 0.5874011 * 65536 = 38495.92 -> 38496
+    // 767: 0.9981957 * 65536 = 65417.76 -> 65418 (FF8Ah)
+    let anchors = [
+        (0, 0),
+        (64, 3897),
+        (256, 17034),
+        (384, 27146),
+        (512, 38496),
+        (767, 65418),
+    ];
+    assert_eq!(table_mismatches(pitch, &anchors), vec![]);
+}
+
+#[test]
+fn given_the_volume_formula_when_anchor_entries_are_read_then_each_is_the_rounded_min() {
+    // entry i = min(7Fh, round(127 * 10^((i - 723) / 200) * k))
+    // 723: 127 * 1                      = 127
+    // 663: 127 * 10^-0.3   = 127 * 0.5011872          = 63.65  -> 64   (k = 1)
+    // 662: 254 * 10^-0.305 = 254 * 0.4954502          = 125.84 -> 126  (k = 2)
+    // 603: 254 * 10^-0.6   = 254 * 0.2511886          = 63.80  -> 64   (k = 2)
+    // 602: 508 * 10^-0.605 = 508 * 0.2483133          = 126.14 -> 126  (k = 4)
+    // 483: 508 * 10^-1.2   = 508 * 0.0630957          = 32.05  -> 32   (k = 4)
+    // 482: 2032 * 10^-1.205 = 2032 * 0.0623735        = 126.74 -> 127  (k = 16)
+    // 300: 2032 * 10^-2.115 = 2032 * 0.0076736        = 15.59  -> 16   (k = 16)
+    // 100: 2032 * 10^-3.115 = 2032 * 0.00076736       = 1.56   -> 2    (k = 16)
+    // Entries 0, 2 and 10 are left out: their products (0.493, 0.505, 0.553) sit too close to
+    // the boundary at 0.5 to pin.
+    let anchors = [
+        (723, 127),
+        (663, 64),
+        (662, 126),
+        (603, 64),
+        (602, 126),
+        (483, 32),
+        (482, 127),
+        (300, 16),
+        (100, 2),
+    ];
+    assert_eq!(table_mismatches(volume, &anchors), vec![]);
+}
+
+#[test]
+fn given_an_index_past_a_table_when_it_is_read_then_the_entry_is_0() {
+    // `hle-swi.md`: "an index outside a table's range gives 0".
+    let got = [
+        sine(64),
+        sine(u32::MAX),
+        pitch(768),
+        pitch(u32::MAX),
+        volume(724),
+        volume(u32::MAX),
+    ];
+    assert_eq!(got, [0; 6]);
+}
+
+#[test]
+fn given_the_whole_sine_table_when_walked_then_no_entry_exceeds_7ff5h() {
+    assert_eq!(above(sine, 64, 0x7FF5), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_whole_sine_table_when_walked_then_no_entry_falls() {
+    assert_eq!(falls(sine, 64), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_whole_pitch_table_when_walked_then_no_entry_exceeds_ff8ah() {
+    assert_eq!(above(pitch, 768, 0xFF8A), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_whole_pitch_table_when_walked_then_every_entry_is_above_the_one_before() {
+    // 64 entries per semitone: each step is at least 65536 * ln 2 / 768 = 59 units, so rounding
+    // never makes two neighbours equal.
+    assert_eq!(non_rises(pitch, 768), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_whole_volume_table_when_walked_then_no_entry_exceeds_7fh() {
+    assert_eq!(above(volume, 724, 0x7F), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_four_volume_ranges_when_walked_then_no_entry_falls_inside_a_range() {
+    let failures: Vec<u32> = [(0, 482), (483, 602), (603, 662), (663, 723)]
+        .iter()
+        .flat_map(|&(first, last)| volume_falls_within(first, last))
+        .collect();
+    assert_eq!(failures, Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_whole_volume_table_when_the_divider_is_applied_then_the_level_never_falls() {
+    assert_eq!(volume_level_falls(), Vec::<u32>::new());
+}
+
+#[test]
+fn given_the_three_tables_when_the_largest_entries_are_read_then_they_are_the_documented_tops() {
+    // GBATEK, via `hle-swi.md`: 7FF5h, FF8Ah and 7Fh are the largest entries.
+    assert_eq!([sine(63), pitch(767), volume(723)], [0x7FF5, 0xFF8A, 0x7F]);
+}
+
+#[test]
+fn given_the_sine_and_pitch_tables_when_entry_0_is_read_then_it_is_0() {
+    // sin 0 = 0 and 2^0 - 1 = 0.
+    assert_eq!([sine(0), pitch(0)], [0, 0]);
 }

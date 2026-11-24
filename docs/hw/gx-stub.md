@@ -5,7 +5,9 @@ Load/Multiply" (MTX_MODE), "DS 3D Matrix Stack", "DS 3D Status", "DS 3D Tests", 
 (the start-timing table), "DS Interrupts" (IF bit 21), "DS Power Control" (POWCNT1).
 Used by: `crates/core/src/gpu3d/`, `crates/core/src/io/map.rs`, `crates/core/src/io/dma/`
 Phase: 5 (#43). Everything past the stub is Phase 7 (#48 geometry engine, #49-#52 rendering, #53
-debugger panels).
+debugger panels). The geometry engine itself is described in `geometry-engine.md`; this note keeps
+the register front (the decoder, the ports, GXSTAT's layout, the stack pointers) and the stub model
+that the PRs of #48 replace one by one.
 
 The ARM9 programs of a commercial game start the 3D hardware long before they draw anything: they
 write display lists to the command FIFO (by DMA, by `STM`, or by the command ports), poll GXSTAT
@@ -25,13 +27,12 @@ POWCNT1 bits 2 and 3 gating the ports.
 and dropped) the moment its last parameter arrives. The FIFO and the PIPE never hold an entry, so a
 program can never see a full or half-full FIFO, a busy engine, a busy stack, or a stalled CPU. There
 is no per-command cycle cost, no stall on a full FIFO, and SWAP_BUFFERS does not wait for VBlank.
-`TODO(phase7)` (#48): the geometry engine replaces this with the real FIFO, the PIPE, the command
+`TODO(phase7)` (#48): `geometry-engine.md` replaces this with the real FIFO, the PIPE, the command
 timings and the swap at VBlank.
 
-**Not implemented (`TODO(phase7)`):** matrix arithmetic (the current, projection, vector and clip
-matrices; CLIPMTX_RESULT and VECMTX_RESULT read 0), vertices and polygons, lighting, textures,
-the rendering registers' effect, POS_TEST and VEC_TEST results, BOX_TEST's real result, RAM_COUNT,
-and the lock-up SWAP_BUFFERS has after an incomplete polygon list.
+**Not implemented (`TODO(phase7)`):** matrix arithmetic, vertices and polygons, lighting, textures,
+POS_TEST, VEC_TEST and BOX_TEST results, RAM_COUNT and the lock-up SWAP_BUFFERS has after an
+incomplete polygon list; all in `geometry-engine.md`. The rendering registers' effect is #49-#52.
 
 ## Registers
 

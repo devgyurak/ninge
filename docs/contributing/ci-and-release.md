@@ -32,6 +32,14 @@ everyone. The repository is `github.com/devgyurak/ninge`.
 `main`, and a `develop` merge that changes dependencies (`cache.yml`). Tests run in shards
 (`NINGE_TEST_SHARD`), the coverage floor checked over all of them.
 
+A PR whose base changes to `develop` or `main` (the next PR of a stack) gets no `pull_request`
+run: GitHub sends a change of base as `edited`, the same event as a new title. `retarget.yml`
+handles it: for a change of base only, it waits for the PR's merge commit with the new base and
+starts `ci.yml` and `agents.yml` on the head branch (`workflow_dispatch`) with that commit as
+input. Every job checks the commit out, and the checks land on the head commit, where the
+rulesets look for them. `ci.yml` does not listen for `edited` itself: a title change would
+rerun everything, or skip it, and a skipped job counts as a passed required check.
+
 ### Documentation-only changes
 
 A documentation-only change (`scripts/docs_only.py`: `docs/`, the agent settings, Markdown

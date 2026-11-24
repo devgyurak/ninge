@@ -1,0 +1,68 @@
+name: retarget
+
+# Runs ci.yml and agents.yml for a pull request whose base changed to develop or main — the next
+# PR of a hand-made stack, retargeted once the one below it merged (the `commit` skill). GitHub
+# sends a change of base as `edited`, which ci.yml does not listen for (it says why), so without
+# this the retargeted PR has no run, and so none of the required checks, until its branch moves.
+#
+# The run it starts is a workflow_dispatch on the PR's head branch, which puts the checks on the
+# head commit, where the branch rulesets look for them; the PR's merge commit with the new base
+# goes in as an input, and every job checks that out, as a pull_request run would.
+
+on:
+  pull_request:
+    types: [edited]
+    branches: [develop, main]
+
+permissions:
+  actions: write # gh workflow run
+  contents: read
+  pull-requests: read
+
+jobs:
+  dispatch:
+    name: retarget
+    # `changes.base` is there only when the base changed: a title or body edit skips the job,
+    # whose check is not a required one. A fork's PR is left alone: its token cannot dispatch,
+    # and a workflow cannot be dispatched on a fork's branch. A push to it runs CI as usual.
+    if: github.event.changes.base && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      # GitHub computes the merge with the new base in the background. Until it has, `mergeable`
+      # is null and merge_commit_sha may still name the merge with the old base, so the commit
+      # is taken only once its parents are the base and head the API reports now.
+      - name: Merge commit with the new base
+        id: merge
+        run: |
+          for _ in $(seq 1 36); do
+            PULL=$(gh api "repos/$GH_REPO/pulls/$PR" \
+              --jq '[.mergeable, .merge_commit_sha, .base.sha, .head.sha] | map(tostring) | join(" ")' || true)
+            read -r MERGEABLE MERGE_SHA BASE_SHA HEAD_SHA <<< "$PULL"
+            if [ "$MERGEABLE" = false ]; then
+              echo "#$PR does not merge cleanly into its new base. Merge or rebase it; the push runs CI." >&2
+              exit 1
+            fi
+            if [ "$MERGEABLE" = true ]; then
+              PARENTS=$(gh api "repos/$GH_REPO/commits/$MERGE_SHA" --jq '[.parents[].sha] | join(" ")' || true)
+              if [ "$PARENTS" = "$BASE_SHA $HEAD_SHA" ]; then
+                echo "sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "GitHub did not compute #$PR's merge commit with its new base within three minutes." >&2
+          exit 1
+
+      - name: Start ci and agents on the merge commit
+        env:
+          MERGE_SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          for workflow in ci.yml agents.yml; do
+            gh workflow run "$workflow" --ref "$HEAD_REF" -f pull_request="$PR" -f merge_sha="$MERGE_SHA"
+          done

@@ -4,7 +4,26 @@
 //! which DISPCNT fields exist, and [`EngineInputs`] is what the machine hands a line: the memory
 //! that engine reads. The spec is a constant, not state, so it is not saved.
 
+use crate::SCREEN_WIDTH;
 use crate::bus::{ExtPalette, VramWindow};
+
+/// One pixel of the 3D layer: RGB555 colour and a 5-bit alpha, 0 transparent to 31 opaque
+/// (`docs/hw/rasterizer.md`, "The output").
+// TODO(hw-unverified): the rasterizer works at 6 bits per channel and narrows to this 15-bit colour
+// at its output; the hardware's narrowing, if any, is not stated (`rasterizer.md`, "Unverified").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Pixel3d {
+    pub(crate) color: u16,
+    pub(crate) alpha: u8,
+}
+
+/// One line of the 3D layer, as the rasterizer (#49) makes it for engine A to take as BG0.
+pub(crate) type Line3d = [Pixel3d; SCREEN_WIDTH];
+
+/// A 3D line with nothing in it: every pixel transparent. Until the rasterizer draws, this is the
+/// 3D layer.
+// TODO(phase7): the rasterizer (#49) fills the line in.
+pub(crate) const TRANSPARENT_LINE: Line3d = [Pixel3d { color: 0, alpha: 0 }; SCREEN_WIDTH];
 
 /// DISPCNT bit 3: BG0 is the 3D engine's layer (engine A only).
 pub(super) const DISPCNT_BG0_3D: u32 = 1 << 3;
@@ -74,6 +93,8 @@ pub(crate) struct EngineInputs<'a> {
     pub(crate) ext_obj: ExtPalette<'a>,
     /// The engine's 1 KiB of OAM: 128 entries of 8 bytes.
     pub(crate) oam: &'a [u8],
+    /// The 3D layer's line, read where BG0 is the 3D layer (DISPCNT bit 3, engine A only).
+    pub(crate) three_d: &'a Line3d,
     pub(crate) spec: &'static EngineSpec,
 }
 
@@ -94,8 +115,14 @@ impl<'a> EngineInputs<'a> {
             ext_bg,
             ext_obj,
             oam,
+            three_d: &TRANSPARENT_LINE,
             spec: &MAIN_SPEC,
         }
+    }
+
+    /// These inputs with `three_d` as the 3D layer's line.
+    pub(crate) fn with_three_d(self, three_d: &'a Line3d) -> Self {
+        Self { three_d, ..self }
     }
 
     /// Engine B's inputs.
@@ -114,6 +141,7 @@ impl<'a> EngineInputs<'a> {
             ext_bg,
             ext_obj,
             oam,
+            three_d: &TRANSPARENT_LINE,
             spec: &SUB_SPEC,
         }
     }

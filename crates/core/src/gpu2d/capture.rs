@@ -4,7 +4,7 @@
 //! (`docs/hw/display-capture.md`). The machine owns the VRAM it writes, so these functions take
 //! the bank as a slice.
 
-use super::{BLUE_SHIFT, CHANNEL_MASK, GREEN_SHIFT, with_byte};
+use super::{BLUE_SHIFT, CHANNEL_MASK, GREEN_SHIFT, Line3d, with_byte};
 use crate::SCREEN_WIDTH;
 use serde::{Deserialize, Serialize};
 
@@ -191,12 +191,19 @@ impl CaptureLine {
         (base + (y * self.width() + x) * 2) & BANK_MASK
     }
 
-    /// The pixels source A gives for `composed`, the graphics screen: alpha 1 for every pixel.
-    // TODO(hw-unverified): a 2D pixel's alpha is 1 (`display-capture.md`, "Unverified").
-    // TODO(phase7): the 3D screen as source A is a transparent zero until the 3D engine exists.
-    fn source_a(&self, composed: &[u16; SCREEN_WIDTH]) -> [u16; SCREEN_WIDTH] {
+    /// The pixels source A gives: with bit 24 clear, `composed`, the graphics screen, alpha 1 for
+    /// every pixel; with it set, the 3D screen `three_d`, alpha 1 where the 3D pixel is not
+    /// transparent.
+    // TODO(hw-unverified): a 2D pixel's alpha is 1, and a 3D pixel's is 1 when its 5-bit alpha is
+    // above 0 (`display-capture.md`, "Unverified").
+    // TODO(hw-unverified): the 3D screen is the line as the renderer made it, before BG0's
+    // horizontal scroll, which only the composed layer applies (`display-capture.md`, "Unverified").
+    fn source_a(&self, composed: &[u16; SCREEN_WIDTH], three_d: &Line3d) -> [u16; SCREEN_WIDTH] {
         if self.control & SOURCE_A_3D != 0 {
-            return [0; SCREEN_WIDTH];
+            return three_d.map(|pixel| match pixel.alpha {
+                0 => 0,
+                _ => (pixel.color & COLOR_MASK) | ALPHA,
+            });
         }
         composed.map(|pixel| (pixel & COLOR_MASK) | ALPHA)
     }
@@ -269,9 +276,10 @@ impl CaptureLine {
     pub(crate) fn pixels(
         &self,
         composed: &[u16; SCREEN_WIDTH],
+        three_d: &Line3d,
         b: &[u16; SCREEN_WIDTH],
     ) -> [u16; SCREEN_WIDTH] {
-        let a = self.source_a(composed);
+        let a = self.source_a(composed, three_d);
         match self.source() {
             Source::A => a,
             Source::B => *b,

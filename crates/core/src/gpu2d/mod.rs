@@ -44,7 +44,7 @@ pub use fifo::DisplayFifo;
 use fifo::{FIFO_BYTES, FIFO_OFFSET};
 pub use obj::{OBJ_COUNT, ObjAttrs};
 use serde::{Deserialize, Serialize};
-pub(crate) use spec::EngineInputs;
+pub(crate) use spec::{EngineInputs, Line3d, TRANSPARENT_LINE};
 use spec::{EngineSpec, MAIN_SPEC, SUB_SPEC};
 pub use text::TextBg;
 pub use window::{LayerSet, WindowRect, Windows};
@@ -436,7 +436,6 @@ impl Gpu2d {
     // capture reads them whatever the mode (`windows.md`, "Unverified").
     // TODO(hw-unverified): source A is still the composed layers with display mode 0 or the screen
     // forced blank (`display-capture.md`, "Unverified").
-    // TODO(phase7): the 3D layer joins BG0 here.
     pub(crate) fn compose_line_a(
         &self,
         y: usize,

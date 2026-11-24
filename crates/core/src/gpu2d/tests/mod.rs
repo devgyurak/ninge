@@ -6,6 +6,8 @@
 
 use super::*;
 use crate::cpu::Bus;
+use crate::gpu2d::spec::Pixel3d;
+use crate::gpu2d::{Line3d, TRANSPARENT_LINE};
 use crate::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 
 /// The xRGB8888 value of a white pixel.

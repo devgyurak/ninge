@@ -102,6 +102,9 @@ pub(super) struct Pixel {
     pub(super) color: u16,
     pub(super) layer: u8,
     pub(super) semi: bool,
+    /// The 3D layer's alpha (0-31) where the pixel is from it, else `None`.
+    // TODO(phase7): the 3D layer's alpha as a first target (`blending.md`, "The 3D layer", #49).
+    pub(super) alpha: Option<u8>,
 }
 
 /// `a` and `b` combined per 5-bit channel by `f`; the top bit of the colour stays clear.

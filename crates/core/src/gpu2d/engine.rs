@@ -36,6 +36,9 @@ const AFFINE_LAYER_BYTES: u32 = 16;
 pub(super) const AFFINE_REGS_BYTES: u32 = 2 * AFFINE_LAYER_BYTES;
 /// DISPCNT bit 12: sprites on (`obj.md`, "DISPCNT bits used here").
 const DISPCNT_OBJ_ON: u32 = 1 << 12;
+/// The 3D layer's scroll region in pixels: the picture, then as many transparent pixels.
+const THREE_D_REGION: usize = 2 * SCREEN_WIDTH;
+
 /// The scroll registers hold 9 bits (`bg-text.md`, "BGxHOFS / BGxVOFS").
 const SCROLL_MASK: u32 = 0x1FF;
 
@@ -346,7 +349,6 @@ impl Engine {
     /// that is not transparent there, or the backdrop, palette entry 0 (`bg-text.md`, "Putting the
     /// layers together"). An object is in front of a background layer whose priority value is the
     /// same or greater (`obj.md`, "Priority").
-    // TODO(phase7): the 3D layer's alpha as a first target (`blending.md`, "The 3D layer").
     // TODO(hw-unverified): the backdrop has no enable bit and shows when every layer is hidden
     // (`windows.md`, "Unverified").
     pub(super) fn render_line(
@@ -402,6 +404,7 @@ impl Engine {
             color: backdrop,
             layer: LAYER_BACKDROP,
             semi: false,
+            alpha: None,
         };
         out.iter_mut().enumerate().for_each(|(x, pixel)| {
             let shown = regions.layers(x, &objects.window);
@@ -429,19 +432,32 @@ impl Engine {
                             px,
                             py as u32,
                         )
+                        .map(|color| (color, None))
                     }
                     Kind::Affine | Kind::Extended | Kind::Large => {
                         let layer = &affines[n & 1];
                         let px = if layer.mosaic { block_x } else { x as u32 };
                         affine::pixel(layer, &inputs.vram, palette, &inputs.ext_bg, px)
+                            .map(|color| (color, None))
                     }
+                    // The 3D layer: a pixel of alpha 0 is transparent. BG0HOFS scrolls it over a
+                    // 512-pixel region, the 256 pixels of the picture then 256 transparent ones;
+                    // the vertical scroll, mosaic and the rest of BG0CNT do not apply
+                    // (`bg-modes.md`, "Edge cases").
+                    Kind::ThreeD => {
+                        let at = (x + usize::from(texts[n].hofs)) % THREE_D_REGION;
+                        inputs.three_d.get(at).copied()
+                    }
+                    .filter(|px| px.alpha > 0)
+                    .map(|px| (px.color, Some(px.alpha))),
                     Kind::Other => None,
                 }
-                .map(|color| {
+                .map(|(color, alpha)| {
                     let layer = Pixel {
                         color,
                         layer: n as u8,
                         semi: false,
+                        alpha,
                     };
                     (layer, texts[n].priority)
                 })
@@ -451,6 +467,7 @@ impl Engine {
                     color: object.color,
                     layer: LAYER_OBJ,
                     semi: object.semi,
+                    alpha: None,
                 };
                 (layer, object.priority)
             });

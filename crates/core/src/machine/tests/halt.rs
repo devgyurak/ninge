@@ -317,10 +317,36 @@ fn given_swi_halt_on_the_arm7_when_executed_then_the_arm7_is_halted_and_nothing_
     );
 }
 
+// ----------------------------------------------------------------------------------- WaitByLoop
+
+/// `swi 0x030000` after `load_count`, which puts the count in `r0`; then `mov r1, #0x66`, `b .`.
+fn wait_by_loop_program(load_count: u32) -> [u32; 4] {
+    [load_count, arm_swi(0x03_0000), MOV_R1, SPIN]
+}
+
+/// `mov r0, #count`, for a count below 100h.
+const fn mov_r0(count: u32) -> u32 {
+    0xE3A0_0000 | count
+}
+
+/// `mov r0, #0x80000000` and `mvn r0, #0` (-1).
+const MOV_R0_MIN: u32 = 0xE3A0_0102;
+const MVN_R0_0: u32 = 0xE3E0_0000;
+/// The steps before the loop: the instruction that loads the count, the `swi`, the SWI trap.
+const WAIT_ENTRY_STEPS: usize = 3;
+/// R15 at the last address of a pass (`+34h`, trap `+3Ch`), in each CPU's BIOS.
+const WAIT_LAST_PC9: u32 = 0xFFFF_003C;
+/// R15 at the `mov r1` after the `swi`: the second word of the program, + 8 for the pipeline.
+const AFTER_SWI_PC9: u32 = ENTRY9 + 8 + 8;
+const AFTER_SWI_PC7: u32 = 0x0238_0000 + 8 + 8;
+/// Supervisor mode with I set, the mode and I bits of the CPSR.
+const MODE_AND_I: u32 = 0x9F;
+const SVC_I_SET: u32 = 0x93;
+
 #[test]
-fn given_swi_waitbyloop_when_executed_then_it_returns_without_halting_and_is_not_unimplemented() {
-    let mut m = arm9_running(&[arm_swi(0x03_0000), MOV_R1, SPIN]);
-    step9(&mut m, 3);
+fn given_swi_waitbyloop_when_it_has_returned_then_the_cpu_runs_on_and_the_number_is_implemented() {
+    let mut m = arm9_running(&wait_by_loop_program(mov_r0(1)));
+    step9(&mut m, WAIT_ENTRY_STEPS + 4 + 1);
     assert_eq!(
         (
             m.inspect().arm9().halted(),
@@ -330,6 +356,190 @@ fn given_swi_waitbyloop_when_executed_then_it_returns_without_halting_and_is_not
         ),
         (false, 0x66, Some(3), None)
     );
+}
+
+#[test]
+fn given_waitbyloop_with_a_count_of_3_when_eleven_loop_steps_ran_then_the_arm9_is_in_the_last_pass()
+{
+    // `hle-swi.md`, "The wait SWIs": four steps a pass, and the fourth subtracts 1 from R0.
+    let mut m = arm9_running(&wait_by_loop_program(mov_r0(3)));
+    step9(&mut m, WAIT_ENTRY_STEPS + 11);
+    let regs = m.inspect().arm9().regs();
+    assert_eq!(
+        (regs.get(15), regs.get(0), regs.cpsr() & MODE_AND_I),
+        (WAIT_LAST_PC9, 1, SVC_I_SET)
+    );
+}
+
+#[test]
+fn given_waitbyloop_with_a_count_of_3_when_twelve_loop_steps_ran_then_the_caller_resumes_with_r0_zero()
+ {
+    let mut m = arm9_running(&wait_by_loop_program(mov_r0(3)));
+    step9(&mut m, WAIT_ENTRY_STEPS + 12);
+    let regs = m.inspect().arm9().regs();
+    assert_eq!(
+        (regs.get(15), regs.get(0), regs.cpsr()),
+        (AFTER_SWI_PC9, 0, SYSTEM_FLAGS)
+    );
+}
+
+#[test]
+fn given_waitbyloop_with_a_count_of_3_on_the_arm7_when_it_returns_then_its_clock_moved_by_15_instructions()
+ {
+    // The entry is 3 instructions and the loop 4 * 3; an ARM7 instruction is 2 master cycles.
+    let mut m = arm7_running(&wait_by_loop_program(mov_r0(3)));
+    let started = m.inspect().arm7_clock();
+    step7(&mut m, WAIT_ENTRY_STEPS + 12);
+    let regs = m.inspect().arm7().regs();
+    assert_eq!(
+        (
+            m.inspect().arm7_clock() - started,
+            regs.get(15),
+            regs.get(0)
+        ),
+        (30, AFTER_SWI_PC7, 0)
+    );
+}
+
+/// What a WaitByLoop call with the count `load_count` loads did: whether the ARM9 was still in
+/// the BIOS one step before `loop_steps` loop steps had run, then R15 and R0 after them.
+fn wait_by_loop_outcome(load_count: u32, loop_steps: usize) -> (bool, u32, u32) {
+    let mut m = arm9_running(&wait_by_loop_program(load_count));
+    step9(&mut m, WAIT_ENTRY_STEPS + loop_steps - 1);
+    let waiting = m.inspect().arm9().regs().get(15) == WAIT_LAST_PC9;
+    step9(&mut m, 1);
+    let regs = m.inspect().arm9().regs();
+    (waiting, regs.get(15), regs.get(0))
+}
+
+/// The counts whose pass count or final R0 is easy to get wrong (`hle-swi.md`, "The wait SWIs"):
+/// (the instruction loading the count, the loop steps the call takes, R0 afterwards). Returns the
+/// rows that differ.
+fn wait_by_loop_count_failures() -> Vec<u32> {
+    let table = [
+        (mov_r0(1), 4, 0),
+        (mov_r0(2), 8, 0),
+        (mov_r0(0xFF), 4 * 0xFF, 0),
+        // Zero or less makes one pass; R0 is the count minus one, wrapped.
+        (mov_r0(0), 4, 0xFFFF_FFFF),
+        (MVN_R0_0, 4, 0xFFFF_FFFE),
+        (MOV_R0_MIN, 4, 0x7FFF_FFFF),
+    ];
+    table
+        .iter()
+        .filter(|&&(load, steps, r0)| {
+            wait_by_loop_outcome(load, steps) != (true, AFTER_SWI_PC9, r0)
+        })
+        .map(|&(load, ..)| load)
+        .collect()
+}
+
+#[test]
+fn given_waitbyloop_counts_at_the_edges_when_each_call_runs_then_every_pass_count_and_r0_match() {
+    assert_eq!(wait_by_loop_count_failures(), Vec::<u32>::new());
+}
+
+#[test]
+fn given_an_interrupt_raised_inside_waitbyloop_when_the_loop_goes_on_then_it_is_not_taken() {
+    // `hle-swi.md`, "The wait SWIs": the delay runs with I set, as the SWI entry left it.
+    let mut m = arm9_running(&wait_by_loop_program(mov_r0(2)));
+    m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
+    step9(&mut m, WAIT_ENTRY_STEPS);
+    request_timer0_on_arm9(&mut m);
+    step9(&mut m, 7);
+    let regs = m.inspect().arm9().regs();
+    assert_eq!(
+        (regs.get(15), regs.cpsr() & MODE_AND_I),
+        (WAIT_LAST_PC9, SVC_I_SET)
+    );
+}
+
+#[test]
+fn given_an_interrupt_raised_inside_waitbyloop_when_the_call_returned_then_the_caller_takes_it() {
+    let mut m = arm9_running(&wait_by_loop_program(mov_r0(2)));
+    m.arm9.regs_mut().set_cpsr(SYSTEM_I_CLEAR);
+    step9(&mut m, WAIT_ENTRY_STEPS);
+    request_timer0_on_arm9(&mut m);
+    // The eight loop steps return to the caller; the next step enters the IRQ from there, with
+    // `LR_irq` 4 past the instruction after the `swi` (`arm-exceptions-modes.md`).
+    step9(&mut m, 8 + 1);
+    let regs = m.inspect().arm9().regs();
+    assert_eq!(
+        (regs.cpsr() & 0x1F, regs.banked(Bank::Irq, 14)),
+        (0x12, ENTRY9 + 8 + 4)
+    );
+}
+
+/// The ARM9 answers IPCSYNC for ever: `r3 = 0x04000180`, then `ldrh r0, [r3]`,
+/// `and r0, r0, #0xF`, `mov r0, r0, lsl #8`, `strh r0, [r3]`, `b` back to the `ldrh`: what the
+/// other CPU sent comes back to it (`ipc.md`).
+const ANSWER_IPCSYNC: [u32; 7] = [
+    0xE3A0_3301, // mov r3, #0x04000000
+    0xE383_3F60, // orr r3, r3, #0x180
+    0xE1D3_00B0, // ldrh r0, [r3]
+    0xE200_000F, // and r0, r0, #0xF
+    0xE1A0_0400, // mov r0, r0, lsl #8
+    0xE1C3_00B0, // strh r0, [r3]
+    0xEAFF_FFFA, // b to the ldrh
+];
+
+/// The ARM7 sends 5 through IPCSYNC, waits by loop with a count of 250 and reads the answer once
+/// into `r1`: `r8 = 0x04000180`, `mov r0, #0x500`, `strh r0, [r8]`, `mov r0, #250`, `swi 3`,
+/// `ldrh r1, [r8]`, `and r1, r1, #0xF`, `b .`.
+const ASK_THEN_WAIT_BY_LOOP: [u32; 9] = [
+    0xE3A0_8301, // mov r8, #0x04000000
+    0xE388_8F60, // orr r8, r8, #0x180
+    0xE3A0_0C05, // mov r0, #0x500
+    0xE1C8_00B0, // strh r0, [r8]
+    0xE3A0_00FA, // mov r0, #250
+    0xEF03_0000, // swi 0x030000
+    0xE1D8_10B0, // ldrh r1, [r8]
+    0xE201_100F, // and r1, r1, #0xF
+    SPIN,
+];
+
+fn run_rounds(m: &mut Machine, rounds: usize) {
+    (0..rounds).for_each(|_| run_round(m));
+}
+
+#[test]
+fn given_an_arm7_that_waits_by_loop_for_an_ipcsync_answer_when_the_wait_ends_then_the_answer_is_there()
+ {
+    // The wait is 1,000 ARM7 instructions, 2,000 master cycles: far longer than the slice the
+    // ARM9 needs to see the 5 and answer it (`scheduler.md`, "Interleaving"). With no delay the
+    // ARM7 reads before the ARM9 has run again and sees 0.
+    let mut m = machine_with(&ANSWER_IPCSYNC, &ASK_THEN_WAIT_BY_LOOP);
+    run_rounds(&mut m, 2_200 / SLICE as usize);
+    let regs = m.inspect().arm7().regs();
+    assert_eq!((regs.get(1), regs.get(0)), (5, 0));
+}
+
+/// An ARM9 five steps into the loop of a WaitByLoop call with a count of 3.
+fn machine_in_wait_by_loop() -> Machine {
+    let mut m = arm9_running(&wait_by_loop_program(mov_r0(3)));
+    step9(&mut m, WAIT_ENTRY_STEPS + 5);
+    m
+}
+
+/// Runs `m` past the end of the call and returns its state.
+fn finish_wait_by_loop(m: &mut Machine) -> Vec<u8> {
+    step9(m, 20);
+    m.save_state()
+}
+
+#[test]
+fn given_a_machine_saved_inside_waitbyloop_when_loaded_and_continued_then_it_equals_an_uninterrupted_run()
+ {
+    let mut uninterrupted = machine_in_wait_by_loop();
+    let saved = uninterrupted.save_state();
+    let mut resumed = Machine::new();
+    resumed
+        .load_rom(uninterrupted.rom().to_vec())
+        .expect("same image");
+    let loaded = resumed.load_state(&saved);
+    let a = finish_wait_by_loop(&mut uninterrupted);
+    let b = finish_wait_by_loop(&mut resumed);
+    assert_eq!((loaded, a == b), (Ok(()), true));
 }
 
 // ------------------------------------------------------------------- IntrWait, VBlankIntrWait

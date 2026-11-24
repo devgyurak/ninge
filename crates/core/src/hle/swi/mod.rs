@@ -35,21 +35,21 @@ const BIAS_MID: u32 = 0x200;
 /// The V-blank bit of IE, IF and the IRQ check flags.
 const VBLANK: u32 = 1;
 
-/// What the BIOS does after a routine: leave the SWI, or go on waiting at the IntrWait loop.
+/// What the BIOS does after a routine: leave the SWI, or go on at one of its two loops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Next {
     /// Return to the caller as `MOVS PC, LR`.
     Return,
     /// Continue in the IntrWait loop (`hle-swi.md`, "The wait SWIs").
     IntrWait,
+    /// Spend the delay in the WaitByLoop loop (`hle-swi.md`, "The wait SWIs").
+    WaitByLoop,
 }
 
 /// Runs SWI `number` for `cpu`. A number no routine implements has no effect and is recorded
 /// (`hle-swi.md`, "Unimplemented number").
 // TODO(phase5): Sleep (07h) powers down the hardware; it and the numbers nothing implements are the
 // unimplemented path.
-// TODO(hw-unverified): WaitByLoop does not delay; the SWI costs one instruction
-// (`hle-swi.md`, "Unverified").
 pub(super) fn run<const ARM9: bool, B: Bus>(
     number: u8,
     cpu: &mut Cpu<ARM9>,
@@ -57,7 +57,7 @@ pub(super) fn run<const ARM9: bool, B: Bus>(
     record: &mut SwiRecord,
 ) -> Next {
     match number {
-        WAIT_BY_LOOP => Next::Return,
+        WAIT_BY_LOOP => Next::WaitByLoop,
         HALT => {
             cpu.set_halted(true);
             Next::Return

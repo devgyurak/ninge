@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_479_602;
-const PINNED_HASH: u64 = 0x1662a34f1854978c;
+const PINNED_LEN: usize = 5_479_657;
+const PINNED_HASH: u64 = 0xe42d9b53153ab726;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -119,8 +119,13 @@ const PINNED_HASH: u64 = 0x1662a34f1854978c;
 /// current ones, two one-entry stacks and 2 x 32 stack entries), each the identity at power-on (the
 /// diagonal's `1000h` is a two-byte varint, the twelve zeros one byte each: 20 bytes), so both
 /// lengths grew by 71 x 20 = 1,420 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_069_526;
-const PINNED_BOOTED_HASH: u64 = 0x7a9e7ac092515934;
+/// Version 50 (#48): the geometry engine's vertex state and the two sets of Polygon RAM and Vertex
+/// RAM grew the power-on state by 55: the position 3, the colour 3 (`7FFFh` is a three-byte varint),
+/// the texture coordinates 2, five attribute words 5, the list state 2, four held vertices of 8
+/// bytes, two empty RAM sets 4, and the buffer index, the overflow flag, the swap bits and the
+/// lock-up flag 4. The booted state grew by the same 55. Both hashes moved.
+const PINNED_BOOTED_LEN: usize = 6_069_581;
+const PINNED_BOOTED_HASH: u64 = 0xafe8f877f82f0bd2;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

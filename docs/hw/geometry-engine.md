@@ -72,7 +72,8 @@ be in the PIPE when the FIFO count is 0, which is why bit 27 exists).
 | 16-28 | Vertices now held in Vertex RAM (0-6144) |
 
 Bits 12-15 and 29-31 read 0. The counts describe the buffer the geometry engine is filling.
-After a SWAP_BUFFERS the counters are cleared 10 cycles after the next VBlank begins.
+After a SWAP_BUFFERS the counters are cleared 10 cycles after the next VBlank begins (GBATEK). The
+model clears them when SWAP_BUFFERS ends, 784 master cycles after VBlank begins (see "Unverified").
 
 ### DISP3DCNT bits 12 and 13
 
@@ -296,6 +297,15 @@ SWAP_BUFFERS also carries two parameter bits that apply to commands *after* it: 
 polygons sorted manually) and bit 1 (depth by W instead of Z). The rendering registers (DISP3DCNT
 and `0400_0330h`-`0400_03BFh`) are not swapped.
 
+### What the rasterizer reads
+
+The set the last SWAP_BUFFERS handed on (`Gpu3d::render_ram`): its polygons in the order they were
+completed, each with its attributes (POLYGON_ATTR as of BEGIN_VTXS, TEXIMAGE_PARAM, PLTT_BASE) and
+3 to 10 indices into the same set's vertices, in drawing order; each vertex has clip coordinates
+(1.19.12), an RGB555 colour and S, T (1.11.4). Screen coordinates are derived from the VIEWPORT
+value (`Gpu3d::viewport`) at render time, as the formula above says. Vertex RAM is filled in the
+order the vertices arrived, a vertex shared by a strip once.
+
 ### SWAP_BUFFERS
 
 The command is held until line 192 begins (VBlank), the engine counts as busy during the wait, and
@@ -438,6 +448,8 @@ oracle.
 - **A command abandoned midway.** When another port is written while a command waits for
   parameters, the model drops the entries the abandoned command already queued (the engine takes a
   command only when all its entries are there, so they would otherwise block the queue for ever).
+  After a lock-up (see "SWAP_BUFFERS") the queue is frozen and keeps what it has: entries that
+  found the FIFO full were dropped, so how many the abandoned command queued is not known.
   GBATEK says nothing of an abandoned command. — `gpu3d/` (`Gpu3d::abandon`) — verify by writing
   part of a MTX_LOAD_4x4 to its port and then another port's command, and reading GXSTAT's busy bit
   and FIFO count.
@@ -476,6 +488,9 @@ oracle.
   392 starts at the line's start, and how a swap issued during VBlank behaves. The model waits for
   the next line-192 start, which is the next frame's when the command begins inside VBlank (lines
   192-262); GBATEK says only "until next VBlank". — `gpu3d/`.
+- **VIEWPORT, TEXIMAGE_PARAM and PLTT_BASE** are stored and copied into each polygon; what they do
+  is the rasterizer's and the texture unit's (#49, #50). POLYGON_ATTR bit 13 (1-dot polygons) and
+  DISP_1DOT_DEPTH are not applied by the geometry engine. — `gpu3d/polygon.rs`.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.
@@ -503,13 +518,22 @@ oracle.
 - **Clipping.** The inside test uses *-w <= x,y,z <= w*; GBATEK names the six sides only. The
   interpolation of colour and texture coordinates for a new vertex, the rounding of the new
   position, and the handling of *w <= 0* are not stated. The model interpolates every attribute
-  linearly in clip space along the edge and rounds toward negative infinity. The "one pixel below
+  linearly in clip space along the edge, `a + (b - a) x da / (da - db)` in 128-bit integers, and
+  the division truncates toward zero. The "one pixel below
   or right of the edge" exception is not modelled. — `gpu3d/`.
 - **Strip clipping**: a clipped polygon in a strip becomes separate polygons and the strip
-  continues from the unclipped vertices. The model does that. — `gpu3d/`.
+  continues from the unclipped vertices. The model stores the clipped polygon's corners afresh and
+  stores the strip's own vertices again when a later polygon uses them. — `gpu3d/polygon.rs`.
+- **The order of a clipped polygon's corners** (where the list starts after the six planes). The
+  model clips plane by plane in the order left, right, bottom, top, near, far, each pass starting
+  at the second corner of the first edge, so the first corner moves on by one for every plane.
+  GBATEK says only that vertices outside a side are replaced by two new ones and nothing about the
+  order, so the whole order is the model's choice. — `gpu3d/polygon.rs` (`clip`).
+- **RAM_COUNT and the swap's instant.** GBATEK clears the counters 10 cycles after VBlank; the model
+  swaps the sets and clears them when SWAP_BUFFERS' own execution ends, 784 master cycles after
+  VBlank. Where a swap and a VBlank clear coincide is not modelled. — `gpu3d/polygon.rs` (`swap`).
 - **RAM overflow behavior**: what is dropped (the polygon, the vertex, or both), and when bit 13 is
   set. The model drops the whole polygon that does not fit and sets the flag. — `gpu3d/`.
-- **RAM_COUNT** when a swap and a VBlank clear coincide. — `gpu3d/`.
 - **The precision of the lighting products.** GBATEK gives the equation (see "Lighting") but not
   the widths: the model keeps the normal and the light as 1.0.9, takes a dot product as an
   18-bit-fraction sum shifted right by 9 and clamped to `0..=1.0`, squares the shininess level

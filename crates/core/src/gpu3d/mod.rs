@@ -18,6 +18,7 @@
 
 mod cycles;
 mod matrix;
+mod polygon;
 mod queue;
 
 use crate::io::device::{
@@ -27,6 +28,8 @@ use crate::io::irq::{GXFIFO_IRQ, Requests};
 use crate::io::timing::next_vblank_start;
 use cycles::command_cycles;
 use matrix::{IDENTITY, Matrices, Target, shape};
+use polygon::Geometry;
+pub use polygon::{MAX_POLYGON_VERTICES, POLYGON_RAM, Polygon, Ram, VERTEX_RAM, Vertex};
 use queue::{Entry, FIFO_CAPACITY, HALF_FULL, Queue};
 use serde::{Deserialize, Serialize};
 
@@ -59,18 +62,23 @@ const PORTS_REL: u32 = 0x40;
 const GXSTAT_REL: u32 = 0x200;
 /// The bytes of GXSTAT.
 const GXSTAT_BYTES: u32 = 4;
+/// RAM_COUNT, `0400_0604h`, one word.
+const RAM_COUNT_REL: u32 = 0x204;
+const RAM_COUNT_END: u32 = RAM_COUNT_REL + 4;
 /// CLIPMTX_RESULT, `0400_0640h`, 16 words; VECMTX_RESULT, `0400_0680h`, 9 words.
 const CLIPMTX_REL: u32 = 0x240;
 const VECMTX_REL: u32 = 0x280;
 /// Bytes of a port: one word, so the ID is the offset from the block divided by this.
 const PORT_SHIFT: u32 = 2;
 
-/// DISP3DCNT: bits 0-11 and 14 are plain read/write; bits 12-13 are status flags the stub never
-/// raises, so they are not stored (`gx-stub.md`, "DISP3DCNT bits").
-// TODO(hw-unverified): bits 12-13 are not stored and a write of 1 does nothing (`gx-stub.md`,
-// "Unverified").
+/// DISP3DCNT: bits 0-11 and 14 are plain read/write; bits 12-13 are status flags, not stored here.
+/// Bit 13 (Polygon/Vertex RAM overflow) is raised by the geometry engine and a write of 1
+/// acknowledges it; bit 12 (the colour buffer's underflow) is the rasterizer's (#49) and reads 0
+/// until then (`geometry-engine.md`, "DISP3DCNT bits 12 and 13").
+// TODO(hw-unverified): bit 13 sets on an overflow and clears by a write of 1, bit 12 reads 0 and a
+// write of 1 to it does nothing (`gx-stub.md`, "Unverified").
 pub const DISP3DCNT_MASK: u16 = 0x4FFF;
-/// RDLINES_COUNT as the stub reads it: the largest value the field holds, as for a renderer that
+/// RDLINES_COUNT as it reads until the rasterizer (#49) exists: the largest value the field holds, as for a renderer that
 /// keeps its line buffer full.
 // TODO(hw-unverified): the real value depends on the renderer (`gx-stub.md`, "Unverified").
 const RDLINES_COUNT: u8 = 46;
@@ -123,7 +131,7 @@ const MODE_PROJECTION: u8 = 0;
 const MODE_SIMULTANEOUS: u8 = 2;
 const MODE_TEXTURE: u8 = 3;
 
-/// The command IDs the stub gives an effect to; the others are consumed and dropped.
+/// The command IDs the decoder and the engine give an effect to.
 const CMD_MTX_MODE: u8 = 0x10;
 const CMD_MTX_PUSH: u8 = 0x11;
 const CMD_MTX_POP: u8 = 0x12;
@@ -137,7 +145,19 @@ const CMD_MTX_MULT_4X3: u8 = 0x19;
 const CMD_MTX_MULT_3X3: u8 = 0x1A;
 const CMD_MTX_SCALE: u8 = 0x1B;
 const CMD_MTX_TRANS: u8 = 0x1C;
+const CMD_COLOR: u8 = 0x20;
+const CMD_VTX_16: u8 = 0x23;
+const CMD_VTX_DIFF: u8 = 0x28;
+const CMD_POLYGON_ATTR: u8 = 0x29;
+const CMD_TEXIMAGE_PARAM: u8 = 0x2A;
+const CMD_PLTT_BASE: u8 = 0x2B;
+const CMD_BEGIN_VTXS: u8 = 0x40;
 const CMD_SWAP_BUFFERS: u8 = 0x50;
+const CMD_VIEWPORT: u8 = 0x60;
+/// COLOR's parameter: RGB555.
+const COLOR_MASK: u32 = 0x7FFF;
+/// DISP3DCNT bit 13: Polygon/Vertex RAM overflow, write 1 to acknowledge.
+const DISP3DCNT_OVERFLOW: u32 = 1 << 13;
 const CMD_BOX_TEST: u8 = 0x70;
 const CMD_POS_TEST: u8 = 0x71;
 const CMD_VEC_TEST: u8 = 0x72;
@@ -170,7 +190,7 @@ const fn parameter_count(id: u8) -> Option<u8> {
     })
 }
 
-/// The stub's 3D engine registers and command decoder.
+/// The geometry engine's registers, command decoder, queue and state.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gpu3d {
     disp3dcnt: u16,
@@ -199,6 +219,12 @@ pub struct Gpu3d {
     queue: Queue,
     /// The matrices and their stacks (`geometry-engine.md`, "Matrices").
     matrices: Matrices,
+    /// The vertex attributes, the list being assembled and the two sets of Polygon and Vertex RAM
+    /// (`geometry-engine.md`, "Vertices").
+    geometry: Geometry,
+    /// SWAP_BUFFERS met an unfinished polygon list: the 3D hardware is locked up and nothing runs
+    /// again (`geometry-engine.md`, "SWAP_BUFFERS").
+    locked: bool,
     /// The command the engine executes, if any (`geometry-engine.md`, "Executing a command").
     running: Option<Running>,
 }
@@ -280,6 +306,43 @@ impl Gpu3d {
         self.running.map(|running| (running.command, running.ends))
     }
 
+    /// Reserves the room both sets of Polygon RAM and Vertex RAM need: a savestate load decodes them
+    /// with exactly their length, and a command must never allocate (`AGENTS.md` §2 rule 3).
+    pub(crate) fn reserve_ram(&mut self) {
+        self.geometry.reserve_ram();
+    }
+
+    /// Polygon RAM and Vertex RAM the geometry engine is filling: for the debugger.
+    pub fn geometry_ram(&self) -> &Ram {
+        self.geometry.filling()
+    }
+
+    /// Polygon RAM and Vertex RAM the last SWAP_BUFFERS handed on: what the rasterizer (#49)
+    /// draws.
+    pub fn render_ram(&self) -> &Ram {
+        self.geometry.rendering()
+    }
+
+    /// DISP3DCNT bit 13: a polygon or vertex was dropped because a RAM was full.
+    pub fn ram_overflow(&self) -> bool {
+        self.geometry.overflow
+    }
+
+    /// SWAP_BUFFERS' two parameter bits (manual sort, W-buffering) as of the last swap.
+    pub fn swap_bits(&self) -> u8 {
+        self.geometry.swap_bits
+    }
+
+    /// VIEWPORT as written.
+    pub fn viewport(&self) -> u32 {
+        self.geometry.viewport
+    }
+
+    /// Whether SWAP_BUFFERS locked the 3D hardware up.
+    pub fn locked_up(&self) -> bool {
+        self.locked
+    }
+
     /// The projection matrix, 16 elements row by row in 1.19.12: for the debugger.
     pub fn projection_matrix(&self) -> &[i32; 16] {
         &self.matrices.projection
@@ -359,14 +422,15 @@ impl Gpu3d {
             | u32::from(self.irq_mode) << GXSTAT_IRQ_SHIFT
     }
 
-    /// The byte of the device at `offset`. Everything but DISP3DCNT, RDLINES_COUNT and GXSTAT
-    /// reads 0: the write-only registers, the results, RAM_COUNT and the unnamed addresses.
+    /// The byte of the device at `offset`: DISP3DCNT, RDLINES_COUNT, GXSTAT and the result registers
+    /// (RAM_COUNT, POS and VEC, the clip and vector matrices) hold state; the write-only registers
+    /// and the unnamed addresses read 0.
     // TODO(hw-unverified): the write-only registers and the unnamed addresses read 0
     // (`gx-stub.md`, "Unverified").
     fn byte_at(&self, offset: u32) -> u8 {
         let byte = |value: u32, base: u32| (value >> (8 * (offset - base))) as u8;
         match offset {
-            0..DISP3DCNT_BYTES => byte(u32::from(self.disp3dcnt), 0),
+            0..DISP3DCNT_BYTES => byte(self.disp3dcnt_read(), 0),
             RENDER_OFFSET => RDLINES_COUNT,
             _ => match offset.wrapping_sub(GEOMETRY_OFFSET + GXSTAT_REL) {
                 0..GXSTAT_BYTES => byte(self.gxstat(), GEOMETRY_OFFSET + GXSTAT_REL),
@@ -375,12 +439,23 @@ impl Gpu3d {
         }
     }
 
+    /// DISP3DCNT as a read sees it: the stored bits and the overflow flag (bit 13).
+    fn disp3dcnt_read(&self) -> u32 {
+        let overflow = if self.geometry.overflow {
+            DISP3DCNT_OVERFLOW
+        } else {
+            0
+        };
+        u32::from(self.disp3dcnt) | overflow
+    }
+
     /// The byte of CLIPMTX_RESULT or VECMTX_RESULT at `rel` bytes into the geometry block, 0 where
     /// neither is (`geometry-engine.md`, "Matrices"). The matrices are read as they stand: a command
     /// that is still executing has not changed them yet.
     fn matrix_byte(&self, rel: u32) -> u8 {
         let word_byte = |base: u32, word: u32| (word >> (8 * ((rel - base) % 4))) as u8;
         match rel {
+            RAM_COUNT_REL..RAM_COUNT_END => word_byte(RAM_COUNT_REL, self.geometry.ram_count()),
             CLIPMTX_REL..VECMTX_REL => word_byte(
                 CLIPMTX_REL,
                 self.matrices.clip_word(((rel - CLIPMTX_REL) / 4) as usize),
@@ -397,6 +472,10 @@ impl Gpu3d {
     fn write_byte(&mut self, offset: u32, byte: u8) {
         match offset {
             0..DISP3DCNT_BYTES => {
+                // A write of 1 to bit 13 (byte 1, bit 5) acknowledges the overflow flag.
+                if offset == 1 && u32::from(byte) << 8 & DISP3DCNT_OVERFLOW != 0 {
+                    self.geometry.overflow = false;
+                }
                 let shift = 8 * offset;
                 let merged =
                     u32::from(self.disp3dcnt) & !(0xFF << shift) | u32::from(byte) << shift;
@@ -467,7 +546,9 @@ impl Gpu3d {
     fn abandon(&mut self) {
         let count = parameter_count(self.command).map_or(0, usize::from);
         let queued = count.saturating_sub(usize::from(self.owed));
-        if self.owed > 0 {
+        // After a lock-up entries that found the FIFO full were dropped, so the count of queued ones
+        // is not known; the queue is frozen then and keeps what it has.
+        if self.owed > 0 && !self.locked {
             self.queue.drop_newest(queued);
         }
         self.owed = 0;
@@ -513,7 +594,7 @@ impl Gpu3d {
     fn enqueue(&mut self, entry: Entry, at: &mut u64) {
         self.advance(*at);
         while self.queue.fifo_full() {
-            let Some(running) = self.running else {
+            let Some(running) = self.running.filter(|_| !self.locked) else {
                 return;
             };
             *at = (*at).max(running.ends);
@@ -526,7 +607,10 @@ impl Gpu3d {
     /// Runs the engine up to master time `time`: every command that ends by then takes effect, and
     /// the next starts where it ended.
     fn advance(&mut self, time: u64) {
-        while let Some(running) = self.running.filter(|running| running.ends <= time) {
+        while let Some(running) = self
+            .running
+            .filter(|running| running.ends <= time && !self.locked)
+        {
             self.running = None;
             self.execute(running.command, &running.params);
             self.start(running.ends);
@@ -592,10 +676,35 @@ impl Gpu3d {
             CMD_MTX_SCALE => self
                 .matrices
                 .multiply_by(self.target(false), &shape(id, params)),
+            CMD_COLOR => self.geometry.color = (param & COLOR_MASK) as u16,
+            CMD_POLYGON_ATTR => self.geometry.write_attr(param),
+            CMD_TEXIMAGE_PARAM => self.geometry.texture = param,
+            CMD_PLTT_BASE => self.geometry.palette = param,
+            CMD_BEGIN_VTXS => self.geometry.begin(param),
+            CMD_VTX_16..=CMD_VTX_DIFF => {
+                self.geometry.vertex(id, params, &self.matrices.clip);
+            }
+            CMD_VIEWPORT => self.geometry.viewport = param,
+            CMD_SWAP_BUFFERS => self.swap_buffers(param),
             // TODO(phase7): the result comes from the box and the matrices; the stub answers
             // "inside" so a program keeps its draw path (`gx-stub.md`, "Model").
             CMD_BOX_TEST => self.box_result = true,
             _ => {}
+        }
+    }
+
+    /// SWAP_BUFFERS has waited for VBlank and run: the two sets of RAM exchange roles, or, with an
+    /// unfinished polygon list, the hardware locks up and the command never ends.
+    fn swap_buffers(&mut self, param: u32) {
+        if self.geometry.unfinished() {
+            self.locked = true;
+            self.running = Some(Running {
+                command: CMD_SWAP_BUFFERS,
+                params: [0; MAX_PARAMS],
+                ends: crate::scheduler::MAX_TIME,
+            });
+        } else {
+            self.geometry.swap(param);
         }
     }
 
@@ -724,6 +833,8 @@ impl Checked for Gpu3d {
             && self.irq_mode <= 3
             && waiting
             && self.queue.well_formed()
+            && self.geometry.well_formed()
+            && (self.running.is_some() || !self.locked)
             && executing
     }
 }
@@ -774,7 +885,9 @@ impl Device<true> for Gpu3d {
 
     /// The engine's slot is due when the command it executes ends.
     fn slot_due(&self, _slot: u8) -> Option<u64> {
-        self.running.map(|running| running.ends)
+        self.running
+            .filter(|_| !self.locked)
+            .map(|running| running.ends)
     }
 
     /// The command ended: its effect is applied, the next command starts, and the levels the FIFO

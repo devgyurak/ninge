@@ -82,7 +82,7 @@ registry! {
         divsqrt: DivSqrt = DivSqrt::new() => [Port::DivSqrt],
         /// The ARM9's 3D engine stub: DISP3DCNT, the geometry command decoder and GXSTAT
         /// (`gx-stub.md`).
-        gpu3d: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
+        gpu3d / gpu3d_mut: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
     }
     arm7 {
         /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").

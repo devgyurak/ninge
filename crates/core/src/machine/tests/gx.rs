@@ -462,6 +462,21 @@ fn given_a_geometry_burst_pause_when_saved_and_loaded_then_the_next_start_is_due
 }
 
 #[test]
+fn given_a_loaded_state_when_the_geometry_ram_is_inspected_then_it_has_room_for_a_full_set() {
+    let state = machine().save_state();
+    let mut loaded = machine();
+    loaded.load_state(&state).expect("a state of this machine");
+    let ram = loaded.inspect().gpu3d().geometry_ram();
+    assert_eq!(
+        (
+            ram.vertices.capacity() >= crate::gpu3d::VERTEX_RAM,
+            ram.polygons.capacity() >= crate::gpu3d::POLYGON_RAM
+        ),
+        (true, true)
+    );
+}
+
+#[test]
 fn given_a_geometry_burst_while_the_arm9_is_held_when_it_ends_then_the_next_burst_waits_for_the_hold()
  {
     // A mode-7 channel of 300 words on an empty FIFO: the first burst of 112 leaves the FIFO below

@@ -159,10 +159,14 @@ time is up**, so a register read during the execution still sees the state from 
   the count past 128 and up to 256 or beyond; what does not fit is covered by the next item.
 - **A write to a full FIFO.** GBATEK says the CPU is frozen for as long as the FIFO is full, and
   that this includes the bus (no DMA, no interrupt, no ARM7 access in that time). The model: the
-  ARM9 write that finds no space runs the engine forward until one entry is free, and the engine
-  cycles that took are charged to the ARM9 as the cost of the write. No separate event holds the
-  CPU. This is deterministic because the engine's clock is a function of the queue alone. The
-  ARM7 is not frozen (see "Unverified"). DMA words wait the same way.
+  ARM9 write that finds no space runs the engine forward until one entry is free, and the ARM9 is
+  **held** for the engine cycles that took: the machine records "ARM9 held until *T*" (state, saved
+  with the machine) and the run loop skips the ARM9's clock to *T*, or to the next event if that
+  comes first, without running an instruction, so the line, timer, DMA, sample and IRQ events keep
+  firing on time during the hold. No separate event holds the CPU. This is deterministic because
+  the engine's clock is a function of the queue alone. The ARM7 is not frozen (see "Unverified").
+  A DMA word that finds the FIFO full does the same and holds the ARM9 with it, as GBATEK's "DMA
+  Overkill" paragraph says the DMA and the CPU are paused together.
 
 ### Matrices
 
@@ -200,8 +204,8 @@ arithmetic and the error flag are unchanged. What the real model adds is the mat
 the stack holds a matrix in each valid entry, PUSH writes the current matrix at the pointer, POP
 loads from the entry the pointer reaches, STORE and RESTORE address an entry by number. Entry 31
 exists and can be written and read although it raises the error flag (GBATEK). The projection and
-texture stacks each have one entry, 0; the access to entry 1 sets the flag and has no other effect
-(see "Unverified"). The vector stack moves with the coordinate stack and has the same size.
+texture stacks each have one entry, 0; GBATEK says the upper half of every stack mirrors the lower,
+so entry 1 is entry 0 and an access to it sets the flag and uses entry 0 (see "Unverified"). The vector stack moves with the coordinate stack and has the same size.
 
 **The clip matrix** is *position x projection*, kept up to date whenever either of them changes
 (GBATEK). CLIPMTX_RESULT reads it. VECMTX_RESULT reads the vector matrix; GBATEK says the fourth row
@@ -320,13 +324,31 @@ emission colours), the shininess table (128 entries of 8 bits), the current norm
   shininess table (0 = a linear ramp is used instead of the table).
 - **SHININESS**: 32 words, entries 0-3 in the first word, 124-127 in the last; 8 bits each, an
   unsigned 0.8 fraction.
-- **NORMAL**: the normal (1.0.9 per component) is multiplied by the vector matrix, and the vertex
-  colour is recalculated for each light enabled in POLYGON_ATTR bits 0-3. The 5-bit colour fed to
+- **NORMAL**: the normal (1.0.9 per component) goes through the vector matrix and the vertex colour
+  is recalculated for each light enabled in POLYGON_ATTR bits 0-3, as below. The 5-bit colour fed to
   the pipeline is expanded to 6 bits first as `x*2 + (x+31)/32`, i.e. 0 stays 0 and every other
   value becomes `2x+1` (GBATEK's COLOR paragraph).
 
-GBATEK names the registers and says what each colour stands for, but it **does not give the
-equation** that combines them, nor the rounding of the dot products. The model equation is in
+GBATEK gives the order of the work in "Internal Operation on Normal Command" and "... on
+Light_Vector Command", which this note restates:
+
+1. In texture transformation mode 2 the texture coordinates are calculated from the normal **as it
+   arrives**, before the vector matrix turns it (see "Texture coordinates").
+2. The normal is multiplied by the vector matrix.
+3. The colour starts as the emission colour. For each enabled light *i*, per colour channel:
+   - diffuse level = `max(0, -(L_i . N))`;
+   - shininess level = `max(0, (-H_i) . N)` **squared**, and, when the table is enabled, the
+     table entry it selects replaces the level;
+   - colour += specular x light colour x shininess level;
+   - colour += diffuse x light colour x diffuse level;
+   - colour += ambient x light colour.
+4. LIGHT_VECTOR stores `L_i` = the vector times the vector matrix and `H_i = (L_i + S) / 2`, where
+   the line of sight `S` is always `(0, 0, -1.0)`: the hardware cannot normalize, so it leaves out
+   the projection matrix, and specular reflection does not work when the projection matrix is
+   rotated.
+
+GBATEK does not give the fixed-point precision and rounding of these products and of the squaring,
+how a squared level selects a table entry, or how the clamp to 5 bits is made; those are in
 "Unverified". Lighting is calculated for the front face only: the back side takes the same colour.
 
 ### Texture coordinates
@@ -338,7 +360,7 @@ transformation mode:
 |---|---|---|
 | 0 | at TEXCOORD | S', T' = S, T |
 | 1 | at TEXCOORD | (S, T, 1/16, 1/16) times the first two columns of the texture matrix |
-| 2 | at NORMAL | (Nx, Ny, Nz, 1.0) times the first two columns, the bottom row replaced by (S, T) |
+| 2 | at NORMAL | the normal as it arrives (before the vector matrix), (Nx, Ny, Nz, 1.0), times the first two columns, the bottom row replaced by (S, T) |
 | 3 | at each VTX | (Vx, Vy, Vz, 1.0) times the first two columns, the bottom row replaced by (S, T) |
 
 Operand formats: matrix 1.19.12, vertex 1.3.12, normal 1.0.9, the constant 1.0 a single integer
@@ -381,8 +403,8 @@ and END_VTXS, except POS_TEST (GBATEK: "anywhere, except within strips, huh?").
   ends; nothing is recomputed on load (`savestate/mod.rs`).
 - Reading CLIPMTX_RESULT or VECMTX_RESULT while a command that changes the matrix is executing
   returns the matrix from before that command.
-- A write to the FIFO that stalls the ARM9 may stall for a whole frame when the engine is waiting
-  for VBlank; a program that fills the FIFO behind a SWAP_BUFFERS therefore waits.
+- A write to the FIFO that holds the ARM9 may hold it for a whole frame when the engine is waiting
+  for VBlank (its events still fire); a program that fills the FIFO behind a SWAP_BUFFERS therefore waits.
 - The FIFO count reaches 256 and bit 24 is set; the low 8 bits (bits 16-23) then read 0.
 
 ## Model (not hardware)
@@ -394,9 +416,10 @@ PR that implements it. None claims to be how the silicon works.
   its effect at the end. (PR B)
 - **PIPE refill.** The 2-entry refill happens at the moment the engine takes entries, with no
   delay. (PR B)
-- **The stall.** The ARM9 pays for engine time itself; see "The FIFO IRQ, the DMA start and the
+- **The stall.** The ARM9 is held for the engine time; see "The FIFO IRQ, the DMA start and the
   stall". (PR B)
-- **Lighting equation** and its rounding. (PR E; see "Unverified")
+- **Lighting rounding**: the precision of the products, the squaring and the table index. (PR E; see
+  "Unverified")
 - **Clipping interpolation** and the guard band. (PR D; see "Unverified")
 - **Polygon RAM layout.** A polygon is a fixed-size record: attributes, texture parameters, the
   vertex count and the first vertex index, with the vertices in Vertex RAM in order. The renderer
@@ -412,6 +435,23 @@ oracle.
   FIFO, nor whether a long command starts before its last parameter arrives. The model takes all
   entries at the start. — `gpu3d/` (the engine) — verify by reading GXSTAT bits 16-26 between two
   writes of one MTX_LOAD_4x4.
+- **A command abandoned midway.** When another port is written while a command waits for
+  parameters, the model drops the entries the abandoned command already queued (the engine takes a
+  command only when all its entries are there, so they would otherwise block the queue for ever).
+  GBATEK says nothing of an abandoned command. — `gpu3d/` (`Gpu3d::abandon`) — verify by writing
+  part of a MTX_LOAD_4x4 to its port and then another port's command, and reading GXSTAT's busy bit
+  and FIFO count.
+- **A write that can never complete.** A writer stuck on a FIFO the engine can never drain would
+  hang the hardware; the model drops the entry instead. Not reachable until SWAP_BUFFERS locks the
+  hardware up (`geometry-engine.md`, "SWAP_BUFFERS"). — `gpu3d/` (`Gpu3d::enqueue`).
+- **The ARM9 hold.** A write to a full FIFO holds the ARM9 until the engine took an entry; the
+  model skips its clock to that time (events still fire in between) and the engine state is
+  advanced inline at the write, so for the span of the hold a register read by another path
+  (a DMA at `now`) sees the engine already at the end of it. A DMA burst that finds the FIFO full
+  holds the ARM9 the same way (GBATEK, "GXFIFO DMA Overkill": "the DMA (and CPU) paused"). —
+  `machine/events.rs` (`run_arm9_until`, `run_dma`).
+- **The swap's wait.** SWAP_BUFFERS' own time is "until VBlank plus 392 cycles"; see the item on
+  its timing. — `gpu3d/` (`Gpu3d::start`).
 - **NOP and invalid IDs queue no entry.** GBATEK says a no-parameter command takes one entry and
   says nothing of NOP or of an invalid ID. — `gpu3d/` (`Gpu3d::run_pending`) — verify by counting
   GXSTAT's FIFO count after a word of NOPs behind a busy engine.
@@ -426,15 +466,16 @@ oracle.
   answers the stub's Unverified item on a repeating channel. — `io/dma/mod.rs`.
 - **The pause between bursts.** A burst is one atomic transfer and the next one starts after the
   words of the last have gone by at one bus cycle each, so a channel that never fills the FIFO does
-  not restart at the very same time for ever. DMA is not held by a full FIFO either: its writes
-  run the engine on for room but charge no CPU. — `io/mod.rs` (`Io::dma_finished`), `io/dma/mod.rs`.
+  not restart at the very same time for ever; the time the next burst is due is saved with the
+  channel. A word that finds the FIFO full holds the ARM9 (see the ARM9 hold). —
+  `io/mod.rs` (`Io::dma_finished`), `io/dma/mod.rs`.
 - **Cycle counts starred in GBATEK** (MULT and TRANS) and the +30 of mode 2: which commands it
   covers. NORMAL's 9..12 range for 0..4 lights, which is five settings for four timings. The model
   takes 9 plus the light count, capped at 12. — `gpu3d/`.
 - **SWAP_BUFFERS timing**: the wait is "until VBlank (scanline 192)" plus 392 cycles; whether the
   392 starts at the line's start, and how a swap issued during VBlank behaves. The model waits for
-  the next line-192 start, or runs at once if the current line is already in 192-262 (see
-  `display-timing.md`). — `gpu3d/`.
+  the next line-192 start, which is the next frame's when the command begins inside VBlank (lines
+  192-262); GBATEK says only "until next VBlank". — `gpu3d/`.
 - **Lock-up on an unfinished list**: exactly which lists count as unfinished (fewer vertices than
   the primitive needs for its *first* polygon, or any partial polygon at the end). The model locks
   up on any partial polygon. — `gpu3d/`.
@@ -449,9 +490,10 @@ oracle.
   GBATEK's "3x3 matrix format"; the fourth row and column are not read. — `gpu3d/matrix.rs`
   (`Matrices::vector_word`).
 - **Matrix reset state.** The model starts all matrices as the identity. — `gpu3d/`.
-- **Stack entries beyond the valid ones** and the texture stack. Entry 31 exists; the projection
-  and texture stacks' invalid entry 1: whether a matrix is stored there. The model stores nothing
-  there. — `gpu3d/`.
+- **Stack entries beyond the valid ones** and the texture stack. Entry 31 exists; entry 1 of the
+  projection and texture stacks mirrors entry 0 (GBATEK's "upper half mirrors the lower"), and the
+  texture stack follows the projection stack's rules, which GBATEK does not give ("one..none?"). —
+  `gpu3d/matrix.rs` (`Matrices::store`).
 - **VTX_DIFF** field format. The reading above (the field added as a sign-extended 12-bit-fraction
   count) follows from GBATEK's "divided by 8" and its stated range of +-0.125; the text does not
   say it in one line. What happens when the sum leaves the 16-bit range is not stated; the model
@@ -468,20 +510,20 @@ oracle.
 - **RAM overflow behavior**: what is dropped (the polygon, the vertex, or both), and when bit 13 is
   set. The model drops the whole polygon that does not fit and sets the flag. — `gpu3d/`.
 - **RAM_COUNT** when a swap and a VBlank clear coincide. — `gpu3d/`.
-- **The lighting equation.** GBATEK lists the inputs and the registers but gives no equation. The
-  model is the usual sum: the emission colour, plus for each enabled light the light colour times
-  (diffuse reflection times a diffuse factor, plus specular reflection times a specular factor,
-  plus ambient reflection), clamped to 5 bits per channel. The diffuse factor is the dot product
-  of the normal and the negated light direction, floored at 0. The specular factor is taken from
-  the shininess table (or the linear ramp) at an index derived from the dot product of the normal
-  and the half-way direction between the light and the view direction, floored at 0. The fixed-point
-  precision and the rounding of every step, and the exact specular index, are open, and the
-  specular term is the one most likely to differ from hardware. — `gpu3d/` (the lighting
-  function) — verify by an oracle trace of vertex colours for one light and a table of normals.
+- **The precision of the lighting products.** GBATEK gives the equation (see "Lighting") but not
+  the widths: the model keeps the normal and the light as 1.0.9, takes a dot product as an
+  18-bit-fraction sum shifted right by 9 and clamped to `0..=1.0`, squares the shininess level
+  (`level * level >> 9`), indexes the 128-entry table by the squared level divided by 4, and forms
+  each colour term as an integer product divided by `31 x 512`, `31 x 256` or `31` with every
+  division truncating. The rounding of each step and the table index are open. — `gpu3d/`
+  (the lighting function) — verify by an oracle trace of vertex colours for one light and a table
+  of normals.
 - **Shininess table off**: "linear increasing numbers" is taken as entry *i* = *i*·2 for *i* in
   0..127. — `gpu3d/`.
-- **Texture matrix modes**: the 1/16 constant's use, the shift that leaves 4 fraction bits, and
-  whether mode 2 runs at NORMAL for lit and unlit polygons alike. — `gpu3d/`.
+- **Texture matrix modes**: the 1/16 constant's use, the shift that leaves 4 fraction bits, the
+  units of the bottom row S, T in modes 2 and 3, and whether mode 2 runs at NORMAL for lit and
+  unlit polygons alike. Mode 2 takes the normal as it arrives, before the vector matrix (GBATEK's
+  "Internal Operation on Normal Command"). — `gpu3d/`.
 - **POS_TEST and the current vertex**: that it replaces the position without touching the
   colour. — `gpu3d/`.
 - **BOX_TEST** (the interpretation of the three offsets as the box's size, "presumably" in GBATEK;

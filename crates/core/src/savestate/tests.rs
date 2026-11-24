@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_479_593;
-const PINNED_HASH: u64 = 0x17053e19257fff24;
+const PINNED_LEN: usize = 5_479_602;
+const PINNED_HASH: u64 = 0x1662a34f1854978c;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -110,8 +110,17 @@ const PINNED_HASH: u64 = 0x17053e19257fff24;
 /// period, three one-byte varints at power-on) in place of the one period it latched, because a
 /// TMR write while a channel plays now moves it (`spu.md`, "Position"), so both lengths grew by
 /// 16 x 2 = 32 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_069_514;
-const PINNED_BOOTED_HASH: u64 = 0x6cb154c285d46b5c;
+/// Version 48 (#48): the geometry engine's command FIFO and PIPE (a 256-entry ring: two bytes of
+/// entries each, plus the lengths), the command it executes and a `None`, every DMA channel's due
+/// time and the machine's ARM9 hold time grew the power-on state by 535: 2 + 256 x 2 for the ring,
+/// 3 bytes of lengths, 8 PIPE bytes, 1 for `None`, 8 x 1 for the eight due times and 1 for the
+/// hold. The booted state grew by 12, the words that stopped being zero. Both hashes moved.
+/// Version 49 (#48): the geometry engine's matrices and stacks: 71 matrices of 16 elements (five
+/// current ones, two one-entry stacks and 2 x 32 stack entries), each the identity at power-on (the
+/// diagonal's `1000h` is a two-byte varint, the twelve zeros one byte each: 20 bytes), so both
+/// lengths grew by 71 x 20 = 1,420 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 6_069_526;
+const PINNED_BOOTED_HASH: u64 = 0x7a9e7ac092515934;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -1575,6 +1584,7 @@ struct ChannelBytes {
     destination_now: u32,
     count_now: u32,
     pending: bool,
+    due: u64,
     frame_wait: bool,
 }
 
@@ -1593,6 +1603,7 @@ const fn idle_channel() -> ChannelBytes {
         destination_now: 0,
         count_now: 0,
         pending: false,
+        due: 0,
         frame_wait: false,
     }
 }

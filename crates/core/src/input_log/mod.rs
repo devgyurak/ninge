@@ -264,7 +264,8 @@ impl LogReader {
         };
         if self.header_seen {
             parse_frame(text, self.next_frame).map_err(at).map(|input| {
-                self.next_frame += 1;
+                // A log of 2^32 frames is out of reach; saturating keeps the reader total.
+                self.next_frame = self.next_frame.saturating_add(1);
                 Some(LogLine::Frame(input))
             })
         } else {

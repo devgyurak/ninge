@@ -198,6 +198,8 @@ impl Machine {
         let generation = self.save_generation().wrapping_add(1);
         loaded.io.cart_mut().set_save_generation(generation);
         loaded.memory.build_page_table();
+        // The decoded Polygon and Vertex RAM have exactly their length: room for a full set, once.
+        loaded.io.gpu3d_mut().reserve_ram();
         // The queue is not saved: it is rebuilt from the devices and `now`.
         loaded.schedule_events();
         *self = loaded;

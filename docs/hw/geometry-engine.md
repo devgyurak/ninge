@@ -72,7 +72,8 @@ be in the PIPE when the FIFO count is 0, which is why bit 27 exists).
 | 16-28 | Vertices now held in Vertex RAM (0-6144) |
 
 Bits 12-15 and 29-31 read 0. The counts describe the buffer the geometry engine is filling.
-After a SWAP_BUFFERS the counters are cleared 10 cycles after the next VBlank begins.
+After a SWAP_BUFFERS the counters are cleared 10 cycles after the next VBlank begins (GBATEK). The
+model clears them when SWAP_BUFFERS ends, 784 master cycles after VBlank begins (see "Unverified").
 
 ### DISP3DCNT bits 12 and 13
 
@@ -515,18 +516,22 @@ oracle.
 - **Clipping.** The inside test uses *-w <= x,y,z <= w*; GBATEK names the six sides only. The
   interpolation of colour and texture coordinates for a new vertex, the rounding of the new
   position, and the handling of *w <= 0* are not stated. The model interpolates every attribute
-  linearly in clip space along the edge and rounds toward negative infinity. The "one pixel below
+  linearly in clip space along the edge, `a + (b - a) x da / (da - db)` in 128-bit integers, and
+  the division truncates toward zero. The "one pixel below
   or right of the edge" exception is not modelled. — `gpu3d/`.
 - **Strip clipping**: a clipped polygon in a strip becomes separate polygons and the strip
   continues from the unclipped vertices. The model stores the clipped polygon's corners afresh and
   stores the strip's own vertices again when a later polygon uses them. — `gpu3d/polygon.rs`.
 - **The order of a clipped polygon's corners** (where the list starts after the six planes). The
   model clips plane by plane in the order left, right, bottom, top, near, far, each pass starting
-  at the second corner of the first edge, so the first corner moves on by one for every plane; the
-  cycle is what hardware shows, the start is the model's. — `gpu3d/polygon.rs` (`clip`).
+  at the second corner of the first edge, so the first corner moves on by one for every plane.
+  GBATEK says only that vertices outside a side are replaced by two new ones and nothing about the
+  order, so the whole order is the model's choice. — `gpu3d/polygon.rs` (`clip`).
+- **RAM_COUNT and the swap's instant.** GBATEK clears the counters 10 cycles after VBlank; the model
+  swaps the sets and clears them when SWAP_BUFFERS' own execution ends, 784 master cycles after
+  VBlank. Where a swap and a VBlank clear coincide is not modelled. — `gpu3d/polygon.rs` (`swap`).
 - **RAM overflow behavior**: what is dropped (the polygon, the vertex, or both), and when bit 13 is
   set. The model drops the whole polygon that does not fit and sets the flag. — `gpu3d/`.
-- **RAM_COUNT** when a swap and a VBlank clear coincide. — `gpu3d/`.
 - **The precision of the lighting products.** GBATEK gives the equation (see "Lighting") but not
   the widths: the model keeps the normal and the light as 1.0.9, takes a dot product as an
   18-bit-fraction sum shifted right by 9 and clamped to `0..=1.0`, squares the shininess level

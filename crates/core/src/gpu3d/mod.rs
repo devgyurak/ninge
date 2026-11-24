@@ -71,12 +71,14 @@ const VECMTX_REL: u32 = 0x280;
 /// Bytes of a port: one word, so the ID is the offset from the block divided by this.
 const PORT_SHIFT: u32 = 2;
 
-/// DISP3DCNT: bits 0-11 and 14 are plain read/write; bits 12-13 are status flags the stub never
-/// raises, so they are not stored (`gx-stub.md`, "DISP3DCNT bits").
+/// DISP3DCNT: bits 0-11 and 14 are plain read/write; bits 12-13 are status flags, not stored here.
+/// Bit 13 (Polygon/Vertex RAM overflow) is raised by the geometry engine and a write of 1
+/// acknowledges it; bit 12 (the colour buffer's underflow) is the rasterizer's (#49) and reads 0
+/// until then (`geometry-engine.md`, "DISP3DCNT bits 12 and 13").
 // TODO(hw-unverified): bits 12-13 are not stored and a write of 1 does nothing (`gx-stub.md`,
 // "Unverified").
 pub const DISP3DCNT_MASK: u16 = 0x4FFF;
-/// RDLINES_COUNT as the stub reads it: the largest value the field holds, as for a renderer that
+/// RDLINES_COUNT as it reads until the rasterizer (#49) exists: the largest value the field holds, as for a renderer that
 /// keeps its line buffer full.
 // TODO(hw-unverified): the real value depends on the renderer (`gx-stub.md`, "Unverified").
 const RDLINES_COUNT: u8 = 46;
@@ -129,7 +131,7 @@ const MODE_PROJECTION: u8 = 0;
 const MODE_SIMULTANEOUS: u8 = 2;
 const MODE_TEXTURE: u8 = 3;
 
-/// The command IDs the stub gives an effect to; the others are consumed and dropped.
+/// The command IDs the decoder and the engine give an effect to.
 const CMD_MTX_MODE: u8 = 0x10;
 const CMD_MTX_PUSH: u8 = 0x11;
 const CMD_MTX_POP: u8 = 0x12;
@@ -188,7 +190,7 @@ const fn parameter_count(id: u8) -> Option<u8> {
     })
 }
 
-/// The stub's 3D engine registers and command decoder.
+/// The geometry engine's registers, command decoder, queue and state.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gpu3d {
     disp3dcnt: u16,
@@ -304,6 +306,12 @@ impl Gpu3d {
         self.running.map(|running| (running.command, running.ends))
     }
 
+    /// Reserves the room both sets of Polygon RAM and Vertex RAM need: a savestate load decodes them
+    /// with exactly their length, and a command must never allocate (`AGENTS.md` §2 rule 3).
+    pub(crate) fn reserve_ram(&mut self) {
+        self.geometry.reserve_ram();
+    }
+
     /// Polygon RAM and Vertex RAM the geometry engine is filling: for the debugger.
     pub fn geometry_ram(&self) -> &Ram {
         self.geometry.filling()
@@ -414,8 +422,9 @@ impl Gpu3d {
             | u32::from(self.irq_mode) << GXSTAT_IRQ_SHIFT
     }
 
-    /// The byte of the device at `offset`. Everything but DISP3DCNT, RDLINES_COUNT and GXSTAT
-    /// reads 0: the write-only registers, the results, RAM_COUNT and the unnamed addresses.
+    /// The byte of the device at `offset`: DISP3DCNT, RDLINES_COUNT, GXSTAT and the result registers
+    /// (RAM_COUNT, POS and VEC, the clip and vector matrices) hold state; the write-only registers
+    /// and the unnamed addresses read 0.
     // TODO(hw-unverified): the write-only registers and the unnamed addresses read 0
     // (`gx-stub.md`, "Unverified").
     fn byte_at(&self, offset: u32) -> u8 {

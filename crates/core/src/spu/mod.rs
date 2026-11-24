@@ -203,6 +203,18 @@ struct Latched {
     one_shot: bool,
 }
 
+impl Latched {
+    /// What a start latches holds only what its registers keep, and names the channel it is in:
+    /// the format is one of the four, SAD and LEN fit their masks and PNT its 16 bits.
+    fn well_formed(&self, index: usize) -> bool {
+        self.sad & !SAD_MASK == 0
+            && self.len & !LEN_MASK == 0
+            && self.pnt <= u32::from(u16::MAX)
+            && self.format <= FORMAT_PSG
+            && usize::from(self.channel) == index
+    }
+}
+
 /// A channel's sample clock (`spu.md`, "Position", "Model"): sample `base` begins at master time
 /// `origin`, and from there a sample takes `period` master cycles. A start sets it to sample 0 at
 /// the time of the write; a TMR write while the channel plays moves it to the sample after the one
@@ -876,6 +888,13 @@ impl Spu {
             .for_each(|(channel, state)| channel.decoders = state);
     }
 
+    /// Gives channel `index` an end time its registers do not make, to build a corrupt state in a
+    /// test.
+    #[cfg(test)]
+    pub(crate) fn set_end_for_test(&mut self, index: usize, end: u64) {
+        self.channels[index % CHANNELS].end = end;
+    }
+
     /// Channel `index` (0-15).
     pub fn channel(&self, index: usize) -> &Channel {
         &self.channels[index % CHANNELS]
@@ -1191,7 +1210,7 @@ impl Checked for Spu {
     /// sample clock is all zero and a started one's period is one a TMR value gives, as a
     /// capture's is.
     fn well_formed(&self, _now: u64) -> bool {
-        let channels = self.channels.iter().all(|c| {
+        let channels = self.channels.iter().enumerate().all(|(index, c)| {
             let clocked = if c.cnt & CNT_START == 0 {
                 c.clock == SampleClock::default()
             } else {
@@ -1201,7 +1220,11 @@ impl Checked for Spu {
                 && c.sad & !SAD_MASK == 0
                 && c.len & !LEN_MASK == 0
                 && (c.cnt & CNT_START != 0 || (c.end == 0 && c.start == 0))
+                // The end is derived from the latched registers and the sample clock, so a state
+                // that holds another one is refused rather than rebuilt: the busy bit would lie.
+                && (c.cnt & CNT_START == 0 || c.end == c.end_of_run())
                 && clocked
+                && (c.cnt & CNT_START == 0 || c.latched.well_formed(index))
                 && c.decoders.adpcm.well_formed()
                 && c.decoders.noise.well_formed()
         });

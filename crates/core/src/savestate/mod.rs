@@ -171,7 +171,8 @@ impl Machine {
         // that says otherwise would run on a header alone, or hold a ROM it never booted. Memory
         // buffers of the wrong size would read as zeros rather than panic, but are not a machine.
         if !rest.is_empty()
-            || loaded.header.is_some() != !self.rom.is_empty()
+            // The header is derived from the ROM, so it must be what the ROM parses to.
+            || loaded.header != crate::cart::parse(&self.rom).ok()
             || !loaded.memory.is_well_formed()
             || !loaded.screens_well_formed()
             || !loaded.scheduler.is_well_formed()
@@ -195,11 +196,10 @@ impl Machine {
         loaded.audio.clear();
         // The save memory may differ from what a host last wrote: the counter goes up, so the host
         // sees a change (`docs/hw/auxspi-saves.md`, "Save files").
-        let generation = self.save_generation().wrapping_add(1);
-        loaded.io.cart_mut().set_save_generation(generation);
+        loaded
+            .io
+            .after_load(self.save_generation(), loaded.scheduler.now());
         loaded.memory.build_page_table();
-        // The decoded Polygon and Vertex RAM have exactly their length: room for a full set, once.
-        loaded.io.gpu3d_mut().reserve_ram();
         // The queue is not saved: it is rebuilt from the devices and `now`.
         loaded.schedule_events();
         *self = loaded;

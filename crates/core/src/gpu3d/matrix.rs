@@ -159,6 +159,17 @@ impl Matrices {
         self.update_clip();
     }
 
+    /// A clip matrix that disagrees with its source, for a test.
+    #[cfg(test)]
+    pub(super) fn scramble_clip_for_test(&mut self) {
+        self.clip[0] = 0x1234;
+    }
+
+    /// Recomputes the clip matrix from the two it is the product of, after a load.
+    pub(super) fn restore_clip(&mut self) {
+        self.update_clip();
+    }
+
     /// `clip = position x projection`.
     fn update_clip(&mut self) {
         self.clip = multiply(&self.position, &self.projection);

@@ -302,6 +302,14 @@ pub(crate) trait Checked {
     fn well_formed(&self, _now: u64) -> bool {
         true
     }
+
+    /// What a load must rebuild once the state has been checked: a buffer the decoder left at
+    /// exactly its length, a value derived from the saved ones. `Io` walks every device (the
+    /// registry), so a device that adds derived state registers its repair here and
+    /// `Machine::load_state` names no device. A derived value is either rebuilt here or compared with
+    /// its source in [`Checked::well_formed`]; it is never trusted as saved. `now` is the master
+    /// time the state holds, for a device whose derived value depends on it (none does yet).
+    fn restore(&mut self, _now: u64) {}
 }
 
 /// What a fired event asks of its caller: an [`Effect`], like a register access, and for DMA the

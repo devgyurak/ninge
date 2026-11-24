@@ -7,6 +7,16 @@ use std::ops::Range;
 
 use crate::rsp::{Reader, RspError, frame, hex_bytes};
 
+/// The 16 MiB block of addresses a CPU's BIOS sits in: `FF000000h` up to the top for the ARM9,
+/// `0` to `00FFFFFFh` for the ARM7. The last byte of the ARM9 block is left out because the
+/// range's end is a `u32`; a read of it alone is a one-byte read at the wrap, which is refused.
+fn bios_block(cpu: ninge_core::trace::TraceCpu) -> Range<u32> {
+    match cpu {
+        ninge_core::trace::TraceCpu::Arm9 => 0xFF00_0000..0xFFFF_FFFF,
+        ninge_core::trace::TraceCpu::Arm7 => 0..0x0100_0000,
+    }
+}
+
 /// How many times a request is sent again after a `-` or a corrupted reply.
 const RETRIES: usize = 3;
 
@@ -29,11 +39,18 @@ pub struct GdbClient<T> {
 impl<T: Read + Write> GdbClient<T> {
     /// A client over `stream`. A memory read that overlaps a `forbidden` range is refused before
     /// any packet is sent: the BIOS areas go here, so no BIOS byte leaves the oracle.
-    pub fn new(stream: T, forbidden: Vec<Range<u32>>) -> Self {
+    pub(crate) fn new(stream: T, forbidden: Vec<Range<u32>>) -> Self {
         Self {
             reader: Reader::new(stream),
             forbidden,
         }
+    }
+
+    /// A client for `cpu`'s stub that always refuses to read that CPU's BIOS: its whole 16 MiB
+    /// address block, not just the area, in case the oracle mirrors the BIOS elsewhere in it. The
+    /// forbidden list cannot be emptied from outside the crate.
+    pub fn for_cpu(stream: T, cpu: ninge_core::trace::TraceCpu) -> Self {
+        Self::new(stream, vec![bios_block(cpu)])
     }
 
     /// Sends one request and returns the decoded reply, acknowledging it. A `-` or a corrupted

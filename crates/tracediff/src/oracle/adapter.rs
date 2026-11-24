@@ -101,7 +101,7 @@ pub struct OracleCpu<T> {
 impl<T: Read + Write> OracleCpu<T> {
     /// Wraps `client`, a connection to `cpu`'s stub. The client must have been built with `cpu`'s
     /// BIOS area forbidden; [`OracleCpu::connect`] does that.
-    pub fn new(client: GdbClient<T>, cpu: TraceCpu, layout: RegisterLayout) -> Self {
+    pub(crate) fn new(client: GdbClient<T>, cpu: TraceCpu, layout: RegisterLayout) -> Self {
         Self {
             client,
             cpu,
@@ -112,9 +112,9 @@ impl<T: Read + Write> OracleCpu<T> {
         }
     }
 
-    /// Wraps `stream` in a client that forbids reads of `cpu`'s BIOS area.
+    /// Wraps `stream` in a client that forbids reads of `cpu`'s BIOS block.
     pub fn connect(stream: T, cpu: TraceCpu, layout: RegisterLayout) -> Self {
-        Self::new(GdbClient::new(stream, vec![cpu.bios_area()]), cpu, layout)
+        Self::new(GdbClient::for_cpu(stream, cpu), cpu, layout)
     }
 
     /// Sets how many steps one BIOS call may take before [`AdapterError::StuckInBios`]; the

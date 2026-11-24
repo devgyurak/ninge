@@ -261,37 +261,53 @@ fn given_a_bios_step_when_collapsed_then_the_stub_is_stepped_once_per_instructio
     assert_eq!(requests(&log, 's').len(), 6);
 }
 
-/// The ARM9 area's edges: `FFFF7FFCh` is inside, `FFFF8000h` is the first address outside.
+/// A read the client refuses: the adapter's error, and that no `m` packet was sent.
+fn refused(cpu: TraceCpu, script: Vec<State>) -> (bool, Vec<u32>) {
+    let (mut cpu, log) = adapter(cpu, script);
+    let outcome = drain(&mut cpu);
+    (
+        matches!(outcome, Err(AdapterError::Rsp(RspError::Forbidden(_)))),
+        read_addresses(&log),
+    )
+}
+
+/// The address block around each BIOS is refused as a whole, not only the area: an oracle that
+/// mirrors the BIOS elsewhere in the block must not leak it through an opcode read.
 #[test]
-fn given_pcs_either_side_of_the_arm9_area_end_when_recorded_then_only_the_outside_one_is_read() {
-    let script = vec![arm_at(0xFFFF_7FFC), arm_at(0xFFFF_8000)];
-    let (mut cpu, log) = adapter(TraceCpu::Arm9, script);
-    let records = drain(&mut cpu).unwrap();
+fn given_a_pc_past_the_arm9_area_but_in_its_block_when_recorded_then_the_read_is_refused_unsent() {
     assert_eq!(
-        (pcs_and_steps(&records), read_addresses(&log)),
-        (vec![(0xFFFF_8000, 0)], vec![0xFFFF_8000])
+        refused(TraceCpu::Arm9, vec![arm_at(0xFFFF_8000)]),
+        (true, Vec::new())
     );
 }
 
 #[test]
-fn given_a_pc_just_below_the_arm9_area_when_recorded_then_it_is_read_and_recorded() {
-    let script = vec![arm_at(0xFFFE_FFFC)];
-    let (mut cpu, log) = adapter(TraceCpu::Arm9, script);
-    let records = drain(&mut cpu).unwrap();
+fn given_a_pc_past_the_arm7_area_but_in_its_block_when_recorded_then_the_read_is_refused_unsent() {
     assert_eq!(
-        (pcs_and_steps(&records), read_addresses(&log)),
-        (vec![(0xFFFE_FFFC, 0)], vec![0xFFFE_FFFC])
+        refused(TraceCpu::Arm7, vec![arm_at(0x0000_4000)]),
+        (true, Vec::new())
     );
 }
 
 #[test]
-fn given_pcs_either_side_of_the_arm7_area_end_when_recorded_then_only_the_outside_one_is_read() {
-    let script = vec![arm_at(0x0000_3FFC), arm_at(0x0000_4000)];
+fn given_a_pc_just_below_the_arm9_block_when_recorded_then_it_is_read_and_recorded() {
+    let script = vec![arm_at(0xFEFF_FFFC)];
+    let (mut cpu, log) = adapter(TraceCpu::Arm9, script);
+    let records = drain(&mut cpu).unwrap();
+    assert_eq!(
+        (pcs_and_steps(&records), read_addresses(&log)),
+        (vec![(0xFEFF_FFFC, 0)], vec![0xFEFF_FFFC])
+    );
+}
+
+#[test]
+fn given_a_pc_at_the_first_address_past_the_arm7_block_when_recorded_then_it_is_read() {
+    let script = vec![arm_at(0x0100_0000)];
     let (mut cpu, log) = adapter(TraceCpu::Arm7, script);
     let records = drain(&mut cpu).unwrap();
     assert_eq!(
         (pcs_and_steps(&records), read_addresses(&log)),
-        (vec![(0x0000_4000, 0)], vec![0x0000_4000])
+        (vec![(0x0100_0000, 0)], vec![0x0100_0000])
     );
 }
 

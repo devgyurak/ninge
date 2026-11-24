@@ -1,0 +1,10 @@
+# Input for testroms/rtc with the host's clock at 366 days after 2000-01-01 00:00:00 (31622400
+# seconds) on every frame, so the clock chip starts on 2001-01-01 and the ROM's first check, which
+# expects 2000-01-01, fails: band 1 turns red. It proves a replay uses the recorded wall time
+# rather than the host's clock. Hand-written; the final frame matches tests/golden/rtc.txt
+# (frames=4).
+ninge-input 1 rom=6f3b save=none:cbf29ce484222325
+f=1 wall=31622400
+f=2 wall=31622400
+f=3 wall=31622400
+f=4 wall=31622400

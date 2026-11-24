@@ -1,0 +1,8 @@
+# Input for testroms/touch, the same four frames as crates/runner/tests/touch.rs: the panel is
+# pressed at pixel (100, 50) for two frames and released from the third.
+# Hand-written. The final frame matches tests/golden/touch.txt (frames=4).
+ninge-input 1 rom=be61 save=none:cbf29ce484222325
+f=1 t=100,50
+f=2 t=100,50
+f=3
+f=4

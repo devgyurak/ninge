@@ -1,0 +1,14 @@
+# Input for testroms/keyirq, the same ten frames as crates/runner/tests/keyirq.rs: nothing while
+# the ROM sets up, then A, A and B, nothing, B, Start, the hinge closed, open again, and nothing.
+# Hand-written. The final frame matches tests/golden/keyirq.txt (frames=10).
+ninge-input 1 rom=79ca save=none:cbf29ce484222325
+f=1
+f=2 b=A
+f=3 b=A,B
+f=4
+f=5 b=B
+f=6 b=START
+f=7 hinge
+f=8
+f=9
+f=10

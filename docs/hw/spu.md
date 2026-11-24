@@ -42,10 +42,18 @@ resampling to a host device rate is the frontend's job (#47); the core does not 
 ### Position
 
 A channel starts when bit 31 of SOUNDxCNT goes from 0 to 1. The master time of that write is the
-channel's **start**. Samples elapsed since the start are `floor((now - start) / (4 * (10000h -
-TMR)))`, with `now` the master time of the query. The sample a channel outputs is a function of
-that count and the registers latched at the start: nothing is stepped, so the busy bit and the
-output cannot disagree.
+channel's **start**. From there the channel's sample clock counts samples, each one `4 * (10000h -
+TMR)` master cycles long. While TMR is not written, the samples elapsed since the start are
+`floor((now - start) / (4 * (10000h - TMR)))`, with `now` the master time of the query. The sample
+a channel outputs is a function of that count and the registers latched at the start: nothing is
+stepped, so the busy bit and the output cannot disagree.
+
+**A write to SOUNDxTMR while the channel plays** changes the rate from the next sample on: the
+sample in progress keeps the length it began with, and every sample that begins after it takes
+`4 * (10000h - TMR)` cycles of the new value. The count does not jump, so the data position goes on
+from where it was, faster or slower. This is how a program changes the pitch of a note that is
+already sounding (a bend, a vibrato, a trill inside one note). The end of a one-shot moves with it:
+the samples still to play are counted at the new length. See "Model" and "Unverified".
 
 The data position for a given sample count depends on the format and the repeat mode (PNT and LEN
 are in words, SAD is the first byte):
@@ -215,9 +223,17 @@ the first gate is `(bias - 200h) * 64`.
   bit clears at the start of the last sample period, not at its end. The model has none of
   these delays, so that the busy bit of `sound-registers.md` and the output share one position; see
   "Unverified".
-- **The registers are latched at the start.** SAD, PNT, LEN, TMR, the format and the repeat mode
-  are read when the channel starts and a write while it plays does not move it. Volume, divider,
-  panning, hold and duty are read live. GBATEK says nothing either way.
+- **The registers are latched at the start, except TMR.** SAD, PNT, LEN, the format and the repeat
+  mode are read when the channel starts and a write while it plays does not move it. Volume,
+  divider, panning, hold and duty are read live. GBATEK says nothing either way.
+- **TMR is read at each sample boundary.** GBATEK calls SOUNDxTMR a timer value, and the model
+  treats it as the reload of a counter: a write does not touch the count in progress, so the
+  sample in progress ends when it would have, and the new value sets the length of the samples
+  after it. Two writes inside one sample leave only the last one. The model keeps the count of the
+  sample that begins next, the master time it begins and the length in force; the samples elapsed
+  are that count plus the whole lengths since. A query at a time before that boundary gets the
+  sample in progress at the write, also when the query's time is before the write itself (the ARM7
+  can write at a time past the master clock).
 - **The manual (0) and prohibited (3) repeat modes play like a loop.** They never end, as the busy
   bit already models.
 - **An empty loop** (loop mode with LEN = 0 and a PNT part of at least 4 words) plays the PNT part
@@ -230,6 +246,12 @@ the first gate is `(bias - 200h) * 64`.
 
 - A TMR of `FFFFh` makes a sample per 4 master cycles, faster than the output rate, so a PCM
   channel is subsampled; TMR 0 makes one per `4 * 10000h` cycles.
+- A TMR write is two byte writes at one time on the bus. Both fall inside the same sample, so the
+  half-written value is never the length of a sample.
+- A TMR write to a channel that is stopped, or whose one-shot has ended, only stores the value:
+  the next start reads it.
+- A TMR write during the last sample of a one-shot does not move the end: no sample begins after
+  it.
 - Volume 127 and panning 127 read as 128, so `vol * pan` can reach `128 * 128`.
 - A PCM8 value of `-80h` is the PCM16 value `-8000h`; an ADPCM header can start at `-8000h`
   (GBATEK) and the add clamp leaves it.
@@ -265,8 +287,15 @@ oracle.
 - **Whether the first noise output is the first step or the initial register.** GBATEK gives the
   start value `7FFFh` and the step; the model takes the first step at the first sample of the
   clock (so the first output is LOW and the register `5FFFh`). — `spu/psg/`.
-- **Register writes while a channel plays**: TMR, SAD, PNT, LEN, the format and the repeat mode
-  are latched at the start here. — `spu/`.
+- **Register writes while a channel plays**: SAD, PNT, LEN, the format and the repeat mode are
+  latched at the start here. — `spu/`.
+- **A TMR write while a channel plays.** GBATEK gives the timer formula and nothing on a write
+  during playback. The rate follows the write here because a program was seen to depend on it: it
+  wrote SOUNDxTMR several times within one note (the same start, the same source registers),
+  which changes the note's pitch only if the playing channel changes its rate. That is an
+  observation of a program, not of the hardware. When the new value takes effect is a choice: at
+  the next sample here (a reload read at the counter's overflow); at once is the other reading. —
+  `spu/` — verify by a test ROM that writes TMR mid-sound and times the busy bit of a one-shot.
 - **The phase of PSG and noise on restart** is GBATEK's (LOW first, `X = 7FFFh`); what a write of 1
   to a running channel does is not stated, and here it does not restart. — `spu/`.
 - **Whether the header's initial `Pcm16` is itself output.** GBATEK counts `8 * (N - 1)` ADPCM

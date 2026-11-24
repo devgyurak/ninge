@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_477_615;
-const PINNED_HASH: u64 = 0x8a3432d9ed8b2adb;
+const PINNED_LEN: usize = 5_477_647;
+const PINNED_HASH: u64 = 0xc0d095aeb2dbbb0c;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -106,8 +106,12 @@ const PINNED_HASH: u64 = 0x8a3432d9ed8b2adb;
 /// SOUNDBIAS now starts at `200h` (`sound-registers.md`, "Start values"): the state's content
 /// changed, not its layout, so the version stayed; `200h` is a two-byte varint where 0 was one, so
 /// both lengths grew by 1 and both hashes moved.
-const PINNED_BOOTED_LEN: usize = 6_067_536;
-const PINNED_BOOTED_HASH: u64 = 0xc7f325f50d059981;
+/// Version 47: each of the 16 sound channels keeps a sample clock (the count, the time and the
+/// period, three one-byte varints at power-on) in place of the one period it latched, because a
+/// TMR write while a channel plays now moves it (`spu.md`, "Position"), so both lengths grew by
+/// 16 x 2 = 32 and both hashes moved.
+const PINNED_BOOTED_LEN: usize = 6_067_568;
+const PINNED_BOOTED_HASH: u64 = 0x691e41b06f594b54;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

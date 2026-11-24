@@ -1856,3 +1856,41 @@ fn given_a_state_whose_power_register_holds_a_bit_that_cannot_exist_when_loaded_
     );
     assert_eq!(load_with_spi(spi), (Err(SavestateError::Corrupt), true));
 }
+
+#[test]
+fn given_a_state_with_a_dma_due_time_on_a_channel_that_waits_for_nothing_when_loaded_then_it_is_corrupt()
+ {
+    // Only a waiting start has a due time (`dma.md`, "Savestate").
+    let machine = with_distinct_dma();
+    let corrupt = arm9_bytes(ChannelBytes {
+        due: 5,
+        ..idle_channel()
+    });
+    assert_eq!(
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma9(),
+            &corrupt
+        )),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_dma_due_time_past_the_last_time_when_loaded_then_it_is_corrupt() {
+    let machine = with_distinct_dma();
+    let corrupt = arm9_bytes(ChannelBytes {
+        control: 1 << 31,
+        pending: true,
+        due: u64::MAX,
+        ..idle_channel()
+    });
+    assert_eq!(
+        load_bytes(bytes_with_replaced(
+            &machine,
+            machine.inspect().dma9(),
+            &corrupt
+        )),
+        Err(SavestateError::Corrupt)
+    );
+}

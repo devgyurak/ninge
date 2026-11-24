@@ -381,6 +381,7 @@ impl Io {
         scheduler: &mut Scheduler,
         transfer: &Transfer,
         end: End,
+        arm9_held_until: u64,
     ) {
         let effect = if transfer.arm9 {
             self.dma9.finish(transfer, end)
@@ -397,7 +398,12 @@ impl Io {
                 .held_signals::<true>()
                 .contains(Signal::GeometryFifoHalf)
         {
-            let time = scheduler.now().saturating_add(transfer.duration());
+            // The next burst waits for its words to have gone by and for the ARM9 hold the burst
+            // may have caused (a DMA that stalled paused the ARM9 with it).
+            let time = scheduler
+                .now()
+                .saturating_add(transfer.duration())
+                .max(arm9_held_until);
             self.route(scheduler, Signals::of(Signal::GeometryFifoHalf), time);
         }
     }

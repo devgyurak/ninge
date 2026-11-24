@@ -374,6 +374,9 @@ impl Machine {
             TcmConfig::from_cp15(self.arm9.cp15()),
         )
         .with_hold(self.arm9_hold_until);
+        // A hold that is already on ends before the step: the ARM9 runs no instruction in it.
+        let waiting = view.hold_until().saturating_sub(view.clock());
+        view.advance(waiting);
         arm9_instruction(&mut self.arm9, &mut self.bios.arm9, &mut view);
         // A lone step runs the whole hold: a debugger step is one instruction and what it cost.
         let rest = view.hold_until().saturating_sub(view.clock());

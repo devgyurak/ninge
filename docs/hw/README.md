@@ -58,6 +58,7 @@ File name: `docs/hw/<feature>.md`, kebab-case (`ipc-fifo.md`, `vram-banks.md`,
 - [Colour special effects and master brightness (both engines)](blending.md)
 - [Display capture and the main-memory display (engine A)](display-capture.md)
 - [The 3D engine stub: command ports, GXSTAT, stack pointers, DMA start mode 7](gx-stub.md)
+- [The geometry engine: command FIFO, matrices, vertices, clipping, lighting, tests](geometry-engine.md)
 
 **Boot and BIOS**
 

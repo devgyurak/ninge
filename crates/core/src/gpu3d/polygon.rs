@@ -296,23 +296,11 @@ impl Geometry {
 
     /// The current position through the clip matrix: `(x, y, z, 1.0) x clip`.
     fn transform(&self, clip: &Matrix) -> Vertex {
-        let [x, y, z] = self.position.map(i64::from);
-        let column = |c: usize| {
-            let sum = x
-                .wrapping_mul(i64::from(clip[c]))
-                .wrapping_add(y.wrapping_mul(i64::from(clip[4 + c])))
-                .wrapping_add(z.wrapping_mul(i64::from(clip[8 + c])))
-                .wrapping_add(i64::from(ONE).wrapping_mul(i64::from(clip[12 + c])));
-            (sum >> 12) as i32
-        };
         Vertex {
-            x: column(0),
-            y: column(1),
-            z: column(2),
-            w: column(3),
             color: self.color,
             s: self.st[0],
             t: self.st[1],
+            ..self.vertex_at(self.position, clip)
         }
     }
 
@@ -386,7 +374,7 @@ impl Geometry {
             .for_each(|(&at, corner)| *corner = self.held[at].vertex);
         let corners = &corners[..order.len()];
         let mut cut = [Vertex::default(); MAX_POLYGON_VERTICES];
-        match clip(corners, self.attr & ATTR_FAR_PLANE != 0, &mut cut) {
+        match clip_polygon(corners, self.attr & ATTR_FAR_PLANE != 0, &mut cut) {
             Clipped::Outside => {}
             Clipped::Inside => {
                 let needed = order
@@ -463,6 +451,82 @@ impl Geometry {
         };
         let fill = usize::from(self.fill & 1);
         self.ram[fill].polygons.push(polygon);
+    }
+
+    /// POS_TEST: the position is replaced by `(x, y, z)` (as VTX_16 gives them) and goes through the
+    /// clip matrix; the four results are `(x, y, z, w)`, 1.19.12.
+    // TODO(hw-unverified): the colour and the texture coordinates are left alone (`geometry-engine.md`,
+    // "Unverified").
+    pub(super) fn position_test(&mut self, params: &[u32], clip: &Matrix) -> [i32; 4] {
+        let half = |word: u32, high: bool| (word >> if high { 16 } else { 0 }) as u16 as i16;
+        self.position = [
+            half(params[0], false),
+            half(params[0], true),
+            half(params[1], false),
+        ];
+        let v = self.transform(clip);
+        [v.x, v.y, v.z, v.w]
+    }
+
+    /// BOX_TEST: whether any of the six faces of the box is wholly or partly inside the view volume.
+    /// The corner `(x, y, z)` and the size `(width, height, depth)` are 1.3.12 values in the three
+    /// parameters; each face is clipped like a polygon with the far plane allowed.
+    // TODO(hw-unverified): the faces are tested one by one, the three offsets are the box's size and
+    // the far plane counts (`geometry-engine.md`, "Unverified").
+    pub(super) fn box_test(&self, params: &[u32], clip: &Matrix) -> bool {
+        let half = |word: u32, high: bool| (word >> if high { 16 } else { 0 }) as u16 as i16;
+        let origin = [
+            half(params[0], false),
+            half(params[0], true),
+            half(params[1], false),
+        ];
+        let size = [
+            half(params[1], true),
+            half(params[2], false),
+            half(params[2], true),
+        ];
+        // Corner `i` has the far end of x if bit 0 is set, of y if bit 1, of z if bit 2.
+        let corner = |i: usize| {
+            let at = |axis: usize| {
+                let far = if i >> axis & 1 == 1 { size[axis] } else { 0 };
+                origin[axis].wrapping_add(far)
+            };
+            self.vertex_at([at(0), at(1), at(2)], clip)
+        };
+        let corners: [Vertex; 8] = std::array::from_fn(corner);
+        const FACES: [[usize; 4]; 6] = [
+            [0, 2, 6, 4],
+            [1, 3, 7, 5],
+            [0, 1, 5, 4],
+            [2, 3, 7, 6],
+            [0, 1, 3, 2],
+            [4, 5, 7, 6],
+        ];
+        FACES.iter().any(|face| {
+            let quad = face.map(|i| corners[i]);
+            let mut scratch = [Vertex::default(); MAX_POLYGON_VERTICES];
+            clip_polygon(&quad, true, &mut scratch) != Clipped::Outside
+        })
+    }
+
+    /// A position through the clip matrix, with the current colour and texture coordinates.
+    fn vertex_at(&self, position: [i16; 3], clip: &Matrix) -> Vertex {
+        let [x, y, z] = position.map(i64::from);
+        let column = |c: usize| {
+            let sum = x
+                .wrapping_mul(i64::from(clip[c]))
+                .wrapping_add(y.wrapping_mul(i64::from(clip[4 + c])))
+                .wrapping_add(z.wrapping_mul(i64::from(clip[8 + c])))
+                .wrapping_add(i64::from(ONE).wrapping_mul(i64::from(clip[12 + c])));
+            (sum >> 12) as i32
+        };
+        Vertex {
+            x: column(0),
+            y: column(1),
+            z: column(2),
+            w: column(3),
+            ..Vertex::default()
+        }
     }
 
     /// Whether the open list ends in a polygon that was never completed: SWAP_BUFFERS then locks
@@ -625,7 +689,7 @@ fn intersect(a: &Vertex, b: &Vertex, da: i64, db: i64) -> Vertex {
 /// plane is hidden whole.
 // TODO(hw-unverified): the far-plane rule, the inside test and the order of the corners that remain
 // (`geometry-engine.md`, "Unverified").
-pub(super) fn clip(
+pub(super) fn clip_polygon(
     corners: &[Vertex],
     render_far: bool,
     out: &mut [Vertex; MAX_POLYGON_VERTICES],

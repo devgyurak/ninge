@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The geometry engine's front: DISP3DCNT, the command decoder (GXFIFO and the command ports), the
-//! 256-entry FIFO and 4-entry PIPE, the engine's command timing, the matrix mode and stack pointers,
-//! GXSTAT and the FIFO IRQ (`docs/hw/geometry-engine.md`, `docs/hw/gx-stub.md`).
+//! The geometry engine: DISP3DCNT, the command decoder (GXFIFO and the command ports), the
+//! 256-entry FIFO and 4-entry PIPE, the engine's command timing, the matrices and their stacks,
+//! vertices and polygons with their clipping and the two sets of Polygon RAM and Vertex RAM,
+//! lighting, texture coordinates, the three test commands, GXSTAT and the FIFO IRQ
+//! (`docs/hw/geometry-engine.md`, `docs/hw/gx-stub.md`).
 //!
 //! The engine takes one command at a time from the queue, holds for the command's cycles and then
-//! applies its effect: each command's end is a scheduler event of this device (slot 0). Nothing is
-//! drawn and no matrix is computed yet; the matrix mode, the stack pointers and the BOX_TEST result
-//! are the only effects. A writer that finds the FIFO full waits for the engine, and the engine
-//! cycles that takes are charged to it (`Effect::stall`).
+//! applies its effect: each command's end is a scheduler event of this device (slot 0). A writer that
+//! finds the FIFO full waits for the engine, and the engine cycles that takes are charged to it
+//! (`Effect::stall`). Nothing is drawn: the polygons the last SWAP_BUFFERS handed on are what the
+//! rendering engine will read.
 //!
 //! Only the ARM9 sees these registers, so [`Gpu3d`] is a plain type implementing `Device<true>`
 //! (`AGENTS.md` §4, "Per-CPU devices"): the "seen by one CPU" class. It registers directly with its
 //! own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
-// TODO(phase7): the matrices (#48 PR C), vertices and polygons (PR D), lighting (PR E) and the
-// position, vector and box tests (PR F) give the commands their effects; the rendering engine is
-// #49-#52 (`geometry-engine.md`).
+// TODO(phase7): the rendering engine that draws the polygons is #49-#52.
 
 mod cycles;
 mod lighting;
@@ -28,7 +28,8 @@ use crate::io::device::{
 use crate::io::irq::{GXFIFO_IRQ, Requests};
 use crate::io::timing::next_vblank_start;
 use cycles::command_cycles;
-use matrix::{IDENTITY, Matrices, Target, shape};
+use lighting::unpack;
+use matrix::{IDENTITY, Matrices, Matrix, Target, shape};
 use polygon::Geometry;
 pub use polygon::{MAX_POLYGON_VERTICES, POLYGON_RAM, Polygon, Ram, VERTEX_RAM, Vertex};
 use queue::{Entry, FIFO_CAPACITY, HALF_FULL, Queue};
@@ -66,6 +67,10 @@ const GXSTAT_BYTES: u32 = 4;
 /// RAM_COUNT, `0400_0604h`, one word.
 const RAM_COUNT_REL: u32 = 0x204;
 const RAM_COUNT_END: u32 = RAM_COUNT_REL + 4;
+/// POS_RESULT, `0400_0620h`, four words; VEC_RESULT, `0400_0630h`, three halfwords.
+const POS_RESULT_REL: u32 = 0x220;
+const VEC_RESULT_REL: u32 = 0x230;
+const VEC_RESULT_END: u32 = VEC_RESULT_REL + 6;
 /// CLIPMTX_RESULT, `0400_0640h`, 16 words; VECMTX_RESULT, `0400_0680h`, 9 words.
 const CLIPMTX_REL: u32 = 0x240;
 const VECMTX_REL: u32 = 0x280;
@@ -216,6 +221,10 @@ pub struct Gpu3d {
     irq_mode: u8,
     /// GXSTAT bit 1, 0 until a BOX_TEST has run.
     box_result: bool,
+    /// POS_RESULT: the clip coordinates of the last POS_TEST, 1.19.12.
+    pos_result: [i32; 4],
+    /// VEC_RESULT: the last VEC_TEST, three 16-bit values with 12 fraction bits.
+    vec_result: [u16; 3],
     /// The command IDs of the word being decoded that have not run yet, the next in the low byte.
     /// A byte of 0 is NOP and so is everything above the last non-zero byte: 0 means none left.
     pending: u32,
@@ -395,6 +404,8 @@ impl Gpu3d {
             self.running
                 .is_some_and(|running| ids.contains(&running.command))
         };
+        // TODO(hw-unverified): bit 0 covers the whole time a test executes and bit 14 the time a
+        // push, pop, store or restore executes (`geometry-engine.md`, "Unverified").
         let test_busy = if executing(&[CMD_BOX_TEST, CMD_POS_TEST, CMD_VEC_TEST]) {
             GXSTAT_TEST_BUSY
         } else {
@@ -463,6 +474,14 @@ impl Gpu3d {
     fn matrix_byte(&self, rel: u32) -> u8 {
         let word_byte = |base: u32, word: u32| (word >> (8 * ((rel - base) % 4))) as u8;
         match rel {
+            POS_RESULT_REL..VEC_RESULT_REL => word_byte(
+                POS_RESULT_REL,
+                self.pos_result[((rel - POS_RESULT_REL) / 4) as usize] as u32,
+            ),
+            VEC_RESULT_REL..VEC_RESULT_END => {
+                let at = rel - VEC_RESULT_REL;
+                (self.vec_result[(at / 2) as usize] >> (8 * (at % 2))) as u8
+            }
             RAM_COUNT_REL..RAM_COUNT_END => word_byte(RAM_COUNT_REL, self.geometry.ram_count()),
             CLIPMTX_REL..VECMTX_REL => word_byte(
                 CLIPMTX_REL,
@@ -663,11 +682,8 @@ impl Gpu3d {
         });
     }
 
-    /// A command that has ended, with its parameters (`params`, one 0 for none). The matrix mode,
-    /// the matrices and their stacks, the stack pointers and the BOX_TEST result have an effect;
-    /// the rest is consumed and dropped.
-    // TODO(phase7): vertices and polygons (#48 PR D), lighting (PR E) and the tests (PR F) give
-    // the other commands their effects.
+    /// A command that has ended, with its parameters (`params`, one 0 for none): its effect takes
+    /// place now. The rendering registers are not commands and are not here.
     fn execute(&mut self, id: u8, params: &[u32; MAX_PARAMS]) {
         let param = params[0];
         match id {
@@ -709,9 +725,13 @@ impl Gpu3d {
             }
             CMD_VIEWPORT => self.geometry.viewport = param,
             CMD_SWAP_BUFFERS => self.swap_buffers(param),
-            // TODO(phase7): the result comes from the box and the matrices; the stub answers
-            // "inside" so a program keeps its draw path (`gx-stub.md`, "Model").
-            CMD_BOX_TEST => self.box_result = true,
+            CMD_BOX_TEST => {
+                self.box_result = self.geometry.box_test(params, &self.matrices.clip);
+            }
+            CMD_POS_TEST => {
+                self.pos_result = self.geometry.position_test(params, &self.matrices.clip);
+            }
+            CMD_VEC_TEST => self.vec_result = vector_test(param, &self.matrices.vector),
             _ => {}
         }
     }
@@ -827,6 +847,22 @@ impl Gpu3d {
             _ => self.matrices.restore(self.stack_target(), entry),
         }
     }
+}
+
+/// VEC_TEST: the vector (1.0.9) through the vector matrix, as 12-bit fractions in 16 bits whose top
+/// four bits copy the sign: a value of 1.0 or more overflows (1.0 reads as -1.0). The sum of the
+/// products has 21 fraction bits (9 and 12) and keeps 12, so the low bits of the result are real.
+// TODO(hw-unverified): the result's width and sign extension (`geometry-engine.md`, "Unverified").
+fn vector_test(param: u32, vector: &Matrix) -> [u16; 3] {
+    let v = unpack(param);
+    std::array::from_fn(|c| {
+        let sum = (0..3).fold(0i64, |sum, k| {
+            sum.wrapping_add(i64::from(v[k]).wrapping_mul(i64::from(vector[4 * k + c])))
+        });
+        // 21 fraction bits to 12, then the 13-bit signed value sign-extended to 16 bits.
+        let twelve = (sum >> 9) as i32;
+        (((twelve << 19) >> 19) as i16) as u16
+    })
 }
 
 /// Bits 0-5 of `value` as a signed number, as the byte a pointer is stepped by (two's complement

@@ -26,6 +26,7 @@ pub mod pacing;
 pub mod pattern;
 pub mod pen;
 pub mod placeholder;
+pub mod record;
 pub mod render;
 pub mod savefile;
 #[cfg(unix)]

@@ -714,3 +714,125 @@ fn given_a_machine_when_a_frame_runs_then_the_audio_is_that_frames_samples() {
         (true, true)
     );
 }
+
+// ------------------------------------------------------------- recording
+
+/// A writer whose bytes the test can read after the recorder owns it.
+#[derive(Clone, Default)]
+struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedBuf {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("not poisoned")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An app on the smoke ROM that records to the returned buffer, with a fixed clock.
+fn recording_app() -> (App, SharedBuf) {
+    let rom = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testroms/build/smoke.nds"),
+    )
+    .expect("smoke ROM is built");
+    let machine = crate::source::boot(rom).expect("valid header");
+    let buffer = SharedBuf::default();
+    let recorder = Recorder::begin(
+        Box::new(buffer.clone()),
+        std::path::PathBuf::from("run.ninput"),
+        &machine,
+    )
+    .expect("header");
+    let app = App::new(size())
+        .with_clock(|| 789_012_345)
+        .with_source(Source::Machine(Box::new(machine)))
+        .with_recorder(Some(recorder));
+    (app, buffer)
+}
+
+/// Runs `n` frames and returns the input the machine latched for each.
+fn latched_inputs(app: &mut App, n: u32) -> Vec<Input> {
+    (0..n)
+        .map(|_| {
+            app.step();
+            app.machine().expect("a machine").inspect().input()
+        })
+        .collect()
+}
+
+#[test]
+fn given_keys_held_and_a_clock_when_frames_run_then_the_log_holds_what_run_frame_received() {
+    let (mut app, buffer) = recording_app();
+    app.apply(press(KeyCode::Enter));
+    app.apply(press(KeyCode::Right));
+    let latched = latched_inputs(&mut app, 8);
+    let text = String::from_utf8(buffer.0.lock().expect("not poisoned").clone()).expect("utf-8");
+    assert_eq!(
+        ninge_core::input_log::parse(&text)
+            .expect("a valid log")
+            .frames,
+        latched
+    );
+}
+
+#[test]
+fn given_keys_held_for_a_while_when_frames_run_then_the_recorded_buttons_change_when_the_hold_ends()
+{
+    let (mut app, buffer) = recording_app();
+    app.apply(press(KeyCode::Enter));
+    let latched = latched_inputs(&mut app, crate::input::FALLBACK_HOLD_FRAMES as u32 + 2);
+    let text = String::from_utf8(buffer.0.lock().expect("not poisoned").clone()).expect("utf-8");
+    let recorded = ninge_core::input_log::parse(&text).expect("valid").frames;
+    assert_eq!(
+        (
+            recorded.first().map(|i| i.buttons),
+            recorded.last().map(|i| i.buttons)
+        ),
+        (
+            Some(ninge_core::Buttons::START),
+            Some(ninge_core::Buttons::empty())
+        )
+    );
+    assert_eq!(recorded, latched);
+}
+
+#[test]
+fn given_a_recording_app_when_a_frame_runs_then_the_clock_s_time_is_in_the_log() {
+    let (mut app, buffer) = recording_app();
+    run_frames(&mut app, 1);
+    let text = String::from_utf8(buffer.0.lock().expect("not poisoned").clone()).expect("utf-8");
+    assert!(text.ends_with("f=1 wall=789012345\n"));
+}
+
+#[test]
+fn given_a_recording_app_when_asked_for_the_note_then_it_says_how_many_frames_were_recorded() {
+    let (mut app, _) = recording_app();
+    run_frames(&mut app, 3);
+    assert_eq!(
+        app.recording_note(),
+        Some("recorded 3 frames to run.ninput".to_string())
+    );
+}
+
+#[test]
+fn given_an_app_that_is_not_recording_when_asked_for_the_note_then_there_is_none() {
+    assert_eq!(App::new(size()).recording_note(), None);
+}
+
+#[test]
+fn given_the_dummy_pattern_with_a_recorder_when_frames_run_then_no_frame_is_recorded() {
+    let (machine_app, _) = recording_app();
+    let recorder = machine_app.recorder;
+    let mut app = App::new(size()).with_recorder(recorder);
+    run_frames(&mut app, 2);
+    assert_eq!(
+        app.recording_note(),
+        Some("recorded 0 frames to run.ninput".to_string())
+    );
+}

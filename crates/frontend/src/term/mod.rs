@@ -22,6 +22,7 @@ use crate::handoff::Handoff;
 use crate::kitty;
 use crate::layout::TermSize;
 use crate::pen::Unit;
+use crate::record::Recorder;
 use crate::render::{Renderer, Snapshot};
 use crate::savefile::SaveFile;
 use crate::source::Source;
@@ -197,6 +198,7 @@ pub fn size() -> io::Result<TermSize> {
 pub fn run(
     source: Source,
     save: Option<SaveFile>,
+    recorder: Option<Recorder>,
     audio: bool,
     focus_pause: bool,
 ) -> anyhow::Result<Option<String>> {
@@ -237,7 +239,8 @@ pub fn run(
         .with_key_release(found.key_release)
         .with_focus_pause(focus_pause)
         .with_source(source)
-        .with_save(save);
+        .with_save(save)
+        .with_recorder(recorder);
     let mut renderer = Renderer::new(found.sink, found.transfer);
     let mut gfx = io::stdout();
     // Opened here so the model starts knowing whether the library started and how many pads there
@@ -259,7 +262,10 @@ pub fn run(
         .is_some_and(|device| device.failed.load(Ordering::Acquire));
     outcome(
         result,
-        join_notes(sound_note(refused.as_deref(), failed), app.save_note()),
+        join_notes(
+            join_notes(sound_note(refused.as_deref(), failed), app.save_note()),
+            app.recording_note(),
+        ),
     )
 }
 

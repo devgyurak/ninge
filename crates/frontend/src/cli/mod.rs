@@ -8,8 +8,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 /// The usage line shown with every [`UsageError`].
-pub const USAGE: &str =
-    "usage: ninge [--no-audio] [--focus-pause] [<rom> [--save PATH] [--save-type TYPE]]";
+pub const USAGE: &str = "usage: ninge [--no-audio] [--focus-pause] [<rom> [--save PATH] [--save-type TYPE] [--record PATH]]";
 
 /// Arguments the frontend does not accept.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +31,8 @@ pub struct Options {
     pub save: Option<PathBuf>,
     /// The save chip, which `auto` (or leaving it out) leaves to the file's size and detection.
     pub save_type: Option<SaveType>,
+    /// `--record PATH`: write the input of every frame to a new input log at `PATH`.
+    pub record: Option<PathBuf>,
     /// `--no-audio`: open no sound device and keep time by the frame period.
     pub no_audio: bool,
     /// `--focus-pause`: pause the run, sound included, while the terminal is not focused.
@@ -40,6 +41,7 @@ pub struct Options {
 
 /// Parses the arguments after the program name: none shows the dummy pattern, one path is the ROM,
 /// `--save PATH` and `--save-type TYPE` (which need a ROM) name the save file and chip,
+/// `--record PATH` (which needs a ROM) records the input log,
 /// `--no-audio` (with or without a ROM) opens no sound device, and `--focus-pause` (likewise)
 /// pauses the run while the terminal is not focused. More than one path, or any other option, is
 /// a usage error.
@@ -56,6 +58,12 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, U
                     .next()
                     .ok_or_else(|| UsageError("--save needs a path".to_string()))?;
                 options.save = Some(PathBuf::from(value));
+            }
+            "--record" if options.record.is_none() => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| UsageError("--record needs a path".to_string()))?;
+                options.record = Some(PathBuf::from(value));
             }
             "--save-type" if options.save_type.is_none() => {
                 let value = args
@@ -79,6 +87,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, U
     }
     if options.rom.is_none() && (options.save.is_some() || options.save_type.is_some()) {
         return Err(UsageError("--save and --save-type need a ROM".to_string()));
+    }
+    if options.rom.is_none() && options.record.is_some() {
+        return Err(UsageError("--record needs a ROM".to_string()));
     }
     Ok(options)
 }

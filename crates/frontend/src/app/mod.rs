@@ -50,6 +50,7 @@ use crate::input::Keys;
 use crate::layout::{Areas, TermSize, compute};
 use crate::pattern::dummy_frame;
 use crate::pen::{Pen, Target, Unit};
+use crate::record::Recorder;
 use crate::render::Snapshot;
 use crate::savefile::SaveFile;
 use crate::source::Source;
@@ -121,6 +122,8 @@ pub struct App {
     frame_no: u64,
     source: Source,
     save: Option<SaveFile>,
+    /// The input log being written (`--record`).
+    recorder: Option<Recorder>,
     quit: bool,
     /// Whether the terminal has the focus, as it last reported; true until it says otherwise.
     focused: bool,
@@ -153,6 +156,7 @@ impl App {
             frame_no: 0,
             source: Source::Pattern,
             save: None,
+            recorder: None,
             quit: false,
             focused: true,
             focus_pause: false,
@@ -229,6 +233,19 @@ impl App {
     pub fn with_save(mut self, save: Option<SaveFile>) -> Self {
         self.save = save;
         self
+    }
+
+    /// Writes the input of every frame [`App::step`] runs to `recorder`.
+    #[must_use]
+    pub fn with_recorder(mut self, recorder: Option<Recorder>) -> Self {
+        self.recorder = recorder;
+        self
+    }
+
+    /// A line for the user once the program ends: how much was recorded, or why recording
+    /// stopped; `None` when nothing was being recorded.
+    pub fn recording_note(&self) -> Option<String> {
+        self.recorder.as_ref().map(Recorder::note)
     }
 
     /// Writes any save memory the file does not hold yet. Called when the main loop ends, and
@@ -332,6 +349,10 @@ impl App {
                 .with_touch(self.pen.touch().or(self.cursor.touch()))
                 .with_wall_time((self.clock)());
             machine.run_frame(input);
+            // The very input the frame ran with, so a replay of the log is this run.
+            if let Some(recorder) = &mut self.recorder {
+                recorder.record(&input);
+            }
             if let Some(save) = &mut self.save {
                 save.after_frame(machine);
             }

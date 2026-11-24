@@ -79,6 +79,19 @@ Only newline-terminated lines count. A final line with no `\n` is dropped, becau
 may have been cut off in the middle of it, and the parser reports that it dropped one. This is
 not an error: a log cut off mid-write replays as its prefix.
 
+## Recording
+
+```bash
+ninge <rom> --record PATH
+```
+
+The frontend writes the header before frame 1, from the loaded ROM's header CRC and the save
+memory it holds then, and one line per frame it runs, flushed as it goes. Each line is exactly
+the `Input` the frame was run with, wall-clock time included. `PATH` must not exist: an existing
+file is refused, not overwritten. A paused run (`--focus-pause`) runs no frame and records none.
+If a write fails, recording stops and the run goes on; the error is printed when the program
+ends. The log holds no ROM name, path, or bytes.
+
 ## Replaying
 
 ```bash

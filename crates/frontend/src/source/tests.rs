@@ -156,3 +156,71 @@ fn given_a_rom_when_starting_then_there_is_a_machine_and_a_save_file() {
     let (source, save) = start(&options(temp_save("start.bin", 512), None)).expect("starts");
     assert!(matches!(source, Source::Machine(_)) && save.is_some());
 }
+
+fn smoke_source() -> Source {
+    let rom = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testroms/build/smoke.nds"),
+    )
+    .expect("smoke ROM is built");
+    Source::Machine(Box::new(boot(rom).expect("valid header")))
+}
+
+fn record_to(path: &std::path::Path) -> Options {
+    Options {
+        record: Some(path.to_path_buf()),
+        ..Options::default()
+    }
+}
+
+#[test]
+fn given_no_record_option_when_opening_the_recording_then_there_is_none() {
+    assert!(
+        open_recording(&Options::default(), &smoke_source())
+            .expect("nothing to open")
+            .is_none()
+    );
+}
+
+#[test]
+fn given_a_new_path_when_opening_the_recording_then_the_file_holds_the_header() {
+    let path = std::env::temp_dir().join(format!("ninge-source-{}-new.ninput", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let opened = open_recording(&record_to(&path), &smoke_source()).expect("opens");
+    let text = std::fs::read_to_string(&path).expect("created");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        (opened.is_some(), text.starts_with("ninge-input 1 rom=")),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_an_existing_path_when_opening_the_recording_then_it_is_refused_with_exit_1_and_kept() {
+    let path = std::env::temp_dir().join(format!("ninge-source-{}-old.ninput", std::process::id()));
+    std::fs::write(&path, "keep me").expect("temp dir is writable");
+    let error = open_recording(&record_to(&path), &smoke_source())
+        .err()
+        .expect("refused");
+    let kept = std::fs::read_to_string(&path).expect("still there");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        (
+            error.exit_code(),
+            error.to_string().starts_with("cannot record to "),
+            kept
+        ),
+        (1, true, "keep me".to_string())
+    );
+}
+
+#[test]
+fn given_the_dummy_pattern_when_opening_the_recording_then_there_is_none() {
+    assert!(
+        open_recording(
+            &record_to(std::path::Path::new("x.ninput")),
+            &Source::Pattern
+        )
+        .expect("no machine to record")
+        .is_none()
+    );
+}

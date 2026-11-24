@@ -367,3 +367,33 @@ fn given_replay_as_the_first_word_when_the_command_is_parsed_then_it_is_a_replay
     let command = parse_command(["replay", "g.nds", "l"].map(OsString::from));
     assert!(matches!(command, Ok(Command::Replay(_))));
 }
+
+#[test]
+fn given_a_save_mismatch_when_displayed_then_the_message_says_how_to_pass_the_old_save() {
+    let rom = keypad_rom();
+    let blank = vec![0xFF; SaveType::Eeprom8K.len()];
+    let header = LogHeader {
+        save_type: SaveType::Eeprom8K,
+        save_hash: input_log::save_hash(&blank),
+        ..header_for(&rom)
+    };
+    let mut changed = blank;
+    changed[0] = 0;
+    let message = replay(rom, &encode_header(&header), None, Some(changed))
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("pass the save as it was before recording with --save"));
+}
+
+#[test]
+fn given_a_rom_mismatch_when_displayed_then_the_message_has_no_save_hint() {
+    let rom = keypad_rom();
+    let header = LogHeader {
+        rom_crc: rom_crc(&rom) ^ 1,
+        ..header_for(&rom)
+    };
+    let message = replay(rom, &encode_header(&header), None, None)
+        .unwrap_err()
+        .to_string();
+    assert!(!message.contains("--save"));
+}

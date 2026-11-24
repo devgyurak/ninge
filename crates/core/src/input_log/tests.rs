@@ -4,6 +4,8 @@
 use super::*;
 use proptest::prelude::*;
 
+// `cbf29ce484222325` below is FNV-1a 64 of no bytes: the save hash of a machine with no save
+// memory (pinned by the empty-save test).
 const HEADER: &str = "ninge-input 1 rom=1a2b save=flash-512k:00112233aabbccdd\n";
 
 fn header() -> LogHeader {

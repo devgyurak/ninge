@@ -9,14 +9,17 @@ const MASTER_PER_BUS: u64 = 2;
 const SIMULTANEOUS_MODE_EXTRA: u64 = 30;
 /// MTX_MODE value of the simultaneous mode.
 const MODE_SIMULTANEOUS: u8 = 2;
+/// NORMAL takes 9 bus cycles and one more for each enabled light, up to 12.
+const NORMAL_LIGHT_CYCLES_CAP: u64 = 3;
 /// SWAP_BUFFERS' own execution once the wait for VBlank is over.
 const SWAP_BUFFERS_BUS_CYCLES: u64 = 392;
 
 /// Master cycles command `id` occupies the engine, with the matrix mode at its start. An ID that
 /// is not a command (the decoder never queues one) costs nothing.
 // TODO(hw-unverified): which starred commands take the mode-2 extra, and NORMAL's cost with its
-// light count: 9 here until lighting lands (`geometry-engine.md`, "Unverified").
-pub(super) const fn command_cycles(id: u8, matrix_mode: u8) -> u64 {
+// light count: one more bus cycle for each enabled light up to GBATEK's 12
+// (`geometry-engine.md`, "Unverified").
+pub(super) fn command_cycles(id: u8, matrix_mode: u8, lights: u32) -> u64 {
     let extra = if matrix_mode == MODE_SIMULTANEOUS {
         SIMULTANEOUS_MODE_EXTRA
     } else {
@@ -34,7 +37,8 @@ pub(super) const fn command_cycles(id: u8, matrix_mode: u8) -> u64 {
         0x1A => 28 + extra,
         0x1B => 22,
         0x1C => 22 + extra,
-        0x21 | 0x23 => 9,
+        0x21 => 9 + NORMAL_LIGHT_CYCLES_CAP.min(lights as u64),
+        0x23 => 9,
         0x24..=0x28 => 8,
         0x30 | 0x31 => 4,
         0x32 => 6,

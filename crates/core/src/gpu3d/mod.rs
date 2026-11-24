@@ -17,6 +17,7 @@
 // #49-#52 (`geometry-engine.md`).
 
 mod cycles;
+mod lighting;
 mod matrix;
 mod polygon;
 mod queue;
@@ -144,11 +145,18 @@ const CMD_MTX_MULT_3X3: u8 = 0x1A;
 const CMD_MTX_SCALE: u8 = 0x1B;
 const CMD_MTX_TRANS: u8 = 0x1C;
 const CMD_COLOR: u8 = 0x20;
+const CMD_NORMAL: u8 = 0x21;
+const CMD_TEXCOORD: u8 = 0x22;
 const CMD_VTX_16: u8 = 0x23;
 const CMD_VTX_DIFF: u8 = 0x28;
 const CMD_POLYGON_ATTR: u8 = 0x29;
 const CMD_TEXIMAGE_PARAM: u8 = 0x2A;
 const CMD_PLTT_BASE: u8 = 0x2B;
+const CMD_DIF_AMB: u8 = 0x30;
+const CMD_SPE_EMI: u8 = 0x31;
+const CMD_LIGHT_VECTOR: u8 = 0x32;
+const CMD_LIGHT_COLOR: u8 = 0x33;
+const CMD_SHININESS: u8 = 0x34;
 const CMD_BEGIN_VTXS: u8 = 0x40;
 const CMD_SWAP_BUFFERS: u8 = 0x50;
 const CMD_VIEWPORT: u8 = 0x60;
@@ -619,7 +627,11 @@ impl Gpu3d {
         self.running = Some(Running {
             command: front.command,
             params,
-            ends: begins.saturating_add(command_cycles(front.command, self.mtx_mode)),
+            ends: begins.saturating_add(command_cycles(
+                front.command,
+                self.mtx_mode,
+                self.geometry.enabled_lights(),
+            )),
         });
     }
 
@@ -649,12 +661,23 @@ impl Gpu3d {
                 .matrices
                 .multiply_by(self.target(false), &shape(id, params)),
             CMD_COLOR => self.geometry.color = (param & COLOR_MASK) as u16,
+            CMD_NORMAL => {
+                self.geometry
+                    .normal(param, &self.matrices.vector, &self.matrices.texture);
+            }
+            CMD_TEXCOORD => self.geometry.texcoord(param, &self.matrices.texture),
+            CMD_DIF_AMB => self.geometry.diffuse_ambient(param),
+            CMD_SPE_EMI => self.geometry.specular_emission(param),
+            CMD_LIGHT_VECTOR => self.geometry.light_vector(param, &self.matrices.vector),
+            CMD_LIGHT_COLOR => self.geometry.light_color(param),
+            CMD_SHININESS => self.geometry.shininess(params),
             CMD_POLYGON_ATTR => self.geometry.write_attr(param),
             CMD_TEXIMAGE_PARAM => self.geometry.texture = param,
             CMD_PLTT_BASE => self.geometry.palette = param,
             CMD_BEGIN_VTXS => self.geometry.begin(param),
             CMD_VTX_16..=CMD_VTX_DIFF => {
-                self.geometry.vertex(id, params, &self.matrices.clip);
+                self.geometry
+                    .vertex(id, params, &self.matrices.clip, &self.matrices.texture);
             }
             CMD_VIEWPORT => self.geometry.viewport = param,
             CMD_SWAP_BUFFERS => self.swap_buffers(param),

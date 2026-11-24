@@ -7,6 +7,7 @@
 //! SWAP_BUFFERS exchanges them. Everything is fixed-size plain data: the vectors are reserved once
 //! and a polygon or a vertex that does not fit is dropped, never grown.
 
+use super::lighting::{Lighting, direction, unpack};
 use super::matrix::{Matrix, ONE};
 use serde::{Deserialize, Serialize};
 
@@ -108,8 +109,12 @@ pub(super) struct Geometry {
     position: [i16; 3],
     /// The current vertex colour, RGB555.
     pub(super) color: u16,
-    /// The current texture coordinates, 1.11.4.
-    pub(super) texcoord: [i16; 2],
+    /// The texture coordinates as TEXCOORD gave them, 1.11.4.
+    texcoord: [i16; 2],
+    /// The texture coordinates vertices take: `texcoord` after the transformation mode has run.
+    st: [i16; 2],
+    /// The lights, the material and the shininess table (`geometry-engine.md`, "Lighting").
+    lighting: Lighting,
     /// POLYGON_ATTR as written, applied at the next BEGIN_VTXS.
     attr_written: u32,
     /// POLYGON_ATTR in force.
@@ -138,6 +143,8 @@ impl Geometry {
             position: [0; 3],
             color: 0x7FFF,
             texcoord: [0; 2],
+            st: [0; 2],
+            lighting: Lighting::new(),
             attr_written: 0,
             attr: 0,
             texture: 0,
@@ -183,8 +190,61 @@ impl Geometry {
         self.ram.iter_mut().for_each(Ram::reserve);
     }
 
+    /// The lights POLYGON_ATTR enables, as a count.
+    pub(super) fn enabled_lights(&self) -> u32 {
+        (self.attr & LIGHT_BITS).count_ones()
+    }
+
+    /// TEXIMAGE_PARAM bits 30-31: how texture coordinates are transformed.
+    fn texture_mode(&self) -> u32 {
+        self.texture >> 30
+    }
+
+    /// TEXCOORD: S in bits 0-15 and T in bits 16-31. Modes 0 and 1 give the coordinates a vertex
+    /// takes now; modes 2 and 3 compute them later (at NORMAL and at each vertex).
+    pub(super) fn texcoord(&mut self, param: u32, texture: &Matrix) {
+        self.texcoord = [param as u16 as i16, (param >> 16) as u16 as i16];
+        match self.texture_mode() {
+            0 => self.st = self.texcoord,
+            1 => self.st = map_texcoord(&self.texcoord, texture),
+            _ => {}
+        }
+    }
+
+    /// NORMAL: the vertex colour from the lights, and in texture mode 2 the coordinates from the
+    /// normal.
+    pub(super) fn normal(&mut self, param: u32, vector: &Matrix, texture: &Matrix) {
+        let normal = direction(unpack(param), vector);
+        self.color = self.lighting.vertex_color(normal, self.attr & LIGHT_BITS);
+        if self.texture_mode() == 2 {
+            self.st = texture_from(normal.map(i64::from), VECTOR_TEXTURE_SHIFT, self, texture);
+        }
+    }
+
+    pub(super) fn diffuse_ambient(&mut self, param: u32) {
+        if let Some(color) = self.lighting.set_diffuse_ambient(param) {
+            self.color = color;
+        }
+    }
+
+    pub(super) fn specular_emission(&mut self, param: u32) {
+        self.lighting.set_specular_emission(param);
+    }
+
+    pub(super) fn light_vector(&mut self, param: u32, vector: &Matrix) {
+        self.lighting.set_direction(param, vector);
+    }
+
+    pub(super) fn light_color(&mut self, param: u32) {
+        self.lighting.set_color(param);
+    }
+
+    pub(super) fn shininess(&mut self, words: &[u32]) {
+        self.lighting.set_table(words);
+    }
+
     /// Sets the current position from a vertex command and processes the vertex.
-    pub(super) fn vertex(&mut self, id: u8, params: &[u32], clip: &Matrix) {
+    pub(super) fn vertex(&mut self, id: u8, params: &[u32], clip: &Matrix, texture: &Matrix) {
         let p0 = params[0];
         let half = |word: u32, high: bool| (word >> if high { 16 } else { 0 }) as u16 as i16;
         match id {
@@ -205,6 +265,10 @@ impl Geometry {
                     self.position[n] = self.position[n].wrapping_add(delta);
                 });
             }
+        }
+        if self.texture_mode() == 3 {
+            let position = self.position.map(i64::from);
+            self.st = texture_from(position, POSITION_TEXTURE_SHIFT, self, texture);
         }
         let vertex = self.transform(clip);
         self.add_vertex(vertex);
@@ -227,8 +291,8 @@ impl Geometry {
             z: column(2),
             w: column(3),
             color: self.color,
-            s: self.texcoord[0],
-            t: self.texcoord[1],
+            s: self.st[0],
+            t: self.st[1],
         }
     }
 
@@ -428,6 +492,42 @@ impl Default for Geometry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// POLYGON_ATTR bits 0-3: the lights NORMAL takes into account.
+const LIGHT_BITS: u32 = 0xF;
+/// A normal (9-bit fraction) times a matrix element (12 bits) has 21 fraction bits; the result keeps
+/// 4. A position (12-bit fraction) has 24.
+const VECTOR_TEXTURE_SHIFT: u32 = 17;
+const POSITION_TEXTURE_SHIFT: u32 = 20;
+
+/// Texture mode 1: `(S, T, 1/16, 1/16)` times the first two columns of the texture matrix. S and T
+/// have 4 fraction bits, the matrix 12, so the sum shifts right by 12; the two constants are `1/16`
+/// (a raw 1). The result is masked to 16 bits.
+fn map_texcoord(st: &[i16; 2], m: &Matrix) -> [i16; 2] {
+    let [s, t] = st.map(i64::from);
+    std::array::from_fn(|c| {
+        let sum = s
+            .wrapping_mul(i64::from(m[c]))
+            .wrapping_add(t.wrapping_mul(i64::from(m[4 + c])))
+            .wrapping_add(i64::from(m[8 + c]))
+            .wrapping_add(i64::from(m[12 + c]));
+        (sum >> 12) as i16
+    })
+}
+
+/// Texture modes 2 and 3: `(x, y, z, 1.0)` times the first two columns with the bottom row replaced
+/// by S and T. The vector terms shift right by `shift` to leave 4 fraction bits and S, T are added as
+/// they are.
+// TODO(hw-unverified): the units of the bottom row and the shifts (`geometry-engine.md`,
+// "Unverified").
+fn texture_from(v: [i64; 3], shift: u32, geometry: &Geometry, m: &Matrix) -> [i16; 2] {
+    std::array::from_fn(|c| {
+        let sum = (0..3).fold(0i64, |sum, k| {
+            sum.wrapping_add(v[k].wrapping_mul(i64::from(m[4 * k + c])))
+        });
+        ((sum >> shift) as i16).wrapping_add(geometry.texcoord[c])
+    })
 }
 
 /// Bits 0-9 of `value` as a signed number.

@@ -75,8 +75,8 @@ const PORT_SHIFT: u32 = 2;
 /// Bit 13 (Polygon/Vertex RAM overflow) is raised by the geometry engine and a write of 1
 /// acknowledges it; bit 12 (the colour buffer's underflow) is the rasterizer's (#49) and reads 0
 /// until then (`geometry-engine.md`, "DISP3DCNT bits 12 and 13").
-// TODO(hw-unverified): bits 12-13 are not stored and a write of 1 does nothing (`gx-stub.md`,
-// "Unverified").
+// TODO(hw-unverified): bit 13 sets on an overflow and clears by a write of 1, bit 12 reads 0 and a
+// write of 1 to it does nothing (`gx-stub.md`, "Unverified").
 pub const DISP3DCNT_MASK: u16 = 0x4FFF;
 /// RDLINES_COUNT as it reads until the rasterizer (#49) exists: the largest value the field holds, as for a renderer that
 /// keeps its line buffer full.

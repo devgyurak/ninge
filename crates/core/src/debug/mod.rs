@@ -242,10 +242,9 @@ impl<'a> Inspect<'a> {
         self.machine.io.spu()
     }
 
-    /// The 3D engine stub: DISP3DCNT, the matrix mode, the three stack pointers, the error flag and
-    /// the command decoder's state.
-    // No panel shows them yet: the debugger's 3D panels come with the geometry engine in Phase 7
-    // (#53).
+    /// The 3D engine: DISP3DCNT, the geometry engine (its FIFO, matrices and stacks, the polygon
+    /// RAM the last swap handed on), GXSTAT and the rendering registers.
+    // No panel shows them yet: the debugger's 3D panels (#53) will.
     pub fn gpu3d(&self) -> &'a Gpu3d {
         self.machine.io.gpu3d()
     }

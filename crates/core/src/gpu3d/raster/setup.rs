@@ -35,6 +35,13 @@ const MODE_SHADOW: u32 = 3;
 const ATTR_DEPTH_EQUAL: u32 = 1 << 14;
 /// SWAP_BUFFERS bit 1: the depth buffer holds W, not Z.
 const SWAP_W_BUFFER: u8 = 1 << 1;
+/// SWAP_BUFFERS bit 0: translucent polygons keep the order they were completed in.
+const SWAP_MANUAL_SORT: u8 = 1;
+/// POLYGON_ATTR bit 11: a translucent pixel writes its depth.
+const ATTR_UPDATE_DEPTH: u32 = 1 << 11;
+// DISP3DCNT bits 2 and 3.
+const DISP3DCNT_ALPHA_TEST: u16 = 1 << 2;
+const DISP3DCNT_BLEND: u16 = 1 << 3;
 const OPAQUE: u32 = 31;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
@@ -56,6 +63,17 @@ pub(super) struct PolyDraw {
     pub(super) count: usize,
     /// The polygon ID, 6 bits.
     pub(super) id: u8,
+    /// The alpha of the polygon's pixels, 5 bits: 31 for an opaque polygon, a wire frame and a line
+    /// segment, the POLYGON_ATTR alpha for a translucent one.
+    pub(super) alpha: u8,
+    /// Alpha 1 to 30: drawn after the opaque polygons and blended into the buffer.
+    pub(super) translucent: bool,
+    /// A translucent pixel writes its depth (POLYGON_ATTR bit 11).
+    pub(super) update_depth: bool,
+    /// DISP3DCNT bit 3: translucent pixels blend with what is there.
+    pub(super) blend: bool,
+    /// A pixel draws only if its alpha is greater than this: ALPHA_TEST_REF with the test on, else 0.
+    pub(super) alpha_ref: u8,
     /// Alpha 0: only the edges draw.
     pub(super) wire: bool,
     /// The lower and right edges do not draw (`rasterizer.md`, "Which pixels a polygon covers").
@@ -77,6 +95,8 @@ pub(super) struct PolyDraw {
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Clear {
     pub(super) color: u16,
+    /// The colour as 6-bit channels (`X x 2 + 1`, 0 stays 0).
+    pub(super) color6: [u8; 3],
     pub(super) alpha: u8,
     pub(super) depth: u32,
     pub(super) id: u8,
@@ -150,9 +170,8 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
     ram.polygons.iter().for_each(|p| {
         let alpha = (p.attr >> ATTR_ALPHA_SHIFT) & 0x1F;
         let mode = (p.attr >> ATTR_MODE_SHIFT) & 3;
-        // TODO(phase7): translucent polygons are #49's next part and shadow polygons the one after;
-        // until then they draw nothing.
-        if (alpha != 0 && alpha != OPAQUE) || mode == MODE_SHADOW {
+        // TODO(phase7, #49): shadow polygons are the next part of #49; until then they draw nothing.
+        if mode == MODE_SHADOW {
             return;
         }
         let n = usize::from(p.count).min(MAX_POLYGON_VERTICES);
@@ -203,13 +222,34 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         let y_min_fix = screen.iter().map(|v| v.y).min().unwrap_or(0);
         let y_max_fix = screen.iter().map(|v| v.y).max().unwrap_or(0);
         let wire = alpha == 0 || segment;
+        // A wire frame (alpha 0) draws at alpha 31; a line segment of alpha 1 to 30 is translucent like
+        // any polygon (`rasterizer.md`, "Which pixels a polygon covers").
+        let translucent = alpha != 0 && alpha != OPAQUE;
+        let blend = disp3dcnt & DISP3DCNT_BLEND != 0;
         let flat = y_min_fix == y_max_fix;
         frame.polygons.push(PolyDraw {
             first: frame.vertices.len(),
             count: screen.len(),
             id: ((p.attr >> ATTR_ID_SHIFT) & 0x3F) as u8,
+            // TODO(hw-unverified): a wire frame (alpha 31 here) goes through the alpha test like any
+            // pixel (`rasterizer.md`, "Unverified").
+            alpha: if translucent {
+                alpha as u8
+            } else {
+                OPAQUE as u8
+            },
+            translucent,
+            update_depth: p.attr & ATTR_UPDATE_DEPTH != 0,
+            blend,
+            alpha_ref: if disp3dcnt & DISP3DCNT_ALPHA_TEST != 0 {
+                regs.alpha_test_ref
+            } else {
+                0
+            },
             wire,
-            exclude_edges: !wire && !marked,
+            // Opaque polygons without edge marking and anti-aliasing, and translucent ones with
+            // blending off, drop their lower and right edges (`rasterizer.md`).
+            exclude_edges: !wire && if translucent { !blend } else { !marked },
             equal: p.attr & ATTR_DEPTH_EQUAL != 0,
             w_buffer: scene.swap_bits & SWAP_W_BUFFER != 0,
             flat,
@@ -230,6 +270,16 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
             }
         }
     });
+    // Opaque polygons first, then the translucent ones, sorted by their top line unless the swap
+    // asked for manual order. The sort is stable, so equal keys keep the order of completion.
+    // TODO(hw-unverified): the sort key (`rasterizer.md`, "Unverified").
+    let manual = scene.swap_bits & SWAP_MANUAL_SORT != 0;
+    frame.polygons.sort_by_key(|p| {
+        (
+            p.translucent,
+            if p.translucent && !manual { p.y_min } else { 0 },
+        )
+    });
     frame
 }
 
@@ -239,6 +289,7 @@ fn clear_from(regs: &RenderRegs) -> Clear {
     // expanded to 6 bits like a vertex colour is not stated (`rasterizer.md`, "Unverified").
     Clear {
         color: (regs.clear_color & 0x7FFF) as u16,
+        color6: [0, 5, 10].map(|shift| expand6(((regs.clear_color >> shift) & 0x1F) as u16) as u8),
         alpha: ((regs.clear_color >> 16) & 0x1F) as u8,
         depth: expand_clear_depth(regs.clear_depth),
         id: ((regs.clear_color >> 24) & 0x3F) as u8,

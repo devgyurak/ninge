@@ -3,6 +3,7 @@
 //! scene in clip space with the viewport that covers the screen and a W of 3.0, where one screen
 //! pixel is 96 clip units across and 128 down, so every expected pixel is exact.
 
+mod alpha;
 mod depth;
 mod fill;
 mod interp;
@@ -96,6 +97,14 @@ pub(super) fn opaque(id: u32) -> u32 {
 /// All 192 lines of `ram` under DISP3DCNT `disp3dcnt` and registers `regs`.
 pub(super) fn draw(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs) -> Vec<Line3d> {
     let frame = Frame::new(Scene { ram, swap_bits: 0 }, regs, disp3dcnt);
+    let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
+    frame.draw(&SequentialExecutor, &mut lines);
+    lines
+}
+
+/// Like [`draw`] under DISP3DCNT `disp3dcnt`, registers `regs` and SWAP_BUFFERS bits `swap_bits`.
+pub(super) fn draw_all(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs, swap_bits: u8) -> Vec<Line3d> {
+    let frame = Frame::new(Scene { ram, swap_bits }, regs, disp3dcnt);
     let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
     frame.draw(&SequentialExecutor, &mut lines);
     lines

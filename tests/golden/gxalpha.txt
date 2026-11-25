@@ -1,0 +1,2 @@
+# Golden frames for testroms/gxalpha. Format and review flow: tests/golden/README.md.
+frames=4 top=c7e77380a6da4425 bottom=1a0564b2e8de2325

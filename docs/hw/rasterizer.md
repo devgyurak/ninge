@@ -196,8 +196,8 @@ A polygon with alpha 31 is opaque, 1 to 30 translucent, 0 a wire frame. Draw ord
 
 1. Opaque polygons, in the order they were completed.
 2. Translucent polygons, last. SWAP_BUFFERS bit 0 picks the order: 0 sorts them automatically by
-   Y (GBATEK says only "Y-sorting"; the model sorts by the smallest screen Y of a polygon's
-   vertices, ties kept in completion order, and marks it `TODO(hw-unverified)`), 1 keeps the order
+   Y (GBATEK says only "Y-sorting"; the model sorts by the smallest screen line number (the topmost line,
+   counted from the top of the screen) of a polygon's vertices, ties kept in completion order, and marks it `TODO(hw-unverified)`), 1 keeps the order
    of completion.
 
 Blending a translucent pixel into the colour buffer (DISP3DCNT bit 3 on), per channel with 5-bit
@@ -293,3 +293,5 @@ for both).
 - Whether the W depth is the 1.19.12 value itself clamped to 24 bits, and which scale the rear plane's
   depth has in W mode. — `gpu3d/` — verify by a test ROM that compares a W-buffered polygon with the
   rear plane at a known CLEAR_DEPTH.
+- Whether a wire frame or line segment, which draw at alpha 31, are subject to the alpha test as any
+  pixel is (the model: yes). — `gpu3d/` — verify by a test ROM with ALPHA_TEST_REF 31.

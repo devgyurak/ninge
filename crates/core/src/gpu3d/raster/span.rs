@@ -15,8 +15,6 @@ use super::setup::{ATTRS, Attrs, DEPTH, FRAC, IW, IW_ONE, MAX_DEPTH, ONE, PolyDr
 use crate::SCREEN_WIDTH;
 use crate::gpu2d::{Line3d, Pixel3d};
 
-/// Opaque, in 5 bits.
-const OPAQUE: u8 = 31;
 /// A weight of 1.0 in `lerp`.
 const WEIGHT_ONE: i64 = 1 << 16;
 
@@ -97,6 +95,9 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     if x >= SCREEN_WIDTH {
         return;
     }
+    if poly.alpha <= poly.alpha_ref {
+        return;
+    }
     let iw = attrs[IW].max(1);
     // TODO(hw-unverified): in W-buffer mode the depth is the interpolated W, the 1.19.12 value
     // itself, clamped to 24 bits (`rasterizer.md`, "Unverified").
@@ -111,19 +112,49 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     } else {
         depth < kept
     };
-    if !passes {
+    // A translucent polygon does not draw over a pixel another translucent pixel of its own ID wrote.
+    // TODO(hw-unverified): the rule for ordinary translucent polygons is the model's
+    // (`rasterizer.md`, "Unverified").
+    let again = poly.translucent && state.translucent[x] && state.id[x] == poly.id;
+    if !passes || again {
         return;
     }
     // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
     // (`rasterizer.md`, "Unverified").
-    // The 6-bit channel, narrowed to the 15-bit output (`rasterizer.md`, "The output").
-    let channel = |k: usize| ((attrs[k] / iw).clamp(0, 63) >> 1) as u16;
-    out[x] = Pixel3d {
-        color: channel(1) | channel(2) << 5 | channel(3) << 10,
-        alpha: OPAQUE,
+    let own = [1, 2, 3].map(|k| (attrs[k] / iw).clamp(0, 63) as u8);
+    // The alpha already in the output stands for the buffer's alpha; nothing else changes `out` while
+    // the polygons draw.
+    let below = out[x].alpha;
+    let blended = poly.translucent && poly.blend && below != 0;
+    // Blending: (poly x (A + 1) + buffer x (31 - A)) / 32 per channel, the alpha the larger of the
+    // two; it is skipped for an opaque pixel, with blending off and over alpha 0 (`rasterizer.md`,
+    // "Translucency, draw order and the rear plane").
+    let color6 = if blended {
+        let a = u16::from(poly.alpha);
+        // TODO(hw-unverified): the 5-bit formula is applied to 6-bit channels and narrowed after
+        // (`rasterizer.md`, "Unverified").
+        let mix =
+            |new: u8, old: u8| ((u16::from(new) * (a + 1) + u16::from(old) * (31 - a)) / 32) as u8;
+        [0, 1, 2].map(|k| mix(own[k], state.color6[x][k]))
+    } else {
+        own
     };
-    state.depth[x] = depth;
+    // The 6-bit channels, narrowed to the 15-bit output (`rasterizer.md`, "The output").
+    let narrow = |c: u8| u16::from(c >> 1);
+    out[x] = Pixel3d {
+        color: narrow(color6[0]) | narrow(color6[1]) << 5 | narrow(color6[2]) << 10,
+        alpha: if blended {
+            poly.alpha.max(below)
+        } else {
+            poly.alpha
+        },
+    };
+    state.color6[x] = color6;
+    if !poly.translucent || poly.update_depth {
+        state.depth[x] = depth;
+    }
     state.id[x] = poly.id;
+    state.translucent[x] = poly.translucent;
 }
 
 /// Polygon `poly` on line `y`: its interior, its edges (a wire frame) or its one dot.

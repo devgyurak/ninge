@@ -1,0 +1,2 @@
+# Golden frames for testroms/gxdepth. Format and review flow: tests/golden/README.md.
+frames=4 top=06bf9110904e5b25 bottom=1a0564b2e8de2325

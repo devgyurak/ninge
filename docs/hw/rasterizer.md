@@ -175,8 +175,11 @@ when the two differ by at most 200h; GBATEK says "+/-200h" and warns that near p
 match by accident). A pixel that passes and is opaque writes its depth, its polygon ID and its fog
 flag (POLYGON_ATTR bit 15). The depth of the polygon's interior at a pixel is the interpolation of
 its vertices' depth; GBATEK does not state the precision or how Z and W map into the 24 bits
-(`TODO(hw-unverified)`; the model interpolates Z linearly in screen space and W as its
-reciprocal's inverse, in integers, mapped onto 0..FFFFFFh).
+(`TODO(hw-unverified)`; the model interpolates Z/W linearly in screen space and maps it onto
+0..FFFFFFh, and with W-buffering takes the pixel's W (the inverse of the interpolated 1/W) as its
+1.19.12 value itself, clamped to 24 bits).
+The rear plane's depth is always the expanded CLEAR_DEPTH, in either mode, so with W-buffering a
+polygon that asks for equal depth does not match the rear plane unless its W is within 200h of it.
 
 POLYGON_ATTR bit 12 decides what happens to a polygon that crosses the **far** plane: 1 draws the
 clipped part, 0 hides the polygon. The geometry engine applies it (`geometry-engine.md`,
@@ -282,3 +285,6 @@ for both).
   `gpu3d/` — verify by a test ROM.
 - Whether the shadow mask pass or a failed render pass writes depth, and the stencil buffer's
   lifetime (cleared each frame in the model). — `gpu3d/` — verify by a test ROM.
+- Whether the W depth is the 1.19.12 value itself clamped to 24 bits, and which scale the rear plane's
+  depth has in W mode. — `gpu3d/` — verify by a test ROM that compares a W-buffered polygon with the
+  rear plane at a known CLEAR_DEPTH.

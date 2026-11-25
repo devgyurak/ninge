@@ -11,7 +11,7 @@
 // stated by the source (`rasterizer.md`, "Unverified").
 
 use super::LineState;
-use super::setup::{ATTRS, Attrs, DEPTH, FRAC, IW, MAX_DEPTH, ONE, PolyDraw, ScreenVertex};
+use super::setup::{ATTRS, Attrs, DEPTH, FRAC, IW, IW_ONE, MAX_DEPTH, ONE, PolyDraw, ScreenVertex};
 use crate::SCREEN_WIDTH;
 use crate::gpu2d::{Line3d, Pixel3d};
 
@@ -86,19 +86,34 @@ fn crossings(vs: &[ScreenVertex], y: i64, closed: bool) -> Option<(Cross, Cross)
     left.zip(right)
 }
 
+/// The tolerance of the equal depth test, either way, in the 24-bit depth (`rasterizer.md`, "Depth").
+const EQUAL_TOLERANCE: u32 = 0x200;
+
 /// Writes one pixel of attributes `attrs` at `x` if it passes the depth test: closer than what the
-/// line holds (`rasterizer.md`, "Depth").
-// TODO(phase7): the equal test and W-buffering are the next part of #49.
-fn plot(x: i64, attrs: &Attrs, id: u8, state: &mut LineState, out: &mut Line3d) {
+/// line holds, or equal to it within [`EQUAL_TOLERANCE`] for a polygon that asks for that
+/// (`rasterizer.md`, "Depth").
+fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut Line3d) {
     let Ok(x) = usize::try_from(x) else { return };
     if x >= SCREEN_WIDTH {
         return;
     }
-    let depth = attrs[DEPTH].clamp(0, MAX_DEPTH) as u32;
-    if depth >= state.depth[x] {
+    let iw = attrs[IW].max(1);
+    // TODO(hw-unverified): in W-buffer mode the depth is the interpolated W, the 1.19.12 value
+    // itself, clamped to 24 bits (`rasterizer.md`, "Unverified").
+    let depth = if poly.w_buffer {
+        (IW_ONE / iw).clamp(0, MAX_DEPTH) as u32
+    } else {
+        attrs[DEPTH].clamp(0, MAX_DEPTH) as u32
+    };
+    let kept = state.depth[x];
+    let passes = if poly.equal {
+        depth.abs_diff(kept) <= EQUAL_TOLERANCE
+    } else {
+        depth < kept
+    };
+    if !passes {
         return;
     }
-    let iw = attrs[IW].max(1);
     // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
     // (`rasterizer.md`, "Unverified").
     // The 6-bit channel, narrowed to the 15-bit output (`rasterizer.md`, "The output").
@@ -108,7 +123,7 @@ fn plot(x: i64, attrs: &Attrs, id: u8, state: &mut LineState, out: &mut Line3d) 
         alpha: OPAQUE,
     };
     state.depth[x] = depth;
-    state.id[x] = id;
+    state.id[x] = poly.id;
 }
 
 /// Polygon `poly` on line `y`: its interior, its edges (a wire frame) or its one dot.
@@ -130,7 +145,7 @@ pub(super) fn draw_polygon(
     // colour (`rasterizer.md`), whatever its type.
     if let Some((dot_x, dot_y)) = poly.dot {
         if dot_y == y as i64 {
-            plot(dot_x, &vs[0].attrs, poly.id, state, out);
+            plot(dot_x, &vs[0].attrs, poly, state, out);
         }
         return;
     }
@@ -167,7 +182,7 @@ fn fill(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, o
             (((x << FRAC) - left.x) << 16) / span
         };
         let attrs = lerp(&left.attrs, &right.attrs, t.clamp(0, WEIGHT_ONE));
-        plot(x, &attrs, poly.id, state, out);
+        plot(x, &attrs, poly, state, out);
     });
 }
 
@@ -203,7 +218,7 @@ fn wire(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, o
         let (x_lo, x_hi) = (round(xa.min(xb)), round(xa.max(xb)));
         (x_lo..=x_hi).for_each(|x| {
             let t = (ta + tb) / 2;
-            plot(x, &lerp(&a.attrs, &b.attrs, t), poly.id, state, out);
+            plot(x, &lerp(&a.attrs, &b.attrs, t), poly, state, out);
         });
     });
 }

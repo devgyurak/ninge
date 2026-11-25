@@ -18,7 +18,7 @@ pub(super) type Attrs = [i64; ATTRS];
 pub(super) const IW: usize = 0;
 pub(super) const DEPTH: usize = 4;
 /// 1/W is held with this many fractional bits.
-const IW_ONE: i64 = 1 << 40;
+pub(super) const IW_ONE: i64 = 1 << 40;
 /// The largest 24-bit depth.
 pub(super) const MAX_DEPTH: i64 = 0x00FF_FFFF;
 
@@ -29,6 +29,10 @@ const ATTR_FRONT: u32 = 1 << 7;
 const ATTR_ALPHA_SHIFT: u32 = 16;
 const ATTR_ID_SHIFT: u32 = 24;
 const MODE_SHADOW: u32 = 3;
+/// POLYGON_ATTR bit 14: the depth test passes on equal depth, not less.
+const ATTR_DEPTH_EQUAL: u32 = 1 << 14;
+/// SWAP_BUFFERS bit 1: the depth buffer holds W, not Z.
+const SWAP_W_BUFFER: u8 = 1 << 1;
 const OPAQUE: u32 = 31;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
@@ -54,6 +58,10 @@ pub(super) struct PolyDraw {
     pub(super) wire: bool,
     /// The lower and right edges do not draw (`rasterizer.md`, "Which pixels a polygon covers").
     pub(super) exclude_edges: bool,
+    /// The depth test passes on equal depth (within a tolerance) instead of less.
+    pub(super) equal: bool,
+    /// The depth is the W value, not Z (SWAP_BUFFERS bit 1).
+    pub(super) w_buffer: bool,
     /// Every vertex is on one row: it draws that row, edges and all.
     pub(super) flat: bool,
     /// The polygon rounds to one dot: where, in whole pixels.
@@ -190,6 +198,8 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
             id: ((p.attr >> ATTR_ID_SHIFT) & 0x3F) as u8,
             wire,
             exclude_edges: !wire && !marked,
+            equal: p.attr & ATTR_DEPTH_EQUAL != 0,
+            w_buffer: scene.swap_bits & SWAP_W_BUFFER != 0,
             flat,
             dot,
             y_min: y_min_fix,

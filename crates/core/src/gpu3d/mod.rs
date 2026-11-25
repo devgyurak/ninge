@@ -25,7 +25,8 @@ mod queue;
 mod render;
 
 use crate::io::device::{
-    Checked, Cx, Device, Effect, Fired, Signal, Signals, SlotMask, Width, read_bytes, write_bytes,
+    Checked, Cx, Device, Effect, Fired, Signal, Signals, SlotMask, StateTimes, Width, read_bytes,
+    write_bytes,
 };
 use crate::io::irq::{GXFIFO_IRQ, Requests};
 use crate::io::timing::next_vblank_start;
@@ -897,7 +898,7 @@ impl Checked for Gpu3d {
     /// Every register and pointer holds a value it can reach, a decoder that waits for parameters
     /// waits for a command that takes that many, the queue is whole and the command the engine
     /// executes is one the decoder queues, due no later than the model's last time.
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         let waiting = match self.owed {
             0 => true,
             owed => parameter_count(self.command).is_some_and(|count| owed <= count),

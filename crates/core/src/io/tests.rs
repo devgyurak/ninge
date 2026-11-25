@@ -6,6 +6,7 @@ use super::map::{ARM7_PORTS, ARM9_PORTS, Owner, Port, PortEntry, decode};
 use super::*;
 use crate::bus::VRAMCNT_A_ADDR;
 use crate::gpu2d::{DISPCNT_A_ADDR, POWCNT1_ADDR};
+use crate::io::device::StateTimes;
 use crate::io::dma::{DMA0FILL_ADDR, DMA0SAD_ADDR};
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR, IPCSYNC_ADDR};
 use crate::io::irq::{IE_ADDR, IF_ADDR, IME_ADDR, InterruptController, Requests};
@@ -474,14 +475,14 @@ fn given_the_ports_of_one_device_when_mapped_then_they_give_the_same_device_and_
 
 #[test]
 fn given_power_on_devices_when_checked_then_they_are_well_formed() {
-    assert!(Io::new().is_well_formed(0));
+    assert!(Io::new().is_well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_an_ie_bit_outside_the_arm9_mask_when_checked_then_the_devices_are_not_well_formed() {
     let mut io = Io::new();
     io.irq9 = InterruptController::with_unchecked_ie(1 << 7);
-    assert!(!io.is_well_formed(0));
+    assert!(!io.is_well_formed(StateTimes::at(0)));
 }
 
 #[test]

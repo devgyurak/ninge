@@ -358,7 +358,7 @@ fn given_a_command_in_flight_when_saved_and_loaded_then_it_ends_at_the_same_time
 
 #[test]
 fn given_a_gpu_with_commands_queued_when_checked_then_it_is_well_formed() {
-    assert!(waiting_with(200).well_formed(0));
+    assert!(waiting_with(200).well_formed(StateTimes::at(0)));
 }
 
 #[test]

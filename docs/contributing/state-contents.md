@@ -45,12 +45,12 @@ VCOUNT and the HBlank flag are derived from the master time too: the line is
 `(t / LINE_CYCLES) % 263` and the flag is set from `HBLANK_START_CYCLES` into the line, where `t` is
 the time the line events have reached (`now`, or `now - 1` in a round a stop interrupted after the
 ARM9 ran, because the events due at `now` have not fired there). A load checks them against that
-time at the machine level, not in `Timing`'s own `well_formed`, which does not know it; the check
-arrives with the run control that makes such a round possible (`scheduler.md`, "Savestate
-checks"). A line start only adds one to VCOUNT and never looks at the time, so a wrong value would
-be kept for good, and a frame boundary would sit 192 lines off. A lone `step_arm9` therefore fires
-every due event (`scheduler.md`, "Debugger single-step"). A machine with no program runs no events
-and is not checked.
+time in `Timing`'s own `well_formed`, which every device's check is handed with the master time
+(`StateTimes`); the check arrives with the run control that makes such a round possible
+(`scheduler.md`, "Savestate checks"). A line start only adds one to VCOUNT and never looks at the
+time, so a wrong value would be kept for good, and a frame boundary would sit 192 lines off. A lone
+`step_arm9` therefore fires every due event (`scheduler.md`, "Debugger single-step"). A machine with
+no program runs no events and is not checked.
 
 Derived but unchecked, known: the level IF bit of the geometry FIFO, and a few due times.
 

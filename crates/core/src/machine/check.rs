@@ -6,14 +6,15 @@
 
 use super::Machine;
 use crate::cpu::ARM7_INSTRUCTION_COST;
+use crate::io::device::StateTimes;
 use crate::scheduler::MAX_TIME;
 
 impl Machine {
     /// Whether this machine, decoded from a savestate, is one a run could reach on `rom`, the ROM
     /// of the machine that loads it. A booted program has a ROM and an unbooted machine has none
-    /// (`load_rom`); a state that says otherwise would run on a header alone, or hold a ROM it never
-    /// booted. Memory buffers of the wrong size would read as zeros rather than panic, but are not
-    /// a machine.
+    /// (`load_rom`); a state that says otherwise would run on a header alone, or hold a ROM it
+    /// never booted. Memory buffers of the wrong size would read as zeros rather than panic, but
+    /// are not a machine.
     pub(crate) fn is_well_formed(&self, rom: &[u8]) -> bool {
         let now = self.scheduler.now();
         // The header is derived from the ROM, so it must be what the ROM parses to.
@@ -25,12 +26,14 @@ impl Machine {
             && self.round.is_none_or(|round| {
                 self.header.is_some() && round.well_formed(now, self.arm7_clock)
             })
-            && self.io.is_well_formed(now)
+            // Each device at the times the state holds: VCOUNT and the HBlank flag against the
+            // time the line events have reached, which a machine with no program does not have.
+            && self.io.is_well_formed(StateTimes {
+                now,
+                lines: self.header.is_some().then(|| self.events_from()),
+            })
             && self.arm9.is_well_formed()
             && self.arm7.is_well_formed()
-            // VCOUNT and the HBlank flag are what the line events up to the time make them. A
-            // machine with no program runs no events, so its time says nothing about them.
-            && (self.header.is_none() || self.io.timing().follows(self.events_from()))
             // A booted machine between rounds is settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up. In a round a stop
             // interrupted the ARM7 has not caught up yet, and lags by up to a slice.

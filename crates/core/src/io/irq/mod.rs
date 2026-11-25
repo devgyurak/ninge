@@ -5,7 +5,7 @@
 //! "an independent copy for each CPU" class of `AGENTS.md` §4 ("Per-CPU devices"): two
 //! instances of `InterruptController<const ARM9: bool>`.
 
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, StateTimes, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 /// IME, at `0400_0208h` (`interrupts.md`, "Registers").
@@ -235,7 +235,7 @@ impl<const ARM9: bool> InterruptController<ARM9> {
 }
 
 impl<const ARM9: bool> Checked for InterruptController<ARM9> {
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         self.is_well_formed()
     }
 }

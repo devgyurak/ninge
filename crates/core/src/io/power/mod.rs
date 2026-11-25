@@ -6,7 +6,7 @@
 //! wait-for-interrupt instead. The register itself holds nothing: a write whose mode is "halt"
 //! leaves a request that the machine turns into the ARM7's halted state after the access.
 
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, StateTimes, Width, read_bytes};
 use serde::{Deserialize, Serialize};
 
 /// POSTFLG, then HALTCNT, at `0400_0300h` (ARM7). The device's register space starts at POSTFLG.
@@ -66,7 +66,7 @@ impl Power {
 
 impl Checked for Power {
     /// POWCNT2 holds only its two bits.
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         self.powcnt2 & !POWCNT2_MASK == 0
     }
 }

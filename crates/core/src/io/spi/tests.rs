@@ -5,6 +5,7 @@
 use super::{BUSY, Checked, ENABLE, HOLD, IRQ, PowerManagement, SPICNT_MASK, Spi, Tsc, WIDE};
 use crate::cpu::Bus;
 use crate::input::{Input, Touch};
+use crate::io::device::StateTimes;
 use crate::io::device::{Cx, Device, Effect, Lines, Width, cx_at};
 use crate::io::irq::{Requests, SPI_IRQ};
 use crate::io::map::{Owner, Port, decode};
@@ -504,7 +505,10 @@ fn given_a_touch_or_power_state_the_hardware_cannot_reach_when_checked_then_the_
     let bad_power =
         Spi::with_devices_for_test(PowerManagement::with_control_for_test(0x80), Tsc::new());
     assert_eq!(
-        (bad_touch.well_formed(0), bad_power.well_formed(0)),
+        (
+            bad_touch.well_formed(StateTimes::at(0)),
+            bad_power.well_formed(StateTimes::at(0))
+        ),
         (false, false)
     );
 }
@@ -528,7 +532,7 @@ fn given_a_fresh_bus_when_inspected_then_it_is_idle_with_the_firmware_chip_fitte
 
 #[test]
 fn given_a_fresh_bus_when_checked_then_it_is_well_formed() {
-    assert!(Spi::new().well_formed(0));
+    assert!(Spi::new().well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -542,8 +546,8 @@ fn given_state_a_register_cannot_reach_when_checked_then_it_is_not_well_formed()
     let mut short_image = Spi::new();
     short_image.firmware =
         crate::cart::save::SaveChip::blank(crate::cart::save::SaveType::Flash512K);
-    let verdicts =
-        [stray_bits, far_future, orphan_event, short_image].map(|spi| spi.well_formed(0));
+    let verdicts = [stray_bits, far_future, orphan_event, short_image]
+        .map(|spi| spi.well_formed(StateTimes::at(0)));
     assert_eq!(verdicts, [false; 4]);
 }
 

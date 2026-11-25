@@ -8,7 +8,7 @@
 //! to the chip. It has no timing and no event: the program does the waiting, and the clock the chip
 //! shows is the host's time (`Cx::host`) plus the program's own offset.
 
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, StateTimes, Width, read_bytes, write_bytes};
 use crate::rtc::Chip;
 use serde::{Deserialize, Serialize};
 
@@ -144,7 +144,7 @@ impl Default for Rtc {
 }
 
 impl Checked for Rtc {
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         self.chip.well_formed()
     }
 }

@@ -108,5 +108,5 @@ fn given_the_rendering_engine_unpowered_when_a_register_is_written_then_the_writ
 fn given_a_register_with_an_unused_bit_set_when_checked_then_the_state_is_not_well_formed() {
     let mut gpu = Gpu3d::new();
     gpu.render.fog_table[0] = 0x80;
-    assert!(!gpu.well_formed(0));
+    assert!(!gpu.well_formed(StateTimes::at(0)));
 }

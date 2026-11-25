@@ -84,7 +84,7 @@ registry! {
         divsqrt: DivSqrt = DivSqrt::new() => [Port::DivSqrt],
         /// The ARM9's 3D engine: DISP3DCNT, the geometry engine with its FIFO, matrices and
         /// polygon RAM, GXSTAT and the rendering registers (`geometry-engine.md`).
-        gpu3d / gpu3d_mut: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
+        gpu3d: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
     }
     arm7 {
         /// The ARM7's HALTCNT (`interrupts.md`, "HALTCNT").
@@ -122,6 +122,16 @@ impl Io {
             .latch_requests(&previous, &input)
             .merge(self.keypad7.latch_requests(&previous, &input));
         self.request_irq(requests);
+    }
+
+    /// What a load does to the devices once the state has been checked: each device rebuilds what it
+    /// derives ([`Checked::restore`]), and the save chip's generation goes one past `previous`, the
+    /// count the machine held before the load, since the save memory may differ from what a host last
+    /// wrote (`docs/hw/auxspi-saves.md`, "Save files").
+    pub(crate) fn after_load(&mut self, previous_generation: u64, now: u64) {
+        self.restore(now);
+        self.cart_mut()
+            .set_save_generation(previous_generation.wrapping_add(1));
     }
 
     /// The wires between devices as they stand now (`device::Lines`).
@@ -418,6 +428,12 @@ impl Io {
     #[cfg(test)]
     pub(crate) fn replace_spi_for_test(&mut self, spi: Spi) {
         self.spi = spi;
+    }
+
+    /// The 3D engine, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn gpu3d_for_test(&mut self) -> &mut Gpu3d {
+        &mut self.gpu3d
     }
 
     /// Replaces the RTC, to build a corrupt state in a test.

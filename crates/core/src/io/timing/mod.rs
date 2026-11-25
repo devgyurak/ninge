@@ -262,6 +262,9 @@ impl Timing {
 }
 
 impl Checked for Timing {
+    /// VCOUNT and the HBlank flag follow the master time, but a state saved between two events can
+    /// hold either a line behind it (a lone step settles one event at a time), so they are not
+    /// compared with the time: a known unchecked derived value (`state-contents.md`).
     fn well_formed(&self, _now: u64) -> bool {
         self.is_well_formed()
     }

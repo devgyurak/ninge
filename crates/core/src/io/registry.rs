@@ -218,6 +218,14 @@ macro_rules! registry {
                     $( && Checked::well_formed(&self.$ef9, now) && Checked::well_formed(&self.$ef7, now) )*
             }
 
+            /// What a load rebuilds in every device, after the checks passed ([`Checked::restore`]).
+            pub(crate) fn restore(&mut self, now: u64) {
+                $( Checked::restore(&mut self.$sf, now); )*
+                $( Checked::restore(&mut self.$af, now); )*
+                $( Checked::restore(&mut self.$bf, now); )*
+                $( Checked::restore(&mut self.$ef9, now); Checked::restore(&mut self.$ef7, now); )*
+            }
+
             /// The signals every device the CPU `ARM9` reaches holds as a level, merged
             /// ([`Device::held_signals`]). A device only the other CPU sees holds none for it.
             pub(crate) fn held_signals<const ARM9: bool>(&self) -> Signals {

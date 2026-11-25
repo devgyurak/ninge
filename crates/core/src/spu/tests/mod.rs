@@ -1307,3 +1307,69 @@ fn given_a_channel_that_is_silent_when_mixed_then_it_adds_nothing() {
     let spu = mixer(MASTER_ON, 0x200, &[(0, LEFT), (5, LEFT)]);
     assert_eq!(spu.output(&samples(&[(0, 0x2000)]), true), [0x2000, 0]);
 }
+
+#[test]
+fn given_a_started_channel_when_checked_then_what_it_latched_is_well_formed() {
+    let spu = started(3, start(LOOP, PCM8), 0, 4, 0);
+    assert!(spu.well_formed(0));
+}
+
+#[test]
+fn given_a_latched_channel_number_that_is_not_the_slot_when_checked_then_it_is_not_well_formed() {
+    let mut spu = started(3, start(LOOP, PCM8), 0, 4, 0);
+    spu.channels[3].latched.channel = 4;
+    assert!(!spu.well_formed(0));
+}
+
+#[test]
+fn given_a_latched_sad_with_a_bit_outside_its_mask_when_checked_then_it_is_not_well_formed() {
+    let mut spu = started(0, start(LOOP, PCM8), 0, 4, 0);
+    spu.channels[0].latched.sad |= 1;
+    assert!(!spu.well_formed(0));
+}
+
+/// A latch of channel 0 with one field changed to a value its register cannot hold.
+fn bad_latches() -> [Latched; 4] {
+    let ok = Latched {
+        sad: 0x0200_0000,
+        pnt: 0,
+        len: 4,
+        format: 0,
+        channel: 0,
+        one_shot: false,
+    };
+    [
+        Latched {
+            len: LEN_MASK + 1,
+            ..ok
+        },
+        Latched {
+            pnt: 0x1_0000,
+            ..ok
+        },
+        Latched { format: 4, ..ok },
+        Latched {
+            sad: SAD_MASK + 1,
+            ..ok
+        },
+    ]
+}
+
+#[test]
+fn given_a_latch_holding_a_value_its_register_cannot_when_checked_then_it_is_refused() {
+    let accepted: Vec<bool> = bad_latches().iter().map(|l| l.well_formed(0)).collect();
+    assert_eq!(accepted, vec![false; 4]);
+}
+
+#[test]
+fn given_a_latch_every_register_could_hold_when_checked_then_it_is_accepted() {
+    let latched = Latched {
+        sad: SAD_MASK,
+        pnt: 0xFFFF,
+        len: LEN_MASK,
+        format: FORMAT_PSG,
+        channel: 15,
+        one_shot: true,
+    };
+    assert!(latched.well_formed(15));
+}

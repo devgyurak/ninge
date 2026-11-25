@@ -330,12 +330,6 @@ impl Gpu3d {
         self.running.map(|running| (running.command, running.ends))
     }
 
-    /// Reserves the room both sets of Polygon RAM and Vertex RAM need: a savestate load decodes them
-    /// with exactly their length, and a command must never allocate (`AGENTS.md` §2 rule 3).
-    pub(crate) fn reserve_ram(&mut self) {
-        self.geometry.reserve_ram();
-    }
-
     /// Polygon RAM and Vertex RAM the geometry engine is filling: for the debugger.
     pub fn geometry_ram(&self) -> &Ram {
         self.geometry.filling()
@@ -882,7 +876,24 @@ const fn sign_extend_6(value: u32) -> u8 {
     (((value as u8) << shift) as i8 >> shift) as u8
 }
 
+impl Gpu3d {
+    /// Puts a clip matrix in that is not the product of the two it comes from, to build a corrupt
+    /// state in a test.
+    #[cfg(test)]
+    pub(crate) fn scramble_clip_for_test(&mut self) {
+        self.matrices.scramble_clip_for_test();
+    }
+}
+
 impl Checked for Gpu3d {
+    /// A load decoded Polygon RAM and Vertex RAM with exactly their length, and a command must never
+    /// allocate (`AGENTS.md` §2 rule 3): the room for a full set is reserved once. The clip matrix is
+    /// a product of two saved matrices, so it is recomputed, never trusted.
+    fn restore(&mut self, _now: u64) {
+        self.geometry.reserve_ram();
+        self.matrices.restore_clip();
+    }
+
     /// Every register and pointer holds a value it can reach, a decoder that waits for parameters
     /// waits for a command that takes that many, the queue is whole and the command the engine
     /// executes is one the decoder queues, due no later than the model's last time.

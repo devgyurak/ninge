@@ -1896,3 +1896,58 @@ fn given_a_state_with_a_dma_due_time_past_the_last_time_when_loaded_then_it_is_c
         Err(SavestateError::Corrupt)
     );
 }
+
+// ------------------------------------------------------------------------- caches and the load hook
+
+#[test]
+fn given_a_state_whose_clip_matrix_disagrees_with_its_source_when_loaded_then_it_is_rebuilt() {
+    let mut saver = booted(&counter_rom(), 1);
+    saver.io.gpu3d_for_test().scramble_clip_for_test();
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    let loaded = target.load_state(&bytes);
+    // CLIPMTX_RESULT's first element: the identity matrix has 1.0 (1000h) there.
+    assert_eq!(
+        (loaded, target.bus9().read32(0x0400_0640)),
+        (Ok(()), 0x1000)
+    );
+}
+
+#[test]
+fn given_a_state_whose_channel_end_disagrees_with_its_registers_when_loaded_then_it_is_corrupt() {
+    let mut saver = booted(&counter_rom(), 1);
+    // Channel 0 playing a one-shot PCM8 sound of 4 words at TMR FFF0h.
+    saver.bus7(0).write16(0x0400_0408, 0xFFF0);
+    saver.bus7(0).write32(0x0400_040C, 4);
+    saver
+        .bus7(0)
+        .write32(0x0400_0400, (1 << 31) | (2 << 27) | 0x7F);
+    saver.io.spu_mut().set_end_for_test(0, 12_345);
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    assert_eq!(target.load_state(&bytes), Err(SavestateError::Corrupt));
+}
+
+#[test]
+fn given_a_state_with_a_playing_channel_when_loaded_then_its_end_is_accepted() {
+    let mut saver = booted(&counter_rom(), 1);
+    saver.bus7(0).write16(0x0400_0408, 0xFFF0);
+    saver.bus7(0).write32(0x0400_040C, 4);
+    saver
+        .bus7(0)
+        .write32(0x0400_0400, (1 << 31) | (2 << 27) | 0x7F);
+    let bytes = saver.save_state();
+    let mut target = booted(&counter_rom(), 1);
+    assert_eq!(target.load_state(&bytes), Ok(()));
+}
+
+#[test]
+fn given_a_state_whose_header_is_not_what_its_rom_parses_to_when_loaded_then_it_is_corrupt() {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.header.as_mut().expect("a booted header").crc ^= 1;
+    assert_eq!(
+        load_onto_fresh(&rom, &saver),
+        (Err(SavestateError::Corrupt), true)
+    );
+}

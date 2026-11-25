@@ -3,6 +3,7 @@
 //! scene in clip space with the viewport that covers the screen and a W of 3.0, where one screen
 //! pixel is 96 clip units across and 128 down, so every expected pixel is exact.
 
+mod depth;
 mod fill;
 mod interp;
 
@@ -21,6 +22,19 @@ const FRONT_BACK: u32 = 0xC0;
 pub(super) const OPAQUE: u32 = 31 << 16;
 pub(super) const RED: u16 = 0x001F;
 pub(super) const GREEN: u16 = 0x03E0;
+
+/// Like [`vertex`] with a W of `k` times 3.0: the position, the colour and the depth ratio `z / w`
+/// are those of `vertex(px, row, z / k, ..)`, so a polygon of another W lands on the same pixels.
+pub(super) fn vertex_k(px: i32, row: i32, z: i32, color: u16, k: i32) -> Vertex {
+    let v = vertex(px, row, 0, color);
+    Vertex {
+        x: v.x * k,
+        y: v.y * k,
+        z,
+        w: v.w * k,
+        ..v
+    }
+}
 
 /// A clip-space vertex at screen position `(px, row)` in whole pixel edges and depth `z`
 /// (-W near, W far), coloured `color`.
@@ -82,6 +96,14 @@ pub(super) fn opaque(id: u32) -> u32 {
 /// All 192 lines of `ram` under DISP3DCNT `disp3dcnt` and registers `regs`.
 pub(super) fn draw(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs) -> Vec<Line3d> {
     let frame = Frame::new(Scene { ram, swap_bits: 0 }, regs, disp3dcnt);
+    let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
+    frame.draw(&SequentialExecutor, &mut lines);
+    lines
+}
+
+/// Like [`draw`] under SWAP_BUFFERS parameter bits `swap_bits`.
+pub(super) fn draw_swap(ram: &Ram, swap_bits: u8) -> Vec<Line3d> {
+    let frame = Frame::new(Scene { ram, swap_bits }, &regs(), 0);
     let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
     frame.draw(&SequentialExecutor, &mut lines);
     lines

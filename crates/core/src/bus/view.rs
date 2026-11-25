@@ -397,7 +397,8 @@ pub struct Arm7View<'a> {
 impl<'a> Arm7View<'a> {
     /// Builds the view at the ARM7 clock `clock`, in master cycles. `floor` is the master clock:
     /// the earliest an event the step schedules may fire, since the ARM7's step leaves the master
-    /// clock where it is (`timers.md`, "Model").
+    /// clock where it is (`timers.md`, "Model"). A running machine builds its ARM7 views through
+    /// `Machine::with_arm7_bus`, which acts on a halt request; boot and test code build them here.
     pub(crate) fn new(
         memory: &'a mut Memory,
         io: &'a mut Io,

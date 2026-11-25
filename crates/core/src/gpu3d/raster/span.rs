@@ -121,18 +121,19 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     }
     if poly.shadow {
         // The mask pass only sets the stencil where it passes the depth test. The render pass
-        // clears a set flag and draws nothing there; where the flag is clear it draws if its ID
-        // differs from the pixel's (`rasterizer.md`, "Shadow polygons").
+        // draws nothing where the flag is set, whichever face of the volume it is, and where the flag
+        // is clear it draws if its ID differs from the pixel's; the flags are cleared when the next
+        // volume's mask pass begins (`rasterizer.md`, "Shadow polygons").
         // TODO(phase7, #51): the fog flag of a shadowed pixel (the old flag ANDed with the
         // polygon's) comes with fog.
-        // TODO(hw-unverified): the stencil is checked only where the depth test passes, and neither
-        // pass writes depth (`rasterizer.md`, "Unverified").
+        // TODO(hw-unverified): the stencil is checked only where the depth test passes, neither pass
+        // writes depth, a shadow polygon of alpha 0 or a line segment goes the wire path, and the
+        // alpha test hides the mask pass too (`rasterizer.md`, "Unverified").
         if poly.mask {
             state.stencil[x] = true;
             return;
         }
         if state.stencil[x] {
-            state.stencil[x] = false;
             return;
         }
         if state.id[x] == poly.id {
@@ -189,6 +190,11 @@ pub(super) fn draw_polygon(
     let Some(vs) = vertices.get(poly.first..poly.first + poly.count) else {
         return;
     };
+    // A new shadow volume starts with a clear stencil on every line, whether or not its mask polygon
+    // reaches this one.
+    if poly.new_volume {
+        state.stencil = [false; SCREEN_WIDTH];
+    }
     let row = (y as i64) << FRAC;
     if row + ONE / 2 <= poly.y_min || row - ONE / 2 > poly.y_max {
         return;

@@ -5,6 +5,7 @@
 //! a time of its choosing, and the picture shows it wherever no polygon draws.
 
 use super::timing::{line_start, machine, run_to};
+use crate::Input;
 use crate::cpu::Bus;
 use crate::gpu2d::Pixel3d;
 use crate::machine::*;
@@ -101,4 +102,28 @@ fn given_a_state_saved_after_the_draw_when_loaded_then_the_picture_comes_back_as
         .load_state(&saved.save_state())
         .expect("a state this build saved");
     assert_eq!(loaded.frame3d, saved.frame3d);
+}
+
+#[test]
+fn given_a_state_saved_at_a_frame_end_stop_when_loaded_and_run_on_then_it_matches_a_run_without_a_stop()
+ {
+    let mut whole = machine();
+    run_to(&mut whole, line_start(200));
+    set_clear(&mut whole, RED);
+    whole.run_frame(Input::new());
+    let bytes = whole.save_state();
+    whole.run_frame(Input::new());
+
+    let mut resumed = machine();
+    resumed
+        .load_state(&bytes)
+        .expect("a state this build saved");
+    resumed.run_frame(Input::new());
+    assert_eq!(
+        (
+            resumed.frame3d == whole.frame3d,
+            resumed.save_state() == whole.save_state()
+        ),
+        (true, true)
+    );
 }

@@ -101,14 +101,68 @@ fn given_a_shadow_of_the_surfaces_own_id_when_both_passes_run_then_the_surface_i
 }
 
 #[test]
-fn given_a_stencil_set_when_one_render_pass_clears_it_then_a_second_render_pass_draws() {
+fn given_a_stencil_set_when_two_render_passes_follow_one_mask_then_neither_draws() {
     let ram = scene(&[
         floor(1),
         (mask(), clockwise(IN_FRONT)),
         (shadow(2), anticlockwise(IN_FRONT)),
         (shadow(3), anticlockwise(IN_FRONT)),
     ]);
+    assert_eq!(result(&ram), plain());
+}
+
+/// The back-face render pass of ID `id`: mode 3, alpha 15, back surface only.
+fn back_shadow(id: u32) -> u32 {
+    SHADOW_MODE | BACK_ONLY | 15 << 16 | id << 24
+}
+
+#[test]
+fn given_a_volume_in_front_of_the_surface_when_the_render_pass_draws_both_faces_then_neither_shadows()
+ {
+    // The front face and the back face of one volume look at the same flag: neither draws.
+    let ram = scene(&[
+        floor(1),
+        (mask(), clockwise(IN_FRONT)),
+        (shadow(2), anticlockwise(IN_FRONT)),
+        (back_shadow(2), clockwise(IN_FRONT)),
+    ]);
+    assert_eq!(result(&ram), plain());
+}
+
+#[test]
+fn given_a_volume_around_the_surface_when_the_render_pass_draws_both_faces_then_the_surface_is_shadowed_once()
+ {
+    // The back face is behind the floor and fails the depth test; the front face draws.
+    let ram = scene(&[
+        floor(1),
+        (mask(), clockwise(BEHIND)),
+        (shadow(2), anticlockwise(IN_FRONT)),
+        (back_shadow(2), clockwise(BEHIND)),
+    ]);
     assert_eq!(result(&ram), shadowed());
+}
+
+#[test]
+fn given_a_next_volume_when_its_mask_pass_begins_then_the_flags_of_the_last_are_cleared() {
+    let ram = scene(&[
+        floor(1),
+        (mask(), clockwise(IN_FRONT)),
+        (shadow(2), anticlockwise(IN_FRONT)),
+        (mask(), clockwise(BEHIND)),
+        (shadow(3), anticlockwise(IN_FRONT)),
+    ]);
+    assert_eq!(result(&ram), shadowed());
+}
+
+#[test]
+fn given_two_mask_passes_in_a_row_when_the_second_begins_then_the_first_flags_stay() {
+    let ram = scene(&[
+        floor(1),
+        (mask(), clockwise(IN_FRONT)),
+        (mask(), clockwise(BEHIND)),
+        (shadow(2), anticlockwise(IN_FRONT)),
+    ]);
+    assert_eq!(result(&ram), plain());
 }
 
 #[test]

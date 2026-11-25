@@ -9,10 +9,11 @@
 @
 @ Regions (the expected picture is in crates/runner/tests/gxshadow.rs, worked out from the note):
 @   S1  the mask is behind the floor, the render pass in front: the floor is shadowed.
-@   S2  both in front of the floor: the stencil is set where the render pass looks; no shadow.
+@   S2  both in front of the floor: the stencil is set where the render pass looks, and neither its
+@       front face nor its back face draws a shadow.
 @   S3  the render pass has the floor's own ID: no shadow.
-@   S4  two render passes after one mask: the first clears the stencil and draws nothing, the second
-@       draws the shadow.
+@   S4  a volume in front of the floor draws nothing; the next volume's mask pass clears its flags, and
+@       its render pass then shadows.
 @
 @ TODO(hw-unverified): the stencil's lifetime and the depth rules of both passes follow the model of
 @ docs/hw/rasterizer.md ("Unverified"); a pass says the emulator follows the note, not that hardware
@@ -195,7 +196,7 @@ commands:
     .word 0x00000023   @ VTX_16 (144, line 60, z -1000)
     .word 0x06000200
     .word 0x0000FC18
-    @ S2 render pass in front: the stencil is set, so no shadow
+    @ S2 render pass, front face, in front: the stencil is set, so no shadow
     .word 0x00000029   @ POLYGON_ATTR
     .word 0x040F00B0
     .word 0x00000040   @ BEGIN_VTXS
@@ -219,6 +220,31 @@ commands:
     .word 0x00000000
     .word 0x00000023   @ VTX_16 (192, line 36, z -1000)
     .word 0x0A000800
+    .word 0x0000FC18
+    @ S2 render pass, back face, in front: the same flag, no shadow either
+    .word 0x00000029   @ POLYGON_ATTR
+    .word 0x040F0070
+    .word 0x00000040   @ BEGIN_VTXS
+    .word 0x00000001
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (144, line 36, z -1000)
+    .word 0x0A000200
+    .word 0x0000FC18
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (192, line 36, z -1000)
+    .word 0x0A000800
+    .word 0x0000FC18
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (192, line 60, z -1000)
+    .word 0x06000800
+    .word 0x0000FC18
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (144, line 60, z -1000)
+    .word 0x06000200
     .word 0x0000FC18
     @ S3 floor, ID 5
     .word 0x00000029   @ POLYGON_ATTR
@@ -345,7 +371,7 @@ commands:
     .word 0x00000023   @ VTX_16 (144, line 132, z -1000)
     .word 0xFA000200
     .word 0x0000FC18
-    @ S4 first render pass (ID 7): clears the stencil, draws nothing
+    @ S4 first render pass (ID 7): the stencil is set, draws nothing
     .word 0x00000029   @ POLYGON_ATTR
     .word 0x070F00B0
     .word 0x00000040   @ BEGIN_VTXS
@@ -370,6 +396,31 @@ commands:
     .word 0x00000023   @ VTX_16 (192, line 108, z -1000)
     .word 0xFE000800
     .word 0x0000FC18
+    @ S4 second mask pass, behind the floor: a new volume, clears the old flags
+    .word 0x00000029   @ POLYGON_ATTR
+    .word 0x000F0070
+    .word 0x00000040   @ BEGIN_VTXS
+    .word 0x00000001
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (144, line 108, z 1000)
+    .word 0xFE000200
+    .word 0x000003E8
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (192, line 108, z 1000)
+    .word 0xFE000800
+    .word 0x000003E8
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (192, line 132, z 1000)
+    .word 0xFA000800
+    .word 0x000003E8
+    .word 0x00000020   @ COLOR
+    .word 0x00000000
+    .word 0x00000023   @ VTX_16 (144, line 132, z 1000)
+    .word 0xFA000200
+    .word 0x000003E8
     @ S4 second render pass (ID 8): the stencil is clear, shadowed
     .word 0x00000029   @ POLYGON_ATTR
     .word 0x080F00B0

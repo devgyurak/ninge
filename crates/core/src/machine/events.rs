@@ -5,7 +5,7 @@
 
 use super::AUDIO_CAPACITY;
 use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
-use crate::bus::{Arm7View, Arm9View, TcmConfig, peek};
+use crate::bus::{Arm9View, TcmConfig, peek};
 use crate::io::dma::Trigger;
 use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
@@ -70,21 +70,15 @@ impl Participants for Machine {
     }
 
     fn run_arm7_until(&mut self, target: u64) {
-        let mut view = Arm7View::new(
-            &mut self.memory,
-            &mut self.io,
-            &mut self.scheduler,
-            &self.rom,
-            self.arm7_clock,
-        );
-        while view.clock() < target {
-            if self.arm7.halted() && !view.io().irq7().wakes() {
-                view.advance(target - view.clock());
-                break;
+        self.with_arm7_bus(|arm7, bios, view| {
+            while view.clock() < target {
+                if arm7.halted() && !view.io().irq7().wakes() {
+                    view.advance(target - view.clock());
+                    break;
+                }
+                arm7_instruction(arm7, bios, view);
             }
-            arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
-        }
-        self.arm7_clock = view.clock();
+        });
     }
 
     fn dispatch(&mut self, event: Event) {
@@ -133,21 +127,13 @@ impl Machine {
         if captures.iter().all(Option::is_none) {
             return;
         }
-        let mut view = Arm7View::new(
-            &mut self.memory,
-            &mut self.io,
-            &mut self.scheduler,
-            &self.rom,
-            self.arm7_clock,
-        );
-        captures
-            .iter()
-            .flatten()
-            .for_each(|writes| writes.run(&mut view));
-        // As for a DMA unit, a write may reach HALTCNT: the ARM7 halts at once.
-        if view.take_halt() {
-            self.arm7.set_halted(true);
-        }
+        // As for a DMA unit, a write may reach HALTCNT: the ARM7 halts at once (`with_arm7_bus`).
+        self.with_arm7_bus(|_, _, view| {
+            captures
+                .iter()
+                .flatten()
+                .for_each(|writes| writes.run(view));
+        });
     }
 
     /// Runs a DMA transfer through the owning CPU's bus view with the TCM switched off: DMA
@@ -186,19 +172,9 @@ impl Machine {
                 .max(self.scheduler.now().saturating_add(stall));
             end
         } else {
-            let mut view = Arm7View::new(
-                &mut self.memory,
-                &mut self.io,
-                &mut self.scheduler,
-                &self.rom,
-                self.arm7_clock,
-            );
-            let end = transfer.run(&mut view);
-            // A DMA unit may write HALTCNT: the ARM7 halts at once, not after its next instruction.
-            if view.take_halt() {
-                self.arm7.set_halted(true);
-            }
-            end
+            // A DMA unit may write HALTCNT: the ARM7 halts at once, not after its next instruction
+            // (`with_arm7_bus`).
+            self.with_arm7_bus(|_, _, view| transfer.run(view))
         };
         self.io
             .dma_finished(&mut self.scheduler, &transfer, end, self.arm9_hold_until);

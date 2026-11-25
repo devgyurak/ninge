@@ -100,7 +100,8 @@ frames, so a buffer that is not saved must be rebuilt from those three inputs on
 GBATEK gives the mapping for a vertex with clip coordinates (xx, yy, zz, ww) and the VIEWPORT in
 force (`geometry-engine.md`, "VIEWPORT"): *screen_x = (xx + ww) x width / (2 x ww) + x1* and
 *screen_y = (yy + ww) x height / (2 x ww) + y1*. The origin of the viewport is the lower left, so
-the 2D line of a screen y is *191 - y*. GBATEK does not say how *width* and *height* follow from
+positions are pixel edges and the screen is 192 lines tall, so the 2D line coordinate of a screen y
+is *192 - y* (a polygon that spans the viewport spans lines 0 to 191). GBATEK does not say how *width* and *height* follow from
 X1, X2, Y1, Y2, in what fixed-point precision the division runs, or how it rounds; it only notes a
 vertex may land one pixel beyond X2 or Y1 "due to rounding". The model computes the division in
 integers with a fractional part (a model choice, `TODO(hw-unverified)`), takes *width = X2 - X1 +
@@ -135,8 +136,9 @@ top-left convention, or a different one), the slope arithmetic, or what makes an
 `TODO(hw-unverified)`: a pixel on scanline *y* is covered from the first whole x at or right of the
 left edge's crossing to the last whole x left of the right edge's crossing, the right end
 excluded for the polygons above that drop their right and lower edges, and included for the rest.
-The rule is compared with a reference emulator binary as a black box before a golden frame fixes
-it (see the PR that adds it); that comparison is a record of agreement, not a hardware fact.
+A comparison with a reference emulator binary used as a black box is still to be done; until then
+the golden frames for this rule are evidence that the emulator follows this note, nothing more, and
+the comparison, once made, is a record of agreement and not a hardware fact.
 
 ### Facing
 
@@ -155,7 +157,7 @@ A vertex colour is the 5-bit RGB of the COLOR command (or the lit colour), expan
 all. The model interpolates the 6-bit channels linearly across the polygon in perspective-correct
 fashion, using 1/W as the weight (the model's choice; the exact precision and rounding are not stated), in integer fixed point with the
 rounding stated in the code, and takes a texture-less pixel's colour from that. All of it is
-`TODO(hw-unverified)` and settled by the comparison above. With no texture and no lighting the
+`TODO(hw-unverified)`, to be compared as above. With no texture and no lighting the
 vertex colour is the pixel colour. The decal (polygon mode 1) and toon or highlight (mode 2)
 polygons draw the interpolated vertex colour in this model until texture and toon shading exist
 (#50, #51).

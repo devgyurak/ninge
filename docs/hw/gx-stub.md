@@ -24,8 +24,8 @@ error flag, GXSTAT's layout and POWCNT1 bits 2 and 3 gating the ports. What the 
 commands (the FIFO and the PIPE, timing, matrices, polygons, lighting, the tests, DMA start mode 7)
 is in `geometry-engine.md`, which wins where the two differ about a timing or a result.
 
-The rendering registers' effect is #49-#52 (`TODO(phase7)`): they drop their writes and read 0
-here.
+The rendering registers' effect is #49-#52 (`TODO(phase7)`): they store their writes (masked,
+`geometry-engine.md`, "The rendering registers") and read 0 here.
 
 ## Registers
 
@@ -36,7 +36,7 @@ All of these are ARM9 only. The ARM7 does not see them: the ARM7 has the sound r
 |---|---|---|---|---|
 | `0400_0060h` | DISP3DCNT | 16 | R/W | stored, bits 12-13 acknowledge |
 | `0400_0320h` | RDLINES_COUNT | 8 | R | a fixed value, see "Unverified" |
-| `0400_0330h`-`0400_03BFh` | the rendering registers (EDGE_COLOR, ALPHA_TEST_REF, CLEAR_COLOR, CLEAR_DEPTH, CLRIMAGE_OFFSET, FOG_COLOR, FOG_OFFSET, FOG_TABLE, TOON_TABLE) | 8-32 | W | write dropped, reads 0 |
+| `0400_0330h`-`0400_03BFh` | the rendering registers (EDGE_COLOR, ALPHA_TEST_REF, CLEAR_COLOR, CLEAR_DEPTH, CLRIMAGE_OFFSET, FOG_COLOR, FOG_OFFSET, FOG_TABLE, TOON_TABLE) | 8-32 | W | stored and masked, reads 0 |
 | `0400_0400h`-`0400_043Fh` | GXFIFO (16 mirrors of one word) | 32 | W | the command decoder |
 | `0400_0440h`-`0400_05FFh` | the command ports | 32 | W | the command decoder |
 | `0400_0600h` | GXSTAT | 32 | R, bits 30-31 R/W, bit 15 write-1-to-clear | see below |
@@ -266,9 +266,8 @@ With bit 3 clear, then, GXFIFO and the command ports drop their writes (no comma
 bits 30-31 and the write-1-to-clear of bit 15 are dropped, and a GXSTAT read still reports the state
 as it was.
 
-Bit 2 gates the rendering block. While the block drops its writes (before the registers are stored,
-see `geometry-engine.md`, "The rendering registers") clearing it has no observable effect;
-`TODO(phase7)` with the rasterizer (#49-#52).
+Bit 2 gates the rendering block: clear, its writes are dropped (`geometry-engine.md`, "The
+rendering registers").
 
 GBATEK also advises sending one SwapBuffers after powering the two engines on; the stub does not need
 it.

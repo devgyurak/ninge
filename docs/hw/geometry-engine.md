@@ -300,7 +300,7 @@ and `0400_0330h`-`0400_03BFh`) are not swapped.
 
 ### What the rasterizer reads
 
-The set the last SWAP_BUFFERS handed on (`Gpu3d::render_ram`): its polygons in the order they were
+The set the last SWAP_BUFFERS handed on (`Gpu3d::scene`): its polygons in the order they were
 completed, each with its attributes (POLYGON_ATTR as of BEGIN_VTXS, TEXIMAGE_PARAM, PLTT_BASE) and
 3 to 10 indices into the same set's vertices, in drawing order; each vertex has clip coordinates
 (1.19.12), an RGB555 colour and S, T (1.11.4), and each polygon carries the VIEWPORT that was in

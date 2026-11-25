@@ -348,7 +348,7 @@ fn given_a_running_capture_with_an_empty_buffer_when_checked_then_it_is_not_well
     let mut spu = Spu::new();
     running(&mut spu, 0, 0);
     spu.captures[0].latched.samples = 0;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -356,12 +356,12 @@ fn given_a_running_capture_with_a_zero_period_when_checked_then_it_is_not_well_f
     let mut spu = Spu::new();
     running(&mut spu, 0, 0);
     spu.captures[0].latched.period = 0;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_started_capture_when_checked_then_it_is_well_formed() {
     let mut spu = Spu::new();
     running(&mut spu, 0, 0);
-    assert!(spu.well_formed(0));
+    assert!(spu.well_formed(StateTimes::at(0)));
 }

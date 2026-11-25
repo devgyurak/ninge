@@ -295,11 +295,30 @@ pub(crate) trait Device<const ARM9: bool> {
     }
 }
 
+/// The times a decoded state holds, for the check a savestate load runs ([`Checked::well_formed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StateTimes {
+    /// The master time.
+    pub(crate) now: u64,
+    /// The time the line events have reached: `now`, or `now - 1` in a round a stop interrupted
+    /// after the ARM9 ran (`Machine::events_from`). `None` for a machine with no program, which
+    /// runs no events, so its time says nothing about the line (`state-contents.md`).
+    pub(crate) lines: Option<u64>,
+}
+
+impl StateTimes {
+    /// A state at master time `now` with no program, as a device's own test builds it.
+    #[cfg(test)]
+    pub(crate) const fn at(now: u64) -> Self {
+        Self { now, lines: None }
+    }
+}
+
 /// Whether a device holds only values that exist, for the check a savestate load runs. The
 /// default is yes: a device whose registers take every bit pattern has nothing to check.
 pub(crate) trait Checked {
-    /// Whether the state is one the device can reach, at master time `now`.
-    fn well_formed(&self, _now: u64) -> bool {
+    /// Whether the state is one the device can reach, at the times it holds.
+    fn well_formed(&self, _times: StateTimes) -> bool {
         true
     }
 

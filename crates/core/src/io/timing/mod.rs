@@ -10,7 +10,7 @@
 //! are generic over which CPU asks. That is the "seen by both CPUs" class of `AGENTS.md` §4
 //! ("Per-CPU devices"), whatever per-CPU registers sit inside.
 
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, StateTimes, Width, read_bytes, write_bytes};
 use crate::io::irq::{HBLANK_IRQ, Requests, VBLANK_IRQ, VCOUNT_IRQ};
 use crate::scheduler::{FRAME_CYCLES, HBLANK_START_CYCLES, LINE_CYCLES};
 use serde::{Deserialize, Serialize};
@@ -276,10 +276,10 @@ impl Timing {
 }
 
 impl Checked for Timing {
-    /// The line and the HBlank flag against the time are checked by [`Timing::follows`], which needs
-    /// the time the line events have reached and not `now` (`state-contents.md`).
-    fn well_formed(&self, _now: u64) -> bool {
-        self.is_well_formed()
+    /// The registers on their own, and the line and the HBlank flag against the time the line events
+    /// have reached ([`Timing::follows`]), when the machine runs a program (`state-contents.md`).
+    fn well_formed(&self, times: StateTimes) -> bool {
+        self.is_well_formed() && times.lines.is_none_or(|time| self.follows(time))
     }
 }
 

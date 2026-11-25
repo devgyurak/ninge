@@ -576,7 +576,7 @@ fn given_polygons_in_both_sets_when_saved_and_loaded_then_they_are_kept_and_well
     assert_eq!(
         (
             restored == original,
-            restored.well_formed(0),
+            restored.well_formed(StateTimes::at(0)),
             restored.scene().ram.polygons.len()
         ),
         (true, true, 1)

@@ -210,12 +210,12 @@ macro_rules! registry {
 
             /// Whether every device holds only values that exist. A savestate that decodes to
             /// anything else is corrupt (`savestate`).
-            pub(crate) fn is_well_formed(&self, now: u64) -> bool {
+            pub(crate) fn is_well_formed(&self, times: $crate::io::device::StateTimes) -> bool {
                 true
-                    $( && Checked::well_formed(&self.$sf, now) )*
-                    $( && Checked::well_formed(&self.$af, now) )*
-                    $( && Checked::well_formed(&self.$bf, now) )*
-                    $( && Checked::well_formed(&self.$ef9, now) && Checked::well_formed(&self.$ef7, now) )*
+                    $( && Checked::well_formed(&self.$sf, times) )*
+                    $( && Checked::well_formed(&self.$af, times) )*
+                    $( && Checked::well_formed(&self.$bf, times) )*
+                    $( && Checked::well_formed(&self.$ef9, times) && Checked::well_formed(&self.$ef7, times) )*
             }
 
             /// What a load rebuilds in every device, after the checks passed ([`Checked::restore`]).

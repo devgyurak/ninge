@@ -17,7 +17,7 @@
 use crate::cart::protocol::{self, BLOCK_BYTES};
 use crate::cart::save::{SaveChip, SaveError, SaveType};
 use crate::io::device::{
-    Checked, Cx, Device, Effect, Fired, Signal, Signals, Width, read_bytes, write_bytes,
+    Checked, Cx, Device, Effect, Fired, Signal, Signals, StateTimes, Width, read_bytes, write_bytes,
 };
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
 use serde::{Deserialize, Serialize};
@@ -510,7 +510,8 @@ impl Cart {
 }
 
 impl Checked for Cart {
-    fn well_formed(&self, now: u64) -> bool {
+    fn well_formed(&self, times: StateTimes) -> bool {
+        let now = times.now;
         self.pos < BLOCK_BYTES
             && self.base.is_multiple_of(BLOCK_BYTES)
             && self.left <= block_bytes(6)

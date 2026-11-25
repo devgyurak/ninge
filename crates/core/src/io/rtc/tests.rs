@@ -299,14 +299,14 @@ fn given_the_chip_sending_when_the_program_drives_the_data_pin_then_the_pin_read
 
 #[test]
 fn given_a_new_device_when_checked_then_it_is_well_formed() {
-    assert!(Checked::well_formed(&Rtc::new(), 0));
+    assert!(Checked::well_formed(&Rtc::new(), StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_chip_out_of_range_when_the_device_is_checked_then_it_is_not_well_formed() {
     let mut rtc = Rtc::new();
     rtc.chip = Chip::with_session_for_test(Session::Command { byte: 0, bits: 9 });
-    assert!(!Checked::well_formed(&rtc, 0));
+    assert!(!Checked::well_formed(&rtc, StateTimes::at(0)));
 }
 
 // ----------------------------------------------------------------------------------- the map

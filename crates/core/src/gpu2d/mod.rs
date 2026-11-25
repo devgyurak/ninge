@@ -24,7 +24,7 @@ mod spec;
 mod text;
 mod window;
 
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, StateTimes, Width, read_bytes, write_bytes};
 use crate::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use affine::{AffineBg, AffineFormat};
 use brightness::{BRIGHT_BLOCK_BYTES as ENGINE_BRIGHT_BYTES, BRIGHT_OFFSET};
@@ -554,7 +554,7 @@ impl Device<true> for Gpu2d {
 }
 
 impl Checked for Gpu2d {
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         self.capture.well_formed() && self.fifo.well_formed()
     }
 }

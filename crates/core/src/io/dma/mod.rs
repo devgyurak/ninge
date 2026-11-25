@@ -11,7 +11,7 @@
 
 use crate::cpu::Bus;
 use crate::io::device::{
-    Checked, Cx, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes,
+    Checked, Cx, Device, Effect, Fired, SlotMask, StateTimes, Width, read_bytes, write_bytes,
 };
 use crate::io::irq::{DMA0_IRQ, Requests};
 use serde::{Deserialize, Serialize};
@@ -581,7 +581,7 @@ impl<const ARM9: bool> Dma<ARM9> {
 }
 
 impl<const ARM9: bool> Checked for Dma<ARM9> {
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         self.is_well_formed()
     }
 }

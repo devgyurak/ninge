@@ -115,9 +115,29 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     // A translucent polygon does not draw over a pixel another translucent pixel of its own ID wrote.
     // TODO(hw-unverified): the rule for ordinary translucent polygons is the model's
     // (`rasterizer.md`, "Unverified").
-    let again = poly.translucent && state.translucent[x] && state.id[x] == poly.id;
+    let again = poly.translucent && !poly.shadow && state.translucent[x] && state.id[x] == poly.id;
     if !passes || again {
         return;
+    }
+    if poly.shadow {
+        // The mask pass only sets the stencil where it passes the depth test. The render pass
+        // clears a set flag and draws nothing there; where the flag is clear it draws if its ID
+        // differs from the pixel's (`rasterizer.md`, "Shadow polygons").
+        // TODO(phase7, #51): the fog flag of a shadowed pixel (the old flag ANDed with the
+        // polygon's) comes with fog.
+        // TODO(hw-unverified): the stencil is checked only where the depth test passes, and neither
+        // pass writes depth (`rasterizer.md`, "Unverified").
+        if poly.mask {
+            state.stencil[x] = true;
+            return;
+        }
+        if state.stencil[x] {
+            state.stencil[x] = false;
+            return;
+        }
+        if state.id[x] == poly.id {
+            return;
+        }
     }
     // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
     // (`rasterizer.md`, "Unverified").
@@ -150,7 +170,8 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
         },
     };
     state.color6[x] = color6;
-    if !poly.translucent || poly.update_depth {
+    // A shadow polygon writes no depth in either pass (`rasterizer.md`, "Shadow polygons").
+    if !poly.shadow && (!poly.translucent || poly.update_depth) {
         state.depth[x] = depth;
     }
     state.id[x] = poly.id;

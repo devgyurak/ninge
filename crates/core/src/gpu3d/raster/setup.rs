@@ -72,6 +72,10 @@ pub(super) struct PolyDraw {
     pub(super) blend: bool,
     /// A pixel draws only if its alpha is greater than this: ALPHA_TEST_REF with the test on, else 0.
     pub(super) alpha_ref: u8,
+    /// A shadow polygon (polygon mode 3): two passes over a stencil buffer.
+    pub(super) shadow: bool,
+    /// A shadow polygon of ID 0, the mask pass: it draws no colour and sets the stencil.
+    pub(super) mask: bool,
     /// Alpha 0: only the edges draw.
     pub(super) wire: bool,
     /// The lower and right edges do not draw (`rasterizer.md`, "Which pixels a polygon covers").
@@ -162,10 +166,7 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
     ram.polygons.iter().for_each(|p| {
         let alpha = (p.attr >> ATTR_ALPHA_SHIFT) & 0x1F;
         let mode = (p.attr >> ATTR_MODE_SHIFT) & 3;
-        // TODO(phase7, #49): shadow polygons are the next part of #49; until then they draw nothing.
-        if mode == MODE_SHADOW {
-            return;
-        }
+        let shadow = mode == MODE_SHADOW;
         let n = usize::from(p.count).min(MAX_POLYGON_VERTICES);
         let mut source = [Vertex::default(); MAX_POLYGON_VERTICES];
         let mut screen = [ScreenVertex::default(); MAX_POLYGON_VERTICES];
@@ -210,7 +211,8 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         let y_min_fix = screen.iter().map(|v| v.y).min().unwrap_or(0);
         let y_max_fix = screen.iter().map(|v| v.y).max().unwrap_or(0);
         let wire = alpha == 0 || segment;
-        let translucent = !wire && alpha != OPAQUE;
+        // A shadow polygon is translucent whatever its alpha: it draws after the opaque ones.
+        let translucent = !wire && (alpha != OPAQUE || shadow);
         let blend = disp3dcnt & DISP3DCNT_BLEND != 0;
         let flat = y_min_fix == y_max_fix;
         frame.polygons.push(PolyDraw {
@@ -224,6 +226,8 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
             } else {
                 OPAQUE as u8
             },
+            shadow,
+            mask: shadow && (p.attr >> ATTR_ID_SHIFT) & 0x3F == 0,
             translucent,
             update_depth: p.attr & ATTR_UPDATE_DEPTH != 0,
             blend,

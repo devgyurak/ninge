@@ -231,7 +231,9 @@ same volume, with automatic sorting off so the order holds.
   sets the back surface to render and marks that "what/why?" (it is under "Unverified"). A pixel is drawn to the colour buffer, blended as a
   translucent pixel with the polygon's alpha, only if its stencil flag is 0 and its polygon ID
   differs from the ID in the pixel's buffer. The pass clears the stencil flag when it checks it.
-  The pixel's fog flag becomes the old flag ANDed with the polygon's.
+  The pixel's fog flag becomes the old flag ANDed with the polygon's. (Fog is #51; the model
+  does not set the flag yet.) A shadow polygon is not subject to the same-ID rule of ordinary
+  translucent polygons: its own rule, that its ID differs from the pixel's, decides.
 
 Shadow polygons are translucent by their alpha (1 to 30), so they draw after the opaque ones even
 when the order is manual. The stencil is one bit per pixel and is reset to 0 at the start of each
@@ -290,3 +292,8 @@ for both).
   rear plane at a known CLEAR_DEPTH.
 - Whether a wire frame or line segment, which draw at alpha 31, are subject to the alpha test as any
   pixel is (the model: yes). — `gpu3d/` — verify by a test ROM with ALPHA_TEST_REF 31.
+- A shadow polygon of alpha 0 or one that is a line segment (the model: the wire path, so the mask pass
+  sets the stencil along its edges only), and whether the alpha test hides the mask pass (the model:
+  yes). — `gpu3d/` — verify by a test ROM.
+- Whether the render pass checks and clears the stencil only where it passes the depth test (the model:
+  yes). — `gpu3d/` — verify by a test ROM.

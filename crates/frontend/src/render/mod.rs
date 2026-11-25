@@ -5,6 +5,7 @@
 //! ones the model chose to show (backlight, cursor overlay), the layout is the model's, and what
 //! it adds is only what it owns: the transfer medium and its label.
 
+use crate::debugger::{DebugView, Panel};
 use crate::input::FALLBACK_HOLD_FRAMES;
 use crate::kitty;
 use crate::layout::Areas;
@@ -45,6 +46,50 @@ pub struct Snapshot {
     pub pads_connected: u32,
     /// Whether the run is paused because the terminal is not focused, which the panel says.
     pub paused: bool,
+    /// What the debugger panels show, filled on the emu thread from `Inspect`.
+    pub debug: DebugView,
+}
+
+/// The registers panel's text: the ARM9's registers two to a row, its next address and CPSR, the
+/// ARM7's next address. Empty without a machine.
+fn registers_text(debug: &DebugView) -> String {
+    if !debug.present {
+        return String::new();
+    }
+    let (a9, a7) = (&debug.registers.arm9, &debug.registers.arm7);
+    let halted = |halted: bool| if halted { " halted" } else { "" };
+    let mut text = format!("ARM9{}\n", halted(a9.halted));
+    (0..8).for_each(|n| {
+        text.push_str(&format!(
+            "r{n:<2}{:08x} r{:<2}{:08x}\n",
+            a9.regs[n],
+            n + 8,
+            a9.regs[n + 8]
+        ));
+    });
+    text.push_str(&format!(
+        "pc {:08x} ps {:08x}\nARM7 pc {:08x}{}\n",
+        a9.next_pc,
+        a9.cpsr,
+        a7.next_pc,
+        halted(a7.halted)
+    ));
+    text
+}
+
+/// The disassembly panel's text: one line for each instruction, `>` on the next one to run.
+fn disasm_text(debug: &DebugView) -> String {
+    let next = debug.registers.arm9.next_pc;
+    debug
+        .disasm
+        .lines
+        .iter()
+        .map(|line| {
+            let mark = if line.addr == next { '>' } else { ' ' };
+            format!("{mark}{:08x} {}", line.addr, line.instruction)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Writes snapshots to the terminal. `S` is where shared-memory frames are written.
@@ -137,19 +182,32 @@ impl<S: ShmSink> Renderer<S> {
         } else {
             ""
         };
-        // TODO(phase1): real register and disassembly panels (#56).
+        let debug = &snapshot.debug;
+        let broken_note = if debug.broken { "\nBREAK" } else { "" };
+        let title = |panel: Panel, name: &str| match debug.panel.panel == panel {
+            true => format!("{name} *"),
+            false => name.to_string(),
+        };
         frame.render_widget(
             Paragraph::new(format!(
-                "TODO(phase1) (#56){note}{keys_note}{cursor_note}{pad_note}{paused_note}\n{}",
-                self.transfer.label()
+                "{}{note}{keys_note}{cursor_note}{pad_note}{paused_note}{broken_note}\n{}",
+                self.transfer.label(),
+                registers_text(debug)
             ))
             .wrap(Wrap { trim: false })
-            .block(Block::new().borders(Borders::ALL).title("Registers")),
+            .block(
+                Block::new()
+                    .borders(Borders::ALL)
+                    .title(title(Panel::Registers, "Registers")),
+            ),
             areas.registers,
         );
         frame.render_widget(
-            Paragraph::new("TODO(phase1) (#56)")
-                .block(Block::new().borders(Borders::ALL).title("Disassembly")),
+            Paragraph::new(disasm_text(debug)).block(
+                Block::new()
+                    .borders(Borders::ALL)
+                    .title(title(Panel::Disassembly, "Disassembly")),
+            ),
             areas.disasm,
         );
     }

@@ -71,6 +71,11 @@ impl<const ARM9: bool> Cpu<ARM9> {
         }
     }
 
+    /// Whether the CPU is in Thumb state (CPSR bit 5), so its instructions are halfwords.
+    pub fn is_thumb(&self) -> bool {
+        self.regs.cpsr() & FLAG_T != 0
+    }
+
     /// The address of the instruction the next step executes. The register file holds the fetch
     /// address, two instructions ahead of it: 8 bytes in ARM state, 4 in Thumb state.
     pub fn next_instruction(&self) -> u32 {

@@ -16,6 +16,7 @@ pub mod audio;
 pub mod cli;
 pub mod clock;
 pub mod cursor;
+pub mod debugger;
 mod diacritics;
 pub mod gamepad;
 pub mod handoff;

@@ -12,8 +12,8 @@ pub(crate) use memory::{BANK_COUNT, BIOS7_BASE, BIOS9_BASE, ExtPalette, VRAMCNT_
 pub use memory::{
     ExtPaletteBanks, Memory, Textures, VramBankState, VramMapping, VramWindow, WramShare, WramState,
 };
-pub(crate) use view::peek;
 pub use view::{Arm7View, Arm9View, TcmConfig};
+pub(crate) use view::{peek, peek_fetch};
 
 #[cfg(test)]
 pub(crate) mod bench;

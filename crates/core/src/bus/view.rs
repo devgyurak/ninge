@@ -63,6 +63,23 @@ pub(crate) fn peek<const ARM9: bool, const N: usize>(
         .unwrap_or_else(|| read_registers::<ARM9, N>(memory, io, rom, now, addr))
 }
 
+/// What CPU `ARM9` finds at `addr` when it fetches an instruction, without side effects: the
+/// disassembler's read. It differs from [`peek`] where the data and the instruction side differ,
+/// the DTCM (an instruction fetch does not see it) and a load-mode ITCM.
+pub(crate) fn peek_fetch<const ARM9: bool, const N: usize>(
+    memory: &Memory,
+    io: &Io,
+    tcm: &TcmConfig,
+    rom: &[u8],
+    now: u64,
+    addr: u32,
+) -> [u8; N] {
+    let addr = addr & !(N as u32 - 1);
+    memory
+        .fetch::<ARM9, N>(tcm, addr)
+        .unwrap_or_else(|| read_registers::<ARM9, N>(memory, io, rom, now, addr))
+}
+
 /// The `N` bytes of a register access, as the one value a device takes.
 fn pack<const N: usize>(bytes: [u8; N]) -> u32 {
     bytes

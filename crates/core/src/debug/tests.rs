@@ -357,3 +357,91 @@ fn given_a_running_arm9_timer_and_an_advanced_clock_when_the_arm9_peeks_its_coun
     m.scheduler.advance(THREE_TICKS);
     assert_eq!(m.inspect().arm9_peek16(TM0CNT_L_ADDR), RELOAD_16_TICKS + 3);
 }
+
+/// An ARM9 about to run the instruction at `pc` in ARM state (or Thumb state when `thumb`), with
+/// `words` written from `pc` in main RAM.
+fn arm9_at(pc: u32, thumb: bool, words: &[u32]) -> Machine {
+    let mut m = Machine::new();
+    words
+        .iter()
+        .zip(0u32..)
+        .for_each(|(&word, n)| m.bus9().write32(pc + 4 * n, word));
+    let (ahead, t_bit) = if thumb { (4, 1 << 5) } else { (8, 0) };
+    m.arm9.regs_mut().set_cpsr(0x1F | t_bit);
+    m.arm9.regs_mut().set(15, pc + ahead);
+    m
+}
+
+/// The text of the lines `disassemble_arm9(scroll, count)` gives.
+fn listing(m: &Machine, scroll: i32, count: usize) -> Vec<(u32, String)> {
+    m.inspect()
+        .disassemble_arm9(scroll, count)
+        .map(|line| (line.addr, line.instruction.to_string()))
+        .collect()
+}
+
+#[test]
+fn given_the_arm9_in_arm_state_when_disassembled_then_lines_are_four_bytes_apart() {
+    // `mov r1, #5` then `mov r2, #6`.
+    let m = arm9_at(0x0200_0000, false, &[0xE3A0_1005, 0xE3A0_2006]);
+    assert_eq!(
+        listing(&m, 0, 2),
+        vec![
+            (0x0200_0000, "mov r1, #0x5".to_string()),
+            (0x0200_0004, "mov r2, #0x6".to_string())
+        ]
+    );
+}
+
+#[test]
+fn given_the_arm9_in_thumb_state_when_disassembled_then_lines_are_two_bytes_apart() {
+    // `movs r1, #5` and `movs r2, #6` as halfwords 2105h and 2206h (the disassembler writes `mov`).
+    let m = arm9_at(0x0200_0000, true, &[0x2206_2105]);
+    assert_eq!(
+        listing(&m, 0, 2),
+        vec![
+            (0x0200_0000, "mov r1, #0x5".to_string()),
+            (0x0200_0002, "mov r2, #0x6".to_string())
+        ]
+    );
+}
+
+#[test]
+fn given_a_scroll_when_disassembled_in_thumb_state_then_the_start_moves_by_halfwords() {
+    let m = arm9_at(0x0200_0000, true, &[0x2206_2105]);
+    assert_eq!(
+        listing(&m, 1, 1),
+        vec![(0x0200_0002, "mov r2, #0x6".to_string())]
+    );
+}
+
+#[test]
+fn given_a_negative_scroll_when_disassembled_then_the_start_is_before_the_next_instruction() {
+    // The next instruction is the second word; the one before it is `mov r1, #5`.
+    let mut m = arm9_at(0x0200_0004, false, &[0xE3A0_2006]);
+    m.bus9().write32(0x0200_0000, 0xE3A0_1005);
+    assert_eq!(
+        listing(&m, -1, 1),
+        vec![(0x0200_0000, "mov r1, #0x5".to_string())]
+    );
+}
+
+#[test]
+fn given_a_thumb_bl_pair_when_disassembled_then_the_first_half_reads_as_the_whole_instruction() {
+    // `bl` is two halfwords, F000h then F800h (offset 0): the first line is the whole branch.
+    let m = arm9_at(0x0200_0000, true, &[0xF800_F000]);
+    let lines = listing(&m, 0, 1);
+    assert!(lines[0].1.starts_with("bl"));
+}
+
+#[test]
+fn given_the_arm9_in_thumb_state_when_asked_then_the_cpu_says_it_is_thumb() {
+    let m = arm9_at(0x0200_0000, true, &[]);
+    assert!(m.inspect().arm9().is_thumb());
+}
+
+#[test]
+fn given_the_arm9_in_arm_state_when_asked_then_the_cpu_says_it_is_not_thumb() {
+    let m = arm9_at(0x0200_0000, false, &[]);
+    assert!(!m.inspect().arm9().is_thumb());
+}

@@ -836,3 +836,85 @@ fn given_the_dummy_pattern_with_a_recorder_when_frames_run_then_no_frame_is_reco
         Some("recorded 0 frames to run.ninput".to_string())
     );
 }
+
+// -------------------------------------------------------------------------- the debugger
+
+#[test]
+fn given_a_break_action_when_applied_then_the_run_is_stopped_and_not_paused() {
+    let mut app = App::new(size());
+    app.apply(Action::Break);
+    assert_eq!(
+        (app.broken(), app.stopped(), app.paused()),
+        (true, true, false)
+    );
+}
+
+#[test]
+fn given_a_broken_run_when_resumed_then_it_is_no_longer_stopped() {
+    let mut app = App::new(size());
+    app.apply(Action::Break);
+    app.apply(Action::Resume);
+    assert_eq!((app.broken(), app.stopped()), (false, false));
+}
+
+#[test]
+fn given_a_focus_pause_when_the_focus_is_lost_then_the_run_is_stopped_but_not_broken() {
+    let mut app = App::new(size()).with_focus_pause(true);
+    app.apply(Action::FocusLost);
+    assert_eq!((app.broken(), app.stopped()), (false, true));
+}
+
+#[test]
+fn given_a_next_panel_action_when_applied_then_the_disassembly_has_the_focus() {
+    let mut app = App::new(size());
+    app.apply(Action::NextPanel);
+    assert_eq!(app.panel().panel, crate::debugger::Panel::Disassembly);
+}
+
+#[test]
+fn given_the_disassembly_focus_when_scrolled_and_recentered_then_the_scroll_follows_the_actions() {
+    let mut app = App::new(size());
+    app.apply(Action::NextPanel);
+    app.apply(Action::Scroll(5));
+    let scrolled = app.panel().scroll;
+    app.apply(Action::Recenter);
+    assert_eq!((scrolled, app.panel().scroll), (5, 0));
+}
+
+#[test]
+fn given_a_machine_and_a_break_when_filled_then_the_snapshot_carries_the_debug_view() {
+    let mut app = smoke_app(true);
+    app.apply(Action::Break);
+    let mut snapshot = Snapshot::default();
+    app.fill(&mut snapshot);
+    assert_eq!(
+        (
+            snapshot.debug.broken,
+            snapshot.debug.present,
+            snapshot.debug.disasm.lines.is_empty()
+        ),
+        (true, true, false)
+    );
+}
+
+#[test]
+fn given_a_terminal_with_no_room_when_filled_then_the_debug_view_is_not_filled() {
+    let mut app = smoke_app(true);
+    app.resize(TermSize {
+        cols: 1,
+        rows: 1,
+        cell_w: 10,
+        cell_h: 20,
+        px_known: true,
+    });
+    let mut snapshot = Snapshot::default();
+    app.fill(&mut snapshot);
+    assert_eq!(
+        (
+            app.areas().is_none(),
+            snapshot.debug.present,
+            snapshot.debug.disasm.lines.len()
+        ),
+        (true, true, 0)
+    );
+}

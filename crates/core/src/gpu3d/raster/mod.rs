@@ -38,6 +38,10 @@ pub(crate) struct Frame {
 struct LineState {
     depth: [u32; SCREEN_WIDTH],
     id: [u8; SCREEN_WIDTH],
+    /// The 6-bit colour of each pixel, which a blend reads (the output holds it narrowed).
+    color6: [[u8; 3]; SCREEN_WIDTH],
+    /// The pixel was last written by a translucent polygon.
+    translucent: [bool; SCREEN_WIDTH],
 }
 
 impl Frame {
@@ -57,6 +61,8 @@ impl Frame {
         let mut state = LineState {
             depth: [self.clear.depth; SCREEN_WIDTH],
             id: [self.clear.id; SCREEN_WIDTH],
+            color6: [self.clear.color6; SCREEN_WIDTH],
+            translucent: [false; SCREEN_WIDTH],
         };
         self.polygons.iter().for_each(|poly| {
             span::draw_polygon(poly, &self.vertices, y, &mut state, out);

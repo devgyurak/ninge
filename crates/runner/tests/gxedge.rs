@@ -64,7 +64,8 @@ fn expected() -> Vec<u16> {
     // D1 (near, green) is drawn first and D2 (far, red) second; D2 loses where they overlap.
     (120..168).for_each(|y| (20..84).for_each(|x| put(x, y, -1, GREEN)));
     (135..183).for_each(|y| (52..116).for_each(|x| put(x, y, 1, RED)));
-    // E: one dot.
+    // E: one dot (its 1-dot bit is set). G, the same at (248,171) with the bit clear, is hidden:
+    // DISP_1DOT_DEPTH is at its reset value, 0, and its W is not at most that.
     put(240, 171, 0, WHITE);
     // F: the outline of (150,93)-(230,141), edges included.
     (93..=141).for_each(|y| {

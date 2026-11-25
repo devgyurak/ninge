@@ -122,7 +122,12 @@ GBATEK states these rules and no more:
 - The hardware rounds the width and height of every polygon up to at least 1, so a polygon of
   0x0, 1x0, 0x1 and 1x1 dots all draw as one dot. Only the 0x0 case is subject to the 1-dot depth
   check (POLYGON_ATTR bit 13 and DISP_1DOT_DEPTH, a W comparison on the vertices; the dot takes
-  the colour, depth and texture of the first vertex).
+  the colour, depth and texture of the first vertex). That check is the 0x0 case's alone and is
+  decided by POLYGON_ATTR bit 13 (set: draw) or, with it clear, by DISP_1DOT_DEPTH (`0400_0610h`,
+  15 bits, a W in 12.3 fixed point): the polygon draws if at least one vertex has a W at most that
+  value, and is dropped otherwise. The register is not routed through GXFIFO, so a write applies
+  to polygons still in the FIFO. The model compares the vertex W (12 fractional bits) shifted right
+  by 9, and takes the register as 0 at reset (`TODO(hw-unverified)`).
 - A polygon with an alpha of 0 is a wire frame: only the lines along its edges draw, at a fixed
   alpha of 31, and the inside is transparent. A line segment (a triangle with two equal vertices)
   always draws; it has no front or back. Only a wire frame's lines have the fixed alpha 31: a line
@@ -314,3 +319,8 @@ it does not. Whether the mask pass writes depth is not stated either; the model 
   model: yes). — `gpu3d/` — verify by a test ROM.
 - Whether the render pass checks the stencil only where it passes the depth test (the model: yes). —
   `gpu3d/` — verify by a test ROM.
+- DISP_1DOT_DEPTH's reset value (the model: 0, so a 0x0 polygon with bit 13 clear is hidden) and
+  whether a narrow write stores just its bytes. — `gpu3d/` — verify by a test ROM that reads back
+  a 1-dot polygon before and after writing the register.
+- Whether the vertex W is truncated or rounded to the register's 3 fractional bits for the 1-dot
+  comparison (the model: truncated). — `gpu3d/` — verify by a test ROM with a W between two steps.

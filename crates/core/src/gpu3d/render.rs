@@ -60,6 +60,9 @@ pub struct RenderRegs {
     pub fog_table: [u8; 32],
     /// TOON_TABLE: 32 colours, RGB555.
     pub toon_table: [u16; 32],
+    /// DISP_1DOT_DEPTH (`0400_0610h`, in the geometry block but a rendering input): a W, 12.3 fixed
+    /// point, 15 bits.
+    pub one_dot_depth: u16,
 }
 
 /// `old` with the byte at `index` (0 = lowest) replaced by `byte`, then masked.
@@ -130,6 +133,19 @@ impl RenderRegs {
         }
     }
 
+    /// Stores `byte` at byte `index` (0 or 1) of DISP_1DOT_DEPTH.
+    // TODO(hw-unverified): the register's reset value is 0 and a narrow write stores just its bytes
+    // (`rasterizer.md`, "Unverified").
+    pub(super) fn write_one_dot_byte(&mut self, index: u32, byte: u8) {
+        let value = merge(
+            u32::from(self.one_dot_depth),
+            index & 1,
+            byte,
+            FIFTEEN_BIT_MASK,
+        );
+        self.one_dot_depth = value as u16;
+    }
+
     /// Whether every register holds only bits it stores, for a savestate load.
     pub(super) fn well_formed(&self) -> bool {
         let colors = |all: &[u16]| all.iter().all(|&c| u32::from(c) & !COLOR15_MASK == 0);
@@ -141,6 +157,7 @@ impl RenderRegs {
             && u32::from(self.clrimage_offset) & !FIFTEEN_BIT_MASK == 0
             && self.fog_color & !FOG_COLOR_MASK == 0
             && u32::from(self.fog_offset) & !FIFTEEN_BIT_MASK == 0
+            && u32::from(self.one_dot_depth) & !FIFTEEN_BIT_MASK == 0
             && self
                 .fog_table
                 .iter()

@@ -33,6 +33,10 @@ const ATTR_ID_SHIFT: u32 = 24;
 const MODE_SHADOW: u32 = 3;
 /// POLYGON_ATTR bit 14: the depth test passes on equal depth, not less.
 const ATTR_DEPTH_EQUAL: u32 = 1 << 14;
+/// POLYGON_ATTR bit 13: draw a 1-dot polygon behind DISP_1DOT_DEPTH too.
+const ATTR_ONE_DOT: u32 = 1 << 13;
+/// A clip W has 12 fractional bits and DISP_1DOT_DEPTH 3: shift right by the difference.
+const W_TO_ONE_DOT: u32 = 9;
 /// SWAP_BUFFERS bit 1: the depth buffer holds W, not Z.
 const SWAP_W_BUFFER: u8 = 1 << 1;
 /// SWAP_BUFFERS bit 0: translucent polygons keep the order they were completed in.
@@ -220,11 +224,24 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         let ys = screen.iter().map(|v| round(v.y));
         let (x_lo, x_hi) = (xs.clone().min().unwrap_or(0), xs.max().unwrap_or(0));
         let (y_lo, y_hi) = (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0));
-        // Polygons of 0x0, 1x0, 0x1 and 1x1 dots all draw as one dot (`rasterizer.md`).
-        // TODO(phase7, #49): DISP_1DOT_DEPTH is not stored yet, so the dot always passes the 1-dot
-        // depth check that POLYGON_ATTR bit 13 and the register decide (`rasterizer.md`, "Which
-        // pixels a polygon covers").
+        // Polygons of 0x0, 1x0, 0x1 and 1x1 dots all draw as one dot (`rasterizer.md`). Only the
+        // 0x0 one is subject to the 1-dot depth check: POLYGON_ATTR bit 13, or a vertex whose W
+        // (12.3 fixed point) is at most DISP_1DOT_DEPTH; a polygon that fails it does not draw.
         let dot = (x_hi - x_lo <= 1 && y_hi - y_lo <= 1).then_some((x_lo, y_lo));
+        // TODO(hw-unverified): the vertex W is truncated, not rounded, to the register's 3
+        // fractional bits for the comparison (`rasterizer.md`, "Unverified").
+        let nearest_w = source
+            .iter()
+            .map(|v| i64::from(v.w) >> W_TO_ONE_DOT)
+            .min()
+            .unwrap_or(0);
+        let hidden_dot = x_hi == x_lo
+            && y_hi == y_lo
+            && p.attr & ATTR_ONE_DOT == 0
+            && nearest_w > i64::from(regs.one_dot_depth);
+        if hidden_dot {
+            return;
+        }
         // A line segment draws as a wire whatever its alpha.
         let y_min_fix = screen.iter().map(|v| v.y).min().unwrap_or(0);
         let y_max_fix = screen.iter().map(|v| v.y).max().unwrap_or(0);

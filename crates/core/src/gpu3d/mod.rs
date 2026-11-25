@@ -68,6 +68,9 @@ const GEOMETRY_OFFSET: u32 = GEOMETRY_ADDR - DISP3DCNT_ADDR;
 const GXFIFO_BYTES: u32 = 0x40;
 /// The command ports start here, `0400_0440h`; the port of command `id` is `id * 4` from the block.
 const PORTS_REL: u32 = 0x40;
+/// DISP_1DOT_DEPTH, `0400_0610h`, in bytes into the geometry block, and its size.
+const ONE_DOT_REL: u32 = 0x210;
+const ONE_DOT_BYTES: u32 = 2;
 /// The first byte past the ports, `0400_0600h`: GXSTAT.
 const GXSTAT_REL: u32 = 0x200;
 /// The bytes of GXSTAT.
@@ -1029,6 +1032,16 @@ impl Gpu3d {
             rel if (GXSTAT_REL..GXSTAT_REL + GXSTAT_BYTES).contains(&rel) => {
                 write_bytes(offset, width, value, |at, byte| {
                     self.write_byte(at, byte);
+                    Effect::default()
+                })
+            }
+            // DISP_1DOT_DEPTH: not routed through GXFIFO, so a write takes effect at once and
+            // applies to polygons still in the FIFO (`rasterizer.md`, "Which pixels a polygon
+            // covers").
+            rel if (ONE_DOT_REL..ONE_DOT_REL + ONE_DOT_BYTES).contains(&rel) => {
+                write_bytes(offset, width, value, |at, byte| {
+                    self.render
+                        .write_one_dot_byte(at - (GEOMETRY_OFFSET + ONE_DOT_REL), byte);
                     Effect::default()
                 })
             }

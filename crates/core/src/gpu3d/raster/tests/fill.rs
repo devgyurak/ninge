@@ -84,14 +84,61 @@ fn given_a_line_segment_when_both_face_bits_are_clear_then_it_still_draws() {
     assert_eq!(covered(&draw(&ram, NONE, &regs())), rect(10, 10, 20, 10));
 }
 
+const ONE_DOT_BIT: u32 = 1 << 13;
+
+/// Three equal vertices at pixel (30, 40): a polygon of 0x0 dots.
+fn dot() -> Vec<Vertex> {
+    vec![
+        vertex(30, 40, 0, GREEN),
+        vertex(30, 40, 0, GREEN),
+        vertex(30, 40, 0, GREEN),
+    ]
+}
+
+fn one_dot_depth(depth: u16) -> RenderRegs {
+    RenderRegs {
+        one_dot_depth: depth,
+        ..regs()
+    }
+}
+
 #[test]
-fn given_a_polygon_that_rounds_to_one_dot_when_drawn_then_one_pixel_draws() {
-    let tiny = vec![
+fn given_a_polygon_of_0x0_dots_when_its_one_dot_bit_is_set_then_one_pixel_draws() {
+    let ram = scene(&[(opaque(1) | ONE_DOT_BIT, dot())]);
+    assert_eq!(covered(&draw(&ram, NONE, &regs())), vec![(30, 40)]);
+}
+
+#[test]
+fn given_a_polygon_of_0x0_dots_when_the_bit_is_clear_and_it_is_behind_the_depth_then_it_is_hidden()
+{
+    let ram = scene(&[(opaque(1), dot())]);
+    assert_eq!(covered(&draw(&ram, NONE, &regs())), vec![]);
+}
+
+#[test]
+fn given_a_polygon_of_0x0_dots_when_its_w_is_at_the_depth_then_one_pixel_draws() {
+    // W is 3.0 = 3 x 4096 in 12 fractional bits, 24 in 3.
+    let ram = scene(&[(opaque(1), dot())]);
+    assert_eq!(
+        covered(&draw(&ram, NONE, &one_dot_depth(24))),
+        vec![(30, 40)]
+    );
+}
+
+#[test]
+fn given_a_polygon_of_0x0_dots_when_its_w_is_one_step_behind_the_depth_then_it_is_hidden() {
+    let ram = scene(&[(opaque(1), dot())]);
+    assert_eq!(covered(&draw(&ram, NONE, &one_dot_depth(23))), vec![]);
+}
+
+#[test]
+fn given_a_polygon_of_1x1_dots_when_the_bit_is_clear_then_it_draws_as_one_dot_anyway() {
+    let one_by_one = vec![
         vertex(30, 40, 0, GREEN),
-        vertex(30, 40, 0, GREEN),
-        vertex(30, 40, 0, GREEN),
+        vertex(31, 40, 0, GREEN),
+        vertex(30, 41, 0, GREEN),
     ];
-    let ram = scene(&[(opaque(1), tiny)]);
+    let ram = scene(&[(opaque(1), one_by_one)]);
     assert_eq!(covered(&draw(&ram, NONE, &regs())), vec![(30, 40)]);
 }
 

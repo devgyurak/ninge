@@ -17,7 +17,8 @@
 @   B  green right triangle (100,24) (100,72) (148,72): a slanted right edge.
 @   C  quad 160-223 across, lines 24-47: red channel 0 at the left edge, 31 at the right.
 @   D1 near green quad, then D2 far red quad overlapping it, drawn after it: depth decides.
-@   E  a triangle of three equal vertices at (240,171): one dot.
+@   E  a triangle of three equal vertices at (240,171): one dot (POLYGON_ATTR bit 13 set).
+@   G  the same at (248,171) with bit 13 clear: DISP_1DOT_DEPTH is 0, so it is hidden.
 @   F  wire frame (alpha 0) green quad (150,93)-(230,141).
 @
 @ TODO(hw-unverified): the coverage rule, the interpolation and the depth mapping follow the model of
@@ -198,7 +199,7 @@ commands:
     .word 0x00000800
     @ E: a triangle of one point, white
     .word 0x00000029   @ POLYGON_ATTR
-    .word 0x061F00C0
+    .word 0x061F20C0   @ ID 6, 1-dot bit (13) set: drawn whatever DISP_1DOT_DEPTH is
     .word 0x00000040   @ BEGIN_VTXS
     .word 0x00000000
     .word 0x00000020   @ COLOR
@@ -215,6 +216,26 @@ commands:
     .word 0x00007FFF
     .word 0x00000023   @ VTX_16 (240, line 171, z 0)
     .word 0xF3800E00
+    .word 0x00000000
+    @ G: the same, ID 8, bit 13 clear: behind DISP_1DOT_DEPTH (0), hidden
+    .word 0x00000029   @ POLYGON_ATTR
+    .word 0x081F00C0
+    .word 0x00000040   @ BEGIN_VTXS
+    .word 0x00000000
+    .word 0x00000020   @ COLOR
+    .word 0x00007FFF
+    .word 0x00000023   @ VTX_16 (248, line 171, z 0)
+    .word 0xF3800F00
+    .word 0x00000000
+    .word 0x00000020   @ COLOR
+    .word 0x00007FFF
+    .word 0x00000023   @ VTX_16 (248, line 171, z 0)
+    .word 0xF3800F00
+    .word 0x00000000
+    .word 0x00000020   @ COLOR
+    .word 0x00007FFF
+    .word 0x00000023   @ VTX_16 (248, line 171, z 0)
+    .word 0xF3800F00
     .word 0x00000000
     @ F: wire frame quad, alpha 0, green
     .word 0x00000029   @ POLYGON_ATTR

@@ -105,8 +105,10 @@ is *192 - y* (a polygon that spans the viewport spans lines 0 to 191). GBATEK do
 X1, X2, Y1, Y2, in what fixed-point precision the division runs, or how it rounds; it only notes a
 vertex may land one pixel beyond X2 or Y1 "due to rounding". The model computes the division in
 integers with a fractional part (a model choice, `TODO(hw-unverified)`), takes *width = X2 - X1 +
-1* and *height = Y2 - Y1 + 1*, and clips the polygon's pixels to the viewport rectangle and to the
-256x192 screen. The viewport limits where polygons draw; it does not move or size the rear plane.
+1* and *height = Y2 - Y1 + 1*, and clips the polygon's pixels to the 256x192 screen only. The
+viewport is what the view volume is scaled into, and the geometry engine has already clipped each
+polygon to that volume; the rasterizer does not clip to the viewport rectangle again (a vertex may
+land a pixel beyond it). The viewport does not move or size the rear plane.
 
 A polygon has 3 to 10 vertices after clipping (`geometry-engine.md`). The model fills it as a
 convex polygon, one scanline at a time, between its left and right edge on that line.
@@ -121,11 +123,14 @@ GBATEK states these rules and no more:
   the colour, depth and texture of the first vertex).
 - A polygon with an alpha of 0 is a wire frame: only the lines along its edges draw, at a fixed
   alpha of 31, and the inside is transparent. A line segment (a triangle with two equal vertices)
-  always draws; it has no front or back.
+  always draws; it has no front or back. Only a wire frame's lines have the fixed alpha 31: a line
+  segment of alpha 1 to 30 is translucent like any polygon (GBATEK's anti-aliasing workaround
+  relies on translucent lines).
 - Some polygons leave out their **lower and right edges**, to save work where polygons join:
   opaque polygons that are not wire frames and have neither edge marking nor anti-aliasing on,
-  and every polygon with a vertical right edge (line segments excepted), and translucent polygons
-  when DISP3DCNT bit 3 (blending) is off. Every other polygon draws all its edges. Turning edge
+  and translucent polygons when DISP3DCNT bit 3 (blending) is off. Every other polygon draws all
+  its edges, except that **every polygon with a vertical right edge drops that right edge only**
+  (line segments excepted), whatever else it keeps. Turning edge
   marking on makes polygons full size even if nothing is marked.
 - A pixel is drawn only if its alpha passes the test: greater than 0, or greater than
   ALPHA_TEST_REF when DISP3DCNT bit 2 is on. A pixel with alpha 0 changes no buffer at all.

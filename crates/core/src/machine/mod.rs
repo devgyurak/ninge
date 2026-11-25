@@ -321,7 +321,7 @@ impl Machine {
 
     /// Whether all four frame buffers have the size `new` allocates; a savestate that decodes
     /// to anything else is corrupt.
-    pub(crate) fn screens_well_formed(&self) -> bool {
+    fn screens_well_formed(&self) -> bool {
         [&self.top, &self.bottom, &self.work_top, &self.work_bottom]
             .iter()
             .all(|buffer| buffer.len() == SCREEN_WIDTH * SCREEN_HEIGHT)
@@ -470,6 +470,7 @@ impl Default for Machine {
     }
 }
 
+mod check;
 mod events;
 mod render;
 #[cfg(test)]

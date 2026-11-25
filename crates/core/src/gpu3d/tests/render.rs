@@ -110,3 +110,30 @@ fn given_a_register_with_an_unused_bit_set_when_checked_then_the_state_is_not_we
     gpu.render.fog_table[0] = 0x80;
     assert!(!gpu.well_formed(StateTimes::at(0)));
 }
+
+/// DISP_1DOT_DEPTH, `0400_0610h`, from DISP3DCNT's offset.
+const ONE_DOT_DEPTH: u32 = 0x0400_0610 - 0x0400_0060;
+
+#[test]
+fn given_a_word_written_to_disp_1dot_depth_when_stored_then_only_its_15_bits_stay() {
+    assert_eq!(
+        stored(&[(ONE_DOT_DEPTH, Width::Word, 0xFFFF_FFFF)]).one_dot_depth,
+        0x7FFF
+    );
+}
+
+#[test]
+fn given_a_byte_written_to_disp_1dot_depth_when_the_other_byte_was_set_then_it_stays() {
+    let regs = stored(&[
+        (ONE_DOT_DEPTH, Width::Half, 0x1234),
+        (ONE_DOT_DEPTH + 1, Width::Byte, 0x56),
+    ]);
+    assert_eq!(regs.one_dot_depth, 0x5634);
+}
+
+#[test]
+fn given_disp_1dot_depth_set_when_read_then_it_reads_zero_as_a_write_only_register() {
+    let mut gpu = Gpu3d::new();
+    write(&mut gpu, ONE_DOT_DEPTH, Width::Half, 0x1234);
+    assert_eq!(read(&gpu, ONE_DOT_DEPTH, Width::Half), 0);
+}

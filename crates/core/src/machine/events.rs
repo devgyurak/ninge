@@ -263,9 +263,9 @@ impl Machine {
             self.present_frame();
         }
         self.render_line(line);
-        // The rendering engine starts the next frame's lines here, from the scene SWAP_BUFFERS handed
-        // on at line 192 and the registers as the VBlank left them (`rasterizer.md`, "When the
-        // hardware draws").
+        // The rendering engine starts the next frame's lines here, from the scene SWAP_BUFFERS
+        // handed on at line 192 and the registers as the VBlank left them (`rasterizer.md`, "When
+        // the hardware draws").
         if line == usize::from(RENDER_START_LINE) {
             self.render_3d();
         }

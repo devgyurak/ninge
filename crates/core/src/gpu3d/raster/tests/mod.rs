@@ -7,6 +7,7 @@ mod alpha;
 mod depth;
 mod fill;
 mod interp;
+mod shadow;
 
 use super::Frame;
 use crate::SCREEN_WIDTH;

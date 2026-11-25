@@ -84,7 +84,7 @@ layout change now.
 
 ## The size of a state
 
-The savestate layout test pins the length: 5,578,200 bytes at power-on and 6,168,124 for the
+The savestate layout test pins the length: 5,578,201 bytes at power-on and 6,168,125 for the
 counter test ROM after two frames. The large parts are main RAM (4 MiB), VRAM (656 KiB), the
 firmware image (256 KiB) and the save memory, and the four frame buffers (`top`, `bottom`,
 `work_top`, `work_bottom`: 49,152 `u32` pixels each, saved so that save, load and continue equals

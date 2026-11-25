@@ -41,7 +41,7 @@ All of these are ARM9 only. The ARM7 does not see them: the ARM7 has the sound r
 | `0400_0440h`-`0400_05FFh` | the command ports | 32 | W | the command decoder |
 | `0400_0600h` | GXSTAT | 32 | R, bits 30-31 R/W, bit 15 write-1-to-clear | see below |
 | `0400_0604h` | RAM_COUNT | 32 | R | the Polygon and Vertex RAM counts (`geometry-engine.md`) |
-| `0400_0610h` | DISP_1DOT_DEPTH | 16 | W | write dropped |
+| `0400_0610h` | DISP_1DOT_DEPTH | 16 | W | bits 0-14 stored, read as 0 (`rasterizer.md`) |
 | `0400_0620h`-`0400_062Fh` | POS_RESULT | 4 words | R | the last POS_TEST (`geometry-engine.md`) |
 | `0400_0630h`-`0400_0635h` | VEC_RESULT | 3 halfwords | R | the last VEC_TEST (`geometry-engine.md`) |
 | `0400_0640h`-`0400_067Fh` | CLIPMTX_RESULT | 16 words | R | the clip matrix (`geometry-engine.md`) |

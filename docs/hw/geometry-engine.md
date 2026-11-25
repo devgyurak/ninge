@@ -545,7 +545,8 @@ oracle.
   the screen coordinates per vertex cannot be told from GBATEK, and no program that follows its
   advice (no VIEWPORT inside a vertex list) can see the difference ("VIEWPORT"). POLYGON_ATTR bit
   13 (1-dot polygons) and
-  DISP_1DOT_DEPTH are not applied by the geometry engine. — `gpu3d/polygon.rs`.
+  DISP_1DOT_DEPTH are not applied by the geometry engine; the rasterizer applies them
+  (`rasterizer.md`). — `gpu3d/polygon.rs`.
 - **VIEWPORT sampling**: the power-on value (the model holds 0), whether the hardware keeps the
   viewport or screen coordinates per vertex, when the rasterizer samples the value, and what a
   VIEWPORT inside a vertex list does. The model keeps the value in force at the polygon's

@@ -42,6 +42,8 @@ struct LineState {
     color6: [[u8; 3]; SCREEN_WIDTH],
     /// The pixel was last written by a translucent polygon.
     translucent: [bool; SCREEN_WIDTH],
+    /// The stencil flag shadow polygons set and clear (`rasterizer.md`, "Shadow polygons").
+    stencil: [bool; SCREEN_WIDTH],
 }
 
 impl Frame {
@@ -63,6 +65,7 @@ impl Frame {
             id: [self.clear.id; SCREEN_WIDTH],
             color6: [self.clear.color6; SCREEN_WIDTH],
             translucent: [false; SCREEN_WIDTH],
+            stencil: [false; SCREEN_WIDTH],
         };
         self.polygons.iter().for_each(|poly| {
             span::draw_polygon(poly, &self.vertices, y, &mut state, out);

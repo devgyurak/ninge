@@ -106,7 +106,8 @@ fn given_two_translucent_polygons_of_different_ids_when_they_overlap_then_the_se
         (translucent(15, 2), quad(10, 10, 30, 30, 0, RED)),
         (translucent(15, 3), quad(10, 10, 30, 30, 0, GREEN)),
     ]);
-    // Red over nothing is red (alpha 15, 6-bit 63); green blends in: R (0 x 16 + 63 x 16) / 32 = 31.
+    // Red over nothing is red (alpha 15, 6-bit 63); green blends in: R (0 x 16 + 63 x 16) / 32 =
+    // 31.
     assert_eq!(
         pixel_of(&draw(&ram, BLEND, &regs())),
         Pixel3d {
@@ -172,8 +173,8 @@ fn sort_scene() -> Ram {
 
 #[test]
 fn given_auto_sort_when_two_translucent_polygons_overlap_then_the_upper_one_draws_first() {
-    // Green (top line 10) first, red (top line 20) blends over it: R (63 x 17) / 32 = 33, G (63 x 15)
-    // / 32 = 29, narrowed to 16 and 14.
+    // Green (top line 10) first, red (top line 20) blends over it: R (63 x 17) / 32 = 33, G (63 x
+    // 15) / 32 = 29, narrowed to 16 and 14.
     let lines = draw_all(&sort_scene(), BLEND, &regs(), 0);
     assert_eq!(at(&lines, 20, 25).color, 16 | 14 << 5);
 }

@@ -127,3 +127,32 @@ fn given_a_state_saved_at_a_frame_end_stop_when_loaded_and_run_on_then_it_matche
         (true, true)
     );
 }
+
+#[test]
+fn given_a_state_saved_at_an_instruction_stop_beside_line_214_when_loaded_and_run_on_then_it_matches_a_run_without_a_stop()
+ {
+    let mut whole = machine();
+    set_clear(&mut whole, RED);
+    run_to(&mut whole, line_start(RENDER_START) - 3);
+    // A few instructions: the stop lands on an instruction boundary a hair before the draw.
+    let stop = whole.run_until(
+        Input::new(),
+        &StopSet::frame_end().with_instruction_limit(3),
+    );
+    let bytes = whole.save_state();
+    run_to(&mut whole, line_start(LINES + 10));
+
+    let mut resumed = machine();
+    resumed
+        .load_state(&bytes)
+        .expect("a state this build saved");
+    run_to(&mut resumed, line_start(LINES + 10));
+    assert_eq!(
+        (
+            stop,
+            resumed.frame3d == whole.frame3d,
+            resumed.save_state() == whole.save_state()
+        ),
+        (StopReason::InstructionLimit, true, true)
+    );
+}

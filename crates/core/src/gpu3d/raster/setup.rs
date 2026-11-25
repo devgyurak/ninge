@@ -33,6 +33,10 @@ const ATTR_ID_SHIFT: u32 = 24;
 const MODE_SHADOW: u32 = 3;
 /// POLYGON_ATTR bit 14: the depth test passes on equal depth, not less.
 const ATTR_DEPTH_EQUAL: u32 = 1 << 14;
+/// POLYGON_ATTR bit 13: draw a 1-dot polygon behind DISP_1DOT_DEPTH too.
+const ATTR_ONE_DOT: u32 = 1 << 13;
+/// A clip W has 12 fractional bits and DISP_1DOT_DEPTH 3: shift right by the difference.
+const W_TO_ONE_DOT: u32 = 9;
 /// SWAP_BUFFERS bit 1: the depth buffer holds W, not Z.
 const SWAP_W_BUFFER: u8 = 1 << 1;
 /// SWAP_BUFFERS bit 0: translucent polygons keep the order they were completed in.
@@ -72,8 +76,15 @@ pub(super) struct PolyDraw {
     pub(super) update_depth: bool,
     /// DISP3DCNT bit 3: translucent pixels blend with what is there.
     pub(super) blend: bool,
-    /// A pixel draws only if its alpha is greater than this: ALPHA_TEST_REF with the test on, else 0.
+    /// A pixel draws only if its alpha is greater than this: ALPHA_TEST_REF with the test on, else
+    /// 0.
     pub(super) alpha_ref: u8,
+    /// A shadow polygon (polygon mode 3): two passes over a stencil buffer.
+    pub(super) shadow: bool,
+    /// A shadow polygon of ID 0, the mask pass: it draws no colour and sets the stencil.
+    pub(super) mask: bool,
+    /// A mask pass that follows render passes: it starts a new volume and clears the stencil first.
+    pub(super) new_volume: bool,
     /// Alpha 0: only the edges draw.
     pub(super) wire: bool,
     /// The lower and right edges do not draw (`rasterizer.md`, "Which pixels a polygon covers").
@@ -129,8 +140,10 @@ fn to_screen(v: &Vertex, viewport: u32) -> ScreenVertex {
     // The screen is 192 lines tall: a viewport y of 192 is the top edge of line 0. Positions are
     // pixel edges, so a polygon that spans the screen spans lines 0 to 191.
     let sy = 192 * ONE - sy_up;
-    // A vertex far outside the screen (a crafted savestate can hold one) is held to a bound that keeps
-    // every product below in range; the polygon still covers the same screen pixels.
+    // A vertex far outside the screen (a crafted savestate can hold one) is held to a bound that
+    // keeps every product below in range. It only guards that case: clamping changes the slope of
+    // an edge that starts far out, so a polygon with such a vertex draws different pixels than it
+    // would unclamped.
     let (sx, sy) = (
         sx.clamp(-COORD_LIMIT, COORD_LIMIT),
         sy.clamp(-COORD_LIMIT, COORD_LIMIT),
@@ -170,10 +183,7 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
     ram.polygons.iter().for_each(|p| {
         let alpha = (p.attr >> ATTR_ALPHA_SHIFT) & 0x1F;
         let mode = (p.attr >> ATTR_MODE_SHIFT) & 3;
-        // TODO(phase7, #49): shadow polygons are the next part of #49; until then they draw nothing.
-        if mode == MODE_SHADOW {
-            return;
-        }
+        let shadow = mode == MODE_SHADOW;
         let n = usize::from(p.count).min(MAX_POLYGON_VERTICES);
         let mut source = [Vertex::default(); MAX_POLYGON_VERTICES];
         let mut screen = [ScreenVertex::default(); MAX_POLYGON_VERTICES];
@@ -214,30 +224,48 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         let ys = screen.iter().map(|v| round(v.y));
         let (x_lo, x_hi) = (xs.clone().min().unwrap_or(0), xs.max().unwrap_or(0));
         let (y_lo, y_hi) = (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0));
-        // Polygons of 0x0, 1x0, 0x1 and 1x1 dots all draw as one dot (`rasterizer.md`).
-        // TODO(phase7, #49): DISP_1DOT_DEPTH is not stored yet, so the dot always passes the 1-dot depth check
-        // that POLYGON_ATTR bit 13 and the register decide (`rasterizer.md`, "Which pixels a polygon covers").
+        // Polygons of 0x0, 1x0, 0x1 and 1x1 dots all draw as one dot (`rasterizer.md`). Only the
+        // 0x0 one is subject to the 1-dot depth check: POLYGON_ATTR bit 13, or a vertex whose W
+        // (12.3 fixed point) is at most DISP_1DOT_DEPTH; a polygon that fails it does not draw.
         let dot = (x_hi - x_lo <= 1 && y_hi - y_lo <= 1).then_some((x_lo, y_lo));
+        // TODO(hw-unverified): the vertex W is truncated, not rounded, to the register's 3
+        // fractional bits for the comparison (`rasterizer.md`, "Unverified").
+        let nearest_w = source
+            .iter()
+            .map(|v| i64::from(v.w) >> W_TO_ONE_DOT)
+            .min()
+            .unwrap_or(0);
+        let hidden_dot = x_hi == x_lo
+            && y_hi == y_lo
+            && p.attr & ATTR_ONE_DOT == 0
+            && nearest_w > i64::from(regs.one_dot_depth);
+        if hidden_dot {
+            return;
+        }
         // A line segment draws as a wire whatever its alpha.
         let y_min_fix = screen.iter().map(|v| v.y).min().unwrap_or(0);
         let y_max_fix = screen.iter().map(|v| v.y).max().unwrap_or(0);
         let wire = alpha == 0 || segment;
-        // A wire frame (alpha 0) draws at alpha 31; a line segment of alpha 1 to 30 is translucent like
-        // any polygon (`rasterizer.md`, "Which pixels a polygon covers").
-        let translucent = alpha != 0 && alpha != OPAQUE;
+        // A wire frame (alpha 0) draws at alpha 31; a line segment of alpha 1 to 30 is translucent
+        // like any polygon, and a shadow polygon is translucent whatever its alpha: it draws after
+        // the opaque ones (`rasterizer.md`, "Which pixels a polygon covers", "Shadow polygons").
+        let translucent = alpha != 0 && (alpha != OPAQUE || shadow);
         let blend = disp3dcnt & DISP3DCNT_BLEND != 0;
         let flat = y_min_fix == y_max_fix;
         frame.polygons.push(PolyDraw {
             first: frame.vertices.len(),
             count: screen.len(),
             id: ((p.attr >> ATTR_ID_SHIFT) & 0x3F) as u8,
-            // TODO(hw-unverified): a wire frame (alpha 31 here) goes through the alpha test like any
-            // pixel (`rasterizer.md`, "Unverified").
+            // TODO(hw-unverified): a wire frame (alpha 31 here) goes through the alpha test like
+            // any pixel (`rasterizer.md`, "Unverified").
             alpha: if translucent {
                 alpha as u8
             } else {
                 OPAQUE as u8
             },
+            shadow,
+            mask: shadow && (p.attr >> ATTR_ID_SHIFT) & 0x3F == 0,
+            new_volume: false,
             translucent,
             update_depth: p.attr & ATTR_UPDATE_DEPTH != 0,
             blend,
@@ -280,6 +308,23 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
             if p.translucent && !manual { p.y_min } else { 0 },
         )
     });
+    // A mask pass that follows render passes starts a new shadow volume: the flags of the last one
+    // are cleared before it sets its own. Decided on the final drawing order, per polygon and not
+    // per pixel, so every line agrees (`rasterizer.md`, "Shadow polygons"). TODO(hw-unverified):
+    // when the stencil is cleared (`rasterizer.md`, "Unverified").
+    let mut render_seen = false;
+    frame
+        .polygons
+        .iter_mut()
+        .filter(|p| p.shadow)
+        .for_each(|p| {
+            if p.mask {
+                p.new_volume = render_seen;
+                render_seen = false;
+            } else {
+                render_seen = true;
+            }
+        });
     frame
 }
 

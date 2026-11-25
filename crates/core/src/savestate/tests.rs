@@ -19,120 +19,110 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen, StopReason, StopSet};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_578_200;
-const PINNED_HASH: u64 = 0x9564e5fa89c920bb;
-/// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
-/// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
-/// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
-/// shared-WRAM contents); the length is unchanged. Version 6 (#104) added the display timing
-/// state and a second queued event, so both pins moved. Version 7 (#24) added the IPC block:
-/// 50 bytes at power-on (two FIFOs of 16 + 3 one-byte varints each, two ports of 6 one-byte fields),
-/// so both lengths grew by 50. Version 8 (#25) added both CPUs' timers: 34 bytes at power-on
-/// (4 timers of 4 one-byte fields and a one-byte dirty mask, twice), so both lengths grew by 34.
-/// Version 9 (#109) split the devices out of the memory block without moving a byte and dropped the dirty mask: one byte per timer set, so both lengths
-/// shrank by 2 and both hashes moved (the version field changed too).
-/// Version 10 (#26) added both CPUs' DMA channels: 7 one-byte fields a channel and four fill
-/// words for each CPU, so both lengths grew by 2 x (4 x 7 + 4) = 64 and both hashes moved.
-/// Version 11 (#112) no longer saves the event queue, so both lengths shrank (the power-on state by
-/// its two queued events and the sequence counter, the booted one by more) and both hashes moved.
-/// Version 12 (#27) added both CPUs' SWI records (two one-byte `None`s each): the power-on length
-/// grew by 4 and both hashes moved. The booted length grew by more because the synthetic ARM7
-/// program now runs through the BIOS traps, which changes the registers it ends with.
-/// Version 13 (#27) added each core's halted flag and the ARM7's HALTCNT request, three one-byte
-/// bools: both lengths grew by 3 and both hashes moved.
-/// Version 14 (#28) added the palette RAM: 2048 bytes behind a two-byte length, so both lengths
-/// grew by 2050 and both hashes moved.
-/// Version 15 (#28) added engine A's BGxCNT and scroll registers: twelve `u16`s, each a one-byte
-/// varint while zero, so both lengths grew by 12 and both hashes moved.
-/// Version 16 (#28) added the four frame buffers: 196,608 one-byte zero pixels and four three-byte
-/// lengths at power-on, so that length grew by 196,620; the booted one grew by more because its
-/// screens hold colors (multi-byte varints). Both hashes moved.
-/// Version 17 (#29) added both CPUs' KEYCNT, one `u16` each, a one-byte varint while zero: both
-/// lengths grew by 2 and both hashes moved.
-/// Version 18 (#135) added the ARM9's divider and square-root unit: seven fields for the divider
-/// (mode, numerator, denominator, quotient, remainder, flag, end time) and four for the square
-/// root, each a one-byte varint or bool while zero, so both lengths grew by 11 and both hashes
-/// moved.
-/// Version 19 (#35) replaced bank A's 128 KiB buffer and one VRAMCNT byte with all nine banks in one
-/// 656 KiB buffer and nine VRAMCNT bytes: both lengths grew by the same amount and both hashes moved.
-/// Version 20 (#30) added engine B's registers (13 bytes, all zero at power on), and the booted machine
-/// now draws engine B's screen white instead of black, which costs three more bytes in each of its
-/// 2 x 49,152 lower-screen pixels. Version 21 (#30) added the affine layers' registers and internal
-/// reference points: 2 engines x 2 layers x 8 bytes while they are zero. Version 22 (#30) added both
-/// engines' MOSAIC: one byte each while it is zero. Version 23 (#31) added the OAM: 2048 bytes
-/// behind a two-byte length, so both lengths grew by 2050 and both hashes moved. Version 24 (#33)
-/// added both engines' window registers: 2 x (2 + 2 + 1 + 1) one-byte varints while they are zero,
-/// so both lengths grew by 12 and both hashes moved.
-/// Version 25 (#34) added both engines' BLDCNT, BLDALPHA and BLDY: 2 x 3 one-byte varints while they
-/// are zero, so both lengths grew by 6 and both hashes moved.
-/// Version 26 (#34) added both engines' MASTER_BRIGHT: 2 one-byte varints while they are zero, so both
-/// lengths grew by 2 and both hashes moved.
-/// Version 31 (#186) dropped the input waiting for the next frame, which `run_frame` now takes: a
-/// default `Input` is three one-byte fields, so both lengths shrank by 3 and both hashes moved.
-/// Version 32 (#186) moved the latched input out of both keypads (3 bytes each) into one copy in `Io`
-/// (3 bytes), so both lengths shrank by 3 again and both hashes moved.
-/// Version 33 (#37) added the cartridge slot's registers and transfer state: 20 bytes of one-byte
-/// varints, bytes and the 8 command bytes while they are zero (the booted pin also has RESB set,
-/// which is a varint of 5 bytes, so its length grew by 24), and both hashes moved.
-/// Direct boot now leaves the cartridge's chip ID in main RAM (#37): the booted state's content
-/// changed, not its layout, so only the booted hash moved and the version stayed.
+const PINNED_LEN: usize = 5_578_201;
+const PINNED_HASH: u64 = 0xb3a407e4b81f82a8;
+/// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and RAM,
+/// so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those). The hash
+/// moved when direct boot began setting WRAMCNT = 3 (one register byte and the shared-WRAM
+/// contents); the length is unchanged. Version 6 (#104) added the display timing state and a second
+/// queued event, so both pins moved. Version 7 (#24) added the IPC block: 50 bytes at power-on (two
+/// FIFOs of 16 + 3 one-byte varints each, two ports of 6 one-byte fields), so both lengths grew by
+/// 50. Version 8 (#25) added both CPUs' timers: 34 bytes at power-on (4 timers of 4 one-byte fields
+/// and a one-byte dirty mask, twice), so both lengths grew by 34. Version 9 (#109) split the
+/// devices out of the memory block without moving a byte and dropped the dirty mask: one byte per
+/// timer set, so both lengths shrank by 2 and both hashes moved (the version field changed too).
+/// Version 10 (#26) added both CPUs' DMA channels: 7 one-byte fields a channel and four fill words
+/// for each CPU, so both lengths grew by 2 x (4 x 7 + 4) = 64 and both hashes moved. Version 11
+/// (#112) no longer saves the event queue, so both lengths shrank (the power-on state by its two
+/// queued events and the sequence counter, the booted one by more) and both hashes moved. Version
+/// 12 (#27) added both CPUs' SWI records (two one-byte `None`s each): the power-on length grew by 4
+/// and both hashes moved. The booted length grew by more because the synthetic ARM7 program now
+/// runs through the BIOS traps, which changes the registers it ends with. Version 13 (#27) added
+/// each core's halted flag and the ARM7's HALTCNT request, three one-byte bools: both lengths grew
+/// by 3 and both hashes moved. Version 14 (#28) added the palette RAM: 2048 bytes behind a two-byte
+/// length, so both lengths grew by 2050 and both hashes moved. Version 15 (#28) added engine A's
+/// BGxCNT and scroll registers: twelve `u16`s, each a one-byte varint while zero, so both lengths
+/// grew by 12 and both hashes moved. Version 16 (#28) added the four frame buffers: 196,608
+/// one-byte zero pixels and four three-byte lengths at power-on, so that length grew by 196,620;
+/// the booted one grew by more because its screens hold colors (multi-byte varints). Both hashes
+/// moved. Version 17 (#29) added both CPUs' KEYCNT, one `u16` each, a one-byte varint while zero:
+/// both lengths grew by 2 and both hashes moved. Version 18 (#135) added the ARM9's divider and
+/// square-root unit: seven fields for the divider (mode, numerator, denominator, quotient,
+/// remainder, flag, end time) and four for the square root, each a one-byte varint or bool while
+/// zero, so both lengths grew by 11 and both hashes moved. Version 19 (#35) replaced bank A's 128
+/// KiB buffer and one VRAMCNT byte with all nine banks in one 656 KiB buffer and nine VRAMCNT
+/// bytes: both lengths grew by the same amount and both hashes moved. Version 20 (#30) added engine
+/// B's registers (13 bytes, all zero at power on), and the booted machine now draws engine B's
+/// screen white instead of black, which costs three more bytes in each of its 2 x 49,152
+/// lower-screen pixels. Version 21 (#30) added the affine layers' registers and internal reference
+/// points: 2 engines x 2 layers x 8 bytes while they are zero. Version 22 (#30) added both engines'
+/// MOSAIC: one byte each while it is zero. Version 23 (#31) added the OAM: 2048 bytes behind a
+/// two-byte length, so both lengths grew by 2050 and both hashes moved. Version 24 (#33) added both
+/// engines' window registers: 2 x (2 + 2 + 1 + 1) one-byte varints while they are zero, so both
+/// lengths grew by 12 and both hashes moved. Version 25 (#34) added both engines' BLDCNT, BLDALPHA
+/// and BLDY: 2 x 3 one-byte varints while they are zero, so both lengths grew by 6 and both hashes
+/// moved. Version 26 (#34) added both engines' MASTER_BRIGHT: 2 one-byte varints while they are
+/// zero, so both lengths grew by 2 and both hashes moved. Version 31 (#186) dropped the input
+/// waiting for the next frame, which `run_frame` now takes: a default `Input` is three one-byte
+/// fields, so both lengths shrank by 3 and both hashes moved. Version 32 (#186) moved the latched
+/// input out of both keypads (3 bytes each) into one copy in `Io` (3 bytes), so both lengths shrank
+/// by 3 again and both hashes moved. Version 33 (#37) added the cartridge slot's registers and
+/// transfer state: 20 bytes of one-byte varints, bytes and the 8 command bytes while they are zero
+/// (the booted pin also has RESB set, which is a varint of 5 bytes, so its length grew by 24), and
+/// both hashes moved. Direct boot now leaves the cartridge's chip ID in main RAM (#37): the booted
+/// state's content changed, not its layout, so only the booted hash moved and the version stayed.
 /// Version 34 (#37) added the transfer's total size and the time of the next word (two one-byte
-/// fields while idle), so both lengths grew by 2 and both hashes moved.
-/// Version 35 (#38) added the save chip: its type, an empty memory, the idle session, three flags,
-/// the byte AUXSPIDATA reads and the time of the SPI byte in flight (eight one-byte fields with no
-/// chip fitted), so both lengths grew by 8 and both hashes moved.
-/// Version 36 (#38) added the bytes a chip of unknown type records of its open session; with no
-/// session open they take no space, so only the version in the header changed and both hashes moved.
-/// Version 37 (#39) added the SPI bus and the firmware chip: SPICNT, SPIDATA, the time the unit on
-/// the wire is done and the interrupt's due time (four one-byte fields while idle), and the chip's
-/// own fields with its 256 KiB image behind a three-byte length, so both lengths grew by 262,156 and
-/// both hashes moved.
-/// Version 38 (#40) added the clock chip and the host's time in the input: RTCCNT, the chip's offset,
-/// weekday base, two status bytes, two three-byte alarms, the adjust and free bytes and the idle
-/// session (fourteen fields, each a one-byte varint at power-on) and the input's `wall_time` (one byte while zero),
-/// so both lengths grew by 15 and both hashes moved.
-/// Direct boot now leaves the BIOS and firmware values in main RAM (#39): the booted state's content
-/// changed, not its layout, so only the booted pin moved (its length by 2, the words that stopped
-/// being zero) and the version stayed.
-/// Version 43 (#45): each of the 16 sound channels gained its start time and the six registers it
-/// latches (one-byte varints at power-on), so both lengths grew by 112 and both hashes moved.
-/// Version 44 (#45): each channel gained its IMA-ADPCM decoder state, six one-byte varints at
-/// power-on, so both lengths grew by 96 and both hashes moved.
-/// Version 45 (#45): each channel gained its number and its noise generator (four one-byte varints
-/// at power-on), so both lengths grew by 64 and both hashes moved.
-/// Version 46 (#46): each capture unit's end time became a start time and five latched fields (nine
-/// one-byte fields at power-on instead of four), so both lengths grew by 2 x 5 = 10 and both
-/// hashes moved.
-/// SOUNDBIAS now starts at `200h` (`sound-registers.md`, "Start values"): the state's content
-/// changed, not its layout, so the version stayed; `200h` is a two-byte varint where 0 was one, so
-/// both lengths grew by 1 and both hashes moved.
-/// Version 47: each of the 16 sound channels keeps a sample clock (the count, the time and the
-/// period, three one-byte varints at power-on) in place of the one period it latched, because a
-/// TMR write while a channel plays now moves it (`spu.md`, "Position"), so both lengths grew by
-/// 16 x 2 = 32 and both hashes moved.
-/// Version 48 (#48): the geometry engine's command FIFO and PIPE (a 256-entry ring: two bytes of
-/// entries each, plus the lengths), the command it executes and a `None`, every DMA channel's due
-/// time and the machine's ARM9 hold time grew the power-on state by 535: 2 + 256 x 2 for the ring,
-/// 3 bytes of lengths, 8 PIPE bytes, 1 for `None`, 8 x 1 for the eight due times and 1 for the
-/// hold. The booted state grew by 12, the words that stopped being zero. Both hashes moved.
-/// Version 49 (#48): the geometry engine's matrices and stacks: 71 matrices of 16 elements (five
-/// current ones, two one-entry stacks and 2 x 32 stack entries), each the identity at power-on (the
-/// diagonal's `1000h` is a two-byte varint, the twelve zeros one byte each: 20 bytes), so both
-/// lengths grew by 71 x 20 = 1,420 and both hashes moved.
-/// Version 50 (#48): the geometry engine's vertex state and the two sets of Polygon RAM and Vertex
-/// RAM grew the power-on state by 55: the position 3, the colour 3 (`7FFFh` is a three-byte varint),
-/// the texture coordinates 2, five attribute words 5, the list state 2, four held vertices of 8
-/// bytes, two empty RAM sets 4, and the buffer index, the overflow flag, the swap bits and the
-/// lock-up flag 4. The booted state grew by the same 55. Both hashes moved.
-/// Version 51 (#48): the geometry engine's four lights (a direction of three words and a colour
-/// each), the material (four colours and the table switch), the 128-byte shininess table and the
-/// effective texture coordinates grew both states by 151: 12 + 4 + 4 + 1 + 128 + 2.
-/// Version 52 (#48): the geometry engine's POS_RESULT (four words) and VEC_RESULT (three halfwords)
-/// grew both states by 7, one zero byte each at power-on.
-/// Version 56 (#49): the 3D layer's picture, 256 x 192 pixels of two zero bytes each at power-on and
-/// the length, grew both states by 98 307.
-const PINNED_BOOTED_LEN: usize = 6_168_124;
-const PINNED_BOOTED_HASH: u64 = 0x61f83b1b2ad43da9;
+/// fields while idle), so both lengths grew by 2 and both hashes moved. Version 35 (#38) added the
+/// save chip: its type, an empty memory, the idle session, three flags, the byte AUXSPIDATA reads
+/// and the time of the SPI byte in flight (eight one-byte fields with no chip fitted), so both
+/// lengths grew by 8 and both hashes moved. Version 36 (#38) added the bytes a chip of unknown type
+/// records of its open session; with no session open they take no space, so only the version in the
+/// header changed and both hashes moved. Version 37 (#39) added the SPI bus and the firmware chip:
+/// SPICNT, SPIDATA, the time the unit on the wire is done and the interrupt's due time (four
+/// one-byte fields while idle), and the chip's own fields with its 256 KiB image behind a
+/// three-byte length, so both lengths grew by 262,156 and both hashes moved. Version 38 (#40) added
+/// the clock chip and the host's time in the input: RTCCNT, the chip's offset, weekday base, two
+/// status bytes, two three-byte alarms, the adjust and free bytes and the idle session (fourteen
+/// fields, each a one-byte varint at power-on) and the input's `wall_time` (one byte while zero),
+/// so both lengths grew by 15 and both hashes moved. Direct boot now leaves the BIOS and firmware
+/// values in main RAM (#39): the booted state's content changed, not its layout, so only the booted
+/// pin moved (its length by 2, the words that stopped being zero) and the version stayed. Version
+/// 43 (#45): each of the 16 sound channels gained its start time and the six registers it latches
+/// (one-byte varints at power-on), so both lengths grew by 112 and both hashes moved. Version 44
+/// (#45): each channel gained its IMA-ADPCM decoder state, six one-byte varints at power-on, so
+/// both lengths grew by 96 and both hashes moved. Version 45 (#45): each channel gained its number
+/// and its noise generator (four one-byte varints at power-on), so both lengths grew by 64 and both
+/// hashes moved. Version 46 (#46): each capture unit's end time became a start time and five
+/// latched fields (nine one-byte fields at power-on instead of four), so both lengths grew by 2 x 5
+/// = 10 and both hashes moved. SOUNDBIAS now starts at `200h` (`sound-registers.md`, "Start
+/// values"): the state's content changed, not its layout, so the version stayed; `200h` is a
+/// two-byte varint where 0 was one, so both lengths grew by 1 and both hashes moved. Version 47:
+/// each of the 16 sound channels keeps a sample clock (the count, the time and the period, three
+/// one-byte varints at power-on) in place of the one period it latched, because a TMR write while a
+/// channel plays now moves it (`spu.md`, "Position"), so both lengths grew by 16 x 2 = 32 and both
+/// hashes moved. Version 48 (#48): the geometry engine's command FIFO and PIPE (a 256-entry ring:
+/// two bytes of entries each, plus the lengths), the command it executes and a `None`, every DMA
+/// channel's due time and the machine's ARM9 hold time grew the power-on state by 535: 2 + 256 x 2
+/// for the ring, 3 bytes of lengths, 8 PIPE bytes, 1 for `None`, 8 x 1 for the eight due times and
+/// 1 for the hold. The booted state grew by 12, the words that stopped being zero. Both hashes
+/// moved. Version 49 (#48): the geometry engine's matrices and stacks: 71 matrices of 16 elements
+/// (five current ones, two one-entry stacks and 2 x 32 stack entries), each the identity at
+/// power-on (the diagonal's `1000h` is a two-byte varint, the twelve zeros one byte each: 20
+/// bytes), so both lengths grew by 71 x 20 = 1,420 and both hashes moved. Version 50 (#48): the
+/// geometry engine's vertex state and the two sets of Polygon RAM and Vertex RAM grew the power-on
+/// state by 55: the position 3, the colour 3 (`7FFFh` is a three-byte varint), the texture
+/// coordinates 2, five attribute words 5, the list state 2, four held vertices of 8 bytes, two
+/// empty RAM sets 4, and the buffer index, the overflow flag, the swap bits and the lock-up flag 4.
+/// The booted state grew by the same 55. Both hashes moved. Version 51 (#48): the geometry engine's
+/// four lights (a direction of three words and a colour each), the material (four colours and the
+/// table switch), the 128-byte shininess table and the effective texture coordinates grew both
+/// states by 151: 12 + 4 + 4 + 1 + 128 + 2. Version 52 (#48): the geometry engine's POS_RESULT
+/// (four words) and VEC_RESULT (three halfwords) grew both states by 7, one zero byte each at
+/// power-on. Version 56 (#49): the 3D layer's picture, 256 x 192 pixels of two zero bytes each at
+/// power-on and the length, grew both states by 98 307. Version 57 (#49): DISP_1DOT_DEPTH, a 15-bit
+/// register that is one zero byte at power-on, grew both states by 1.
+const PINNED_BOOTED_LEN: usize = 6_168_125;
+const PINNED_BOOTED_HASH: u64 = 0xa27551079f18820c;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).

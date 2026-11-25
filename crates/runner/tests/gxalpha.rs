@@ -60,9 +60,9 @@ fn expected() -> Vec<u16> {
             });
         });
     };
-    // R1: the opaque red quad first (it drops its lower and right edges), then the translucent green
-    // quad over it and over the rear plane; with blending on a translucent polygon keeps its lower
-    // edge (line 72) but a vertical right edge never draws.
+    // R1: the opaque red quad first (it drops its lower and right edges), then the translucent
+    // green quad over it and over the rear plane; with blending on a translucent polygon keeps its
+    // lower edge (line 72) but a vertical right edge never draws.
     paint(16, 80, 24, 72, RED, 31);
     paint(48, 112, 24, 73, GREEN, 15);
     // R2: alpha 8 is not above the reference 8 and draws nothing; alpha 9 does.

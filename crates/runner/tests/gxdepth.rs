@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The rasterizer's depth rules, observed through our own `gxdepth` test ROM (`testroms/gxdepth/`):
 //! W-buffering, the equal depth test with its tolerance, and the far-plane bit of POLYGON_ATTR. The
-//! expected picture is worked out here from `docs/hw/rasterizer.md` and `docs/hw/geometry-engine.md`
-//! ("Clipping"), pixel by pixel, from the coordinates the ROM's source lists. It is never read back
-//! from the emulator: nothing below shares code with `ninge-core`.
+//! expected picture is worked out here from `docs/hw/rasterizer.md` and
+//! `docs/hw/geometry-engine.md` ("Clipping"), pixel by pixel, from the coordinates the ROM's source
+//! lists. It is never read back from the emulator: nothing below shares code with `ninge-core`.
 //!
 //! Every polygon loads its own W, so the depth the ROM compares is that W (SWAP_BUFFERS bit 1). The
-//! rules the picture applies: with W-buffering the smaller W is nearer whatever the Z; a polygon that
-//! asks for equal depth draws where the depth differs by at most 200h; a polygon with POLYGON_ATTR
-//! bit 12 set that crosses the far plane draws its part inside, and one with it clear is hidden.
+//! rules the picture applies: with W-buffering the smaller W is nearer whatever the Z; a polygon
+//! that asks for equal depth draws where the depth differs by at most 200h; a polygon with
+//! POLYGON_ATTR bit 12 set that crosses the far plane draws its part inside, and one with it clear
+//! is hidden.
 
 use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
@@ -44,17 +45,17 @@ fn expected() -> Vec<u16> {
     // although its Z is the larger.
     paint(16, 48, 24, 72, GREEN);
     paint(48, 112, 24, 72, RED);
-    // R2: P1 green 128-191. P2 asks for equal depth: it draws only over P1 (144-191), not over the rear
-    // plane, whose depth is far from its W. P3 (less) draws where nothing is nearer: 192-223.
+    // R2: P1 green 128-191. P2 asks for equal depth: it draws only over P1 (144-191), not over the
+    // rear plane, whose depth is far from its W. P3 (less) draws where nothing is nearer: 192-223.
     paint(128, 144, 24, 72, GREEN);
     paint(144, 192, 24, 72, RED);
     paint(192, 224, 24, 72, WHITE);
     // R3: Q2 (W 100h above, equal) covers Q1; Q3 (W 300h above, equal) leaves Q4 yellow.
     paint(16, 80, 96, 144, RED);
     paint(96, 160, 96, 144, YELLOW);
-    // R4: the quad from column 176 to 240 has its depth cross the far plane half way, at column 208;
-    // the part inside draws (the clipped right edge is vertical and drops). The twin with bit 12
-    // clear is hidden.
+    // R4: the quad from column 176 to 240 has its depth cross the far plane half way, at column
+    // 208; the part inside draws (the clipped right edge is vertical and drops). The twin with bit
+    // 12 clear is hidden.
     paint(176, 208, 96, 144, MAGENTA);
     grid
 }

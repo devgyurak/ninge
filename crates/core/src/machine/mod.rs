@@ -161,9 +161,9 @@ fn arm7_instruction(arm7: &mut Cpu<false>, bios: &mut SwiRecord, view: &mut Arm7
 }
 
 /// Halts the ARM7 when a write through `view` asked it to: a HALTCNT write of the halt mode, from
-/// an instruction, a DMA unit or a sound capture (`docs/hw/interrupts.md`, "HALTCNT"). The one place
-/// that takes the request; [`Machine::with_arm7_bus`] calls it after any work on the ARM7's bus, and
-/// the instruction loop after each instruction as well.
+/// an instruction, a DMA unit or a sound capture (`docs/hw/interrupts.md`, "HALTCNT"). The one
+/// place that takes the request; [`Machine::with_arm7_bus`] calls it after any work on the ARM7's
+/// bus, and the instruction loop after each instruction as well.
 fn halt_if_asked(arm7: &mut Cpu<false>, view: &mut Arm7View<'_>) {
     if view.take_halt() {
         arm7.set_halted(true);
@@ -431,9 +431,9 @@ impl Machine {
     }
 
     /// Runs `work` on the ARM7's bus view at the ARM7's clock, keeps the clock the view leaves and
-    /// then halts the ARM7 if a write in `work` asked to ([`halt_if_asked`]). Every path that writes
-    /// through the ARM7's bus while the machine runs (its instructions, a DMA unit, a sound capture)
-    /// builds its view here, so a new one acts on the halt request without naming it.
+    /// then halts the ARM7 if a write in `work` asked to ([`halt_if_asked`]). Every path that
+    /// writes through the ARM7's bus while the machine runs (its instructions, a DMA unit, a sound
+    /// capture) builds its view here, so a new one acts on the halt request without naming it.
     pub(crate) fn with_arm7_bus<R>(
         &mut self,
         work: impl FnOnce(&mut Cpu<false>, &mut SwiRecord, &mut Arm7View<'_>) -> R,

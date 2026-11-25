@@ -7,7 +7,7 @@ use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
 use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
 use crate::io::Io;
-use crate::scheduler::{EventKind, FRAME_CYCLES, LineEvent, Scheduler};
+use crate::scheduler::{EventKind, FRAME_CYCLES, LineEvent, Round, Scheduler};
 use crate::spu::OUTPUT_SAMPLE_CYCLES;
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,10 @@ pub struct Machine {
     // The master time the ARM9 is held until by a full geometry FIFO; 0 or the past: not held.
     pub(crate) arm9_hold_until: u64,
     pub(crate) scheduler: Scheduler,
+    // The round a stop of `run_until` interrupted, if one did (`docs/hw/scheduler.md`, "Run
+    // control"). Plain data: saving it is what makes a save, a load and a continue equal an
+    // uninterrupted run.
+    pub(crate) round: Option<Round>,
     // What the HLE BIOS records of each CPU's SWIs (`docs/hw/hle-swi.md`).
     pub(crate) bios: BiosState,
     // The parsed header of the booted program; `None` until `load_rom` accepts a ROM.
@@ -193,6 +197,7 @@ impl Machine {
             arm7_clock: 0,
             arm9_hold_until: 0,
             scheduler: Scheduler::new(),
+            round: None,
             bios: BiosState::default(),
             header: None,
             audio: Vec::with_capacity(AUDIO_CAPACITY),
@@ -201,22 +206,36 @@ impl Machine {
         machine
     }
 
+    /// The time the queue is rebuilt from: the line and sample grids count events strictly after
+    /// it. It is `now`, except in a round a stop interrupted after the ARM9 ran (`stop` is set),
+    /// where the events due at `now` have not fired yet (the round fires them last) and are queued
+    /// at `now` too. While the ARM9 still runs, an event due at `now` has fired already. This is
+    /// the one place the rebuild looks at the round (`scheduler.md`, "Run control").
+    pub(crate) fn events_from(&self) -> u64 {
+        let now = self.scheduler.now();
+        match self.round {
+            Some(Round { stop: Some(_), .. }) => now.saturating_sub(1),
+            _ => now,
+        }
+    }
+
     /// Queues every event from the device state and `now`, on an empty queue: the next line
     /// and HBlank starts on their grid, each timer's overflow and each waiting DMA start. The
     /// queue is not saved, so `new` and `load_state` both build it here (`scheduler.md`,
     /// "Savestate checks").
     pub(crate) fn schedule_events(&mut self) {
         let now = self.scheduler.now();
+        let from = self.events_from();
         self.scheduler.schedule(
-            Scheduler::next_hblank_start(now),
+            Scheduler::next_hblank_start(from),
             EventKind::Line(LineEvent::HBlank),
         );
         self.scheduler.schedule(
-            Scheduler::next_line_start(now),
+            Scheduler::next_line_start(from),
             EventKind::Line(LineEvent::Start),
         );
         self.scheduler
-            .schedule(Scheduler::next_sample_time(now), EventKind::Sample);
+            .schedule(Scheduler::next_sample_time(from), EventKind::Sample);
         self.io.schedule_all(&mut self.scheduler, now);
     }
 
@@ -303,20 +322,7 @@ impl Machine {
     // TODO(hw-unverified): a button change reaches the registers at the frame boundary only
     // (`docs/hw/keypad.md`, "Unverified").
     pub fn run_frame(&mut self, input: Input) {
-        self.io.latch_input(input);
-        self.audio.clear();
-        // A machine that was shut down runs nothing, as with no program: the frame only counts
-        // (`touch-power.md`, "What the power register does").
-        // TODO(hw-unverified): the frozen frames after shutdown are the model's (`touch-power.md`,
-        // "Unverified").
-        if self.header.is_none() || self.is_shut_down() {
-            self.frame_count = self.frame_count.wrapping_add(1);
-            return;
-        }
-        let started = self.frame_count;
-        while self.frame_count == started {
-            crate::scheduler::run_round(self);
-        }
+        self.run_until(input, &StopSet::frame_end());
     }
 
     /// Whether all four frame buffers have the size `new` allocates; a savestate that decodes
@@ -365,6 +371,7 @@ impl Machine {
     // TODO(hw-unverified): opcodes already in the pipeline keep the mapping they were fetched
     // under (`docs/hw/arm9-memory-map.md`, "Unverified").
     pub fn step_arm9(&mut self) {
+        self.finish_round();
         self.step_arm9_instruction();
         if self.header.is_some() {
             crate::scheduler::settle(self);
@@ -393,9 +400,32 @@ impl Machine {
         self.arm9_hold_until = 0;
     }
 
+    /// Runs one ARM7 instruction and its cost, for a debugger, as [`Machine::step_arm9`] does for
+    /// the ARM9: the machine is then settled (the ARM9 and the events that became due catch up to
+    /// the ARM7's clock) and the round a stop interrupted ends. A machine with no program steps
+    /// nothing.
+    pub fn step_arm7(&mut self) {
+        if self.header.is_none() {
+            return;
+        }
+        self.finish_round();
+        self.step_arm7_instruction();
+        // The ARM9 and the events catch up to the ARM7's clock, which the step moved ahead.
+        let target = self.arm7_clock;
+        crate::scheduler::catch_up(self, target);
+    }
+
+    /// Runs what is left of the round a stop of [`Machine::run_until`] interrupted, with no stop
+    /// conditions, so a step after a stop starts from the state an uninterrupted run reaches at the
+    /// end of that round and not from a half-run one.
+    fn finish_round(&mut self) {
+        if let Some(mut round) = self.round.take() {
+            crate::scheduler::continue_round(self, &mut round);
+        }
+    }
+
     /// One ARM7 instruction and its cost, with nothing else; see [`arm7_instruction`]. The run
-    /// loop keeps one view for a whole batch instead; this is the lone step tests drive.
-    #[cfg(test)]
+    /// loop keeps one view for a whole batch instead.
     pub(crate) fn step_arm7_instruction(&mut self) {
         self.with_arm7_bus(arm7_instruction);
     }
@@ -473,6 +503,8 @@ impl Default for Machine {
 mod check;
 mod events;
 mod render;
+mod run;
+pub use run::{MAX_BREAKPOINTS, StopReason, StopSet};
 #[cfg(test)]
 mod testing;
 #[cfg(test)]

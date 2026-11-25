@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
+use crate::cpu::ARM7_INSTRUCTION_COST;
 use crate::io::DeviceId;
 use crate::spu::OUTPUT_SAMPLE_CYCLES;
 
@@ -295,10 +296,13 @@ pub(crate) trait Participants {
     fn scheduler(&mut self) -> &mut Scheduler;
     /// Runs the ARM9 until the master clock reaches `target` or the earliest queued event,
     /// whichever is earlier, checked before every instruction. It may queue events while it runs.
-    fn run_arm9_until(&mut self, target: u64);
+    /// Returns false when a stop condition of the host ended the run before `target`
+    /// ([`Machine::run_until`](crate::Machine::run_until)); the round then resumes from the same
+    /// target ([`Round`]).
+    fn run_arm9_until(&mut self, target: u64) -> bool;
     /// Runs the ARM7 until its clock reaches `target`: where the ARM9 stopped, not the round's
-    /// original target.
-    fn run_arm7_until(&mut self, target: u64);
+    /// original target. Returns false when a stop condition ended the run early.
+    fn run_arm7_until(&mut self, target: u64) -> bool;
     /// Handles a fired event.
     fn dispatch(&mut self, event: Event);
 }
@@ -314,29 +318,128 @@ fn dispatch_due<P: Participants>(participants: &mut P, at: u64) {
     }
 }
 
-/// One round: ARM9, then ARM7, then every event due where the ARM9 stopped (`scheduler.md`,
-/// "Interleaving"). The target is the earlier of the next event and `now + SLICE`, and never
-/// before `now`. The ARM9 stops at `stop`, the earlier of the target and any event it queued;
-/// the ARM7 and the events use its actual clock, so a later multi-cycle cost stays right.
-pub(crate) fn run_round<P: Participants>(participants: &mut P) {
+/// A round in progress: what a stop in the middle of one must keep so that resuming it gives the
+/// run an uninterrupted one would have (`scheduler.md`, "Run control"). Plain data, saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Round {
+    /// Where the ARM9 runs to, fixed when the round began.
+    pub(crate) target: u64,
+    /// Where the ARM9 stopped, once it has: the ARM7 runs to it and the events due at it fire.
+    pub(crate) stop: Option<u64>,
+}
+
+impl Round {
+    /// Whether the round is one a run can leave behind, at master time `now` with the ARM7 at
+    /// `arm7_clock`, for a savestate load: the ARM9 is on its way to the target, or has stopped at
+    /// `now` and the ARM7 is catching up; and the ARM7 lags by what one round can leave.
+    pub(crate) fn well_formed(&self, now: u64, arm7_clock: u64) -> bool {
+        let times = match self.stop {
+            None => self.target <= MAX_TIME && self.target >= now,
+            Some(stop) => stop == now,
+        };
+        times && now.saturating_sub(arm7_clock) <= 2 * SLICE
+    }
+}
+
+/// Starts a round: the target is the earlier of the next event and `now + SLICE`, and never before
+/// `now`.
+pub(crate) fn begin_round<P: Participants>(participants: &mut P) -> Round {
     let scheduler = participants.scheduler();
     let horizon = scheduler.now.saturating_add(SLICE);
     let target = scheduler
         .next_time()
         .map_or(horizon, |time| time.min(horizon))
         .max(scheduler.now);
-    participants.run_arm9_until(target);
-    let stop = participants.scheduler().now;
-    participants.run_arm7_until(stop);
-    dispatch_due(participants, stop);
+    Round { target, stop: None }
 }
 
-/// Brings the ARM7 up to the ARM9 clock and fires what is due, after a lone ARM9 step
-/// (`scheduler.md`, "Debugger single-step").
-pub(crate) fn settle<P: Participants>(participants: &mut P) {
+/// Runs what is left of `round`: ARM9, then ARM7, then every event due where the ARM9 stopped
+/// (`scheduler.md`, "Interleaving"). The ARM9 stops at `round.target`, or earlier when it queued an
+/// event; the ARM7 and the events use its actual clock, so a later multi-cycle cost stays right.
+/// Returns false when a stop condition ended it early, with `round` holding what resuming needs.
+pub(crate) fn continue_round<P: Participants>(participants: &mut P, round: &mut Round) -> bool {
+    let stop = match round.stop {
+        Some(stop) => stop,
+        None => {
+            if !participants.run_arm9_until(round.target) {
+                return false;
+            }
+            let stop = participants.scheduler().now;
+            round.stop = Some(stop);
+            stop
+        }
+    };
+    if !participants.run_arm7_until(stop) {
+        return false;
+    }
+    dispatch_due(participants, stop);
+    true
+}
+
+/// One whole round (`scheduler.md`, "Interleaving").
+#[cfg(test)]
+pub(crate) fn run_round<P: Participants>(participants: &mut P) {
+    let mut round = begin_round(participants);
+    continue_round(participants, &mut round);
+}
+
+/// Brings the ARM9 and the events up to an ARM7 clock that a lone ARM7 step moved ahead: the master
+/// clock follows it until the ARM7 leads by less than one instruction, the settled state a
+/// savestate load accepts (`scheduler.md`, "Debugger single-step"). It ends when a pass moved
+/// neither the clock nor an event: a pass that only fired due events (the clock stands at an
+/// event's time) still counts as progress, since the next pass can then run the ARM9 on.
+pub(crate) fn catch_up<P: Participants>(participants: &mut P, arm7_clock: u64) {
+    while participants
+        .scheduler()
+        .now
+        .saturating_add(ARM7_INSTRUCTION_COST)
+        <= arm7_clock
+    {
+        let before = participants.scheduler().now;
+        // A `Machine` here has no stop conditions, so the run always completes (the result is true).
+        participants.run_arm9_until(arm7_clock);
+        let fired = settle(participants);
+        if participants.scheduler().now == before && !fired {
+            break;
+        }
+    }
+}
+
+/// How many passes of [`settle`] may find the earliest due event no later than the pass before
+/// found it. A chain of events at one instant is short (a line start that starts a DMA that raises
+/// an IRQ); an event that reschedules itself at its own time would otherwise never end.
+const SETTLE_STALL_LIMIT: u32 = 64;
+
+/// Brings the ARM7 up to the ARM9 clock and fires every event due at or before it, after a lone ARM9
+/// step (`scheduler.md`, "Debugger single-step"). Returns whether an event fired.
+///
+/// A step can move the clock far past several events (a held ARM9 runs its whole hold), so the events
+/// fire in passes until none is due, oldest first: VCOUNT, the HBlank flag and the sample grid then
+/// agree with the time, as a load checks. Each pass fires the events due when it began; an event a
+/// handler schedules waits for the next pass. When the stall limit ends it, nothing is reported as
+/// fired, so a loop that runs on "an event fired" ends too.
+pub(crate) fn settle<P: Participants>(participants: &mut P) -> bool {
     let now = participants.scheduler().now;
+    // No stop conditions in a settle: the ARM7 run always completes.
     participants.run_arm7_until(now);
-    dispatch_due(participants, now);
+    let mut fired = false;
+    let mut stalled = 0;
+    let mut earliest = 0;
+    while let Some(due) = participants
+        .scheduler()
+        .next_time()
+        .filter(|&time| time <= now)
+    {
+        stalled = if due <= earliest { stalled + 1 } else { 0 };
+        if stalled > SETTLE_STALL_LIMIT {
+            // Giving up is no progress: a caller that loops on "fired" must not spin on it.
+            return false;
+        }
+        earliest = due;
+        dispatch_due(participants, now);
+        fired = true;
+    }
+    fired
 }
 
 #[cfg(test)]

@@ -318,7 +318,13 @@ fn given_a_psg_channel_when_tmr_is_written_then_the_pitch_follows_from_the_next_
 #[test]
 fn given_a_retimed_channel_when_checked_then_the_device_is_well_formed() {
     let spu = retimed(&[(1, 0xFFE0)]);
-    assert_eq!((spu.well_formed(0), spu.well_formed(1 << 40)), (true, true));
+    assert_eq!(
+        (
+            spu.well_formed(StateTimes::at(0)),
+            spu.well_formed(StateTimes::at(1 << 40))
+        ),
+        (true, true)
+    );
 }
 
 /// The (time, count before the write, count after it) of each write after which the count of a
@@ -537,7 +543,7 @@ fn given_a_new_device_when_soundbias_is_read_then_it_is_the_medium_level() {
 
 #[test]
 fn given_a_new_device_when_checked_then_it_is_well_formed() {
-    assert!(Spu::new().well_formed(0));
+    assert!(Spu::new().well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -545,7 +551,7 @@ fn given_registers_written_with_all_ones_when_checked_then_the_device_is_well_fo
     let mut spu = Spu::new();
     let words: Vec<u32> = (0..BLOCK_BYTES).step_by(4).collect();
     write_each(&mut spu, &words, Width::Word, u32::MAX);
-    assert!(spu.well_formed(0));
+    assert!(spu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -556,7 +562,8 @@ fn given_a_state_with_an_unused_bit_set_when_checked_then_it_is_not_well_formed(
     bad_bias.bias = 1 << 10;
     let mut bad_capture = Spu::new();
     bad_capture.captures[1].cnt = 1 << 4;
-    let verdicts = [bad_channel, bad_bias, bad_capture].map(|spu| spu.well_formed(0));
+    let verdicts =
+        [bad_channel, bad_bias, bad_capture].map(|spu| spu.well_formed(StateTimes::at(0)));
     assert_eq!(verdicts, [false, false, false]);
 }
 
@@ -564,7 +571,7 @@ fn given_a_state_with_an_unused_bit_set_when_checked_then_it_is_not_well_formed(
 fn given_a_stopped_channel_with_an_end_time_when_checked_then_it_is_not_well_formed() {
     let mut spu = Spu::new();
     spu.channels[0].end = 5;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 // A stopped channel's sample clock is all zero and a started one's period is one a TMR value gives:
@@ -573,7 +580,7 @@ fn given_a_stopped_channel_with_an_end_time_when_checked_then_it_is_not_well_for
 fn given_a_stopped_channel_with_a_sample_clock_when_checked_then_it_is_not_well_formed() {
     let mut spu = Spu::new();
     spu.channels[0].clock.period = 64;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -583,7 +590,7 @@ fn given_a_started_channel_with_a_period_no_tmr_gives_when_checked_then_it_is_no
     let mut too_long = started(0, start(LOOP, PCM8), 0, 4, 0);
     too_long.channels[0].clock.period = 0x4_0001;
     assert_eq!(
-        [none, too_long].map(|spu| spu.well_formed(0)),
+        [none, too_long].map(|spu| spu.well_formed(StateTimes::at(0))),
         [false, false]
     );
 }
@@ -591,7 +598,7 @@ fn given_a_started_channel_with_a_period_no_tmr_gives_when_checked_then_it_is_no
 #[test]
 fn given_a_one_shot_past_its_end_when_checked_then_it_is_still_well_formed() {
     let spu = started(0, start(ONE_SHOT, PCM8), 0, 4, 0);
-    assert!(spu.well_formed(1 << 40));
+    assert!(spu.well_formed(StateTimes::at(1 << 40)));
 }
 
 // ----------------------------------------------------------------------------------- playback
@@ -976,7 +983,7 @@ fn given_a_decoder_state_with_a_wide_index_when_checked_then_the_device_is_not_w
         index: 200,
         ..Adpcm::default()
     };
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 // ------------------------------------------------------------------------------ PSG and noise
@@ -1145,7 +1152,7 @@ fn given_a_noise_channel_when_restarted_then_the_register_starts_again_at_7fff()
 fn given_a_noise_register_wider_than_15_bits_when_checked_then_the_device_is_not_well_formed() {
     let mut spu = Spu::new();
     spu.channels[14].decoders.noise.x = 0x8000;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 // ------------------------------------------------------------------------------------- the mixer
@@ -1311,21 +1318,21 @@ fn given_a_channel_that_is_silent_when_mixed_then_it_adds_nothing() {
 #[test]
 fn given_a_started_channel_when_checked_then_what_it_latched_is_well_formed() {
     let spu = started(3, start(LOOP, PCM8), 0, 4, 0);
-    assert!(spu.well_formed(0));
+    assert!(spu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_latched_channel_number_that_is_not_the_slot_when_checked_then_it_is_not_well_formed() {
     let mut spu = started(3, start(LOOP, PCM8), 0, 4, 0);
     spu.channels[3].latched.channel = 4;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_latched_sad_with_a_bit_outside_its_mask_when_checked_then_it_is_not_well_formed() {
     let mut spu = started(0, start(LOOP, PCM8), 0, 4, 0);
     spu.channels[0].latched.sad |= 1;
-    assert!(!spu.well_formed(0));
+    assert!(!spu.well_formed(StateTimes::at(0)));
 }
 
 /// A latch of channel 0 with one field changed to a value its register cannot hold.

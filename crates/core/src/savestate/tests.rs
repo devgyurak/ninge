@@ -16,11 +16,11 @@ use crate::cpu::Bus;
 use crate::io::DeviceId;
 use crate::io::irq::Requests;
 use crate::scheduler::LineEvent;
-use crate::{Buttons, Input, Machine, Screen};
+use crate::{Buttons, Input, Machine, Screen, StopReason, StopSet};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_479_892;
-const PINNED_HASH: u64 = 0x1461e8d332f00228;
+const PINNED_LEN: usize = 5_479_893;
+const PINNED_HASH: u64 = 0xe131a963b808273;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -129,8 +129,8 @@ const PINNED_HASH: u64 = 0x1461e8d332f00228;
 /// effective texture coordinates grew both states by 151: 12 + 4 + 4 + 1 + 128 + 2.
 /// Version 52 (#48): the geometry engine's POS_RESULT (four words) and VEC_RESULT (three halfwords)
 /// grew both states by 7, one zero byte each at power-on.
-const PINNED_BOOTED_LEN: usize = 6_069_816;
-const PINNED_BOOTED_HASH: u64 = 0xd24b2e45eebc00ea;
+const PINNED_BOOTED_LEN: usize = 6_069_817;
+const PINNED_BOOTED_HASH: u64 = 0x689e6e440b511dff;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -1949,5 +1949,318 @@ fn given_a_state_whose_header_is_not_what_its_rom_parses_to_when_loaded_then_it_
     assert_eq!(
         load_onto_fresh(&rom, &saver),
         (Err(SavestateError::Corrupt), true)
+    );
+}
+
+// ------------------------------------------------------------------------------- run control
+
+/// A machine that booted `counter_rom` and has not run.
+fn fresh_counter() -> Machine {
+    booted(&counter_rom(), 0)
+}
+
+/// What a run of `frames` whole frames leaves: the savestate bytes, both screens and the audio.
+fn fingerprint(machine: &Machine) -> (Vec<u8>, Vec<u32>, Vec<u32>, Vec<i16>) {
+    (
+        machine.save_state(),
+        machine.frame(Screen::Top).to_vec(),
+        machine.frame(Screen::Bottom).to_vec(),
+        machine.audio().to_vec(),
+    )
+}
+
+/// One frame run in one piece.
+fn uninterrupted() -> Machine {
+    let mut machine = fresh_counter();
+    machine.run_frame(crate::Input::new());
+    machine
+}
+
+/// One frame run in two calls, stopped after `limit` instructions in between.
+fn stopped_after(limit: u64) -> (Machine, StopReason) {
+    let mut machine = fresh_counter();
+    let reason = machine.run_until(
+        crate::Input::new(),
+        &StopSet::frame_end().with_instruction_limit(limit),
+    );
+    (machine, reason)
+}
+
+#[test]
+fn given_an_instruction_limit_when_the_run_reaches_it_then_it_stops_mid_frame_and_says_so() {
+    let (machine, reason) = stopped_after(5_000);
+    assert_eq!(
+        (reason, machine.frame_count, machine.round.is_some()),
+        (StopReason::InstructionLimit, 0, true)
+    );
+}
+
+#[test]
+fn given_a_run_stopped_mid_frame_when_it_continues_then_the_state_equals_an_uninterrupted_frame() {
+    let (mut machine, _) = stopped_after(5_000);
+    let reason = machine.run_until(crate::Input::new(), &StopSet::frame_end());
+    assert_eq!(
+        (reason, fingerprint(&machine)),
+        (StopReason::FrameEnd, fingerprint(&uninterrupted()))
+    );
+}
+
+#[test]
+fn given_a_run_stopped_at_an_arm9_breakpoint_when_it_continues_then_the_state_equals_an_uninterrupted_frame()
+ {
+    let (probe, _) = stopped_after(5_000);
+    let pc = probe.arm9.next_instruction();
+    let mut machine = fresh_counter();
+    let stops = StopSet::frame_end().with_breakpoint(true, pc);
+    let reason = machine.run_until(crate::Input::new(), &stops);
+    let finished = machine.run_until(crate::Input::new(), &StopSet::frame_end());
+    assert_eq!(
+        (reason, finished, fingerprint(&machine)),
+        (
+            StopReason::Breakpoint { arm9: true, pc },
+            StopReason::FrameEnd,
+            fingerprint(&uninterrupted())
+        )
+    );
+}
+
+#[test]
+fn given_a_run_stopped_at_a_breakpoint_when_it_resumes_then_the_instruction_there_runs_first() {
+    let (probe, _) = stopped_after(5_000);
+    let pc = probe.arm9.next_instruction();
+    let mut machine = fresh_counter();
+    let stops = StopSet::frame_end().with_breakpoint(true, pc);
+    let first = machine.run_until(crate::Input::new(), &stops);
+    // With one instruction allowed, a resume that stopped at the breakpoint again would say so.
+    let again = stops.resuming(first).with_instruction_limit(1);
+    let resumed = machine.run_until(crate::Input::new(), &again);
+    assert_eq!(resumed, StopReason::InstructionLimit);
+}
+
+#[test]
+fn given_an_arm7_breakpoint_when_the_run_reaches_it_then_it_stops_on_the_arm7() {
+    let mut probe = fresh_counter();
+    probe.run_until(
+        crate::Input::new(),
+        &StopSet::frame_end().with_instruction_limit(20_000),
+    );
+    let pc = probe.arm7.next_instruction();
+    let mut machine = fresh_counter();
+    let reason = machine.run_until(
+        crate::Input::new(),
+        &StopSet::frame_end().with_breakpoint(false, pc),
+    );
+    assert_eq!(reason, StopReason::Breakpoint { arm9: false, pc });
+}
+
+#[test]
+fn given_a_run_stopped_mid_frame_when_saved_and_loaded_then_it_continues_to_the_same_frame() {
+    let (stopped, _) = stopped_after(5_000);
+    let bytes = stopped.save_state();
+    let mut loaded = fresh_counter();
+    assert_eq!(loaded.load_state(&bytes), Ok(()));
+    loaded.run_until(crate::Input::new(), &StopSet::frame_end());
+    // The audio the stopped half made is output, not state, so it is not compared.
+    let (state, top, bottom, _) = fingerprint(&loaded);
+    let (want_state, want_top, want_bottom, _) = fingerprint(&uninterrupted());
+    assert_eq!(
+        (state == want_state, top == want_top, bottom == want_bottom),
+        (true, true, true)
+    );
+}
+
+#[test]
+fn given_a_run_stopped_mid_frame_when_the_arm9_is_stepped_then_the_round_is_finished() {
+    let (mut machine, _) = stopped_after(5_000);
+    machine.step_arm9();
+    assert!(machine.round.is_none());
+}
+
+#[test]
+fn given_a_run_stopped_mid_round_when_the_arm9_is_stepped_then_the_state_loads() {
+    // The round runs to its end first, so the step lands on a settled state a load accepts.
+    let (mut machine, _) = stopped_after(5_000);
+    machine.step_arm9();
+    let bytes = machine.save_state();
+    assert_eq!(fresh_counter().load_state(&bytes), Ok(()));
+}
+
+#[test]
+fn given_a_run_stopped_mid_round_when_the_arm7_is_stepped_then_the_round_is_finished() {
+    let (mut machine, _) = stopped_after(5_000);
+    machine.step_arm7();
+    assert!(machine.round.is_none());
+}
+
+#[test]
+fn given_a_booted_machine_when_the_arm7_is_stepped_then_its_clock_moves_and_no_round_is_kept() {
+    let mut machine = fresh_counter();
+    let before = machine.arm7_clock;
+    machine.step_arm7();
+    assert_eq!(
+        (machine.arm7_clock > before, machine.round.is_none()),
+        (true, true)
+    );
+}
+
+#[test]
+fn given_nine_breakpoints_for_one_cpu_when_set_then_the_ninth_is_ignored() {
+    let nine = (0..9).fold(StopSet::frame_end(), |set, n| {
+        set.with_breakpoint(true, n * 4)
+    });
+    let eight = (0..8).fold(StopSet::frame_end(), |set, n| {
+        set.with_breakpoint(true, n * 4)
+    });
+    assert_eq!(nine, eight);
+}
+
+#[test]
+fn given_a_resume_passed_again_when_a_limit_stop_comes_first_then_the_breakpoint_still_runs_once() {
+    let (probe, _) = stopped_after(5_000);
+    let pc = probe.arm9.next_instruction();
+    let mut machine = fresh_counter();
+    let stops = StopSet::frame_end().with_breakpoint(true, pc);
+    let first = machine.run_until(crate::Input::new(), &stops);
+    // A limit of 0 stops before the instruction at the breakpoint runs; the host passes the
+    // breakpoint's stop back in each call, so it is still pending for the next.
+    let resume = stops.resuming(first);
+    machine.run_until(crate::Input::new(), &resume.with_instruction_limit(0));
+    let resumed = machine.run_until(crate::Input::new(), &resume.with_instruction_limit(1));
+    assert_eq!(resumed, StopReason::InstructionLimit);
+}
+
+#[test]
+fn given_a_resume_reason_held_across_a_step_when_the_breakpoint_comes_round_again_then_it_stops() {
+    // The step moved the ARM9 off the breakpoint, so the old reason no longer applies: the run
+    // must not skip the breakpoint's next hit.
+    let (probe, _) = stopped_after(5_000);
+    let pc = probe.arm9.next_instruction();
+    let mut machine = fresh_counter();
+    let stops = StopSet::frame_end().with_breakpoint(true, pc);
+    let first = machine.run_until(crate::Input::new(), &stops);
+    machine.step_arm9();
+    let again = machine.run_until(crate::Input::new(), &stops.resuming(first));
+    assert_eq!(again, StopReason::Breakpoint { arm9: true, pc });
+}
+
+#[test]
+fn given_a_round_whose_stop_is_not_the_time_when_loaded_then_it_is_corrupt() {
+    let (mut stopped, _) = stopped_after(5_000);
+    let now = stopped.scheduler.now();
+    stopped.round = stopped.round.map(|round| crate::scheduler::Round {
+        stop: Some(now + 1),
+        ..round
+    });
+    let bytes = stopped.save_state();
+    let mut target = fresh_counter();
+    assert_eq!(target.load_state(&bytes), Err(SavestateError::Corrupt));
+}
+
+#[test]
+fn given_an_arm7_far_behind_in_a_round_when_loaded_then_it_is_corrupt() {
+    let (mut stopped, _) = stopped_after(5_000);
+    stopped.arm7_clock = stopped.scheduler.now().saturating_sub(1_000_000);
+    let bytes = stopped.save_state();
+    let mut target = fresh_counter();
+    assert_eq!(target.load_state(&bytes), Err(SavestateError::Corrupt));
+}
+
+#[test]
+fn given_a_stop_with_the_arm7_catching_up_at_an_event_time_when_loaded_then_the_event_is_still_queued()
+ {
+    let mut stopped = fresh_counter();
+    let now = crate::scheduler::LINE_CYCLES;
+    stopped.scheduler.now = now;
+    // The line start at `now` has not fired in this round, and the HBlank start before it has.
+    stopped.io.timing_mut().set_hblank_for_test(true);
+    stopped.arm7_clock = now - 10;
+    stopped.round = Some(crate::scheduler::Round {
+        target: now + 10,
+        stop: Some(now),
+    });
+    let bytes = stopped.save_state();
+    let mut target = fresh_counter();
+    let loaded = target.load_state(&bytes);
+    assert_eq!((loaded, target.scheduler.next_time()), (Ok(()), Some(now)));
+}
+
+/// A counter machine whose ARM9 is held for `lines` lines, then stepped once: the step runs the
+/// whole hold, as a debugger step over a full geometry FIFO does.
+fn stepped_over_a_hold(lines: u64) -> Machine {
+    let mut machine = fresh_counter();
+    machine.arm9_hold_until = lines * crate::scheduler::LINE_CYCLES;
+    machine.step_arm9();
+    machine
+}
+
+#[test]
+fn given_a_step_over_a_192_line_hold_when_vcount_is_read_then_it_is_line_192() {
+    // A step moved the clock over 192 line starts; every one of them has fired.
+    let machine = stepped_over_a_hold(192);
+    assert_eq!(machine.io.timing().vcount(), 192);
+}
+
+#[test]
+fn given_a_step_over_a_hold_when_saved_and_loaded_then_the_state_loads_at_the_same_line() {
+    let stepped = stepped_over_a_hold(192);
+    let bytes = stepped.save_state();
+    let mut target = fresh_counter();
+    let loaded = target.load_state(&bytes);
+    assert_eq!((loaded, target.io.timing().vcount()), (Ok(()), 192));
+}
+
+#[test]
+fn given_a_step_over_a_hold_when_the_frame_end_is_crossed_then_the_frame_is_counted() {
+    let machine = stepped_over_a_hold(300);
+    assert_eq!(machine.frame_count(), 1);
+}
+
+#[test]
+fn given_a_vcount_that_is_not_the_line_of_the_time_when_loaded_then_it_is_corrupt() {
+    let mut saved = fresh_counter();
+    saved.io.timing_mut().set_vcount_for_test(5);
+    let bytes = saved.save_state();
+    assert_eq!(
+        fresh_counter().load_state(&bytes),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_an_hblank_flag_that_the_time_does_not_have_when_loaded_then_it_is_corrupt() {
+    let mut saved = fresh_counter();
+    saved.io.timing_mut().set_hblank_for_test(true);
+    let bytes = saved.save_state();
+    assert_eq!(
+        fresh_counter().load_state(&bytes),
+        Err(SavestateError::Corrupt)
+    );
+}
+
+#[test]
+fn given_a_machine_with_no_program_when_stepped_and_loaded_then_the_line_is_not_compared() {
+    // With no program no event runs, so the time says nothing about the line.
+    let mut machine = Machine::new();
+    step_arm9_times(&mut machine, 10);
+    let bytes = machine.save_state();
+    assert_eq!(Machine::new().load_state(&bytes), Ok(()));
+}
+
+/// A counter machine after `count` lone ARM7 steps.
+fn after_arm7_steps(count: u32) -> Machine {
+    let mut machine = fresh_counter();
+    (0..count).for_each(|_| machine.step_arm7());
+    machine
+}
+
+#[test]
+fn given_many_arm7_steps_when_the_machine_is_saved_and_loaded_then_the_master_clock_moved_and_it_loads()
+ {
+    let stepped = after_arm7_steps(1_000);
+    let bytes = stepped.save_state();
+    let mut target = fresh_counter();
+    assert_eq!(
+        (stepped.scheduler.now() > 0, target.load_state(&bytes)),
+        (true, Ok(()))
     );
 }

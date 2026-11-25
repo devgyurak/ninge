@@ -53,12 +53,14 @@ impl Participants for Recorder {
     fn scheduler(&mut self) -> &mut Scheduler {
         &mut self.scheduler
     }
-    fn run_arm9_until(&mut self, target: u64) {
+    fn run_arm9_until(&mut self, target: u64) -> bool {
         self.log.push(Step::Arm9(target));
         self.scheduler.now = self.scheduler.now.max(target);
+        true
     }
-    fn run_arm7_until(&mut self, target: u64) {
+    fn run_arm7_until(&mut self, target: u64) -> bool {
         self.log.push(Step::Arm7(target));
+        true
     }
     fn dispatch(&mut self, event: Event) {
         self.log.push(Step::Dispatch(event.time, event.kind));
@@ -611,11 +613,11 @@ impl Participants for SelfScheduling {
     fn scheduler(&mut self) -> &mut Scheduler {
         self.inner.scheduler()
     }
-    fn run_arm9_until(&mut self, target: u64) {
-        self.inner.run_arm9_until(target);
+    fn run_arm9_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm9_until(target)
     }
-    fn run_arm7_until(&mut self, target: u64) {
-        self.inner.run_arm7_until(target);
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm7_until(target)
     }
     fn dispatch(&mut self, event: Event) {
         self.inner.dispatch(event);
@@ -668,15 +670,16 @@ impl Participants for Arm9Queues {
     fn scheduler(&mut self) -> &mut Scheduler {
         self.inner.scheduler()
     }
-    fn run_arm9_until(&mut self, target: u64) {
+    fn run_arm9_until(&mut self, target: u64) -> bool {
         self.inner.log.push(Step::Arm9(target));
         self.inner
             .scheduler
             .schedule(self.queued_at, EventKind::Line(LineEvent::Start));
         self.inner.scheduler.now = self.queued_at;
+        true
     }
-    fn run_arm7_until(&mut self, target: u64) {
-        self.inner.run_arm7_until(target);
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm7_until(target)
     }
     fn dispatch(&mut self, event: Event) {
         self.inner.dispatch(event);
@@ -763,6 +766,187 @@ fn given_events_scheduled_in_reverse_priority_when_settling_then_they_dispatch_i
             Step::Dispatch(40, ARM7_TIMER0)
         ]
     );
+}
+
+/// Participants whose dispatch schedules the same kind of event `period` later, as a line start
+/// does.
+struct Periodic {
+    inner: Recorder,
+    period: u64,
+}
+
+impl Participants for Periodic {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        self.inner.scheduler()
+    }
+    fn run_arm9_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm9_until(target)
+    }
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm7_until(target)
+    }
+    fn dispatch(&mut self, event: Event) {
+        self.inner.dispatch(event);
+        self.inner
+            .scheduler
+            .schedule(event.time + self.period, event.kind);
+    }
+}
+
+/// The times the recorder dispatched events at, in order.
+fn dispatch_times(recorder: &Recorder) -> Vec<u64> {
+    recorder
+        .log
+        .iter()
+        .filter_map(|step| match step {
+            Step::Dispatch(time, _) => Some(*time),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_clock_far_past_a_repeating_event_when_settling_then_every_repeat_up_to_now_fires() {
+    // A step that moved the clock over several lines must leave none of them unfired: the line
+    // counter and the sample grid agree with the time (`scheduler.md`, "Debugger single-step").
+    let mut participants = Periodic {
+        inner: Recorder::with_events(40, &[10]),
+        period: 10,
+    };
+    settle(&mut participants);
+    let times = dispatch_times(&participants.inner);
+    assert_eq!(times, vec![10, 20, 30, 40]);
+}
+
+#[test]
+fn given_an_event_that_reschedules_itself_in_place_when_settling_then_it_ends() {
+    let mut participants = SelfScheduling {
+        inner: Recorder::with_events(10, &[10]),
+    };
+    settle(&mut participants);
+    let dispatched = participants
+        .inner
+        .log
+        .iter()
+        .filter(|step| matches!(step, Step::Dispatch(..)))
+        .count();
+    assert_eq!(dispatched, usize::try_from(SETTLE_STALL_LIMIT + 1).unwrap());
+}
+
+#[test]
+fn given_events_due_when_settling_then_it_reports_that_one_fired() {
+    let mut recorder = Recorder::with_events(40, &[40]);
+    assert!(settle(&mut recorder));
+}
+
+#[test]
+fn given_no_event_due_when_settling_then_it_reports_that_none_fired() {
+    let mut recorder = Recorder::with_events(40, &[41]);
+    assert!(!settle(&mut recorder));
+}
+
+// ------------------------------------------------------------------------ catch_up
+
+/// Participants whose ARM9 does not run while an event is due at its clock, as the real one does
+/// not: the event has to fire first.
+struct Blocked {
+    inner: Recorder,
+}
+
+impl Participants for Blocked {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        self.inner.scheduler()
+    }
+    fn run_arm9_until(&mut self, target: u64) -> bool {
+        let blocked = self
+            .inner
+            .scheduler
+            .next_time()
+            .is_some_and(|time| time <= self.inner.scheduler.now);
+        match blocked {
+            true => true,
+            false => self.inner.run_arm9_until(target),
+        }
+    }
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm7_until(target)
+    }
+    fn dispatch(&mut self, event: Event) {
+        self.inner.dispatch(event);
+    }
+}
+
+#[test]
+fn given_an_event_due_at_the_clock_when_catching_up_then_it_fires_and_the_arm9_goes_on() {
+    // The first pass moves nothing but the event; ending there would leave the ARM7 ahead of the
+    // clock by more than a load accepts.
+    let mut participants = Blocked {
+        inner: Recorder::with_events(0, &[0]),
+    };
+    catch_up(&mut participants, 10);
+    assert_eq!(participants.inner.scheduler.now, 10);
+}
+
+#[test]
+fn given_no_event_and_no_progress_when_catching_up_then_it_ends() {
+    // An ARM9 that cannot move and no event to fire: the pass changes nothing, so the loop stops.
+    let mut frozen = Frozen {
+        inner: Recorder::at(0),
+    };
+    catch_up(&mut frozen, 10);
+    assert_eq!(frozen.inner.scheduler.now, 0);
+}
+
+/// Participants whose ARM9 never runs.
+struct Frozen {
+    inner: Recorder,
+}
+
+impl Participants for Frozen {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        self.inner.scheduler()
+    }
+    fn run_arm9_until(&mut self, _target: u64) -> bool {
+        true
+    }
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm7_until(target)
+    }
+    fn dispatch(&mut self, event: Event) {
+        self.inner.dispatch(event);
+    }
+}
+
+/// Participants whose ARM9 never runs and whose events reschedule themselves in place.
+struct FrozenSelfScheduling {
+    inner: Recorder,
+}
+
+impl Participants for FrozenSelfScheduling {
+    fn scheduler(&mut self) -> &mut Scheduler {
+        self.inner.scheduler()
+    }
+    fn run_arm9_until(&mut self, _target: u64) -> bool {
+        true
+    }
+    fn run_arm7_until(&mut self, target: u64) -> bool {
+        self.inner.run_arm7_until(target)
+    }
+    fn dispatch(&mut self, event: Event) {
+        self.inner.dispatch(event);
+        self.inner.scheduler.schedule(event.time, event.kind);
+    }
+}
+
+#[test]
+fn given_an_event_that_never_leaves_its_time_when_catching_up_then_it_ends() {
+    // The settle gives up at its stall limit and reports nothing fired, so the catch-up loop, which
+    // goes on while events fire, ends too.
+    let mut participants = FrozenSelfScheduling {
+        inner: Recorder::with_events(0, &[0]),
+    };
+    catch_up(&mut participants, 10);
+    assert_eq!(participants.inner.scheduler.now, 0);
 }
 
 // ------------------------------------------------------------------------- cancel

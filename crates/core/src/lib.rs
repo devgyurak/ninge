@@ -45,5 +45,7 @@ pub mod spi;
 pub mod spu;
 
 pub use input::{Buttons, Input, Touch};
-pub use machine::{Machine, RomError, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
+pub use machine::{
+    MAX_BREAKPOINTS, Machine, RomError, SCREEN_HEIGHT, SCREEN_WIDTH, Screen, StopReason, StopSet,
+};
 pub use scheduler::{FRAME_CYCLES, MASTER_CLOCK_HZ};

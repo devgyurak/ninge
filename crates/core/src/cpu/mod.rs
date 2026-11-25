@@ -71,6 +71,16 @@ impl<const ARM9: bool> Cpu<ARM9> {
         }
     }
 
+    /// The address of the instruction the next step executes. The register file holds the fetch
+    /// address, two instructions ahead of it: 8 bytes in ARM state, 4 in Thumb state.
+    pub fn next_instruction(&self) -> u32 {
+        let ahead = match self.regs.cpsr() & FLAG_T != 0 {
+            true => 4,
+            false => 8,
+        };
+        self.regs.get(15).wrapping_sub(ahead)
+    }
+
     /// The register file.
     pub fn regs(&self) -> &Registers {
         &self.regs

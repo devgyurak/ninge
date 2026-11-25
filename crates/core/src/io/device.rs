@@ -131,6 +131,18 @@ pub(crate) struct Effect {
     /// (`geometry-engine.md`, "The FIFO IRQ, the DMA start and the stall"). The caller adds them
     /// to the access's CPU as part of its cost.
     pub(crate) stall: u64,
+    /// The access asked its CPU to halt: a write of the halt mode to HALTCNT (`interrupts.md`,
+    /// "HALTCNT"). It travels with the access to the CPU whose bus carried it, so no caller polls a
+    /// device for it.
+    pub(crate) halt: bool,
+}
+
+/// What a write through `Io` hands back to the bus that carried it: the cycles it held its CPU and
+/// whether it asked the CPU to halt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Written {
+    pub(crate) stall: u64,
+    pub(crate) halt: bool,
 }
 
 impl Effect {
@@ -151,6 +163,7 @@ impl Effect {
             recheck_held_signals: self.recheck_held_signals || other.recheck_held_signals,
             recheck_held_requests: self.recheck_held_requests || other.recheck_held_requests,
             stall: self.stall.saturating_add(other.stall),
+            halt: self.halt || other.halt,
         }
     }
 }
@@ -224,7 +237,11 @@ pub(crate) fn cx_with_rom(now: u64, rom: &[u8]) -> Cx<'_> {
     }
 }
 
-/// A register device. `offset` is into the device's own register space ([`Port::base`] is
+/// A register device. A device cannot reach the bus, so work that needs memory goes back to the
+/// machine as data in what an access returns, and the machine does it through the CPU's own bus
+/// view: the DMA's `Transfer` ([`Fired::transfer`]) is the pattern for "work on a bus the device
+/// does not own", and [`Effect::halt`] is the same idea for a request to the CPU that wrote.
+/// `offset` is into the device's own register space ([`Port::base`] is
 /// offset 0) and `cx` is the access's time and the host's data. `ARM9` is the CPU asking: a device that
 /// serves one CPU (or two copies of one) is implemented for that CPU's value alone
 /// (`AGENTS.md` §4, "Per-CPU devices").

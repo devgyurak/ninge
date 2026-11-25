@@ -9,7 +9,6 @@ use crate::cpu::Bus;
 use crate::io::dma::DMA0SAD_ADDR;
 use crate::io::ipc::{IPCFIFOCNT_ADDR, IPCFIFORECV_ADDR, IPCFIFOSEND_ADDR};
 use crate::io::irq::{IE_ADDR, IME_ADDR, VBLANK_IRQ};
-use crate::io::power::POSTFLG_ADDR;
 use crate::io::timers::TM0CNT_L_ADDR;
 use crate::io::timing::{DISPSTAT_ADDR, VBLANK_IRQ_ENABLE};
 use crate::scheduler::{HBLANK_START_CYCLES, LINE_CYCLES};
@@ -24,8 +23,6 @@ const TM0CNT_H: u32 = TM0CNT_L_ADDR + 2;
 const TIMER_START: u16 = 0x80;
 /// IPCFIFOCNT bit 15: the FIFOs are switched on.
 const FIFO_ENABLE: u16 = 0x8000;
-/// HALTCNT mode 2 (bits 6-7): halt until an interrupt.
-const HALT_MODE: u8 = 0x80;
 /// VRAMCNT_A: the bank on, MST 0, offset 0.
 const BANK_ON: u8 = 0x80;
 /// The timer's reload, 16 ticks from overflow.
@@ -272,13 +269,6 @@ fn given_a_source_written_by_the_arm9_when_inspected_then_only_the_arm9_dma_has_
         (view.dma9().source(0), view.dma7().source(0)),
         (MAIN_RAM, 0)
     );
-}
-
-#[test]
-fn given_a_halt_written_by_the_arm7_when_inspected_then_power_shows_the_request() {
-    let mut m = Machine::new();
-    m.bus7(0).write8(POSTFLG_ADDR + 1, HALT_MODE);
-    assert!(m.inspect().power().halt_requested());
 }
 
 #[test]

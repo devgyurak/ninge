@@ -151,10 +151,19 @@ fn arm7_instruction(arm7: &mut Cpu<false>, bios: &mut SwiRecord, view: &mut Arm7
             None => arm7.step(view),
         },
     };
-    if view.io_mut().power_mut().take_halt() {
+    // The next instruction must not run: the halt takes effect between the two.
+    halt_if_asked(arm7, view);
+    view.advance(cost);
+}
+
+/// Halts the ARM7 when a write through `view` asked it to: a HALTCNT write of the halt mode, from
+/// an instruction, a DMA unit or a sound capture (`docs/hw/interrupts.md`, "HALTCNT"). The one
+/// place that takes the request; [`Machine::with_arm7_bus`] calls it after any work on the ARM7's
+/// bus, and the instruction loop after each instruction as well.
+fn halt_if_asked(arm7: &mut Cpu<false>, view: &mut Arm7View<'_>) {
+    if view.take_halt() {
         arm7.set_halted(true);
     }
-    view.advance(cost);
 }
 
 /// Why [`Machine::load_rom`] refused a ROM: the header is invalid (`docs/hw/cart-header.md`).
@@ -388,6 +397,17 @@ impl Machine {
     /// loop keeps one view for a whole batch instead; this is the lone step tests drive.
     #[cfg(test)]
     pub(crate) fn step_arm7_instruction(&mut self) {
+        self.with_arm7_bus(arm7_instruction);
+    }
+
+    /// Runs `work` on the ARM7's bus view at the ARM7's clock, keeps the clock the view leaves and
+    /// then halts the ARM7 if a write in `work` asked to ([`halt_if_asked`]). Every path that
+    /// writes through the ARM7's bus while the machine runs (its instructions, a DMA unit, a sound
+    /// capture) builds its view here, so a new one acts on the halt request without naming it.
+    pub(crate) fn with_arm7_bus<R>(
+        &mut self,
+        work: impl FnOnce(&mut Cpu<false>, &mut SwiRecord, &mut Arm7View<'_>) -> R,
+    ) -> R {
         let mut view = Arm7View::new(
             &mut self.memory,
             &mut self.io,
@@ -395,8 +415,10 @@ impl Machine {
             &self.rom,
             self.arm7_clock,
         );
-        arm7_instruction(&mut self.arm7, &mut self.bios.arm7, &mut view);
+        let result = work(&mut self.arm7, &mut self.bios.arm7, &mut view);
+        halt_if_asked(&mut self.arm7, &mut view);
         self.arm7_clock = view.clock();
+        result
     }
 
     /// The audio the last frame made, as interleaved stereo `i16` samples.

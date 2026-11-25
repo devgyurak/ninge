@@ -443,8 +443,8 @@ checks").
   its side effect, as the BIOS's own load would; the model does not use a side-effect-free peek.
   — `hle::bios::software_interrupt` — verify likewise.
 - **A DMA write to HALTCNT.** That the ARM7 halts once the transfer ends is the model's order, not
-  from GBATEK. — `Machine::run_dma` in `crates/core/src/machine/mod.rs` (`take_halt`) — verify
-  by a test ROM on hardware that DMAs a halt byte.
+  from GBATEK. — `Machine::run_dma` in `crates/core/src/machine/events.rs`
+  (`Machine::with_arm7_bus`) — verify by a test ROM on hardware that DMAs a halt byte.
 - **Interrupt before BIOS trap.** A pending, unmasked IRQ is taken before the BIOS trap at a
   vector address is looked at; hardware has no such ordering to copy (the BIOS is code), so this
   is the model's choice. — `Machine::step_arm9_instruction` — invisible unless an IRQ arrives

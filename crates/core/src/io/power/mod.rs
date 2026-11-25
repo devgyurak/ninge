@@ -34,7 +34,6 @@ const MODE_HALT: u32 = 2;
 /// HALTCNT of the ARM7.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Power {
-    halt_requested: bool,
     /// POWCNT2: stored and read back. The speaker bit gates the sound output (`spu.md`, "The
     /// gates"); Wi-Fi is not modeled.
     powcnt2: u16,
@@ -47,10 +46,9 @@ impl Default for Power {
 }
 
 impl Power {
-    /// A device with no request pending and POWCNT2 at its initial setting.
+    /// A device with POWCNT2 at its initial setting.
     pub fn new() -> Self {
         Self {
-            halt_requested: false,
             powcnt2: POWCNT2_START,
         }
     }
@@ -63,16 +61,6 @@ impl Power {
     /// POWCNT2 as stored.
     pub fn powcnt2(&self) -> u16 {
         self.powcnt2
-    }
-
-    /// Whether a write asked for a halt that the machine has not taken yet.
-    pub fn halt_requested(&self) -> bool {
-        self.halt_requested
-    }
-
-    /// Takes the pending halt request: true once per halting write.
-    pub(crate) fn take_halt(&mut self) -> bool {
-        std::mem::take(&mut self.halt_requested)
     }
 }
 
@@ -103,12 +91,14 @@ impl Device<false> for Power {
             offset.wrapping_add(i) == HALTCNT_OFFSET
                 && (byte >> MODE_SHIFT) & MODE_MASK == MODE_HALT
         });
-        self.halt_requested |= halting;
         // Only POWCNT2's low byte holds bits; its high byte is unused.
         (0..width.bytes())
             .filter(|&i| offset.wrapping_add(i) == POWCNT2_OFFSET)
             .for_each(|i| self.powcnt2 = ((value >> (8 * i)) as u16) & POWCNT2_MASK);
-        Effect::default()
+        Effect {
+            halt: halting,
+            ..Effect::default()
+        }
     }
 }
 

@@ -574,3 +574,23 @@ fn given_a_running_capture_when_inspected_then_the_position_and_next_address_are
         (3, CAPTURE_ADDR + 6)
     );
 }
+
+/// A machine whose channel 0 plays PCM8 `-128` (byte `80h`, the HALTCNT halt mode), with a one-shot
+/// PCM8 capture of it started at `at` whose second byte lands on HALTCNT.
+fn capturing_into_haltcnt(at: u64) -> Machine {
+    let mut m = looping(at);
+    super::dma::poke_words(&mut m, DATA_ADDR, &[0x8080_8080; 4]);
+    m.bus7(at).write16(SOUND1TMR, 0xFE00);
+    m.bus7(at).write32(SNDCAP0DAD, 0x0400_0300);
+    m.bus7(at).write16(SNDCAP0LEN, 1);
+    m.bus7(at)
+        .write8(SNDCAP0CNT, CAP_ONE_SHOT_PCM8_CHANNEL as u8);
+    m
+}
+
+#[test]
+fn given_a_capture_whose_byte_lands_on_haltcnt_when_the_frame_runs_then_the_arm7_is_halted() {
+    let mut m = capturing_into_haltcnt(3_000);
+    m.run_frame(crate::Input::new());
+    assert!(m.inspect().arm7().halted());
+}

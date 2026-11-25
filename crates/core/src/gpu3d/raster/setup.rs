@@ -222,15 +222,17 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         let y_min_fix = screen.iter().map(|v| v.y).min().unwrap_or(0);
         let y_max_fix = screen.iter().map(|v| v.y).max().unwrap_or(0);
         let wire = alpha == 0 || segment;
-        let translucent = !wire && alpha != OPAQUE;
+        // A wire frame (alpha 0) draws at alpha 31; a line segment of alpha 1 to 30 is translucent like
+        // any polygon (`rasterizer.md`, "Which pixels a polygon covers").
+        let translucent = alpha != 0 && alpha != OPAQUE;
         let blend = disp3dcnt & DISP3DCNT_BLEND != 0;
         let flat = y_min_fix == y_max_fix;
         frame.polygons.push(PolyDraw {
             first: frame.vertices.len(),
             count: screen.len(),
             id: ((p.attr >> ATTR_ID_SHIFT) & 0x3F) as u8,
-            // TODO(hw-unverified): a wire frame and a line segment (alpha 31 here) go through the alpha
-            // test like any pixel (`rasterizer.md`, "Unverified").
+            // TODO(hw-unverified): a wire frame (alpha 31 here) goes through the alpha test like any
+            // pixel (`rasterizer.md`, "Unverified").
             alpha: if translucent {
                 alpha as u8
             } else {

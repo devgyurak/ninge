@@ -197,3 +197,24 @@ fn given_a_translucent_polygon_with_blending_off_when_drawn_then_it_drops_its_lo
     let ram = scene(&[(translucent(15, 2), quad(10, 10, 30, 30, 0, GREEN))]);
     assert_eq!(covered(&draw(&ram, 0, &regs())), rect(10, 10, 29, 29));
 }
+
+#[test]
+fn given_a_line_segment_of_alpha_15_when_blending_is_on_then_it_blends_with_what_is_below() {
+    let segment = vec![
+        vertex(10, 20, -100, GREEN),
+        vertex(30, 20, -100, GREEN),
+        vertex(30, 20, -100, GREEN),
+    ];
+    let ram = scene(&[
+        (opaque(1), quad(0, 0, 60, 60, 0, RED)),
+        (translucent(15, 2), segment),
+    ]);
+    // Alpha 15 green over opaque red mixes like a polygon does, not an opaque line.
+    assert_eq!(
+        at(&draw(&ram, BLEND, &regs()), 20, 20),
+        Pixel3d {
+            color: 15 | 15 << 5,
+            alpha: 31
+        }
+    );
+}

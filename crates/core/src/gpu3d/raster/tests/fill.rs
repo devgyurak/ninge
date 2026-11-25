@@ -117,7 +117,8 @@ fn given_a_polygon_of_zero_height_when_drawn_then_it_is_one_line_tall() {
         vertex(20, 50, 0, RED),
     ];
     let ram = scene(&[(opaque(1), flat)]);
-    assert_eq!(covered(&draw(&ram, NONE, &regs())), rect(10, 50, 20, 50));
+    // One line tall, and like any opaque polygon it drops its right edge.
+    assert_eq!(covered(&draw(&ram, NONE, &regs())), rect(10, 50, 19, 50));
 }
 
 #[test]
@@ -210,4 +211,27 @@ fn given_a_scene_when_drawn_through_the_executor_then_it_equals_a_plain_line_loo
     ]);
     let plain = draw_plain(&ram, NONE, &regs());
     assert_eq!(draw(&ram, NONE, &regs()), plain);
+}
+
+#[test]
+fn given_a_quad_with_one_repeated_vertex_when_the_face_bits_are_clear_then_it_is_not_a_line_segment()
+ {
+    let repeated = vec![
+        vertex(10, 10, 0, RED),
+        vertex(10, 30, 0, RED),
+        vertex(30, 30, 0, RED),
+        vertex(10, 10, 0, RED),
+    ];
+    let ram = scene(&[(OPAQUE, repeated)]);
+    assert_eq!(covered(&draw(&ram, NONE, &regs())), vec![]);
+}
+
+#[test]
+fn given_vertices_at_the_extremes_of_the_coordinate_range_when_drawn_then_nothing_panics() {
+    let mut ram = scene(&[(opaque(1), quad(10, 10, 30, 30, 0, RED))]);
+    ram.vertices[0].x = i32::MAX;
+    ram.vertices[1].y = i32::MIN;
+    ram.vertices[2].x = i32::MIN;
+    ram.vertices[2].z = i32::MAX;
+    assert_eq!(draw(&ram, NONE, &regs()).len(), crate::SCREEN_HEIGHT);
 }

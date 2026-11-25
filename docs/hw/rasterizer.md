@@ -102,14 +102,15 @@ GBATEK gives the mapping for a vertex with clip coordinates (xx, yy, zz, ww) and
 force (`geometry-engine.md`, "VIEWPORT"): *screen_x = (xx + ww) x width / (2 x ww) + x1* and
 *screen_y = (yy + ww) x height / (2 x ww) + y1*. The origin of the viewport is the lower left, so
 positions are pixel edges and the screen is 192 lines tall, so the 2D line coordinate of a screen y
-is *192 - y* (a polygon that spans the viewport spans lines 0 to 191). GBATEK does not say how *width* and *height* follow from
-X1, X2, Y1, Y2, in what fixed-point precision the division runs, or how it rounds; it only notes a
-vertex may land one pixel beyond X2 or Y1 "due to rounding". The model computes the division in
-integers with a fractional part (a model choice, `TODO(hw-unverified)`), takes *width = X2 - X1 +
-1* and *height = Y2 - Y1 + 1*, and clips the polygon's pixels to the 256x192 screen only. The
-viewport is what the view volume is scaled into, and the geometry engine has already clipped each
-polygon to that volume; the rasterizer does not clip to the viewport rectangle again (a vertex may
-land a pixel beyond it). The viewport does not move or size the rear plane.
+is *192 - y* (a polygon that spans the viewport spans lines 0 to 191). GBATEK does not say how
+*width* and *height* follow from X1, X2, Y1, Y2, in what fixed-point precision the division runs, or
+how it rounds; it only notes a vertex may land one pixel beyond X2 or Y1 "due to rounding". The
+model computes the division in integers with a fractional part (a model choice,
+`TODO(hw-unverified)`), takes *width = X2 - X1 + 1* and *height = Y2 - Y1 + 1*, and clips the
+polygon's pixels to the 256x192 screen only. The viewport is what the view volume is scaled into,
+and the geometry engine has already clipped each polygon to that volume; the rasterizer does not
+clip to the viewport rectangle again (a vertex may land a pixel beyond it). The viewport does not
+move or size the rear plane.
 
 A polygon has 3 to 10 vertices after clipping (`geometry-engine.md`). The model fills it as a
 convex polygon, one scanline at a time, between its left and right edge on that line.
@@ -149,24 +150,24 @@ the comparison, once made, is a record of agreement and not a hardware fact.
 ### Facing
 
 POLYGON_ATTR bit 6 (render the back surface) and bit 7 (render the front surface) pick which side
-draws. The geometry engine stores the vertices in the order they arrived, anti-clockwise for a
-front face as GBATEK defines it, with strips alternating (`geometry-engine.md`, "Primitives and
-strips"). A polygon is front facing when its vertices run anti-clockwise as seen on screen with y
-up. A front-facing polygon draws only if bit 7 is set, a back-facing one only if bit 6 is. A line segment ignores both bits.
-A polygon of zero area has no side; GBATEK does not say what it counts as (a model choice, see
-"Unverified").
+draws. The geometry engine stores the vertices in the order they arrived, anti-clockwise for a front
+face as GBATEK defines it, with strips alternating (`geometry-engine.md`, "Primitives and strips").
+A polygon is front facing when its vertices run anti-clockwise as seen on screen with y up. A
+front-facing polygon draws only if bit 7 is set, a back-facing one only if bit 6 is. A line segment
+ignores both bits. A polygon of zero area has no side; GBATEK does not say what it counts as (a
+model choice, see "Unverified").
 
 ## Colour along a polygon
 
 A vertex colour is the 5-bit RGB of the COLOR command (or the lit colour), expanded to 6 bits with
 *X x 2 + 1* for X > 0 and 0 for 0. GBATEK does not describe the interpolation across a polygon at
 all. The model interpolates the 6-bit channels linearly across the polygon in perspective-correct
-fashion, using 1/W as the weight (the model's choice; the exact precision and rounding are not stated), in integer fixed point with the
-rounding stated in the code, and takes a texture-less pixel's colour from that. All of it is
-`TODO(hw-unverified)`, to be compared as above. With no texture and no lighting the
-vertex colour is the pixel colour. The decal (polygon mode 1) and toon or highlight (mode 2)
-polygons draw the interpolated vertex colour in this model until texture and toon shading exist
-(#50, #51).
+fashion, using 1/W as the weight (the model's choice; the exact precision and rounding are not
+stated), in integer fixed point with the rounding stated in the code, and takes a texture-less
+pixel's colour from that. All of it is `TODO(hw-unverified)`, to be compared as above. With no
+texture and no lighting the vertex colour is the pixel colour. The decal (polygon mode 1) and toon
+or highlight (mode 2) polygons draw the interpolated vertex colour in this model until texture and
+toon shading exist (#50, #51).
 
 ## Depth
 
@@ -196,10 +197,10 @@ clipped part, 0 hides the polygon. The geometry engine applies it (`geometry-eng
 A polygon with alpha 31 is opaque, 1 to 30 translucent, 0 a wire frame. Draw order:
 
 1. Opaque polygons, in the order they were completed.
-2. Translucent polygons, last. SWAP_BUFFERS bit 0 picks the order: 0 sorts them automatically by
-   Y (GBATEK says only "Y-sorting"; the model sorts by the smallest screen line number (the topmost line,
-   counted from the top of the screen) of a polygon's vertices, ties kept in completion order, and marks it `TODO(hw-unverified)`), 1 keeps the order
-   of completion.
+2. Translucent polygons, last. SWAP_BUFFERS bit 0 picks the order: 0 sorts them automatically by Y
+   (GBATEK says only "Y-sorting"; the model sorts by the smallest screen line number (the topmost
+   line, counted from the top of the screen) of a polygon's vertices, ties kept in completion order,
+   and marks it `TODO(hw-unverified)`), 1 keeps the order of completion.
 
 Blending a translucent pixel into the colour buffer (DISP3DCNT bit 3 on), per channel with 5-bit
 alpha *A* of the polygon and 5-bit-scale colours, GBATEK gives:
@@ -209,13 +210,13 @@ pixel is opaque, and when the buffer's alpha is 0 (a rear plane with alpha 0). G
 formula for 5-bit colours and the engine computes at 6 bits; the model applies the same
 formula to the 6-bit channels and narrows at the output (see "Unverified").
 
-A translucent pixel writes its depth only when POLYGON_ATTR bit 11 is 1 ("set new depth"); with 0
-it keeps the old depth. A translucent polygon does not draw over a pixel that holds the same
-polygon ID that an earlier translucent polygon wrote there (GBATEK states the "draw only if the ID differs" rule for shadow polygons and says the ID is "used
-for translucent, shadow and edge marking"; it does not state it for ordinary translucent polygons,
-so that extension is the model's). The model: a translucent
-pixel is skipped when the buffer's stored polygon ID equals its own and the buffer pixel already
-came from a translucent polygon, `TODO(hw-unverified)`.
+A translucent pixel writes its depth only when POLYGON_ATTR bit 11 is 1 ("set new depth"); with 0 it
+keeps the old depth. A translucent polygon does not draw over a pixel that holds the same polygon ID
+that an earlier translucent polygon wrote there (GBATEK states the "draw only if the ID differs"
+rule for shadow polygons and says the ID is "used for translucent, shadow and edge marking"; it does
+not state it for ordinary translucent polygons, so that extension is the model's). The model: a
+translucent pixel is skipped when the buffer's stored polygon ID equals its own and the buffer pixel
+already came from a translucent polygon, `TODO(hw-unverified)`.
 
 ### The rear plane
 
@@ -233,29 +234,29 @@ same volume, with automatic sorting off so the order holds.
   hidden (bit 6 set, bit 7 clear). Nothing is drawn to the colour buffer. Where the polygon
   passes its depth test (it is the back side, in front of what has been drawn), the pixel's
   stencil flag is set.
-- **Render pass:** mode 3, polygon ID not 0, alpha 1 to 30, front surface rendered; GBATEK also
-  sets the back surface to render and marks that "what/why?" (it is under "Unverified"). A pixel is drawn to the colour buffer, blended as a
-  translucent pixel with the polygon's alpha, only if its stencil flag is 0 and its polygon ID
-  differs from the ID in the pixel's buffer. GBATEK says the pass resets the flags it checks, and
-  that a closed volume has a front face and a back face for every viewing angle, both rendered in
-  this pass. The model does not clear a flag when a face checks it: that would let the volume's
-  other face, at the same pixel, draw the shadow the first face skipped (a volume floating in
-  front of a surface would darken the surface behind it). The model clears all flags when the
-  **next volume's mask pass begins** (a mask pass that follows render passes), and not otherwise,
-  so every face of a volume sees the flags its mask pass set (`TODO(hw-unverified)`). "The next
-volume" is read off the drawing order (after the translucent sort, so a volume needs manual
-sorting to keep its passes together), and any shadow render polygon that draws counts as a render
-pass, whether or not it covers a pixel.
-  The pixel's fog flag becomes the old flag ANDed with the polygon's. (Fog is #51; the model
-  does not set the flag yet.) A shadow polygon is not subject to the same-ID rule of ordinary
-  translucent polygons: its own rule, that its ID differs from the pixel's, decides.
+- **Render pass:** mode 3, polygon ID not 0, alpha 1 to 30, front surface rendered; GBATEK also sets
+  the back surface to render and marks that "what/why?" (it is under "Unverified"). A pixel is drawn
+  to the colour buffer, blended as a translucent pixel with the polygon's alpha, only if its stencil
+  flag is 0 and its polygon ID differs from the ID in the pixel's buffer. GBATEK says the pass
+  resets the flags it checks, and that a closed volume has a front face and a back face for every
+  viewing angle, both rendered in this pass. The model does not clear a flag when a face checks it:
+  that would let the volume's other face, at the same pixel, draw the shadow the first face skipped
+  (a volume floating in front of a surface would darken the surface behind it). The model clears all
+  flags when the **next volume's mask pass begins** (a mask pass that follows render passes), and
+  not otherwise, so every face of a volume sees the flags its mask pass set (`TODO(hw-unverified)`).
+  "The next volume" is read off the drawing order (after the translucent sort, so a volume needs
+  manual sorting to keep its passes together), and any shadow render polygon that draws counts as a
+  render pass, whether or not it covers a pixel. The pixel's fog flag becomes the old flag ANDed
+  with the polygon's. (Fog is #51; the model does not set the flag yet.) A shadow polygon is not
+  subject to the same-ID rule of ordinary translucent polygons: its own rule, that its ID differs
+  from the pixel's, decides.
 
 Shadow polygons are translucent by their alpha (1 to 30), so they draw after the opaque ones even
-when the order is manual. The stencil is one bit per pixel, working state of a line that starts clear
-on each line (GBATEK does not say; a model choice, `TODO(hw-unverified)`). Whether a render-pass pixel
-that fails the stencil or the ID test writes depth is not stated; the model says it does not. Whether
-the mask pass writes depth is not stated either; the model says it does not (`TODO(hw-unverified)`
-for both).
+when the order is manual. The stencil is one bit per pixel, working state of a line that starts
+clear on each line (GBATEK does not say; a model choice, `TODO(hw-unverified)`). Whether a
+render-pass pixel that fails the stencil or the ID test writes depth is not stated; the model says
+it does not. Whether the mask pass writes depth is not stated either; the model says it does not
+(`TODO(hw-unverified)` for both).
 
 ## Edge cases
 
@@ -303,11 +304,13 @@ for both).
 - Whether the shadow mask pass or a failed render pass writes depth, and when the stencil is cleared
   (the model: at the start of each line and when a mask pass follows render passes; a flag is never
   cleared by being checked). — `gpu3d/` — verify by a test ROM.
-- Whether the W depth is the 1.19.12 value itself clamped to 24 bits, and which scale the rear plane's
-  depth has in W mode. — `gpu3d/` — verify by a test ROM that compares a W-buffered polygon with the
-  rear plane at a known CLEAR_DEPTH.
-- Whether a wire frame, which draws at alpha 31, is subject to the alpha test as any pixel is (the model: yes). — `gpu3d/` — verify by a test ROM with ALPHA_TEST_REF 31.
-- A shadow polygon of alpha 0 or one that is a line segment (the model: the wire path, so the mask pass
-  sets the stencil along its edges only), and whether the alpha test hides the mask pass (the model:
-  yes). — `gpu3d/` — verify by a test ROM.
-- Whether the render pass checks the stencil only where it passes the depth test (the model: yes). — `gpu3d/` — verify by a test ROM.
+- Whether the W depth is the 1.19.12 value itself clamped to 24 bits, and which scale the rear
+  plane's depth has in W mode. — `gpu3d/` — verify by a test ROM that compares a W-buffered polygon
+  with the rear plane at a known CLEAR_DEPTH.
+- Whether a wire frame, which draws at alpha 31, is subject to the alpha test as any pixel is (the
+  model: yes). — `gpu3d/` — verify by a test ROM with ALPHA_TEST_REF 31.
+- A shadow polygon of alpha 0 or one that is a line segment (the model: the wire path, so the mask
+  pass sets the stencil along its edges only), and whether the alpha test hides the mask pass (the
+  model: yes). — `gpu3d/` — verify by a test ROM.
+- Whether the render pass checks the stencil only where it passes the depth test (the model: yes). —
+  `gpu3d/` — verify by a test ROM.

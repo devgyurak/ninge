@@ -9,8 +9,8 @@
 //! numbers are chosen so that every vertex lands on a whole pixel. The rules the picture applies:
 //! an opaque polygon keeps its upper and left edges and drops its lower and right ones; a polygon
 //! has at least one pixel of width; a colour is interpolated across the span in 6 bits and narrowed
-//! to 5; the nearer polygon wins and an equal depth keeps the first; a polygon of one point is a dot;
-//! a wire frame (alpha 0) draws its outline only.
+//! to 5; the nearer polygon wins and an equal depth keeps the first; a polygon of one point is a
+//! dot; a wire frame (alpha 0) draws its outline only.
 
 use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
@@ -56,8 +56,8 @@ fn expected() -> Vec<u16> {
         let last = if y == 24 { 100 } else { 99 + (y - 24) };
         (100..=last).for_each(|x| put(x, y, 0, GREEN));
     });
-    // C: the gradient. The red channel runs 0 to 63 (6 bits) over 64 columns, one step each, then is
-    // narrowed to 5 bits.
+    // C: the gradient. The red channel runs 0 to 63 (6 bits) over 64 columns, one step each, then
+    // is narrowed to 5 bits.
     (24..48).for_each(|y| {
         (160..224).for_each(|x| put(x, y, 0, ((63 * (x as u16 - 160) / 64) >> 1) & 31));
     });

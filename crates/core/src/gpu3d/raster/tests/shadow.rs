@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shadow polygons and the stencil (`docs/hw/rasterizer.md`, "Shadow polygons"): a mask pass of ID 0
-//! that sets stencil flags where it is in front, and a render pass that draws only where the flags
-//! are clear and its ID differs from the pixel's.
+//! Shadow polygons and the stencil (`docs/hw/rasterizer.md`, "Shadow polygons"): a mask pass of ID
+//! 0 that sets stencil flags where it is in front, and a render pass that draws only where the
+//! flags are clear and its ID differs from the pixel's.
 
 use super::*;
 

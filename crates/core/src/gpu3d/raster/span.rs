@@ -84,7 +84,8 @@ fn crossings(vs: &[ScreenVertex], y: i64, closed: bool) -> Option<(Cross, Cross)
     left.zip(right)
 }
 
-/// The tolerance of the equal depth test, either way, in the 24-bit depth (`rasterizer.md`, "Depth").
+/// The tolerance of the equal depth test, either way, in the 24-bit depth (`rasterizer.md`,
+/// "Depth").
 const EQUAL_TOLERANCE: u32 = 0x200;
 
 /// Writes one pixel of attributes `attrs` at `x` if it passes the depth test: closer than what the
@@ -112,23 +113,22 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     } else {
         depth < kept
     };
-    // A translucent polygon does not draw over a pixel another translucent pixel of its own ID wrote.
-    // TODO(hw-unverified): the rule for ordinary translucent polygons is the model's
+    // A translucent polygon does not draw over a pixel another translucent pixel of its own ID
+    // wrote. TODO(hw-unverified): the rule for ordinary translucent polygons is the model's
     // (`rasterizer.md`, "Unverified").
     let again = poly.translucent && !poly.shadow && state.translucent[x] && state.id[x] == poly.id;
     if !passes || again {
         return;
     }
     if poly.shadow {
-        // The mask pass only sets the stencil where it passes the depth test. The render pass
-        // draws nothing where the flag is set, whichever face of the volume it is, and where the flag
-        // is clear it draws if its ID differs from the pixel's; the flags are cleared when the next
-        // volume's mask pass begins (`rasterizer.md`, "Shadow polygons").
-        // TODO(phase7, #51): the fog flag of a shadowed pixel (the old flag ANDed with the
-        // polygon's) comes with fog.
-        // TODO(hw-unverified): the stencil is checked only where the depth test passes, neither pass
-        // writes depth, a shadow polygon of alpha 0 or a line segment goes the wire path, and the
-        // alpha test hides the mask pass too (`rasterizer.md`, "Unverified").
+        // The mask pass only sets the stencil where it passes the depth test. The render pass draws
+        // nothing where the flag is set, whichever face of the volume it is, and where the flag is
+        // clear it draws if its ID differs from the pixel's; the flags are cleared when the next
+        // volume's mask pass begins (`rasterizer.md`, "Shadow polygons"). TODO(phase7, #51): the
+        // fog flag of a shadowed pixel (the old flag ANDed with the polygon's) comes with fog.
+        // TODO(hw-unverified): the stencil is checked only where the depth test passes, neither
+        // pass writes depth, a shadow polygon of alpha 0 or a line segment goes the wire path, and
+        // the alpha test hides the mask pass too (`rasterizer.md`, "Unverified").
         if poly.mask {
             state.stencil[x] = true;
             return;
@@ -143,8 +143,8 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
     // (`rasterizer.md`, "Unverified").
     let own = [1, 2, 3].map(|k| (attrs[k] / iw).clamp(0, 63) as u8);
-    // The alpha already in the output stands for the buffer's alpha; nothing else changes `out` while
-    // the polygons draw.
+    // The alpha already in the output stands for the buffer's alpha; nothing else changes `out`
+    // while the polygons draw.
     let below = out[x].alpha;
     let blended = poly.translucent && poly.blend && below != 0;
     // Blending: (poly x (A + 1) + buffer x (31 - A)) / 32 per channel, the alpha the larger of the
@@ -190,8 +190,8 @@ pub(super) fn draw_polygon(
     let Some(vs) = vertices.get(poly.first..poly.first + poly.count) else {
         return;
     };
-    // A new shadow volume starts with a clear stencil on every line, whether or not its mask polygon
-    // reaches this one.
+    // A new shadow volume starts with a clear stencil on every line, whether or not its mask
+    // polygon reaches this one.
     if poly.new_volume {
         state.stencil = [false; SCREEN_WIDTH];
     }
@@ -219,8 +219,8 @@ fn fill(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, o
     let Some((left, right)) = crossings(vs, row, !poly.exclude_edges || poly.flat) else {
         return;
     };
-    // First whole x at or right of the left crossing; the last one left of the right crossing, or on
-    // it when the right edge draws. A vertical right edge never does.
+    // First whole x at or right of the left crossing; the last one left of the right crossing, or
+    // on it when the right edge draws. A vertical right edge never does.
     let keeps_right = !poly.exclude_edges && !right.vertical;
     let first = (left.x + ONE - 1) >> FRAC;
     let last = if keeps_right {
@@ -228,8 +228,8 @@ fn fill(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, o
     } else {
         ((right.x + ONE - 1) >> FRAC) - 1
     };
-    // The hardware rounds a polygon's width up to at least one pixel: a span that no pixel starts in
-    // still draws its first one (`rasterizer.md`, "Which pixels a polygon covers").
+    // The hardware rounds a polygon's width up to at least one pixel: a span that no pixel starts
+    // in still draws its first one (`rasterizer.md`, "Which pixels a polygon covers").
     // TODO(hw-unverified): that a sliver of a larger polygon is widened the same way.
     let last = last.max(first);
     let span = right.x - left.x;

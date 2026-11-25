@@ -40,9 +40,9 @@ fn capture_tap(
 
 impl Machine {
     /// Draws the whole 3D frame into `frame3d` from the scene the last SWAP_BUFFERS handed on and
-    /// the rendering registers as they are now (`docs/hw/rasterizer.md`, "When the hardware draws").
-    /// The snapshot and the line buffers are rebuilt each time and never saved: the output is a pure
-    /// function of saved state.
+    /// the rendering registers as they are now (`docs/hw/rasterizer.md`, "When the hardware
+    /// draws"). The snapshot and the line buffers are rebuilt each time and never saved: the output
+    /// is a pure function of saved state.
     pub(crate) fn render_3d(&mut self) {
         let gpu = self.io.gpu3d();
         let frame = Frame3d::new(gpu.scene(), gpu.render_regs(), gpu.disp3dcnt());

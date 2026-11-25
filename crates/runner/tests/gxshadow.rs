@@ -5,8 +5,8 @@
 //! polygons"), pixel by pixel, from the coordinates the ROM's source lists. It is never read back
 //! from the emulator: nothing below shares code with `ninge-core`.
 //!
-//! A shadow is black at alpha 15 blended over an opaque red floor, 63 x 16 / 32 = 31 in 6 bits,
-//! 15 in 5; with blending on a translucent polygon keeps its lower edge but not a vertical right one.
+//! A shadow is black at alpha 15 blended over an opaque red floor, 63 x 16 / 32 = 31 in 6 bits, 15
+//! in 5; with blending on a translucent polygon keeps its lower edge but not a vertical right one.
 
 use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};

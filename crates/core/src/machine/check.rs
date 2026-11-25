@@ -21,6 +21,7 @@ impl Machine {
         self.header == crate::cart::parse(rom).ok()
             && self.memory.is_well_formed()
             && self.screens_well_formed()
+            && self.frame3d_well_formed()
             && self.scheduler.is_well_formed()
             // A round in progress belongs to a booted program and to times a run can reach.
             && self.round.is_none_or(|round| {

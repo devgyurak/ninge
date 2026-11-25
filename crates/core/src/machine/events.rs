@@ -8,7 +8,7 @@ use super::run::RunControl;
 use super::{Machine, SCREEN_HEIGHT, arm7_instruction, arm9_instruction};
 use crate::bus::{Arm9View, TcmConfig, peek};
 use crate::io::dma::Trigger;
-use crate::io::timing::{FIRST_VBLANK_LINE, LINES};
+use crate::io::timing::{FIRST_VBLANK_LINE, LINES, RENDER_START_LINE};
 use crate::scheduler::{Event, EventKind, LINE_CYCLES, LineEvent, Participants, Scheduler};
 use crate::spu::{CAPTURES, CaptureWrites, OUTPUT_SAMPLE_CYCLES};
 
@@ -263,6 +263,12 @@ impl Machine {
             self.present_frame();
         }
         self.render_line(line);
+        // The rendering engine starts the next frame's lines here, from the scene SWAP_BUFFERS handed
+        // on at line 192 and the registers as the VBlank left them (`rasterizer.md`, "When the
+        // hardware draws").
+        if line == usize::from(RENDER_START_LINE) {
+            self.render_3d();
+        }
         // The start of line 0 ends the frame; its own line 0 belongs to the next one.
         if line == 0 {
             self.frame_count = self.frame_count.wrapping_add(1);

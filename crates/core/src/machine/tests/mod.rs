@@ -15,6 +15,7 @@ mod input;
 mod ipc;
 mod irq;
 mod mmdisp;
+mod raster;
 mod rebuild;
 mod rtc;
 mod save;

@@ -4,6 +4,7 @@
 use crate::bus::{Arm7View, Arm9View, Memory, TcmConfig};
 use crate::cart::{Header, SaveError, SaveType};
 use crate::cpu::{ARM7_INSTRUCTION_COST, ARM9_INSTRUCTION_COST, Cpu};
+use crate::gpu2d::Pixel3d;
 use crate::hle::{BiosState, SwiRecord};
 use crate::input::Input;
 use crate::io::Io;
@@ -48,6 +49,13 @@ pub struct Machine {
     pub(crate) bottom: Vec<u32>,
     pub(crate) work_top: Vec<u32>,
     pub(crate) work_bottom: Vec<u32>,
+    // The 3D layer's picture: the last frame the rasterizer drew, 256x192 pixels, which lines 0-191
+    // show as engine A's BG0. It is drawn at the start of line 214 from the scene and registers
+    // (`render_3d`) and saved, so a state taken between that line and the lines that show it, or
+    // mid-frame, continues as an uninterrupted run does (`docs/hw/rasterizer.md`, "Where the buffer
+    // lives and whether it is saved"). A `Vec` for the same reason as the screens.
+    // Invariant: it holds exactly SCREEN_WIDTH * SCREEN_HEIGHT pixels (`is_well_formed`).
+    pub(crate) frame3d: Vec<Pixel3d>,
     // The ROM image is an input, not machine state: it is skipped on save and a savestate
     // loads onto a machine that was handed the ROM again, so a savestate never embeds the
     // (possibly commercial) image (`savestate` module docs). Defaults to empty.
@@ -188,6 +196,7 @@ impl Machine {
             bottom: blank_screen(),
             work_top: blank_screen(),
             work_bottom: blank_screen(),
+            frame3d: vec![Pixel3d::default(); SCREEN_WIDTH * SCREEN_HEIGHT],
             rom: Vec::new(),
             frame_count: 0,
             arm9: Cpu::new(),
@@ -333,6 +342,16 @@ impl Machine {
             .all(|buffer| buffer.len() == SCREEN_WIDTH * SCREEN_HEIGHT)
     }
 
+    /// Whether the 3D picture is the size `new` allocates and holds only values the rasterizer
+    /// writes: a 15-bit colour and a 5-bit alpha.
+    fn frame3d_well_formed(&self) -> bool {
+        self.frame3d.len() == SCREEN_WIDTH * SCREEN_HEIGHT
+            && self
+                .frame3d
+                .iter()
+                .all(|pixel| pixel.color <= 0x7FFF && pixel.alpha <= 31)
+    }
+
     /// The frame being drawn is complete: it becomes the one [`Machine::frame`] returns, and the
     /// buffers it replaces are drawn over by the next frame's lines.
     pub(crate) fn present_frame(&mut self) {
@@ -346,6 +365,7 @@ impl Machine {
     pub(crate) fn render_frame(&mut self) {
         // A frame starts from the registers, as VBlank leaves it.
         self.io.gpu2d_mut().vblank_started();
+        self.render_3d();
         (0..SCREEN_HEIGHT).for_each(|y| self.render_line(y));
         self.present_frame();
     }

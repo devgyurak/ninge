@@ -6,12 +6,13 @@
 
 use crate::SCREEN_WIDTH;
 use crate::bus::{ExtPalette, VramWindow};
+use serde::{Deserialize, Serialize};
 
 /// One pixel of the 3D layer: RGB555 colour and a 5-bit alpha, 0 transparent to 31 opaque
 /// (`docs/hw/rasterizer.md`, "The output").
 // TODO(hw-unverified): the rasterizer works at 6 bits per channel and narrows to this 15-bit colour
 // at its output; the hardware's narrowing, if any, is not stated (`rasterizer.md`, "Unverified").
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Pixel3d {
     pub(crate) color: u16,
     pub(crate) alpha: u8,
@@ -20,9 +21,8 @@ pub(crate) struct Pixel3d {
 /// One line of the 3D layer, as the rasterizer (#49) makes it for engine A to take as BG0.
 pub(crate) type Line3d = [Pixel3d; SCREEN_WIDTH];
 
-/// A 3D line with nothing in it: every pixel transparent. Until the rasterizer draws, this is the
-/// 3D layer.
-// TODO(phase7): the rasterizer (#49) fills the line in.
+/// A 3D line with nothing in it: every pixel transparent. The machine draws the real line from the
+/// rasterizer; this is what the 2D unit tests compose over.
 pub(crate) const TRANSPARENT_LINE: Line3d = [Pixel3d { color: 0, alpha: 0 }; SCREEN_WIDTH];
 
 /// DISPCNT bit 3: BG0 is the 3D engine's layer (engine A only).

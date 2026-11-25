@@ -5,7 +5,8 @@
 
 use super::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::bus::Memory;
-use crate::gpu2d::{EngineId, Gpu2d, Line3d, TRANSPARENT_LINE, expand_line};
+use crate::gpu2d::{EngineId, Gpu2d, Line3d, Pixel3d, TRANSPARENT_LINE, expand_line};
+use crate::gpu3d::{Frame3d, SequentialExecutor};
 
 /// The display capture stage: it sees engine A's composed graphics screen for the line, in the
 /// colour the hardware has and before the master brightness, and stores it in the VRAM block
@@ -38,6 +39,19 @@ fn capture_tap(
 }
 
 impl Machine {
+    /// Draws the whole 3D frame into `frame3d` from the scene the last SWAP_BUFFERS handed on and
+    /// the rendering registers as they are now (`docs/hw/rasterizer.md`, "When the hardware draws").
+    /// The snapshot and the line buffers are rebuilt each time and never saved: the output is a pure
+    /// function of saved state.
+    pub(crate) fn render_3d(&mut self) {
+        let gpu = self.io.gpu3d();
+        let frame = Frame3d::new(gpu.scene(), gpu.render_regs(), gpu.disp3dcnt());
+        let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; SCREEN_HEIGHT];
+        frame.draw(&SequentialExecutor, &mut lines);
+        self.frame3d.clear();
+        self.frame3d.extend(lines.iter().flatten());
+    }
+
     /// Draws visible line `y` of both screens into the frame being drawn, from the registers and
     /// memory as they are now (`docs/hw/bg-text.md`, "Lines"). A line past the last visible one is
     /// not drawn.
@@ -60,9 +74,12 @@ impl Machine {
         let mut line_a = [0; SCREEN_WIDTH];
         let mut line_b = [0; SCREEN_WIDTH];
         let mut composed = [0; SCREEN_WIDTH];
-        // The 3D layer's line: transparent until the rasterizer draws (#49).
-        // TODO(phase7): the rasterizer's line for `y`.
-        let three_d = &TRANSPARENT_LINE;
+        // The 3D layer's line, from the frame drawn at line 214 (`render_3d`).
+        let three_d = self
+            .frame3d
+            .get(y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH)
+            .and_then(|row| <&Line3d>::try_from(row).ok())
+            .unwrap_or(&TRANSPARENT_LINE);
         let inputs_a = self.memory.engine_inputs(EngineId::A).with_three_d(three_d);
         // The layers are composed when the screen shows them; a capture reads them in every
         // display mode, so it will ask for them too (`display-capture.md`).

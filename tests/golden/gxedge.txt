@@ -1,0 +1,2 @@
+# Golden frames for testroms/gxedge. Format and review flow: tests/golden/README.md.
+frames=4 top=1d621d2c62f33efd bottom=1a0564b2e8de2325

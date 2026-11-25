@@ -169,6 +169,17 @@ enum Position {
     Last(u64),
 }
 
+/// What one output sample asks of the machine ([`Spu::tick`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Tick {
+    /// The caught-up generators, to store with [`Spu::set_decoders`].
+    pub(crate) decoders: [Decoders; CHANNELS],
+    /// The left and right output of the sample.
+    pub(crate) output: [i16; 2],
+    /// The writes the capture units owe at this sample.
+    pub(crate) captures: [Option<CaptureWrites>; CAPTURES],
+}
+
 /// The generators a channel advances with the sample clock: the IMA-ADPCM decoder and the noise
 /// register. A channel uses at most one, by its format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +423,12 @@ impl Channel {
     /// must have caught up to `now` first. After a one-shot ends the sample is 0, or the last one with Hold set
     /// (`spu.md`, "Position").
     pub fn sample(&self, now: u64, read: impl Fn(u32) -> u8) -> i32 {
+        self.sample_using(&self.decoders, now, read)
+    }
+
+    /// [`Channel::sample`] with the generators `decoders` instead of the stored ones, which
+    /// [`Spu::tick`] uses before the caught-up states are stored.
+    fn sample_using(&self, decoders: &Decoders, now: u64, read: impl Fn(u32) -> u8) -> i32 {
         let Some(elapsed) = self.elapsed(now) else {
             return 0;
         };
@@ -422,7 +439,7 @@ impl Channel {
             return if PSG_CHANNELS.contains(&self.latched.channel) {
                 psg::duty_level(elapsed, self.duty())
             } else {
-                self.decoders.noise.level()
+                decoders.noise.level()
             };
         }
         let sad = self.latched.sad;
@@ -434,7 +451,7 @@ impl Channel {
                 let at = sad.wrapping_add((index * 2) as u32);
                 i32::from(i16::from_le_bytes([read(at), read(at.wrapping_add(1))]))
             }
-            FORMAT_ADPCM => self.decoders.adpcm.pcm(),
+            FORMAT_ADPCM => decoders.adpcm.pcm(),
             _ => 0,
         }
     }
@@ -827,6 +844,27 @@ impl Spu {
             cnt: 0,
             bias: START_BIAS,
             captures: [Capture::default(); CAPTURES],
+        }
+    }
+
+    /// One output sample at master time `time` (`spu.md`, "Output samples"): every channel is
+    /// caught up with the sample clock and read through `read`, the ARM7's side-effect-free byte
+    /// read; the samples are mixed; `audible` says whether the gates outside the unit (the
+    /// speakers and the sound amplifier, `spu.md`, "The gates") let the sound through; and the
+    /// writes the capture units owe are worked out from the same samples and mix
+    /// (`sound-capture.md`, "Model"). Pure: the machine stores [`Tick::decoders`] and performs
+    /// [`Tick::captures`], because `read` borrows the machine this unit sits in, so the unit
+    /// cannot change itself from inside the call.
+    pub(crate) fn tick(&self, time: u64, audible: bool, read: impl Fn(u32) -> u8 + Copy) -> Tick {
+        let decoders: [Decoders; CHANNELS] =
+            std::array::from_fn(|x| self.channels[x].advanced(time, read));
+        let samples =
+            std::array::from_fn(|x| self.channels[x].sample_using(&decoders[x], time, read));
+        let mix = self.mix(&samples, self.adding(time));
+        Tick {
+            decoders,
+            output: self.output_mixed(&mix, audible),
+            captures: self.capture_writes(&mix, &samples, time),
         }
     }
 

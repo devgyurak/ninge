@@ -13,6 +13,7 @@ use proptest::prelude::*;
 
 mod addition;
 mod capture;
+mod tick;
 
 /// TMR `FFF0h`: 16 steps of 4 master cycles.
 const TMR: u32 = 0xFFF0;

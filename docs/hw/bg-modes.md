@@ -85,7 +85,9 @@ The BG mode says what kind each layer is. A kind is how the layer gets its pixel
   - bit 7 = 1, bit 2 = 0: 256-colour bitmap;
   - bit 7 = 1, bit 2 = 1: direct-colour bitmap.
 - **Large bitmap** is a 256-colour bitmap that spans the whole 512 KiB of engine A's BG VRAM.
-- **3D** is the 3D engine's picture and is not drawn yet (`TODO(phase7)`).
+- **3D** is the 3D engine's picture: the layer reads the 3D line (`rasterizer.md`, "The output"), a
+  pixel of alpha 0 being transparent. The line is transparent until the rasterizer exists (#49,
+  `TODO(phase7)`).
 - **None** draws nothing: the layer is absent even if its DISPCNT enable bit is set.
 
 Engine B is the same table except that BG0 is always text (DISPCNT bit 3 does not exist there)
@@ -241,7 +243,11 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
   layer; the layers behind it or the backdrop show.
 - An affine or extended layer in a mode where the layer is another kind uses the kind the mode
   gives. A layer that is none draws nothing, even with its enable bit set.
-- Mode 6 with BG0's enable bit: BG0 is the 3D layer, so it draws nothing yet.
+- Mode 6 with BG0's enable bit and DISPCNT bit 3: BG0 is the 3D layer, which is transparent until
+  the rasterizer exists.
+- BG0HOFS scrolls the 3D layer horizontally over 512 pixels: the 256 of the picture, then 256
+  transparent ones, then the picture again (GBATEK "DS 3D Final 2D Output", "Scrolling"). BG0VOFS,
+  rotation, scaling and mosaic do not apply to it; of BG0CNT only the priority does.
 - A direct-colour pixel of 0000h is transparent, so is 7FFFh; 8000h is opaque black.
 - The same tile data can serve several layers, and an affine map may use tile 0.
 - BGxX or BGxY written twice before a line leaves the second value as the line's origin.
@@ -249,6 +255,9 @@ bottom, so the first line of a frame uses the registers as they were at VBlank.
 
 ## Unverified
 
+- **Mode 6 with DISPCNT bit 3 clear:** BG0 draws nothing (GBATEK calls BG0 "3D only" in mode 6 and
+  does not say what the layer is without the bit). — `gpu2d/kind.rs` (`drawn_kind`) — verify by a test
+  ROM on real hardware.
 - **Reset values** of PA-PD, BGxX, BGxY and MOSAIC are not stated; they start at 0, so an affine
   layer that software forgot to set up is a single point. — `Engine::new` in
   `crates/core/src/gpu2d/engine.rs` — verify by a test ROM on real hardware.

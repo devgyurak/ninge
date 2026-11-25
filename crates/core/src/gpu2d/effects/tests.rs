@@ -20,6 +20,7 @@ const fn pixel(color: u16, layer: u8) -> Pixel {
         color,
         layer,
         semi: false,
+        alpha: None,
     }
 }
 
@@ -28,6 +29,7 @@ const fn semi(color: u16) -> Pixel {
         color,
         layer: LAYER_OBJ,
         semi: true,
+        alpha: None,
     }
 }
 

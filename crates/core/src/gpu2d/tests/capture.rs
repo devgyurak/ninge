@@ -8,6 +8,7 @@ use super::*;
 
 /// DISPCAPCNT (`docs/hw/display-capture.md`, "Registers").
 const DISPCAPCNT: u32 = 0x0400_0064;
+const BG0HOFS: u32 = 0x0400_0010;
 /// VRAMCNT_B, and bank B's LCDC window (bank B is 128 KiB after bank A).
 const VRAMCNT_B: u32 = 0x0400_0241;
 const LCDC_B: u32 = 0x0682_0000;
@@ -439,8 +440,41 @@ fn given_a_small_size_when_source_b_is_captured_then_its_rows_use_the_capture_wi
 }
 
 #[test]
+fn given_a_bg0_scroll_when_the_3d_screen_is_captured_then_the_line_is_not_scrolled() {
+    // The capture takes the renderer's line as it is; only the composed layer scrolls
+    // (`display-capture.md`, "Unverified").
+    let mut m = capture_machine();
+    w32(&mut m, DISPCAPCNT, ENABLE | WRITE_B | size(3) | (1 << 24));
+    w16(&mut m, BG0HOFS, 3);
+    let mut three_d = TRANSPARENT_LINE;
+    three_d[0] = Pixel3d {
+        color: 0x1234,
+        alpha: 31,
+    };
+    m.io.gpu2d_mut().begin_line(0);
+    let capture = m.io.gpu2d().capture_line(0).expect("a capture is running");
+    let pixels = capture.pixels(&[0x7FFF; SCREEN_WIDTH], &three_d, &[0; SCREEN_WIDTH]);
+    assert_eq!(pixels[0], 0x9234);
+}
+
+#[test]
 fn given_source_a_when_the_capture_unit_runs_then_the_vram_block_is_not_read() {
     let mut m = blend_machine(RED15);
     w16(&mut m, LCDC_A, GREEN15);
     assert_eq!(stored(m, 0), ALPHA | RED15);
+}
+
+#[test]
+fn given_the_3d_screen_as_source_a_when_a_3d_pixel_is_opaque_then_it_is_captured_with_alpha_1() {
+    let mut m = capture_machine();
+    w32(&mut m, DISPCAPCNT, ENABLE | WRITE_B | size(3) | (1 << 24));
+    let mut three_d = TRANSPARENT_LINE;
+    three_d[1] = Pixel3d {
+        color: 0x1234,
+        alpha: 31,
+    };
+    m.io.gpu2d_mut().begin_line(0);
+    let capture = m.io.gpu2d().capture_line(0).expect("a capture is running");
+    let pixels = capture.pixels(&[0x7FFF; SCREEN_WIDTH], &three_d, &[0; SCREEN_WIDTH]);
+    assert_eq!((pixels[0], pixels[1]), (0, 0x9234));
 }

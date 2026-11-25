@@ -5,7 +5,7 @@
 
 use super::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::bus::Memory;
-use crate::gpu2d::{EngineId, Gpu2d, expand_line};
+use crate::gpu2d::{EngineId, Gpu2d, Line3d, TRANSPARENT_LINE, expand_line};
 
 /// The display capture stage: it sees engine A's composed graphics screen for the line, in the
 /// colour the hardware has and before the master brightness, and stores it in the VRAM block
@@ -16,6 +16,7 @@ fn capture_tap(
     gpu: &Gpu2d,
     y: usize,
     composed: &[u16; SCREEN_WIDTH],
+    three_d: &Line3d,
     fifo: &[u16; SCREEN_WIDTH],
 ) {
     let Some(capture) = gpu.capture_line(y) else {
@@ -30,7 +31,7 @@ fn capture_tap(
         .copied()
         .flatten();
     let b = capture.source_b(y, read_bank, fifo);
-    let pixels = capture.pixels(composed, &b);
+    let pixels = capture.pixels(composed, three_d, &b);
     if let Some(bank) = memory.lcdc_bank_mut(capture.write_block()) {
         capture.store(y, bank, &pixels);
     }
@@ -59,7 +60,10 @@ impl Machine {
         let mut line_a = [0; SCREEN_WIDTH];
         let mut line_b = [0; SCREEN_WIDTH];
         let mut composed = [0; SCREEN_WIDTH];
-        let inputs_a = self.memory.engine_inputs(EngineId::A);
+        // The 3D layer's line: transparent until the rasterizer draws (#49).
+        // TODO(phase7): the rasterizer's line for `y`.
+        let three_d = &TRANSPARENT_LINE;
+        let inputs_a = self.memory.engine_inputs(EngineId::A).with_three_d(three_d);
         // The layers are composed when the screen shows them; a capture reads them in every
         // display mode, so it will ask for them too (`display-capture.md`).
         let capture_wants_a = gpu
@@ -78,7 +82,7 @@ impl Machine {
         );
         let inputs_b = self.memory.engine_inputs(EngineId::B);
         let brightness_b = gpu.render_line_b(y, &inputs_b, &mut line_b);
-        capture_tap(&mut self.memory, gpu, y, &composed, &fifo);
+        capture_tap(&mut self.memory, gpu, y, &composed, three_d, &fifo);
         let (out_a, out_b) = if gpu.engine_a_on_top() {
             (&mut self.work_top, &mut self.work_bottom)
         } else {

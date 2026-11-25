@@ -92,8 +92,9 @@ read offset is ignored (zero) there. A read block that is not in LCDC mode reads
 **Source B from the FIFO.** The pixel is the next pixel of the main-memory display (below), for
 `x < width` of the line; the FIFO delivers a whole 256-pixel line per line whatever the size.
 
-**Source A from the 3D screen** (bit 24 = 1) needs the 3D engine: `TODO(phase7)`. Until then source
-A is a transparent zero pixel (colour 0, alpha 0) in that case.
+**Source A from the 3D screen** (bit 24 = 1) is the 3D layer's line (`rasterizer.md`, "The output"):
+colour with alpha 1 where the pixel's 5-bit alpha is above 0, a zero pixel elsewhere. Until the
+rasterizer draws (#49) the line is transparent, so source A is a zero pixel in that case.
 
 ## The main-memory display
 
@@ -152,7 +153,8 @@ does is the next frame's.
 
 ## Not implemented yet
 
-- The 3D screen as source A, and the 3D layer in the layered picture (`TODO(phase7)`).
+- The rasterizer that fills the 3D line (#49): source A from the 3D screen and BG0 as the 3D layer
+  read a transparent line until then (`TODO(phase7)`).
 - VRAM wait states from the capture unit's writes. The timing is approximate (`scheduler.md`).
 
 ## Unverified
@@ -161,6 +163,12 @@ GBATEK does not say the following; each is a model, marked `TODO(hw-unverified)`
 
 - **EVA or EVB above 16, and the sum past 16:** factors limited to 16, each channel saturated at 31.
 - **The alpha of a 2D graphics-screen pixel:** 1 for every pixel. The alpha of a FIFO pixel: 1.
+- **The alpha of a 3D-screen pixel:** 1 when its 5-bit alpha is above 0, else a zero pixel.
+- **BG0HOFS and the captured 3D screen:** the 3D screen that source A takes is the renderer's line
+  before BG0's horizontal scroll, which only the composed BG0 applies (`bg-modes.md`, "Edge
+  cases"). GBATEK says the scroll applies to the 3D layer as a BG0 and does not say whether the
+  capture's 3D source sees it. — `crates/core/src/gpu2d/capture.rs` (`source_a`) — verify by a test
+  ROM that scrolls BG0 and captures the 3D screen.
 - **The row stride of the 128-wide size**, for both the write and the VRAM source-B read: 128 pixels,
   not 256.
 - **A write block not in LCDC mode:** nothing is written. A read block not in LCDC mode: 0.

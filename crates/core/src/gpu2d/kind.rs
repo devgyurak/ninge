@@ -15,11 +15,13 @@ pub(super) enum Kind {
     Extended,
     /// The large 256-colour bitmap of BG mode 6 (engine A only).
     Large,
-    /// The 3D layer or absent: nothing is drawn (`TODO(phase7)` for the 3D layer).
+    /// The 3D engine's picture, taken from the line the rasterizer made (`docs/hw/rasterizer.md`).
+    ThreeD,
+    /// Absent: nothing is drawn.
     Other,
 }
 
-use Kind::{Affine, Extended, Large, Other, Text};
+use Kind::{Affine, Extended, Large, Other, Text, ThreeD};
 
 /// DISPCNT bits 0-2: the BG mode.
 const DISPCNT_BG_MODE_MASK: u32 = 0x7;
@@ -36,8 +38,7 @@ const KINDS: [[Kind; 4]; 8] = [
     [Text, Text, Affine, Extended],
     [Text, Text, Extended, Extended],
     // Mode 6: BG0 is the 3D layer only, BG2 the large bitmap (GBATEK "DS Video BG Modes / Control").
-    // TODO(phase7): the 3D layer.
-    [Other, Other, Large, Other],
+    [ThreeD, Other, Large, Other],
     [Other, Other, Other, Other],
 ];
 
@@ -53,11 +54,18 @@ pub(super) fn kind_of(dispcnt: u32, layer: usize, spec: &EngineSpec) -> Kind {
 }
 
 /// The kind of layer `layer` if this call draws it: switched on in `dispcnt` (the DISPCNT as the
-/// engine sees it), a kind this phase draws in the BG mode, and not BG0 handed to the 3D engine
-/// (`TODO(phase7)`).
+/// engine sees it) and a kind that exists in the BG mode. BG0 with DISPCNT bit 3 set is the 3D
+/// layer in any mode that has a BG0; with it clear, mode 6's BG0 is not drawn.
+// TODO(hw-unverified): mode 6 with DISPCNT bit 3 clear draws no BG0 (`bg-modes.md`, "Unverified").
 pub(super) fn drawn_kind(dispcnt: u32, layer: usize, spec: &EngineSpec) -> Option<Kind> {
     let on = dispcnt >> (DISPCNT_LAYER_SHIFT + layer as u32) & 1 != 0;
     let three_d = layer == 0 && dispcnt & DISPCNT_BG0_3D != 0;
     let kind = kind_of(dispcnt, layer, spec);
-    (on && !three_d && kind != Other).then_some(kind)
+    let kind = match (three_d, kind) {
+        (_, Other) => Other,
+        (true, _) => ThreeD,
+        (false, ThreeD) => Other,
+        (false, kind) => kind,
+    };
+    (on && kind != Other).then_some(kind)
 }

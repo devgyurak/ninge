@@ -17,6 +17,7 @@
 // TODO(phase7): the rendering engine that draws the polygons is #49-#52.
 
 mod cycles;
+mod executor;
 mod lighting;
 mod matrix;
 mod polygon;
@@ -29,6 +30,7 @@ use crate::io::device::{
 use crate::io::irq::{GXFIFO_IRQ, Requests};
 use crate::io::timing::next_vblank_start;
 use cycles::command_cycles;
+pub use executor::{ScanlineExecutor, SequentialExecutor};
 use lighting::unpack;
 use matrix::{IDENTITY, Matrices, Matrix, Target, shape};
 use polygon::Geometry;

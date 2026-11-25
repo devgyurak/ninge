@@ -22,6 +22,8 @@ builds it with `Requests::for_cpu::<ARM9>`); only `Io::request_irq` hands them t
 `docs/STATUS.md`): the rasterizer is a pure per-scanline function in ninge-core, driven
 through a `ScanlineExecutor` trait that core defines with a sequential implementation. The
 `rayon` executor lives outside core and is passed in as a generic parameter (static dispatch,
-no thread dependency in core). Each scanline reads only an immutable snapshot and writes only
-its own line, so scheduling cannot change the result; a test pins parallel output =
-sequential output.
+no thread dependency in core). The `rayon` executor lives in the frontend, and the executor is passed
+per call to the function that draws the frame, not as a type parameter of `Machine` (decided in
+#322). Each scanline reads only an immutable snapshot and writes only
+its own line, so scheduling cannot change the result; a test in the frontend (where the
+executor lives; the runner stays sequential) pins parallel output = sequential output.

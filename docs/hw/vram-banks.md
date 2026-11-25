@@ -8,9 +8,10 @@ mapping of banks C and D with VRAMSTAT)
 The DS has nine VRAM banks, A to I (656 KiB in all). Each has its own control register on the
 ARM9 side. This note grows with #35. It models every bank, its register, the plain CPU (LCDC)
 mapping, the BG and OBJ mappings of both 2D engines, and the ARM7's own mapping of banks C and D.
-The mappings only the display controller sees are decoded but not read by the CPU: the texture ones
-are the renderer's `TODO(phase7)`; the extended-palette ones are read by the 2D engines
-(`extended-palettes.md`, #32).
+The mappings only the display controller sees are not read by the CPU: the texture ones are read by
+the rasterizer through `Memory::textures` (the image space by byte offset, 4 slots of 128 KiB, and
+the palette space by byte offset, 6 slots of 16 KiB; a slot no bank backs reads 0); the
+extended-palette ones are read by the 2D engines (`extended-palettes.md`, #32).
 
 ## The banks
 
@@ -212,6 +213,10 @@ switches bank C to LCDC and reads the words the ARM7 stored: the same bytes.
 
 ## Unverified
 
+- **A texture slot no bank backs reads 0**, and so does an offset past the image space (512 KiB)
+  or the palette space (96 KiB); an odd palette offset reads the colour that holds it; and when two
+  banks back one slot the earlier letter wins. — `bus/memory/vram.rs` (`tex_slots`, `Textures`) —
+  verify by a test ROM on real hardware.
 - **Reset value of the VRAMCNT registers.** GBATEK gives none; each starts at 0, so every bank is
   disabled and unmapped until software enables it. — `Memory::new` in
   `crates/core/src/bus/memory/mod.rs` — verify by a test ROM on real hardware.

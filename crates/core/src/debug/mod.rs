@@ -20,7 +20,7 @@ use crate::cpu::Cpu;
 use crate::input::Input;
 use crate::machine::Machine;
 
-pub use crate::bus::{ExtPaletteBanks, VramBankState, VramMapping, WramShare, WramState};
+pub use crate::bus::{ExtPaletteBanks, Textures, VramBankState, VramMapping, WramShare, WramState};
 pub use crate::gpu2d::{
     AffineBg, AffineFormat, BrightnessMode, EffectMode, Effects, EngineId, Gpu2d, LayerSet,
     MasterBrightness, Mosaic, OBJ_COUNT, ObjAttrs, Targets, TextBg, WindowRect, Windows,
@@ -266,6 +266,13 @@ impl<'a> Inspect<'a> {
     // The debugger's VRAM bank map (#58) shows it beside the banks.
     pub fn ext_palette_banks(&self, which: EngineId) -> ExtPaletteBanks {
         self.machine.memory.ext_palette_banks(which == EngineId::B)
+    }
+
+    /// The texture image and palette slots as the rasterizer reads them (`vram-banks.md`), from the
+    /// VRAMCNT registers as they are now.
+    // The debugger's texture viewer (#58) reads them; the rasterizer (#50) reads them from `Memory`.
+    pub fn textures(&self) -> Textures<'_> {
+        self.machine.memory.textures()
     }
 
     /// WRAMCNT as decoded: which 16 KiB halves of the shared WRAM each CPU owns.

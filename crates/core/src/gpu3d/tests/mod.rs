@@ -782,6 +782,7 @@ fn given_a_gxstat_write_when_it_returns_then_it_does_not_ask_for_the_signals() {
 }
 
 mod engine;
+mod executor;
 mod lighting;
 mod matrices;
 mod matrix;

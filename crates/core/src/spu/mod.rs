@@ -20,7 +20,7 @@ mod mixer;
 mod psg;
 
 use crate::cpu::Bus;
-use crate::io::device::{Checked, Cx, Device, Effect, Width, read_bytes, write_bytes};
+use crate::io::device::{Checked, Cx, Device, Effect, StateTimes, Width, read_bytes, write_bytes};
 use serde::{Deserialize, Serialize};
 
 pub use adpcm::Adpcm;
@@ -1209,7 +1209,7 @@ impl Checked for Spu {
     /// checked against `now`: any end time is one a program can have reached. A stopped channel's
     /// sample clock is all zero and a started one's period is one a TMR value gives, as a
     /// capture's is.
-    fn well_formed(&self, _now: u64) -> bool {
+    fn well_formed(&self, _times: StateTimes) -> bool {
         let channels = self.channels.iter().enumerate().all(|(index, c)| {
             let clocked = if c.cnt & CNT_START == 0 {
                 c.clock == SampleClock::default()

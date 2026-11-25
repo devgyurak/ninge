@@ -14,7 +14,9 @@
 
 use crate::cart::save::{SaveChip, SaveType};
 use crate::input::Input;
-use crate::io::device::{Checked, Cx, Device, Effect, Fired, Width, read_bytes, write_bytes};
+use crate::io::device::{
+    Checked, Cx, Device, Effect, Fired, StateTimes, Width, read_bytes, write_bytes,
+};
 use crate::io::irq::{Requests, SPI_IRQ};
 use crate::spi::{FIRMWARE_LEN, FirmwareSettings, PowerManagement, Tsc, build};
 use serde::{Deserialize, Serialize};
@@ -272,7 +274,8 @@ impl Default for Spi {
 }
 
 impl Checked for Spi {
-    fn well_formed(&self, now: u64) -> bool {
+    fn well_formed(&self, times: StateTimes) -> bool {
+        let now = times.now;
         self.spicnt & !SPICNT_MASK == 0
             && self.firmware.kind() == SaveType::Flash256K
             && self.firmware.data().len() == FIRMWARE_LEN

@@ -8,6 +8,7 @@ use super::{
     ROMCTRL_OFFSET, ROMCTRL_READY, ROMCTRL_RESB, block_bytes,
 };
 use crate::cart::protocol::chip_id;
+use crate::io::device::StateTimes;
 use crate::io::device::{Checked, Device, Effect, Fired, Signal, Signals, Width, cx_with_rom};
 use crate::io::irq::{CARD_TRANSFER_IRQ, Requests};
 
@@ -509,28 +510,34 @@ fn given_states_the_slot_can_reach_when_checked_then_they_are_well_formed() {
     let idle = Cart::new();
     let mut busy = Cart::new();
     start_read::<true>(&mut busy, 0x9FFC, 6);
-    assert_eq!((idle.well_formed(0), busy.well_formed(0)), (true, true));
+    assert_eq!(
+        (
+            idle.well_formed(StateTimes::at(0)),
+            busy.well_formed(StateTimes::at(0))
+        ),
+        (true, true)
+    );
 }
 
 #[test]
 fn given_a_ready_word_with_nothing_left_when_checked_then_it_is_not_well_formed() {
     let mut cart = ready_read(0x8000, 7);
     cart.left = 0;
-    assert!(!cart.well_formed(0));
+    assert!(!cart.well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_position_outside_its_block_when_checked_then_it_is_not_well_formed() {
     let mut cart = Cart::new();
     cart.pos = 0x1000;
-    assert!(!cart.well_formed(0));
+    assert!(!cart.well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_length_that_is_not_a_word_multiple_when_checked_then_it_is_not_well_formed() {
     let mut cart = Cart::new();
     cart.left = 3;
-    assert!(!cart.well_formed(0));
+    assert!(!cart.well_formed(StateTimes::at(0)));
 }
 
 // ------------------------------------------------------------------------------------ timing
@@ -706,7 +713,7 @@ fn given_a_transfer_waiting_for_its_event_when_checked_without_one_then_it_is_no
     let mut cart = Cart::new();
     start_read::<true>(&mut cart, 0x8000, 1);
     cart.due = None;
-    assert!(!cart.well_formed(0));
+    assert!(!cart.well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -781,7 +788,7 @@ fn given_an_idle_slot_with_words_left_when_checked_then_it_is_not_well_formed() 
     let mut cart = Cart::new();
     cart.left = 4;
     cart.total = 4;
-    assert!(!cart.well_formed(0));
+    assert!(!cart.well_formed(StateTimes::at(0)));
 }
 
 #[test]
@@ -945,5 +952,5 @@ fn given_the_arm7_does_not_own_the_slot_when_it_sends_a_byte_then_it_reads_zero_
 fn given_a_busy_time_far_in_the_future_when_the_state_is_checked_then_it_is_not_well_formed() {
     let mut cart = spi_cart(0);
     cart.spi_done = u64::MAX;
-    assert!(!cart.well_formed(0));
+    assert!(!cart.well_formed(StateTimes::at(0)));
 }

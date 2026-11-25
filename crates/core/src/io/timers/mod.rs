@@ -13,7 +13,7 @@
 //! `slot_fire`).
 
 use crate::io::device::{
-    Checked, Cx, Device, Effect, Fired, SlotMask, Width, read_bytes, write_bytes,
+    Checked, Cx, Device, Effect, Fired, SlotMask, StateTimes, Width, read_bytes, write_bytes,
 };
 use crate::io::irq::{Requests, TIMER0_IRQ, TIMER1_IRQ, TIMER2_IRQ, TIMER3_IRQ};
 use crate::scheduler::SLICE;
@@ -332,8 +332,8 @@ impl<const ARM9: bool> Timers<ARM9> {
 }
 
 impl<const ARM9: bool> Checked for Timers<ARM9> {
-    fn well_formed(&self, now: u64) -> bool {
-        self.is_well_formed(now)
+    fn well_formed(&self, times: StateTimes) -> bool {
+        self.is_well_formed(times.now)
     }
 }
 

@@ -668,7 +668,7 @@ fn given_a_state_in_the_middle_of_a_packed_word_when_saved_and_loaded_then_it_co
 
 #[test]
 fn given_a_new_device_when_checked_then_it_is_well_formed() {
-    assert!(Gpu3d::new().well_formed(0));
+    assert!(Gpu3d::new().well_formed(StateTimes::at(0)));
 }
 
 /// Mutations of a new device that no program can reach, each of which `well_formed` must refuse.
@@ -691,7 +691,7 @@ fn malformed_states() -> Vec<usize> {
         .filter_map(|(index, mutate)| {
             let mut gpu = Gpu3d::new();
             mutate(&mut gpu);
-            gpu.well_formed(0).then_some(index)
+            gpu.well_formed(StateTimes::at(0)).then_some(index)
         })
         .collect()
 }
@@ -706,14 +706,14 @@ fn given_a_command_owing_more_than_it_takes_when_checked_then_it_is_refused() {
     let mut gpu = Gpu3d::new();
     gpu.command = MTX_PUSH;
     gpu.owed = 1;
-    assert!(!gpu.well_formed(0));
+    assert!(!gpu.well_formed(StateTimes::at(0)));
 }
 
 #[test]
 fn given_a_command_owing_its_parameters_when_checked_then_it_is_well_formed() {
     let mut gpu = Gpu3d::new();
     send(&mut gpu, &[SHININESS.into()]);
-    assert!(gpu.well_formed(0));
+    assert!(gpu.well_formed(StateTimes::at(0)));
 }
 
 /// The ID of each command in the note's table with its parameter count, and every other byte.

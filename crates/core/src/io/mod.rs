@@ -82,8 +82,8 @@ registry! {
         gpu2d / gpu2d_mut: Gpu2d = Gpu2d::new() => [Port::Gpu2d],
         /// The ARM9's divider and square-root unit (`divsqrt.md`).
         divsqrt: DivSqrt = DivSqrt::new() => [Port::DivSqrt],
-        /// The ARM9's 3D engine stub: DISP3DCNT, the geometry command decoder and GXSTAT
-        /// (`gx-stub.md`).
+        /// The ARM9's 3D engine: DISP3DCNT, the geometry engine with its FIFO, matrices and
+        /// polygon RAM, GXSTAT and the rendering registers (`geometry-engine.md`).
         gpu3d: Gpu3d = Gpu3d::new() => [Port::Gpu3d],
     }
     arm7 {

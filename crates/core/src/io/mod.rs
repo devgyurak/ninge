@@ -34,7 +34,7 @@ pub mod timing;
 
 use crate::gpu2d::Gpu2d;
 use crate::gpu3d::Gpu3d;
-use crate::input::Input;
+use crate::input::{Input, Touch};
 use crate::scheduler::{EventKind, Scheduler};
 use crate::spu::Spu;
 use cart::Cart;
@@ -109,6 +109,12 @@ registry! {
 }
 
 impl Io {
+    /// Sets the latched input as it is, unclamped, to build a corrupt state in a test.
+    #[cfg(test)]
+    pub(crate) fn latch_input_unclamped_for_test(&mut self, input: Input) {
+        self.input = input;
+    }
+
     /// Latches `input` as a frame begins (`keypad.md`, "Where the bits come from"). The one copy
     /// of the host's data: every device reads it through the access's [`Cx`].
     ///
@@ -116,6 +122,8 @@ impl Io {
     /// (`keypad.md`, "The keypad IRQ"); a request raised outside a CPU access takes the same
     /// [`Io::request_irq`] path as the events.
     pub(crate) fn latch_input(&mut self, input: Input) {
+        // A touch below the last row is the last row, as an input log writes it (`input-log.md`).
+        let input = input.with_touch(input.touch.map(Touch::clamped));
         let previous = std::mem::replace(&mut self.input, input);
         let requests = self
             .keypad9

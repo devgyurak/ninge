@@ -566,3 +566,21 @@ proptest! {
         prop_assert!(outcome.is_ok() || outcome.is_err());
     }
 }
+
+#[test]
+fn given_a_touch_below_the_last_row_when_encoded_then_the_reader_accepts_it_as_the_last_row() {
+    let input = Input::new().with_touch(Some(Touch { x: 7, y: 200 }));
+    let text = log(&encode_frame(1, &input));
+    let read = parse(&text).map(|parsed| parsed.frames.first().and_then(|frame| frame.touch));
+    assert_eq!(read, Ok(Some(Touch { x: 7, y: 191 })));
+}
+
+#[test]
+fn given_a_touch_below_the_last_row_when_latched_then_the_machine_holds_the_last_row() {
+    let mut machine = crate::Machine::new();
+    machine.run_frame(Input::new().with_touch(Some(Touch { x: 7, y: 200 })));
+    assert_eq!(
+        machine.inspect().input().touch,
+        Some(Touch { x: 7, y: 191 })
+    );
+}

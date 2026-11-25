@@ -34,6 +34,8 @@ impl Machine {
             })
             && self.arm9.is_well_formed()
             && self.arm7.is_well_formed()
+            // A latched touch is on the screen: the latch clamps it (`Touch::MAX_Y`).
+            && self.io.input().touch.is_none_or(|touch| touch == touch.clamped())
             // A booted machine between rounds is settled: the ARM7 is at `now` or one master cycle
             // past it. One that lags would spend the first round catching up. In a round a stop
             // interrupted the ARM7 has not caught up yet, and lags by up to a slice.

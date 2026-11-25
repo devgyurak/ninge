@@ -7,7 +7,12 @@ plus a ROM reproduces a run: the same frames, audio, and savestate bytes.
 The format is **version 1**. The module that reads and writes it is pure and lives in
 `ninge-core` (`crates/core/src/input_log/`), like the savestate format: it turns text into
 `Input` values and back and does no IO. The frontend (`ninge <rom> --record PATH`) writes logs
-and `ninge-runner replay` reads them.
+and `ninge-runner replay` reads them. The text functions are core's (`input_log::parse`,
+`encode_header`, `encode_frame`), so every host shares one format. In the runner, `InputLog`
+(`ninge_runner::log`) is the in-memory list of a run's frames, built on those functions:
+`InputLog::from_text` reads a log and `InputLog::to_text` writes one, so the golden helpers and the
+replay share one type. The frontend cannot depend on the runner (`AGENTS.md` §2), so a debugger's
+recorded session uses core's functions directly and keeps its own list.
 
 ## Shape
 
@@ -58,7 +63,10 @@ space-separated fields, in any order:
 
 **A field at its default is omitted**: no buttons, no touch, hinge open, no mic, `wall_time` 0.
 So `f=4` is a frame with nothing happening, and a log written before a field existed still
-replays, with that field at its default. The writer emits buttons in bit order.
+replays, with that field at its default. The writer emits buttons in bit order. A touch below the last row (y above 191) is written as
+the last row, so the writer never emits a line the reader refuses; the machine latches it as the
+last row too (`Touch::MAX_Y`), so the run that was recorded and its replay see the same input
+whatever host made the touch.
 
 `wall=` is part of the log. The clock chip reads it, so a replay that takes the host's clock
 instead of the recorded value does not reproduce the run.

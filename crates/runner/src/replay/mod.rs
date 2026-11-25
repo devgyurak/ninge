@@ -10,10 +10,10 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use ninge_core::cart::resolve_save;
-use ninge_core::input_log::{self, ParsedLog};
+use ninge_core::input_log;
 use ninge_core::{Machine, Screen};
 
-use crate::golden::InputLog;
+use crate::log::{InputLog, ReadLog};
 use crate::{RunReport, RunnerError, frame_hash};
 
 /// What `replay` was asked for.
@@ -134,11 +134,11 @@ impl Replay {
         log_text: &str,
         save_file: Option<Vec<u8>>,
     ) -> Result<Self, RunnerError> {
-        let ParsedLog {
+        let ReadLog {
             header,
-            frames,
+            log,
             dropped_partial_line,
-        } = input_log::parse(log_text)?;
+        } = InputLog::from_text(log_text)?;
         let mut machine = Machine::new();
         machine.load_rom(rom)?;
         let (kind, data) = resolve_save(Some(header.save_type), save_file)?;
@@ -154,8 +154,8 @@ impl Replay {
         )?;
         Ok(Self {
             machine,
-            log_frames: frames.len() as u64,
-            log: InputLog::new(frames),
+            log_frames: log.len() as u64,
+            log,
             dropped_partial_line,
         })
     }

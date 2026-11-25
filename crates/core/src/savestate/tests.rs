@@ -19,8 +19,8 @@ use crate::scheduler::LineEvent;
 use crate::{Buttons, Input, Machine, Screen, StopReason, StopSet};
 
 /// Length and FNV-1a 64 of a power-on machine's savestate: pins the layout (see the test).
-const PINNED_LEN: usize = 5_479_893;
-const PINNED_HASH: u64 = 0xe131a963b808273;
+const PINNED_LEN: usize = 5_578_200;
+const PINNED_HASH: u64 = 0x9564e5fa89c920bb;
 /// The same pin for `counter_rom` after 2 frames: a non-`None` header, non-zero registers and
 /// RAM, so a reordered `Header` or `Cpu` field changes it (the power-on pin cannot see those).
 /// The hash moved when direct boot began setting WRAMCNT = 3 (one register byte and the
@@ -129,8 +129,10 @@ const PINNED_HASH: u64 = 0xe131a963b808273;
 /// effective texture coordinates grew both states by 151: 12 + 4 + 4 + 1 + 128 + 2.
 /// Version 52 (#48): the geometry engine's POS_RESULT (four words) and VEC_RESULT (three halfwords)
 /// grew both states by 7, one zero byte each at power-on.
-const PINNED_BOOTED_LEN: usize = 6_069_817;
-const PINNED_BOOTED_HASH: u64 = 0x689e6e440b511dff;
+/// Version 56 (#49): the 3D layer's picture, 256 x 192 pixels of two zero bytes each at power-on and
+/// the length, grew both states by 98 307.
+const PINNED_BOOTED_LEN: usize = 6_168_124;
+const PINNED_BOOTED_HASH: u64 = 0x61f83b1b2ad43da9;
 /// Bytes before the encoded machine.
 const HEADER_LEN: usize = 28;
 /// The main-RAM word the counter program increments (outside the 0x100-byte ARM9 binary).
@@ -570,6 +572,36 @@ fn given_a_machine_with_drawn_frames_when_state_is_loaded_then_both_screens_equa
             target.frame(Screen::Top).iter().all(|&p| p == 0)
         ),
         (Ok(()), true, true, 49_152, false)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_short_3d_picture_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.frame3d.pop();
+    let mut target = booted(&rom, 0);
+    let before = target.clone();
+    let result = target.load_state(&saver.save_state());
+    assert_eq!(
+        (result, target == before),
+        (Err(SavestateError::Corrupt), true)
+    );
+}
+
+#[test]
+fn given_a_state_with_a_3d_pixel_of_alpha_32_when_loaded_then_it_is_corrupt_and_the_target_is_unchanged()
+ {
+    let rom = counter_rom();
+    let mut saver = booted(&rom, 1);
+    saver.frame3d[7].alpha = 32;
+    let mut target = booted(&rom, 0);
+    let before = target.clone();
+    let result = target.load_state(&saver.save_state());
+    assert_eq!(
+        (result, target == before),
+        (Err(SavestateError::Corrupt), true)
     );
 }
 

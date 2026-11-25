@@ -35,7 +35,7 @@ const ENABLE_HBLANK: u16 = 1 << 4;
 const ENABLE_VCOUNT: u16 = 1 << 5;
 const IRQ_MODE: u32 = 0x12;
 
-fn machine() -> Machine {
+pub(super) fn machine() -> Machine {
     let mut image = Image::valid();
     image.arm9_code = words(&[0xEAFF_FFFE]);
     image.arm7_code = words(&[0xEAFF_FFFE]);
@@ -46,7 +46,7 @@ fn machine() -> Machine {
 
 /// Runs until the master clock is exactly `time`; events due at `time` have fired. Whole rounds
 /// while a full slice fits, then single steps, so the clock never passes `time`.
-fn run_to(m: &mut Machine, time: u64) {
+pub(super) fn run_to(m: &mut Machine, time: u64) {
     while m.scheduler.now() + SLICE <= time {
         run_round(m);
     }
@@ -64,7 +64,7 @@ fn read9(m: &Machine, addr: u32) -> u16 {
 }
 
 /// A line number's start time.
-fn line_start(line: u64) -> u64 {
+pub(super) fn line_start(line: u64) -> u64 {
     line * LINE
 }
 

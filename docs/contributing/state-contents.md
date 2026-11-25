@@ -12,7 +12,7 @@ length:
 | The buffer is | Use | Check on load | Example |
 |---|---|---|---|
 | at most 32 elements | a plain array `[T; N]` (serde derives it) | none when every bit pattern is a value (the matrix stacks); a mask check in `well_formed` when bits are unused (`RenderRegs::edge_color`) | the matrix stacks, `RenderRegs::edge_color` |
-| a fixed size that serde cannot derive as an array | `Vec<T>` made at full length, never resized | `well_formed` checks the length | the four frame buffers (`Machine::top` and the three others), `gpu3d::queue::Queue::fifo`, main RAM |
+| a fixed size that serde cannot derive as an array | `Vec<T>` made at full length, never resized | `well_formed` checks the length | the four frame buffers (`Machine::top` and the three others), the 3D picture (`Machine::frame3d`), `gpu3d::queue::Queue::fifo`, main RAM |
 | a count that varies up to a hardware bound | `Vec<T>` made with `with_capacity(bound)` | `well_formed` checks the count against the bound; `Checked::restore` reserves the room again, since a decoded `Vec` has exactly its length | `gpu3d::polygon::Ram` (Polygon RAM and Vertex RAM) |
 
 Rules for all three:
@@ -84,11 +84,12 @@ layout change now.
 
 ## The size of a state
 
-The savestate layout test pins the length: 5,479,892 bytes at power-on and 6,069,816 for the
+The savestate layout test pins the length: 5,578,200 bytes at power-on and 6,168,124 for the
 counter test ROM after two frames. The large parts are main RAM (4 MiB), VRAM (656 KiB), the
 firmware image (256 KiB) and the save memory, and the four frame buffers (`top`, `bottom`,
 `work_top`, `work_bottom`: 49,152 `u32` pixels each, saved so that save, load and continue equals
-an uninterrupted run, #28).
+an uninterrupted run, #28), and the 3D picture (`frame3d`: 49,152 pixels, the last frame the
+rasterizer drew at line 214, saved for the same reason, #49).
 
 Decided: no change now. A state of this size is fine for a save slot and a replay checkpoint. It is
 too large to take every frame: rewind or run-ahead would have to delta or compress what changes,

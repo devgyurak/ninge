@@ -14,7 +14,8 @@
 //! Only the ARM9 sees these registers, so [`Gpu3d`] is a plain type implementing `Device<true>`
 //! (`AGENTS.md` §4, "Per-CPU devices"): the "seen by one CPU" class. It registers directly with its
 //! own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
-// TODO(phase7): the rendering engine that draws the polygons is #49-#52.
+// The rasterizer (`raster`) draws the polygons; textures, toon, edge, fog and AA are #50-#51 and the
+// parallel executor is #52.
 
 mod cycles;
 mod executor;
@@ -22,6 +23,7 @@ mod lighting;
 mod matrix;
 mod polygon;
 mod queue;
+mod raster;
 mod render;
 
 use crate::io::device::{
@@ -37,6 +39,7 @@ use matrix::{IDENTITY, Matrices, Matrix, Target, shape};
 use polygon::Geometry;
 pub use polygon::{MAX_POLYGON_VERTICES, POLYGON_RAM, Polygon, Ram, VERTEX_RAM, Vertex};
 use queue::{Entry, FIFO_CAPACITY, HALF_FULL, Queue};
+pub(crate) use raster::Frame as Frame3d;
 pub use render::{RenderRegs, Scene};
 use serde::{Deserialize, Serialize};
 

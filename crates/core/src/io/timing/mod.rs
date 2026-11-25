@@ -26,6 +26,9 @@ const VCOUNT_OFFSET: u32 = VCOUNT_ADDR - DISPSTAT_ADDR;
 pub const LINES: u16 = 263;
 /// The first VBlank line: lines 0-191 are visible (`display-timing.md`, "Frame layout").
 pub const FIRST_VBLANK_LINE: u16 = 192;
+/// The line at whose start the rendering engine begins a frame: 48 lines ahead of the first visible
+/// one, as RDLINES_COUNT puts it (`rasterizer.md`, "When the hardware draws").
+pub const RENDER_START_LINE: u16 = 214;
 /// The line at whose start the VBlank flag clears again (`display-timing.md`, "Flags").
 // TODO(hw-unverified): the exact cycle within the line is not stated
 // (`display-timing.md`, "Unverified").

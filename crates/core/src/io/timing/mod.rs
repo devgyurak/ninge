@@ -276,8 +276,9 @@ impl Timing {
 }
 
 impl Checked for Timing {
-    /// The registers on their own, and the line and the HBlank flag against the time the line events
-    /// have reached ([`Timing::follows`]), when the machine runs a program (`state-contents.md`).
+    /// The registers on their own, and the line and the HBlank flag against the time the line
+    /// events have reached ([`Timing::follows`]), when the machine runs a program
+    /// (`state-contents.md`).
     fn well_formed(&self, times: StateTimes) -> bool {
         self.is_well_formed() && times.lines.is_none_or(|time| self.follows(time))
     }

@@ -37,6 +37,8 @@
 //!
 //! # Checked on load
 //!
+//! The checks are the machine's own (`Machine::is_well_formed`, with each device's through the
+//! registry); this module checks the format around them.
 //! Memory buffer sizes and the register devices' values (a started timer whose overflow lies more than a slice behind `now` included, `docs/hw/timers.md`), the header/ROM presence rule, both CPUs' banks against their CPSR
 //! modes, `now` against `MAX_TIME` (`docs/hw/scheduler.md`, "Savestate checks"), VCOUNT below 263 with the VBlank flag agreeing, DISPSTAT holding only writable bits, IPC FIFO lengths and heads in range (`docs/hw/ipc.md`), and the ARM7 clock at `now` or one master cycle past it (booted machines).
 //! Other decoded values (CP15 masked fields, header contents, the zero padding of
@@ -60,7 +62,6 @@
 //! queues them again (`docs/hw/scheduler.md`, "Savestate checks").
 
 use crate::Machine;
-use crate::cpu::ARM7_INSTRUCTION_COST;
 
 /// The first eight bytes of every savestate. Not a trademarked name.
 pub const MAGIC: [u8; 8] = *b"NINGESTA";
@@ -167,36 +168,9 @@ impl Machine {
         let body = bytes.get(HEADER_LEN..).ok_or(SavestateError::Corrupt)?;
         let (mut loaded, rest) =
             postcard::take_from_bytes::<Machine>(body).map_err(|_| SavestateError::Corrupt)?;
-        // A booted program has a ROM and an unbooted machine has none (`load_rom`); a state
-        // that says otherwise would run on a header alone, or hold a ROM it never booted. Memory
-        // buffers of the wrong size would read as zeros rather than panic, but are not a machine.
-        if !rest.is_empty()
-            // The header is derived from the ROM, so it must be what the ROM parses to.
-            || loaded.header != crate::cart::parse(&self.rom).ok()
-            || !loaded.memory.is_well_formed()
-            || !loaded.screens_well_formed()
-            || !loaded.scheduler.is_well_formed()
-            // A round in progress belongs to a booted program and to times a run can reach.
-            || loaded.round.is_some_and(|round| {
-                loaded.header.is_none()
-                    || !round.well_formed(loaded.scheduler.now(), loaded.arm7_clock)
-            })
-            || !loaded.io.is_well_formed(loaded.scheduler.now())
-            || !loaded.arm9.is_well_formed()
-            || !loaded.arm7.is_well_formed()
-            // VCOUNT and the HBlank flag are what the line events up to the time make them. A
-            // machine with no program runs no events, so its time says nothing about them.
-            || (loaded.header.is_some() && !loaded.io.timing().follows(loaded.events_from()))
-            // A booted machine between rounds is settled: the ARM7 is at `now` or one master cycle
-            // past it. One that lags would spend the first round catching up. In a round a stop
-            // interrupted the ARM7 has not caught up yet, and lags by up to a slice.
-            || (loaded.header.is_some()
-                && loaded.round.is_none()
-                && loaded.arm7_clock < loaded.scheduler.now())
-            // TODO(phase8): once an instruction's cost varies, this bound is the largest cost.
-            || loaded.arm7_clock >= loaded.scheduler.now().saturating_add(ARM7_INSTRUCTION_COST)
-            || loaded.arm9_hold_until > crate::scheduler::MAX_TIME
-        {
+        // What the decoded machine holds is checked by the machine itself; the format is this
+        // module's (`Machine::is_well_formed`).
+        if !rest.is_empty() || !loaded.is_well_formed(&self.rom) {
             return Err(SavestateError::Corrupt);
         }
         loaded.rom = std::mem::take(&mut self.rom);

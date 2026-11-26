@@ -7,8 +7,8 @@ Polygons" (the stencil buffer), "DS 3D Final 2D Output", "DS 3D Rear-Plane" (CLE
 CLEAR_DEPTH, the rear bitmaps), "DS Display Capture" (the 15-bit capture data).
 Used by: `crates/core/src/gpu3d/`, `crates/core/src/gpu2d/`, `crates/core/src/machine/render.rs`
 Phase: 7 (#49-#52). This note settles the frame structure the code seams (#322) are built on and
-the pixel rules of #49 (coverage, colour, depth, translucency, shadows); texture, toon, edge, fog
-and anti-aliasing are written with #50-#51.
+the pixel rules of #49 (coverage, colour, depth, translucency, shadows); textures are in
+`textures.md` (#50); toon, edge, fog and anti-aliasing are written with #51.
 
 ## When the hardware draws
 
@@ -170,9 +170,9 @@ all. The model interpolates the 6-bit channels linearly across the polygon in pe
 fashion, using 1/W as the weight (the model's choice; the exact precision and rounding are not
 stated), in integer fixed point with the rounding stated in the code, and takes a texture-less
 pixel's colour from that. All of it is `TODO(hw-unverified)`, to be compared as above. With no
-texture and no lighting the vertex colour is the pixel colour. The decal (polygon mode 1) and toon
-or highlight (mode 2) polygons draw the interpolated vertex colour in this model until texture and
-toon shading exist (#50, #51).
+texture and no lighting the vertex colour is the pixel colour. A toon or highlight (mode 2) polygon
+draws the interpolated vertex colour in this model until toon shading exists (#51); the texture
+blend of modulation and decal polygons is in `textures.md`.
 
 ## Depth
 
@@ -228,7 +228,7 @@ already came from a translucent polygon, `TODO(hw-unverified)`.
 With DISP3DCNT bit 14 clear the buffers start each frame as: colour from CLEAR_COLOR bits 0-14,
 alpha from bits 16-20, fog flag from bit 15 and polygon ID from bits 24-29; depth from CLEAR_DEPTH
 (above). A pixel nothing draws on keeps the CLEAR_COLOR colour and alpha (alpha 0 lets the 2D
-layers behind show). The bitmap rear plane (bit 14) is #50's.
+layers behind show). The bitmap rear plane (bit 14) is in `textures.md`.
 
 ## Shadow polygons
 
@@ -266,7 +266,7 @@ it does not. Whether the mask pass writes depth is not stated either; the model 
 ## Edge cases
 
 - DISP3DCNT bit 0 (texture) and bit 14 (rear bitmap) change what is read; the slots must be mapped
-  to texture VRAM (`vram-banks.md`); what an unmapped slot reads is #50's.
+  to texture VRAM (`vram-banks.md`); what an unmapped slot reads is in `textures.md`.
 - The 3D layer is BG0 of engine A only, and it is shown only in the display mode that shows BG0
   with the 3D bit of DISPCNT set (`bg-modes.md`).
 

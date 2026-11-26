@@ -61,7 +61,10 @@ impl Frame {
             color: self.clear.color,
             alpha: self.clear.alpha,
         };
-        out.fill(clear);
+        // The bitmap plane writes every pixel itself.
+        if self.clear.bitmap.is_none() {
+            out.fill(clear);
+        }
         let mut state = LineState {
             depth: [self.clear.depth; SCREEN_WIDTH],
             id: [self.clear.id; SCREEN_WIDTH],

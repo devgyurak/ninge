@@ -4,7 +4,7 @@
 //! coordinates to the screen", "Which pixels a polygon covers", "The rear plane").
 
 use super::Frame;
-use super::texture::{self, DISP3DCNT_TEXTURE, Tex};
+use super::texture::{self, Tex};
 use crate::gpu3d::polygon::{MAX_POLYGON_VERTICES, Vertex};
 use crate::gpu3d::render::{RenderRegs, Scene};
 
@@ -55,10 +55,12 @@ const DISP3DCNT_ALPHA_TEST: u16 = 1 << 2;
 const DISP3DCNT_BLEND: u16 = 1 << 3;
 /// The alpha of an opaque pixel (`texture::OPAQUE`) as a POLYGON_ATTR field.
 pub(super) const OPAQUE: u32 = texture::OPAQUE as u32;
+/// DISP3DCNT bit 0: texture mapping on, and bit 14: the rear plane is the bitmaps in texture slots 2
+/// and 3.
+const DISP3DCNT_TEXTURE: u16 = 1;
+const DISP3DCNT_REAR_BITMAP: u16 = 1 << 14;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
-/// DISP3DCNT bit 14: the rear plane is the bitmaps in texture slots 2 and 3.
-const DISP3DCNT_REAR_BITMAP: u16 = 1 << 14;
 const DISP3DCNT_EDGE_MARKING: u16 = 1 << 5;
 
 /// One vertex on the screen: a position in 1/256 pixel (y down, line 0 first) and its attributes.
@@ -84,7 +86,8 @@ pub(super) struct PolyDraw {
     /// The alpha of the polygon's pixels, 5 bits: 31 for an opaque polygon, a wire frame and a line
     /// segment, the POLYGON_ATTR alpha for a translucent one.
     pub(super) alpha: u8,
-    /// Alpha 1 to 30: drawn after the opaque polygons and blended into the buffer.
+    /// Alpha 1 to 30, or an A3I5 or A5I3 texture in modulation mode: drawn after the opaque polygons
+    /// and blended into the buffer where a pixel's own alpha is below 31.
     pub(super) translucent: bool,
     /// A translucent pixel writes its depth (POLYGON_ATTR bit 11).
     pub(super) update_depth: bool,
@@ -281,8 +284,8 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         // like any polygon, and a shadow polygon is translucent whatever its alpha: it draws after
         // the opaque ones (`rasterizer.md`, "Which pixels a polygon covers", "Shadow polygons").
         let by_alpha = alpha != 0 && (alpha != OPAQUE || shadow);
-        // TODO(phase7, #51): toon and highlight (mode 2) draw no texture yet, and neither does a
-        // shadow polygon.
+        // TODO(phase7, #51): toon and highlight (mode 2) draw no texture yet. TODO(hw-unverified): a
+        // shadow polygon draws no texture (`textures.md`, "Unverified").
         let decal = mode == MODE_DECAL;
         let tex = if (mode == MODE_MODULATION || decal) && disp3dcnt & DISP3DCNT_TEXTURE != 0 {
             Tex::parse(p.texture, p.palette)
@@ -318,6 +321,8 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
             wire,
             // Opaque polygons without edge marking and anti-aliasing, and translucent ones with
             // blending off, drop their lower and right edges (`rasterizer.md`).
+            // TODO(hw-unverified): a polygon with an alpha-format texture follows the translucent
+            // polygons' edge rule (`textures.md`, "Unverified").
             exclude_edges: !wire && if translucent { !blend } else { !marked },
             equal: p.attr & ATTR_DEPTH_EQUAL != 0,
             w_buffer: scene.swap_bits & SWAP_W_BUFFER != 0,

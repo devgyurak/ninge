@@ -5,7 +5,7 @@
 //! reads.
 //!
 //! The bitmaps of these tests hold, at entry `(x, y)`: colour red `x / 8`, green `y / 8`, alpha bit
-//! set where bit 5 of `x` and of `y` are equal (so tiles of 32x32 alternate solid and transparent);
+//! set where bit 5 of `x` and of `y` differ (so tiles of 32x32 alternate solid and transparent);
 //! depth 7FFFh (far) for `x` below 128 and 0 (nearest) from 128 on.
 
 use super::texture::*;
@@ -20,7 +20,7 @@ const DEPTH_AT: usize = 0x6_0000;
 
 /// The colour entry at `(x, y)`.
 fn color_entry(x: usize, y: usize) -> u16 {
-    let solid = ((x >> 5) ^ (y >> 5)) & 1 == 0;
+    let solid = ((x >> 5) ^ (y >> 5)) & 1 == 1;
     ((x >> 3) as u16) | (((y >> 3) as u16) << 5) | [0, 0x8000][usize::from(solid)]
 }
 
@@ -67,11 +67,11 @@ fn nothing() -> Ram {
 #[test]
 fn given_the_rear_bitmap_when_nothing_is_drawn_then_each_pixel_has_its_entrys_colour_and_alpha() {
     let lines = draw_rear(&nothing(), 0, &bitmaps(), &scrolled(0, 0));
-    // (3, 5) is in a solid tile, (35, 5) in a transparent one, (35, 40) in a solid one again.
+    // (3, 5) is in a transparent tile, (35, 5) in a solid one, (35, 40) in a transparent one again.
     let pixels = [(3, 5), (35, 5), (35, 40)].map(|(x, y)| at(&lines, x, y));
-    // Entry (3, 5): red 0, green 0, solid: colour 0. Entry (35, 5): red 4, green 0, transparent.
-    // Entry (35, 40): red 4, green 5: 4 + 5 x 32 = 164, solid.
-    let want = [(0, 31), (4, 0), (164, 31)];
+    // Entry (3, 5): red 0, green 0, transparent. Entry (35, 5): red 4, green 0, solid.
+    // Entry (35, 40): red 4, green 5: 4 + 5 x 32 = 164, transparent.
+    let want = [(0, 0), (4, 31), (164, 0)];
     assert_eq!(pixels.map(|p| (p.color, p.alpha)), want);
 }
 
@@ -149,10 +149,23 @@ fn given_an_unmapped_depth_slot_when_a_quad_draws_then_nothing_passes_the_neares
 #[test]
 fn given_a_translucent_quad_when_it_draws_over_a_solid_rear_pixel_then_it_blends_with_the_bitmap_colour()
  {
-    // Rear entry (3, 5) is solid with red 0, green 0: black. A green quad of alpha 15 over it mixes
-    // (new x 16 + old x 16) / 32 per 6-bit channel: green 63 -> 31, narrowed to 15.
+    // Rear entry (35, 5) is solid with red 4 (6-bit 9), green 0. A green quad of alpha 15 over it
+    // mixes (new x 16 + old x 16) / 32 per 6-bit channel: red 9 -> 4, green 63 -> 31; narrowed to
+    // red 2 and green 15.
     let attr = 15 << 16 | FRONT_BACK;
-    let ram = textured(&[(attr, 0, 0, quad(0, 0, 8, 8, 0, GREEN))]);
+    let ram = textured(&[(attr, 0, 0, quad(32, 0, 40, 8, 0, GREEN))]);
     let lines = draw_rear(&ram, BLENDING, &bitmaps(), &scrolled(0, 0));
-    assert_eq!(at(&lines, 3, 5).color, 15 << 5);
+    assert_eq!(at(&lines, 35, 5).color, 2 | 15 << 5);
+}
+
+#[test]
+fn given_bit_15_of_clrimage_offset_set_when_drawn_then_the_y_scroll_stays_7_bits() {
+    // The register stores 15 bits and the Y scroll is bits 8-14: a value with bit 15 set and Y 0
+    // scrolls nothing, so pixel (0, 0) is entry (0, 0) (`textures.md`, "Unverified").
+    let regs = RenderRegs {
+        clrimage_offset: 0x8000,
+        ..scrolled(0, 0)
+    };
+    let lines = draw_rear(&nothing(), 0, &bitmaps(), &regs);
+    assert_eq!(at(&lines, 0, 0).color, color_entry(0, 0) & 0x7FFF);
 }

@@ -98,7 +98,7 @@ fn expected() -> Vec<u16> {
     // The palette at byte 0 holds P1; the one at byte 200h holds colour(90 + k).
     let p1 = [
         rgb(10, 20, 30),
-        rgb(20, 4, 2),
+        rgb(21, 5, 3),
         rgb(31, 31, 31),
         rgb(1, 2, 3),
     ];

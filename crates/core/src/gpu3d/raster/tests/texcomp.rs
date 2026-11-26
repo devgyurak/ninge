@@ -65,8 +65,10 @@ fn block_diffs_opt(lines: &[Line3d], want: &[[Option<u16>; 8]; 8]) -> Vec<(usize
 }
 
 /// What texel `k` (0 to 3) of a block of mode `mode` shows over `palette4()`: the colour, `None` if
-/// transparent. Worked by hand: mode 1's texel 2 is `(c0 + c1) / 2` per channel, mode 3's texels 2
-/// and 3 are `(5 c0 + 3 c1) / 8` and `(3 c0 + 5 c1) / 8`, truncating.
+/// transparent. Worked by hand with odd channel sums, so a rounding mix would differ: mode 1's
+/// texel 2 is `(c0 + c1) / 2` per channel (15.5, 12.5, 16.5 -> 15, 12, 16), mode 3's texels 2 and 3
+/// are `(5 c0 + 3 c1) / 8` (14.1, 14.4, 19.9 -> 14, 14, 19) and `(3 c0 + 5 c1) / 8` (16.9, 10.6,
+/// 13.1 -> 16, 10, 13), truncating.
 fn mode_texel(mode: usize, k: usize) -> Option<u16> {
     let c = palette4();
     let table: [[Option<u16>; 4]; 4] = [
@@ -184,5 +186,65 @@ fn given_an_unmapped_slot_1_when_a_slot_0_texture_draws_then_every_block_reads_m
     let ram = textured(&[(opaque(1), param_st(0, 0, 0, 0), 0, unit_quad())]);
     let lines = draw_with(&ram, TEXTURES_ON, &modes_memory().without_slot(1));
     let want = std::array::from_fn(|_| std::array::from_fn(|x| mode_texel(0, x % 4)));
+    assert_eq!(block_diffs_opt(&lines, &want), vec![]);
+}
+
+/// The block palette modes of the straddling texture: `(mode of the halfword, hidden texel 3)` per
+/// block of an 8x8 texture at image offset 0x1FFF8, whose blocks 0 and 1 are in slot 0 and 2 and 3
+/// in slot 1; the halfwords for blocks 0 and 1 (at 0x2_FFFC) say mode 2.
+fn straddling_picture() -> Vec<(usize, usize, u16, u8)> {
+    let mem = TexMem::new()
+        .image(0x1_FFF8, &[ROW; 8])
+        .image(SLOT1, &[ROW; 8])
+        .image(SLOT1 + 0xFFFC, &halves(&[0x8000, 0x8000]))
+        .palette(0, &palette4());
+    let ram = textured(&[(opaque(1), param_st(0x1_FFF8, 0, 0, 0), 0, unit_quad())]);
+    let lines = draw_with(&ram, TEXTURES_ON, &mem);
+    // Texel 3 of a mode 2 block is colour 3; of a mode 0 block (the halfword is not read) hidden.
+    (0..4)
+        .map(|block| {
+            (
+                block,
+                at(&lines, 16 + block % 2 * 4 + 3, 16 + block / 2 * 4),
+            )
+        })
+        .filter(|(block, p)| {
+            (p.color, p.alpha) != [(palette4()[3], 31), (0, 0)][usize::from(*block >= 2)]
+        })
+        .map(|(block, p)| (block, 0, p.color, p.alpha))
+        .collect()
+}
+
+#[test]
+fn given_a_texture_that_runs_from_slot_0_into_slot_1_when_drawn_then_only_the_slot_0_blocks_have_halfwords()
+ {
+    assert_eq!(straddling_picture(), vec![]);
+}
+
+#[test]
+fn given_a_compressed_texture_in_slot_3_when_drawn_then_its_palette_halfword_reads_as_0() {
+    let mem = TexMem::new()
+        .image(0x6_0000, &[ROW; 16])
+        .image(SLOT1, &halves(&[0x8000; 8]))
+        .palette(0, &palette4());
+    let ram = textured(&[(opaque(1), param_st(0x6_0000, 0, 0, 0), 0, unit_quad())]);
+    let lines = draw_with(&ram, TEXTURES_ON, &mem);
+    let want = std::array::from_fn(|_| std::array::from_fn(|x| mode_texel(0, x % 4)));
+    assert_eq!(block_diffs_opt(&lines, &want), vec![]);
+}
+
+#[test]
+fn given_block_data_past_the_512_kib_image_space_when_drawn_then_those_blocks_read_texel_0_of_mode_0()
+ {
+    // An 8x8 texture at 0x7FFF8: blocks 0 and 1 hold 0xE4 rows, blocks 2 and 3 are past the space
+    // and read 0, so every texel is texel 0 (colour 0) there.
+    let mem = TexMem::new()
+        .image(0x7_FFF8, &[ROW; 8])
+        .palette(0, &palette4());
+    let ram = textured(&[(opaque(1), param_st(0x7_FFF8, 0, 0, 0), 0, unit_quad())]);
+    let lines = draw_with(&ram, TEXTURES_ON, &mem);
+    let want = std::array::from_fn(|y| {
+        std::array::from_fn(|x| mode_texel(0, [x % 4, 0][usize::from(y >= 4)]))
+    });
     assert_eq!(block_diffs_opt(&lines, &want), vec![]);
 }

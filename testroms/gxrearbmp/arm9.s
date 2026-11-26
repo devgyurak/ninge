@@ -2,8 +2,8 @@
 @ Rear bitmap ROM, ARM9 side (docs/hw/textures.md, "The rear bitmap"). No libnds, no crt0.
 @ Loaded at 0x02000000 and entered there (docs/hw/cart-header.md). The ARM7 spins (arm7.s).
 @
-@ Engine A shows the 3D layer as BG0 over the rear bitmap (the rest of the setup is as in gxalpha; CLEAR_COLOR only gives the rear pixels
-@ their polygon ID, 0).
+@ Engine A shows the 3D layer as BG0 over the rear bitmap. The rest of the setup is as in gxalpha;
+@ CLEAR_COLOR (blue, ID 0) supplies only the polygon ID of the rear pixels.
 @ VRAM banks C and D are filled through their LCDC windows first and then mapped as texture slots 2
 @ and 3, where the rear bitmaps live (docs/hw/vram-banks.md). DISP3DCNT is 4000h:
 @ the rear bitmap (bit 14) on; no texture mapping, no blending.

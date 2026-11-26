@@ -22,11 +22,6 @@ const DEPTH_AT: u32 = 3 * TEX_IMAGE_SLOT_BYTES;
 /// Entries on a side of a bitmap.
 const SIDE: u32 = 256;
 
-/// The halfword at image offset `at`.
-fn half(textures: &Textures<'_>, at: u32) -> u16 {
-    u16::from(textures.image_byte(at)) | u16::from(textures.image_byte(at + 1)) << 8
-}
-
 /// Fills line `y`'s output and working state with the rear bitmaps: the colour and alpha into `out`
 /// and `state.color6`, the depth into `state.depth`. What a slot no bank backs reads is 0, so the
 /// pixel is transparent colour 0 at depth 0 (the nearest: nothing draws over it).
@@ -44,12 +39,14 @@ pub(super) fn fill(
     (0..SCREEN_WIDTH).for_each(|x| {
         let column = (x as u32 + u32::from(bitmap.x)) % SIDE;
         let at = (row * SIDE + column) * 2;
-        let color = half(textures, COLOR_AT + at);
-        let depth = half(textures, DEPTH_AT + at);
+        let color = textures.image_half(COLOR_AT + at);
+        let depth = textures.image_half(DEPTH_AT + at);
         out[x] = Pixel3d {
             color: color & 0x7FFF,
             alpha: if color & 0x8000 != 0 { 31 } else { 0 },
         };
+        // TODO(hw-unverified): the colour widens to 6 bits as a vertex colour does, as for CLEAR_COLOR
+        // (`rasterizer.md`, "Unverified").
         state.color6[x] = [0, 5, 10].map(|shift| expand6((color >> shift) & 0x1F));
         state.depth[x] = expand_clear_depth(depth & 0x7FFF);
     });

@@ -6,7 +6,7 @@
 //! snapshot is built. The line draw then reads only that and the texture memory ([`Textures`]), and
 //! allocates nothing.
 
-use crate::bus::Textures;
+use crate::bus::{TEX_IMAGE_SLOT_BYTES as SLOT_BYTES, Textures};
 
 // TEXIMAGE_PARAM fields (`docs/hw/textures.md`, "TEXIMAGE_PARAM bits").
 const OFFSET_MASK: u32 = 0xFFFF;
@@ -29,8 +29,6 @@ const PALETTE_UNIT_4COLOR: u32 = 8;
 pub(super) const DISP3DCNT_TEXTURE: u16 = 1;
 /// A fully opaque alpha, 5 bits: a texel's, and a pixel's.
 pub(super) const OPAQUE: u8 = 31;
-/// Bytes of one texture image slot (128 KiB).
-const SLOT_BYTES: u32 = 0x2_0000;
 /// The fractional bits of S and T (1.11.4).
 const ST_FRAC: u32 = 4;
 
@@ -80,7 +78,7 @@ pub(super) struct Texel {
 
 impl Tex {
     /// The texture of a polygon with TEXIMAGE_PARAM `param` and PLTT_BASE `palette`, or `None` for
-    /// "no texture" and for a format that is not sampled yet.
+    /// "no texture" (format 0).
     pub(super) fn parse(param: u32, palette: u32) -> Option<Self> {
         let format = match (param >> FORMAT_SHIFT) & 7 {
             1 => Format::Alpha3Index5,
@@ -158,9 +156,7 @@ impl Tex {
             alpha: if hidden { 0 } else { alpha },
         }
     }
-}
 
-impl Tex {
     /// The texel at column `x`, row `y` of a 4x4 compressed texture (`textures.md`, "4x4 compressed
     /// texels"): the block's 2-bit texel picks a colour by the mode in the block's palette halfword.
     // TODO(hw-unverified): the halfword of a block whose data is in slot 1 or 3 reads as 0 (the

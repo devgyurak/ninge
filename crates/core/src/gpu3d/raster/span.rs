@@ -153,6 +153,8 @@ fn plot(
         }
         None => (vertex, poly.alpha),
     };
+    // TODO(hw-unverified): the alpha test, the same-ID rule and the depth write see the texel's
+    // alpha, not only the polygon's (`textures.md`, "Unverified").
     if alpha <= poly.alpha_ref {
         return;
     }

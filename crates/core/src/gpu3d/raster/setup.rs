@@ -53,7 +53,8 @@ const ATTR_UPDATE_DEPTH: u32 = 1 << 11;
 // DISP3DCNT bits 2 and 3.
 const DISP3DCNT_ALPHA_TEST: u16 = 1 << 2;
 const DISP3DCNT_BLEND: u16 = 1 << 3;
-pub(super) const OPAQUE: u32 = 31;
+/// The alpha of an opaque pixel (`texture::OPAQUE`) as a POLYGON_ATTR field.
+pub(super) const OPAQUE: u32 = texture::OPAQUE as u32;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
 const DISP3DCNT_EDGE_MARKING: u16 = 1 << 5;

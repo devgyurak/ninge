@@ -29,8 +29,8 @@ const PALETTE_UNIT: u32 = 16;
 const PALETTE_UNIT_4COLOR: u32 = 8;
 /// DISP3DCNT bit 0: texture mapping on.
 pub(super) const DISP3DCNT_TEXTURE: u16 = 1;
-/// A fully opaque texel's alpha, 5 bits.
-const OPAQUE: u8 = 31;
+/// A fully opaque alpha, 5 bits: a texel's, and a pixel's.
+pub(super) const OPAQUE: u8 = 31;
 /// The fractional bits of S and T (1.11.4).
 const ST_FRAC: u32 = 4;
 
@@ -202,8 +202,9 @@ pub(super) fn modulate(texel: Texel, vertex6: [u8; 3], alpha: u8) -> ([u8; 3], u
 /// texture to vertex colour, `(t x a + v x (63 - a)) / 64` per 6-bit channel, with the vertex colour
 /// alone at a texel alpha of 0 and the texel colour alone at 31. The pixel's alpha is the polygon's.
 /// Returns the 6-bit colour and the 5-bit alpha.
-// TODO(hw-unverified): the special cases test the 5-bit alpha and the ratio uses the 6-bit one, and
-// the division truncates (`textures.md`, "Unverified").
+// TODO(hw-unverified): the special cases test the 5-bit alpha and the ratio uses the 6-bit one, the
+// division truncates, and a transparent texel (alpha 0) shows the vertex colour at the polygon's
+// alpha (`textures.md`, "Unverified").
 pub(super) fn decal(texel: Texel, vertex6: [u8; 3], alpha: u8) -> ([u8; 3], u8) {
     let ratio = u16::from(expand6(u16::from(texel.alpha)));
     let mix = |t: u16, v: u8| match texel.alpha {

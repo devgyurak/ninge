@@ -30,8 +30,8 @@ fn half(textures: &Textures<'_>, at: u32) -> u16 {
 /// Fills line `y`'s output and working state with the rear bitmaps: the colour and alpha into `out`
 /// and `state.color6`, the depth into `state.depth`. What a slot no bank backs reads is 0, so the
 /// pixel is transparent colour 0 at depth 0 (the nearest: nothing draws over it).
-// TODO(hw-unverified): the unmapped-slot case and the wrap of the scroll are the model's
-// (`textures.md`, "Unverified").
+// TODO(hw-unverified): the unmapped-slot case, the wrap of the scroll and the depth applying under
+// a transparent colour pixel (alpha 0) are the model's (`textures.md`, "Unverified").
 pub(super) fn fill(
     y: usize,
     bitmap: &RearBitmap,

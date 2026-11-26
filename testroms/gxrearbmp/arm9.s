@@ -2,7 +2,8 @@
 @ Rear bitmap ROM, ARM9 side (docs/hw/textures.md, "The rear bitmap"). No libnds, no crt0.
 @ Loaded at 0x02000000 and entered there (docs/hw/cart-header.md). The ARM7 spins (arm7.s).
 @
-@ Engine A shows the 3D layer as BG0 over the rear bitmap (as in gxalpha, but with CLEAR_COLOR unused).
+@ Engine A shows the 3D layer as BG0 over the rear bitmap (the rest of the setup is as in gxalpha; CLEAR_COLOR only gives the rear pixels
+@ their polygon ID, 0).
 @ VRAM banks C and D are filled through their LCDC windows first and then mapped as texture slots 2
 @ and 3, where the rear bitmaps live (docs/hw/vram-banks.md). DISP3DCNT is 4000h:
 @ the rear bitmap (bit 14) on; no texture mapping, no blending.
@@ -14,8 +15,9 @@
 @   R2  a white untextured quad over the middle: the depth bitmap in slot 3 is far for bitmap
 @       columns below 128 and nearest from 128 on, so the quad draws only over the far columns.
 @
-@ TODO(hw-unverified): the texel sampling and the modulation follow the model of docs/hw/textures.md
-@ ("Unverified"); a pass says the emulator follows the note, not that hardware was measured.
+@ TODO(hw-unverified): the Y scroll width (7 bits), the modulo-256 wrap, and the depth bitmap applying
+@ under a transparent rear pixel follow the model of docs/hw/textures.md ("Unverified"); a pass says
+@ the emulator follows the note, not that hardware was measured.
     .equ POWCNT1, 0x04000304
     .equ DISPCNT_A, 0x04000000
     .equ DISP3DCNT, 0x04000060
@@ -47,7 +49,7 @@ _start:
     nop
     nop
 
-    @ Engine A on the upper screen, the 3D engine on, texture mapping on.
+    @ Engine A on the upper screen, the 3D engine on, the rear bitmap on.
     ldr r0, =POWCNT1
     ldr r1, =0x800F
     strh r1, [r0]

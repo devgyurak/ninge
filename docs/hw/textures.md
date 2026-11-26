@@ -226,6 +226,9 @@ Everything GBATEK does not state. Each item gets `TODO(hw-unverified)` at its co
   uses bits 8-14 as the register stores them) and what X, Y offsets beyond the bitmap do (the
   model: modulo 256). —
   `gpu3d/raster/` — verify by a test ROM with a marked bitmap row.
+- Whether the depth bitmap applies under a transparent rear pixel (alpha 0), which the model does
+  (a polygon is depth-tested against it). — `gpu3d/raster/rear.rs` — verify by a test ROM that
+  draws over a transparent tile with a nearest depth.
 - What the rear bitmap does with an unmapped slot (the model: reads 0). — `gpu3d/raster/` — verify
   by a test ROM with one slot unmapped.
 - Whether a texture slot backed by two banks reads the earlier letter (`vram-banks.md`). —

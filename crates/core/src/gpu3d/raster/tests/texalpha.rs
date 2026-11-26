@@ -263,3 +263,49 @@ fn given_a_decal_polygon_when_a_direct_texel_is_transparent_then_the_vertex_colo
     let p = at(&draw_with(&ram, TEXTURES_ON, &mem), 20, 20);
     assert_eq!((p.color, p.alpha), (GREEN, 31));
 }
+
+/// A 64-texel A3I5 texture of index 1, alpha 7 (solid): the 3-bit alpha 7 widens to 31.
+fn solid_a3i5() -> TexMem {
+    TexMem::new()
+        .image(0, &filled(1 | 7 << 5))
+        .palette(0, &palette_of(32))
+}
+
+#[test]
+fn given_a_translucent_ordered_polygon_when_its_texel_is_solid_then_it_writes_depth_without_bit_11()
+{
+    // B (A3I5, solid texel, polygon alpha 31, no depth-update bit) is a translucent-ordered
+    // polygon whose pixel is opaque, so it writes depth and hides the farther translucent C behind
+    // it. Judged by the polygon alone, B would write no depth and C would draw.
+    let near = tquad((16, 16, 24, 24), -500, (0, 0, 8, 8));
+    let ram = textured(&[
+        (opaque(1), param(0, 0, A3I5, REPEAT_S | REPEAT_T), 0, near),
+        (
+            15 << 16 | FRONT_BACK | 2 << 24,
+            0,
+            0,
+            quad(16, 16, 24, 24, 500, GREEN),
+        ),
+    ]);
+    let p = at(&draw_with(&ram, TEXTURES_ON, &solid_a3i5()), 20, 20);
+    assert_eq!(p.color, colour(1));
+}
+
+#[test]
+fn given_a_translucent_pixel_of_one_id_when_a_solid_texel_of_that_id_follows_then_it_is_not_skipped()
+ {
+    // The same-ID rule is for translucent pixels. X (alpha 15, ID 5) writes no depth; Y (A3I5, solid
+    // texel, ID 5) is farther, and its opaque pixel draws over X.
+    let far = tquad((16, 16, 24, 24), 500, (0, 0, 8, 8));
+    let ram = textured(&[
+        (
+            15 << 16 | FRONT_BACK | 5 << 24,
+            0,
+            0,
+            quad(16, 16, 24, 24, -500, GREEN),
+        ),
+        (opaque(5), param(0, 0, A3I5, REPEAT_S | REPEAT_T), 0, far),
+    ]);
+    let p = at(&draw_with(&ram, TEXTURES_ON, &solid_a3i5()), 20, 20);
+    assert_eq!(p.color, colour(1));
+}

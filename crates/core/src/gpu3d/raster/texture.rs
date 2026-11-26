@@ -14,21 +14,19 @@ use crate::bus::Textures;
 const OFFSET_MASK: u32 = 0xFFFF;
 /// The image offset is in units of 8 bytes.
 const OFFSET_UNIT: u32 = 8;
-const REPEAT_S: u32 = 1 << 16;
-const REPEAT_T: u32 = 1 << 17;
-const FLIP_S: u32 = 1 << 18;
-const FLIP_T: u32 = 1 << 19;
+pub(super) const REPEAT_S: u32 = 1 << 16;
+pub(super) const REPEAT_T: u32 = 1 << 17;
+pub(super) const FLIP_S: u32 = 1 << 18;
+pub(super) const FLIP_T: u32 = 1 << 19;
 const SIZE_S_SHIFT: u32 = 20;
 const SIZE_T_SHIFT: u32 = 23;
 const FORMAT_SHIFT: u32 = 26;
-const COLOR0_TRANSPARENT: u32 = 1 << 29;
+pub(super) const COLOR0_TRANSPARENT: u32 = 1 << 29;
 /// PLTT_BASE bits 0-12.
 const PALETTE_MASK: u32 = 0x1FFF;
 /// The palette base is in units of 16 bytes, 8 for the 4-colour format.
 const PALETTE_UNIT: u32 = 16;
 const PALETTE_UNIT_4COLOR: u32 = 8;
-/// DISP3DCNT bit 0: texture mapping on.
-pub(super) const DISP3DCNT_TEXTURE: u16 = 1;
 /// A fully opaque alpha, 5 bits: a texel's, and a pixel's.
 pub(super) const OPAQUE: u8 = 31;
 /// The fractional bits of S and T (1.11.4).
@@ -104,7 +102,12 @@ impl Tex {
             repeat_t: param & REPEAT_T != 0,
             flip_s: param & FLIP_S != 0,
             flip_t: param & FLIP_T != 0,
-            color0_clear: param & COLOR0_TRANSPARENT != 0,
+            // Bit 29 applies to the 4-, 16- and 256-colour formats only.
+            color0_clear: param & COLOR0_TRANSPARENT != 0
+                && matches!(
+                    format,
+                    Format::Colors4 | Format::Colors16 | Format::Colors256
+                ),
         })
     }
 
@@ -129,10 +132,13 @@ impl Tex {
             Format::Colors256 => (byte(i), OPAQUE),
             Format::Alpha3Index5 => {
                 // The 3-bit alpha widens to 5 bits as `a x 4 + a / 2` (0 stays 0, 7 becomes 31).
-                let a = byte(i) >> 5;
-                (byte(i) & 0x1F, (a * 4 + a / 2) as u8)
+                let b = byte(i);
+                (b & 0x1F, ((b >> 5) * 4 + (b >> 6)) as u8)
             }
-            Format::Alpha5Index3 => (byte(i) & 0x7, (byte(i) >> 3) as u8),
+            Format::Alpha5Index3 => {
+                let b = byte(i);
+                (b & 0x7, (b >> 3) as u8)
+            }
             Format::Direct => {
                 // Bit 15 is the alpha, 31 when set and 0 when clear; there is no palette.
                 let half = byte(2 * i) | byte(2 * i + 1) << 8;
@@ -143,14 +149,9 @@ impl Tex {
                 };
             }
         };
-        // Bit 29 applies to the 4-, 16- and 256-colour formats only.
-        let palette_format = matches!(
-            self.format,
-            Format::Colors4 | Format::Colors16 | Format::Colors256
-        );
-        let hidden = palette_format && self.color0_clear && index == 0;
+        let hidden = self.color0_clear && index == 0;
         Texel {
-            color: mem.palette_color(self.palette + index * 2),
+            color: mem.palette_color(self.palette + index * 2) & 0x7FFF,
             alpha: if hidden { 0 } else { alpha },
         }
     }

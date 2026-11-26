@@ -20,9 +20,10 @@ fog and anti-aliasing are #51.
 | 0x0400_0356 | CLRIMAGE_OFFSET | 16 | W | 0 |
 | 0x0400_0060 | DISP3DCNT | 16 | R/W | 0 |
 
-The three commands go through the command FIFO and are stored with each polygon when it completes
-(`geometry-engine.md`); a polygon keeps the TEXIMAGE_PARAM and PLTT_BASE that were in force
-then. TEXIMAGE_PARAM and PLTT_BASE may change between polygons but not inside a strip.
+The three commands go through the command FIFO. TEXCOORD is per vertex: the S and T in force (after
+the transformation mode) are stored with each vertex. TEXIMAGE_PARAM and PLTT_BASE are per polygon:
+a polygon keeps the values in force when it completes (`geometry-engine.md`), and they may change
+between polygons but not inside a strip.
 
 ### TEXIMAGE_PARAM bits
 
@@ -184,11 +185,14 @@ a whole 128 KiB slot: the **colour** bitmap in texture slot 2 (image offset 0x40
 - An image or palette offset past the 512 KiB / 96 KiB space reads 0 (`Textures` does this).
 - A texture that straddles a slot boundary reads across it. If the two slots are backed by
   different banks, each byte comes from the bank behind its own slot.
-- An odd palette byte offset reads the colour that contains it (`Textures::palette_color`).
+- A PLTT_BASE past the 96 KiB palette space (it has 13 bits, so up to 128 KiB) reads colour 0 for
+  the entries beyond it (`Textures::palette_color`).
 - A 4x4 texture whose data is in slot 1 or 3 has no defined palette halfword (the formula needs
   slot 0 or 2); the model reads the palette information as 0 (mode 0, offset 0).
-- Texture size is *8 << n* with *n* up to 7, so 1024 texels is the largest, and a 4x4 texture's
-  block data and its slot 1 halfwords never exceed their slots for a legal size.
+- Texture size is *8 << n* with *n* up to 7, so 1024 texels is the largest. A 4x4 texture whose
+  block data starts in slot 0 or 2 but runs on into slot 1 or 3 (an offset near the end of the
+  slot) has a palette halfword only for the blocks in slot 0 or 2; the blocks past the boundary read
+  it as 0 (mode 0, offset 0), as for any block in slot 1 or 3. Block data at or past 512 KiB reads 0.
 - S and T are 16-bit values: a transformation that overflows has already wrapped
   (`geometry-engine.md`); the rasterizer sees the wrapped value.
 
@@ -224,5 +228,12 @@ Everything GBATEK does not state. Each item gets `TODO(hw-unverified)` at its co
   `gpu3d/raster/` — verify by a test ROM with a marked bitmap row.
 - What the rear bitmap does with an unmapped slot (the model: reads 0). — `gpu3d/raster/` — verify
   by a test ROM with one slot unmapped.
+- That a shadow polygon (mode 3) draws no texture (the model: its pixels are the vertex colour).
+  — `gpu3d/raster/setup.rs` — verify by a test ROM with a textured shadow polygon.
+- That a 4x4 block past a slot boundary has no palette halfword (the model: 0). —
+  `gpu3d/raster/texture.rs` — verify by a test ROM with a texture at the end of slot 0.
+- GBATEK's CLRIMAGE_OFFSET text swaps "row" and "column" (X is called the upper row, Y the left
+  column); the model takes X as the horizontal and Y as the vertical scroll. — `gpu3d/raster/` —
+  verify by a test ROM with a marked bitmap row and column.
 - Whether a texture slot backed by two banks reads the earlier letter (`vram-banks.md`). —
   `bus/memory/vram.rs` — verify by a test ROM on hardware.

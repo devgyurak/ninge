@@ -8,61 +8,15 @@
 //! A region is 64x48 pixels, so S moves a quarter texel and T a quarter texel per pixel: pixel
 //! `(k, j)` of a region samples texel `(-4 + k / 4, -3 + j / 4)` before the wrap.
 
-use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
+use ninge_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
-use ninge_runner::{load_rom_file, testrom_path};
+use ninge_runner::picture::{
+    BLUE, differences, paint_region as paint, palette_colour as colour, top_after,
+};
 
 /// The swap waits for VBlank and the picture is drawn at line 214, so it shows from the next frame
 /// on; the third frame is a whole one.
 const FRAMES: u64 = 4;
-
-/// The rear plane's colour, which transparent texels let through.
-const BLUE: u16 = 0x7C00;
-/// The regions are 64 pixels wide and 48 lines tall; their corners are these columns and rows.
-const COLS: [usize; 3] = [16, 96, 176];
-const ROWS: [usize; 2] = [24, 96];
-
-/// The 15-bit colour as xRGB8888 (`display-mode-vram.md`, "Colour expansion").
-fn expand(color: u16) -> u32 {
-    let channel = |c: u16| {
-        let c = u32::from(c & 31);
-        (c << 3) | (c >> 2)
-    };
-    (channel(color) << 16) | (channel(color >> 5) << 8) | channel(color >> 10)
-}
-
-/// The ROM's palette colour for entry `k`: a distinct colour for each entry.
-fn colour(k: u16) -> u16 {
-    (k & 31) | (((k * 3) & 31) << 5) | (((k * 7) & 31) << 10)
-}
-
-/// Paints region (`col`, `row`) of `grid` with `f(x, y)`, `x` and `y` being the pixel offsets
-/// inside the 64x48 region.
-fn paint(grid: &mut [u16], col: usize, row: usize, f: impl Fn(usize, usize) -> u16) {
-    (0..48).for_each(|y| {
-        (0..64).for_each(|x| grid[(ROWS[row] + y) * SCREEN_WIDTH + COLS[col] + x] = f(x, y));
-    });
-}
-
-fn top_after(rom: &str, frames: u64) -> Vec<u32> {
-    let mut machine = Machine::new();
-    machine
-        .load_rom(load_rom_file(&testrom_path(rom)).expect("the ROM is built"))
-        .expect("the ROM has a valid header");
-    (0..frames).for_each(|_| machine.run_frame(Default::default()));
-    machine.frame(Screen::Top).to_vec()
-}
-
-/// The first few pixels where the picture differs from the expected one: `(x, y, got, wanted)`.
-fn differences(got: &[u32], wanted: &[u16]) -> Vec<(usize, usize, u32, u32)> {
-    got.iter()
-        .zip(wanted)
-        .enumerate()
-        .filter(|(_, (g, w))| **g != expand(**w))
-        .map(|(at, (g, w))| (at % SCREEN_WIDTH, at / SCREEN_WIDTH, *g, expand(*w)))
-        .take(8)
-        .collect()
-}
 
 /// One axis of a region: how a texel coordinate outside `0..8` is brought back.
 #[derive(Clone, Copy)]

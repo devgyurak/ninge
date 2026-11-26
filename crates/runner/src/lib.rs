@@ -40,6 +40,7 @@
 pub mod cpu_suite;
 pub mod golden;
 pub mod log;
+pub mod picture;
 pub mod replay;
 
 use std::ffi::{OsStr, OsString};

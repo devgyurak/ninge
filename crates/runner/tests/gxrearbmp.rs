@@ -11,42 +11,13 @@
 //! alpha set where bit 5 of `bx` and of `by` differ; its depth is far for `bx` below 128 and
 //! nearest from 128 on. A transparent rear pixel shows the backdrop (palette entry 0: black).
 
-use ninge_core::{Machine, SCREEN_HEIGHT, SCREEN_WIDTH, Screen};
+use ninge_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use ninge_runner::golden::{assert_deterministic, assert_frame_hash, assert_savestate_round_trip};
-use ninge_runner::{load_rom_file, testrom_path};
+use ninge_runner::picture::{differences, top_after};
 
 /// The swap waits for VBlank and the picture is drawn at line 214, so it shows from the next frame
 /// on; the third frame is a whole one.
 const FRAMES: u64 = 4;
-
-/// The 15-bit colour as xRGB8888 (`display-mode-vram.md`, "Colour expansion").
-fn expand(color: u16) -> u32 {
-    let channel = |c: u16| {
-        let c = u32::from(c & 31);
-        (c << 3) | (c >> 2)
-    };
-    (channel(color) << 16) | (channel(color >> 5) << 8) | channel(color >> 10)
-}
-
-fn top_after(rom: &str, frames: u64) -> Vec<u32> {
-    let mut machine = Machine::new();
-    machine
-        .load_rom(load_rom_file(&testrom_path(rom)).expect("the ROM is built"))
-        .expect("the ROM has a valid header");
-    (0..frames).for_each(|_| machine.run_frame(Default::default()));
-    machine.frame(Screen::Top).to_vec()
-}
-
-/// The first few pixels where the picture differs from the expected one: `(x, y, got, wanted)`.
-fn differences(got: &[u32], wanted: &[u16]) -> Vec<(usize, usize, u32, u32)> {
-    got.iter()
-        .zip(wanted)
-        .enumerate()
-        .filter(|(_, (g, w))| **g != expand(**w))
-        .map(|(at, (g, w))| (at % SCREEN_WIDTH, at / SCREEN_WIDTH, *g, expand(*w)))
-        .take(8)
-        .collect()
-}
 
 /// The upper screen the ROM shows, as a grid of 15-bit colours.
 fn expected() -> Vec<u16> {

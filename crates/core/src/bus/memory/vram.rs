@@ -342,7 +342,7 @@ impl<'a> ExtPalette<'a> {
 }
 
 /// Bytes of one texture image slot: a whole 128 KiB bank (`docs/hw/vram-banks.md`).
-const TEX_IMAGE_SLOT_BYTES: u32 = 0x2_0000;
+pub(crate) const TEX_IMAGE_SLOT_BYTES: u32 = 0x2_0000;
 /// Texture image slots, and bytes of the whole image space.
 const TEX_IMAGE_SLOTS: usize = 4;
 const TEX_IMAGE_BYTES: u32 = TEX_IMAGE_SLOTS as u32 * TEX_IMAGE_SLOT_BYTES;

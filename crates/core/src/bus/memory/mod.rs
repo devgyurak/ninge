@@ -12,7 +12,7 @@
 
 mod vram;
 
-pub(crate) use vram::{ExtPalette, ExtSlots};
+pub(crate) use vram::{ExtPalette, ExtSlots, TEX_IMAGE_SLOT_BYTES};
 pub use vram::{ExtPaletteBanks, Textures, VramMapping, VramWindow, VramWindowKind};
 
 use super::TcmConfig;

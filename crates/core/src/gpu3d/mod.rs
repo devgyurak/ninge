@@ -14,8 +14,8 @@
 //! Only the ARM9 sees these registers, so [`Gpu3d`] is a plain type implementing `Device<true>`
 //! (`AGENTS.md` §4, "Per-CPU devices"): the "seen by one CPU" class. It registers directly with its
 //! own port, with no `io/` entrance, as `gpu2d` does (`AGENTS.md` §2, "Placement").
-// The rasterizer (`raster`) draws the polygons and the palette textures; the other texture formats
-// and the rear bitmap are #50, toon, edge, fog and AA are #51 and the parallel executor is #52.
+// The rasterizer (`raster`) draws the polygons and the textures; the rear
+// bitmap is #50, toon, edge, fog and AA are #51 and the parallel executor is #52.
 
 mod cycles;
 mod executor;

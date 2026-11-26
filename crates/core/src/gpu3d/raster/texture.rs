@@ -5,8 +5,8 @@
 //! A polygon's TEXIMAGE_PARAM and PLTT_BASE are parsed once into a [`Tex`] when the frame's
 //! snapshot is built. The line draw then reads only that and the texture memory ([`Textures`]), and
 //! allocates nothing.
-// TODO(phase7, #50): A3I5, A5I3, direct (the alpha-format PR) and 4x4 compressed (its own PR) are
-// not sampled yet; a polygon that uses one draws its vertex colour.
+// TODO(phase7, #50): 4x4 compressed is not sampled yet; a polygon that uses it draws its vertex
+// colour.
 
 use crate::bus::Textures;
 
@@ -29,18 +29,26 @@ const PALETTE_UNIT: u32 = 16;
 const PALETTE_UNIT_4COLOR: u32 = 8;
 /// DISP3DCNT bit 0: texture mapping on.
 pub(super) const DISP3DCNT_TEXTURE: u16 = 1;
+/// A fully opaque texel's alpha, 5 bits.
+const OPAQUE: u8 = 31;
 /// The fractional bits of S and T (1.11.4).
 const ST_FRAC: u32 = 4;
 
-/// The palette formats this module samples so far.
+/// The formats this module samples so far.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Format {
+    /// A3I5: 8 bits, a 3-bit alpha above a 5-bit index into a 32-colour palette.
+    Alpha3Index5,
     /// 2 bits a texel, palette base in units of 8 bytes.
     Colors4,
     /// 4 bits a texel.
     Colors16,
     /// 8 bits a texel.
     Colors256,
+    /// A5I3: 8 bits, a 5-bit alpha above a 3-bit index into an 8-colour palette.
+    Alpha5Index3,
+    /// 16 bits a texel: a 15-bit colour and an alpha bit, no palette.
+    Direct,
 }
 
 /// A polygon's texture, parsed from TEXIMAGE_PARAM and PLTT_BASE.
@@ -73,6 +81,9 @@ impl Tex {
     /// "no texture" and for a format that is not sampled yet.
     pub(super) fn parse(param: u32, palette: u32) -> Option<Self> {
         let format = match (param >> FORMAT_SHIFT) & 7 {
+            1 => Format::Alpha3Index5,
+            6 => Format::Alpha5Index3,
+            7 => Format::Direct,
             2 => Format::Colors4,
             3 => Format::Colors16,
             4 => Format::Colors256,
@@ -97,6 +108,12 @@ impl Tex {
         })
     }
 
+    /// The texels can hold a partial alpha (A3I5 and A5I3), which is what makes a polygon draw with
+    /// the translucent ones (`textures.md`, "Texture alpha, translucency and the buffers").
+    pub(super) fn has_alpha(&self) -> bool {
+        matches!(self.format, Format::Alpha3Index5 | Format::Alpha5Index3)
+    }
+
     /// The texel at S and T (1.11.4, as interpolated), from texture memory `mem`.
     // TODO(hw-unverified): the texel is the floor of S and T, sampled at the pixel's top left
     // corner (`textures.md`, "Unverified").
@@ -104,17 +121,37 @@ impl Tex {
         let x = wrap(s >> ST_FRAC, self.size_s, self.repeat_s, self.flip_s);
         let y = wrap(t >> ST_FRAC, self.size_t, self.repeat_t, self.flip_t);
         let i = y * self.size_s + x;
-        let index = match self.format {
-            Format::Colors4 => u32::from(mem.image_byte(self.image + i / 4) >> (2 * (i % 4))) & 0x3,
-            Format::Colors16 => {
-                u32::from(mem.image_byte(self.image + i / 2) >> (4 * (i % 2))) & 0xF
+        let byte = |at: u32| u32::from(mem.image_byte(self.image + at));
+        // The palette index, and the alpha a texel of this format carries (5 bits).
+        let (index, alpha) = match self.format {
+            Format::Colors4 => ((byte(i / 4) >> (2 * (i % 4))) & 0x3, OPAQUE),
+            Format::Colors16 => ((byte(i / 2) >> (4 * (i % 2))) & 0xF, OPAQUE),
+            Format::Colors256 => (byte(i), OPAQUE),
+            Format::Alpha3Index5 => {
+                // The 3-bit alpha widens to 5 bits as `a x 4 + a / 2` (0 stays 0, 7 becomes 31).
+                let a = byte(i) >> 5;
+                (byte(i) & 0x1F, (a * 4 + a / 2) as u8)
             }
-            Format::Colors256 => u32::from(mem.image_byte(self.image + i)),
+            Format::Alpha5Index3 => (byte(i) & 0x7, (byte(i) >> 3) as u8),
+            Format::Direct => {
+                // Bit 15 is the alpha, 31 when set and 0 when clear; there is no palette.
+                let half = byte(2 * i) | byte(2 * i + 1) << 8;
+                let alpha = if half & 0x8000 != 0 { OPAQUE } else { 0 };
+                return Texel {
+                    color: (half & 0x7FFF) as u16,
+                    alpha,
+                };
+            }
         };
-        let hidden = self.color0_clear && index == 0;
+        // Bit 29 applies to the 4-, 16- and 256-colour formats only.
+        let palette_format = matches!(
+            self.format,
+            Format::Colors4 | Format::Colors16 | Format::Colors256
+        );
+        let hidden = palette_format && self.color0_clear && index == 0;
         Texel {
             color: mem.palette_color(self.palette + index * 2),
-            alpha: if hidden { 0 } else { 31 },
+            alpha: if hidden { 0 } else { alpha },
         }
     }
 }
@@ -159,4 +196,26 @@ pub(super) fn modulate(texel: Texel, vertex6: [u8; 3], alpha: u8) -> ([u8; 3], u
         expand6(u16::from(alpha)),
     );
     (color, a >> 1)
+}
+
+/// Decal (`textures.md`, "Blending the texel with the vertex colour"): the texel alpha is the ratio of
+/// texture to vertex colour, `(t x a + v x (63 - a)) / 64` per 6-bit channel, with the vertex colour
+/// alone at a texel alpha of 0 and the texel colour alone at 31. The pixel's alpha is the polygon's.
+/// Returns the 6-bit colour and the 5-bit alpha.
+// TODO(hw-unverified): the special cases test the 5-bit alpha and the ratio uses the 6-bit one, and
+// the division truncates (`textures.md`, "Unverified").
+pub(super) fn decal(texel: Texel, vertex6: [u8; 3], alpha: u8) -> ([u8; 3], u8) {
+    let ratio = u16::from(expand6(u16::from(texel.alpha)));
+    let mix = |t: u16, v: u8| match texel.alpha {
+        0 => v,
+        OPAQUE => t as u8,
+        _ => ((t * ratio + u16::from(v) * (63 - ratio)) / 64) as u8,
+    };
+    let t = |shift: u32| u16::from(expand6((texel.color >> shift) & 0x1F));
+    let color = [
+        mix(t(0), vertex6[0]),
+        mix(t(5), vertex6[1]),
+        mix(t(10), vertex6[2]),
+    ];
+    (color, alpha)
 }

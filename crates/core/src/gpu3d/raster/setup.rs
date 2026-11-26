@@ -36,6 +36,7 @@ const ATTR_FRONT: u32 = 1 << 7;
 const ATTR_ALPHA_SHIFT: u32 = 16;
 const ATTR_ID_SHIFT: u32 = 24;
 const MODE_MODULATION: u32 = 0;
+const MODE_DECAL: u32 = 1;
 const MODE_SHADOW: u32 = 3;
 /// POLYGON_ATTR bit 14: the depth test passes on equal depth, not less.
 const ATTR_DEPTH_EQUAL: u32 = 1 << 14;
@@ -52,7 +53,7 @@ const ATTR_UPDATE_DEPTH: u32 = 1 << 11;
 // DISP3DCNT bits 2 and 3.
 const DISP3DCNT_ALPHA_TEST: u16 = 1 << 2;
 const DISP3DCNT_BLEND: u16 = 1 << 3;
-const OPAQUE: u32 = 31;
+pub(super) const OPAQUE: u32 = 31;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
 const DISP3DCNT_EDGE_MARKING: u16 = 1 << 5;
@@ -71,8 +72,10 @@ pub(super) struct PolyDraw {
     /// Index of its first vertex in the frame's vertex list, and how many it has.
     pub(super) first: usize,
     pub(super) count: usize,
-    /// The texture the pixels are modulated with, if the polygon has one that is drawn.
+    /// The texture the pixels are blended with, if the polygon has one that is drawn.
     pub(super) tex: Option<Tex>,
+    /// Polygon mode 1: the texture blends by its alpha instead of multiplying the vertex colour.
+    pub(super) decal: bool,
     /// The polygon ID, 6 bits.
     pub(super) id: u8,
     /// The alpha of the polygon's pixels, 5 bits: 31 for an opaque polygon, a wire frame and a line
@@ -264,27 +267,30 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         // A wire frame (alpha 0) draws at alpha 31; a line segment of alpha 1 to 30 is translucent
         // like any polygon, and a shadow polygon is translucent whatever its alpha: it draws after
         // the opaque ones (`rasterizer.md`, "Which pixels a polygon covers", "Shadow polygons").
-        let translucent = alpha != 0 && (alpha != OPAQUE || shadow);
+        let by_alpha = alpha != 0 && (alpha != OPAQUE || shadow);
+        // TODO(phase7, #51): toon and highlight (mode 2) draw no texture yet, and neither does a
+        // shadow polygon.
+        let decal = mode == MODE_DECAL;
+        let tex = if (mode == MODE_MODULATION || decal) && disp3dcnt & DISP3DCNT_TEXTURE != 0 {
+            Tex::parse(p.texture, p.palette)
+        } else {
+            None
+        };
+        // A polygon whose texels can hold a partial alpha draws with the translucent ones, but only
+        // where that alpha reaches the pixel: decal ignores it (`textures.md`, "Texture alpha,
+        // translucency and the buffers"). TODO(hw-unverified): the draw order of such a polygon.
+        let translucent = by_alpha || (!decal && tex.is_some_and(|t| t.has_alpha()));
         let blend = disp3dcnt & DISP3DCNT_BLEND != 0;
         let flat = y_min_fix == y_max_fix;
         frame.polygons.push(PolyDraw {
             first: frame.vertices.len(),
             count: screen.len(),
-            // TODO(phase7, #50): decal (mode 1) comes with the alpha formats; toon and highlight
-            // (mode 2) are #51, and a shadow polygon draws no texture.
-            tex: if mode == MODE_MODULATION && disp3dcnt & DISP3DCNT_TEXTURE != 0 {
-                Tex::parse(p.texture, p.palette)
-            } else {
-                None
-            },
+            tex,
+            decal,
             id: ((p.attr >> ATTR_ID_SHIFT) & 0x3F) as u8,
             // TODO(hw-unverified): a wire frame (alpha 31 here) goes through the alpha test like
             // any pixel (`rasterizer.md`, "Unverified").
-            alpha: if translucent {
-                alpha as u8
-            } else {
-                OPAQUE as u8
-            },
+            alpha: if by_alpha { alpha as u8 } else { OPAQUE as u8 },
             shadow,
             mask: shadow && (p.attr >> ATTR_ID_SHIFT) & 0x3F == 0,
             new_volume: false,

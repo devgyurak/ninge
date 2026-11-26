@@ -151,7 +151,8 @@ What GBATEK does not say, and the model decides (all of it under "Unverified"):
   pixel stays and shows the vertex colour.
 - **Draw order** is a property of the polygon, not of the pixel. A polygon is drawn with the
   translucent ones when its POLYGON_ATTR alpha is 1 to 30, **or** its texture format is A3I5 or
-  A5I3, the two formats whose texels can hold a partial alpha. A polygon with a direct or palette
+  A5I3, the two formats whose texels can hold a partial alpha, and it blends by modulation (a
+  decal polygon's pixel alpha is the polygon's, so the texel alpha never reaches it). A polygon with a direct or palette
   texture stays among the opaque ones: its texels are fully opaque or fully hidden, so no pixel of
   it blends. A shadow polygon stays translucent as before.
 - The translucent-pixel rules of `rasterizer.md` (the same-ID skip, the blend, the depth write)

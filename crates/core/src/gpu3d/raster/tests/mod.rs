@@ -9,6 +9,7 @@ mod fill;
 mod interp;
 mod shadow;
 mod texalpha;
+mod texcomp;
 mod texture;
 
 use super::Frame;

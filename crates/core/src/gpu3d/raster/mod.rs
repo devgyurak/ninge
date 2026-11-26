@@ -10,7 +10,7 @@
 //! allocates on the pixel path. The snapshot is a pure function of the scene and the registers, so
 //! it is never saved; only the finished output is (`Machine::frame3d`).
 // TODO(phase7): the resolve pass (edge marking, fog, anti-aliasing) and toon shading are #51; the
-// rear bitmap and the remaining texture formats are #50.
+// rear bitmap is #50.
 
 mod setup;
 mod span;

@@ -5,8 +5,6 @@
 //! A polygon's TEXIMAGE_PARAM and PLTT_BASE are parsed once into a [`Tex`] when the frame's
 //! snapshot is built. The line draw then reads only that and the texture memory ([`Textures`]), and
 //! allocates nothing.
-// TODO(phase7, #50): 4x4 compressed is not sampled yet; a polygon that uses it draws its vertex
-// colour.
 
 use crate::bus::Textures;
 
@@ -31,6 +29,8 @@ const PALETTE_UNIT_4COLOR: u32 = 8;
 pub(super) const DISP3DCNT_TEXTURE: u16 = 1;
 /// A fully opaque alpha, 5 bits: a texel's, and a pixel's.
 pub(super) const OPAQUE: u8 = 31;
+/// Bytes of one texture image slot (128 KiB).
+const SLOT_BYTES: u32 = 0x2_0000;
 /// The fractional bits of S and T (1.11.4).
 const ST_FRAC: u32 = 4;
 
@@ -49,6 +49,8 @@ enum Format {
     Alpha5Index3,
     /// 16 bits a texel: a 15-bit colour and an alpha bit, no palette.
     Direct,
+    /// 4x4-texel blocks of 2-bit texels, with a palette halfword per block in slot 1.
+    Compressed,
 }
 
 /// A polygon's texture, parsed from TEXIMAGE_PARAM and PLTT_BASE.
@@ -84,6 +86,7 @@ impl Tex {
             1 => Format::Alpha3Index5,
             6 => Format::Alpha5Index3,
             7 => Format::Direct,
+            5 => Format::Compressed,
             2 => Format::Colors4,
             3 => Format::Colors16,
             4 => Format::Colors256,
@@ -133,6 +136,7 @@ impl Tex {
                 (byte(i) & 0x1F, (a * 4 + a / 2) as u8)
             }
             Format::Alpha5Index3 => (byte(i) & 0x7, (byte(i) >> 3) as u8),
+            Format::Compressed => return self.compressed(mem, x, y),
             Format::Direct => {
                 // Bit 15 is the alpha, 31 when set and 0 when clear; there is no palette.
                 let half = byte(2 * i) | byte(2 * i + 1) << 8;
@@ -154,6 +158,56 @@ impl Tex {
             alpha: if hidden { 0 } else { alpha },
         }
     }
+}
+
+impl Tex {
+    /// The texel at column `x`, row `y` of a 4x4 compressed texture (`textures.md`, "4x4 compressed
+    /// texels"): the block's 2-bit texel picks a colour by the mode in the block's palette halfword.
+    // TODO(hw-unverified): the halfword of a block whose data is in slot 1 or 3 reads as 0 (the
+    // formula covers slots 0 and 2 only), and the mixes truncate per 5-bit channel
+    // (`textures.md`, "Unverified").
+    fn compressed(&self, mem: &Textures<'_>, x: u32, y: u32) -> Texel {
+        let block = (y / 4) * (self.size_s / 4) + x / 4;
+        let at = self.image + 4 * block;
+        let row = u32::from(mem.image_byte(at + y % 4));
+        let texel = (row >> (2 * (x % 4))) & 0x3;
+        // The halfword sits in slot 1 at half the block's offset in its slot: in the lower 64 KiB
+        // for data in slot 0, in the upper 64 KiB for data in slot 2.
+        let within = (at % SLOT_BYTES) / 2;
+        let info = match at / SLOT_BYTES {
+            0 => Some(SLOT_BYTES + within),
+            2 => Some(SLOT_BYTES + SLOT_BYTES / 2 + within),
+            _ => None,
+        };
+        let half = info.map_or(0, |a| {
+            u32::from(mem.image_byte(a)) | u32::from(mem.image_byte(a + 1)) << 8
+        });
+        let (mode, base) = (half >> 14, self.palette + (half & 0x3FFF) * 4);
+        let color = |k: u32| mem.palette_color(base + 2 * k);
+        let visible = |c: u16| Texel {
+            color: c,
+            alpha: OPAQUE,
+        };
+        match (mode, texel) {
+            (0 | 1, 3) => Texel { color: 0, alpha: 0 },
+            (_, 0) => visible(color(0)),
+            (_, 1) => visible(color(1)),
+            (1, 2) => visible(mix(color(0), color(1), 1, 1)),
+            (3, 2) => visible(mix(color(0), color(1), 5, 3)),
+            (3, _) => visible(mix(color(0), color(1), 3, 5)),
+            (_, 2) => visible(color(2)),
+            _ => visible(color(3)),
+        }
+    }
+}
+
+/// `(a x wa + b x wb) / (wa + wb)` per 5-bit channel of two 15-bit colours, truncating.
+fn mix(a: u16, b: u16, wa: u16, wb: u16) -> u16 {
+    let channel = |shift: u32| {
+        let (a, b) = ((a >> shift) & 0x1F, (b >> shift) & 0x1F);
+        (a * wa + b * wb) / (wa + wb)
+    };
+    channel(0) | (channel(5) << 5) | (channel(10) << 10)
 }
 
 /// A texel coordinate `n` (any sign) on an axis of `size` texels: clamped, repeated, or repeated

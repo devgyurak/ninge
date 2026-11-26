@@ -22,11 +22,13 @@ use crate::gpu2d::{Line3d, Pixel3d};
 /// A weight of 1.0 in `lerp`.
 const WEIGHT_ONE: i64 = 1 << 16;
 
-/// `a` toward `b` by `t` (0 to [`WEIGHT_ONE`]), per attribute. The product is taken in 128 bits: S
-/// times 1/W is up to 2^55, so a difference times `t` (2^16) would not fit 64.
+/// `a` toward `b` by `t` (0 to [`WEIGHT_ONE`]), per attribute. A channel or depth difference is at
+/// most 2^46 (1/W is at most 2^40), so its product with `t` (2^16) fits 64 bits; S and T times 1/W
+/// reach 2^55, so only those two are multiplied in 128 bits.
 pub(super) fn lerp(a: &Attrs, b: &Attrs, t: i64) -> Attrs {
     let mut out = [0; ATTRS];
-    (0..ATTRS).for_each(|k| {
+    (0..S).for_each(|k| out[k] = a[k] + (((b[k] - a[k]) * t) >> 16));
+    (S..ATTRS).for_each(|k| {
         // The result lies between `a[k]` and `b[k]`, so it fits 64 bits again.
         out[k] = a[k] + ((i128::from(b[k] - a[k]) * i128::from(t)) >> 16) as i64;
     });
@@ -116,6 +118,11 @@ fn plot(
 ) {
     let Ok(x) = usize::try_from(x) else { return };
     if x >= SCREEN_WIDTH {
+        return;
+    }
+    // A texel's alpha is at most the polygon's, so a polygon that fails the alpha test draws no
+    // pixel at all: skip it before the depth, the division and the texel read.
+    if poly.alpha <= poly.alpha_ref {
         return;
     }
     let iw = attrs[IW].max(1);
@@ -319,7 +326,14 @@ fn wire(
         let round = |v: i64| (v + ONE / 2) >> FRAC;
         let (x_lo, x_hi) = (round(xa.min(xb)), round(xa.max(xb)));
         (x_lo..=x_hi).for_each(|x| {
-            let t = (ta + tb) / 2;
+            // The weight follows x along the edge, so a textured line walks its texels; a vertical
+            // edge (no x span) takes the middle.
+            let t = if xa == xb {
+                (ta + tb) / 2
+            } else {
+                let along = ((((x << FRAC) - xa) << 16) / (xb - xa)).clamp(0, WEIGHT_ONE);
+                ta + (((tb - ta) * along) >> 16)
+            };
             plot(x, &lerp(&a.attrs, &b.attrs, t), poly, textures, state, out);
         });
     });

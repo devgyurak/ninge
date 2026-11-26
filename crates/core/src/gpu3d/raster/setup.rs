@@ -4,7 +4,7 @@
 //! coordinates to the screen", "Which pixels a polygon covers", "The rear plane").
 
 use super::Frame;
-use super::texture::{self, DISP3DCNT_TEXTURE, Tex};
+use super::texture::{self, Tex};
 use crate::gpu3d::polygon::{MAX_POLYGON_VERTICES, Vertex};
 use crate::gpu3d::render::{RenderRegs, Scene};
 
@@ -55,6 +55,8 @@ const DISP3DCNT_BLEND: u16 = 1 << 3;
 const OPAQUE: u32 = 31;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
+/// DISP3DCNT bit 0: texture mapping on.
+const DISP3DCNT_TEXTURE: u16 = 1;
 const DISP3DCNT_EDGE_MARKING: u16 = 1 << 5;
 
 /// One vertex on the screen: a position in 1/256 pixel (y down, line 0 first) and its attributes.
@@ -270,8 +272,9 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         frame.polygons.push(PolyDraw {
             first: frame.vertices.len(),
             count: screen.len(),
-            // TODO(phase7, #50): decal (mode 1) comes with the alpha formats; toon and highlight
-            // (mode 2) are #51, and a shadow polygon draws no texture.
+            // TODO(phase7, #50): decal (mode 1) comes with the alpha formats. TODO(phase7, #51):
+            // toon and highlight (mode 2) draw no texture yet. TODO(hw-unverified): a shadow polygon
+            // draws no texture (`textures.md`, "Unverified").
             tex: if mode == MODE_MODULATION && disp3dcnt & DISP3DCNT_TEXTURE != 0 {
                 Tex::parse(p.texture, p.palette)
             } else {

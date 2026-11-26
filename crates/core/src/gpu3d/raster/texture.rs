@@ -14,21 +14,19 @@ use crate::bus::Textures;
 const OFFSET_MASK: u32 = 0xFFFF;
 /// The image offset is in units of 8 bytes.
 const OFFSET_UNIT: u32 = 8;
-const REPEAT_S: u32 = 1 << 16;
-const REPEAT_T: u32 = 1 << 17;
-const FLIP_S: u32 = 1 << 18;
-const FLIP_T: u32 = 1 << 19;
+pub(super) const REPEAT_S: u32 = 1 << 16;
+pub(super) const REPEAT_T: u32 = 1 << 17;
+pub(super) const FLIP_S: u32 = 1 << 18;
+pub(super) const FLIP_T: u32 = 1 << 19;
 const SIZE_S_SHIFT: u32 = 20;
 const SIZE_T_SHIFT: u32 = 23;
 const FORMAT_SHIFT: u32 = 26;
-const COLOR0_TRANSPARENT: u32 = 1 << 29;
+pub(super) const COLOR0_TRANSPARENT: u32 = 1 << 29;
 /// PLTT_BASE bits 0-12.
 const PALETTE_MASK: u32 = 0x1FFF;
 /// The palette base is in units of 16 bytes, 8 for the 4-colour format.
 const PALETTE_UNIT: u32 = 16;
 const PALETTE_UNIT_4COLOR: u32 = 8;
-/// DISP3DCNT bit 0: texture mapping on.
-pub(super) const DISP3DCNT_TEXTURE: u16 = 1;
 /// The fractional bits of S and T (1.11.4).
 const ST_FRAC: u32 = 4;
 
@@ -113,7 +111,7 @@ impl Tex {
         };
         let hidden = self.color0_clear && index == 0;
         Texel {
-            color: mem.palette_color(self.palette + index * 2),
+            color: mem.palette_color(self.palette + index * 2) & 0x7FFF,
             alpha: if hidden { 0 } else { 31 },
         }
     }

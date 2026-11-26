@@ -15,7 +15,7 @@ const COMPRESSED: u32 = 5;
 /// One row of a block: texels 0, 1, 2, 3 from the left (bits 0-1 first).
 const ROW: u8 = 0xE4;
 /// Slot 1 starts here in the test's texture memory (image offsets are VRAM offsets).
-const SLOT1: usize = 0x2_0000;
+const SLOT1: usize = crate::bus::TEX_IMAGE_SLOT_BYTES as usize;
 
 /// A 15-bit colour from 5-bit channels.
 fn rgb(r: u16, g: u16, b: u16) -> u16 {
@@ -26,7 +26,7 @@ fn rgb(r: u16, g: u16, b: u16) -> u16 {
 fn palette4() -> [u16; 4] {
     [
         rgb(10, 20, 30),
-        rgb(20, 4, 2),
+        rgb(21, 5, 3),
         rgb(31, 31, 31),
         rgb(1, 2, 3),
     ]
@@ -78,8 +78,8 @@ fn mode_texel(mode: usize, k: usize) -> Option<u16> {
         [
             Some(c[0]),
             Some(c[1]),
-            Some(rgb(13, 14, 19)),
-            Some(rgb(16, 10, 12)),
+            Some(rgb(14, 14, 19)),
+            Some(rgb(16, 10, 13)),
         ],
     ];
     table[mode][k]

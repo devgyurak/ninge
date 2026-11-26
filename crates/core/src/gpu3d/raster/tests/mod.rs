@@ -8,6 +8,7 @@ mod depth;
 mod fill;
 mod interp;
 mod shadow;
+mod texalpha;
 mod texture;
 
 use super::Frame;

@@ -152,9 +152,10 @@ What GBATEK does not say, and the model decides (all of it under "Unverified"):
   pixel stays and shows the vertex colour.
 - **Draw order** is a property of the polygon, not of the pixel. A polygon is drawn with the
   translucent ones when its POLYGON_ATTR alpha is 1 to 30, **or** its texture format is A3I5 or
-  A5I3, the two formats whose texels can hold a partial alpha. A polygon with a direct or palette
-  texture stays among the opaque ones: its texels are fully opaque or fully hidden, so no pixel of
-  it blends. A shadow polygon stays translucent as before.
+  A5I3, the two formats whose texels can hold a partial alpha, and it blends by modulation (a
+  decal polygon's pixel alpha is the polygon's, so the texel alpha never reaches it). A polygon
+  with a direct, palette or 4x4 compressed texture stays among the opaque ones: its texels are
+  fully opaque or fully hidden, so no pixel of it blends. A shadow polygon stays translucent as before.
 - The translucent-pixel rules of `rasterizer.md` (the same-ID skip, the blend, the depth write)
   apply to a pixel of final alpha 1 to 30, whatever polygon it came from; a pixel of alpha 31
   takes the opaque path and writes depth, ID and the translucent flag of "opaque".
@@ -217,6 +218,10 @@ Everything GBATEK does not state. Each item gets `TODO(hw-unverified)` at its co
 - Whether the polygon is ordered with the translucent polygons when its texture is A3I5 or A5I3,
   and whether a direct or palette texture with transparent texels counts. — `gpu3d/raster/` —
   verify by a test ROM that draws such a polygon after an opaque one at a nearer depth.
+- That a solid texel (alpha 31) of a translucent-ordered polygon takes the opaque path and so writes
+  depth whatever POLYGON_ATTR bit 11 says, which lets it overwrite a nearer translucent pixel that
+  wrote none; and that such a polygon follows the translucent polygons' edge rule (lower and right
+  edges kept with blending on, dropped with it off). — `gpu3d/raster/` — verify by a test ROM.
 - That the texel alpha reaches the alpha test, the same-ID rule and the depth write as the
   polygon's alpha does. — `gpu3d/raster/` — verify by a test ROM.
 - The mixed interpolation of 4x4 modes 1 and 3 (the model: per 5-bit channel, truncating), and the

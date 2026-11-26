@@ -12,7 +12,7 @@
 
 use super::LineState;
 use super::setup::{
-    ATTRS, Attrs, DEPTH, FRAC, IW, IW_ONE, MAX_DEPTH, ONE, PolyDraw, S, ScreenVertex, T,
+    ATTRS, Attrs, DEPTH, FRAC, IW, IW_ONE, MAX_DEPTH, ONE, OPAQUE, PolyDraw, S, ScreenVertex, T,
 };
 use super::texture;
 use crate::SCREEN_WIDTH;
@@ -139,11 +139,7 @@ fn plot(
     } else {
         depth < kept
     };
-    // A translucent polygon does not draw over a pixel another translucent pixel of its own ID
-    // wrote. TODO(hw-unverified): the rule for ordinary translucent polygons is the model's
-    // (`rasterizer.md`, "Unverified").
-    let again = poly.translucent && !poly.shadow && state.translucent[x] && state.id[x] == poly.id;
-    if !passes || again {
+    if !passes {
         return;
     }
     // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
@@ -156,11 +152,28 @@ fn plot(
     let (own, alpha) = match &poly.tex {
         Some(tex) => {
             let texel = tex.texel(textures, round_div(attrs[S], iw), round_div(attrs[T], iw));
-            texture::modulate(texel, vertex, poly.alpha)
+            if poly.decal {
+                texture::decal(texel, vertex, poly.alpha)
+            } else {
+                texture::modulate(texel, vertex, poly.alpha)
+            }
         }
         None => (vertex, poly.alpha),
     };
+    // TODO(hw-unverified): the alpha test, the same-ID rule and the depth write see the texel's
+    // alpha, not only the polygon's (`textures.md`, "Unverified").
     if alpha <= poly.alpha_ref {
+        return;
+    }
+    // A pixel is translucent by its own alpha, not its polygon's: a texel can be fully opaque in a
+    // translucent polygon (`textures.md`). It then takes the opaque path: no blend, depth written.
+    // TODO(hw-unverified): so a solid texel can overwrite a nearer translucent pixel that wrote no
+    // depth (`textures.md`, "Unverified").
+    let translucent = poly.translucent && (u32::from(alpha) != OPAQUE || poly.shadow);
+    // A translucent pixel does not draw over a pixel another translucent pixel of its own ID
+    // wrote. TODO(hw-unverified): the rule for ordinary translucent polygons is the model's
+    // (`rasterizer.md`, "Unverified").
+    if translucent && !poly.shadow && state.translucent[x] && state.id[x] == poly.id {
         return;
     }
     if poly.shadow {
@@ -186,7 +199,7 @@ fn plot(
     // The alpha already in the output stands for the buffer's alpha; nothing else changes `out`
     // while the polygons draw.
     let below = out[x].alpha;
-    let blended = poly.translucent && poly.blend && below != 0;
+    let blended = translucent && poly.blend && below != 0;
     // Blending: (poly x (A + 1) + buffer x (31 - A)) / 32 per channel, the alpha the larger of the
     // two; it is skipped for an opaque pixel, with blending off and over alpha 0 (`rasterizer.md`,
     // "Translucency, draw order and the rear plane").
@@ -208,11 +221,11 @@ fn plot(
     };
     state.color6[x] = color6;
     // A shadow polygon writes no depth in either pass (`rasterizer.md`, "Shadow polygons").
-    if !poly.shadow && (!poly.translucent || poly.update_depth) {
+    if !poly.shadow && (!translucent || poly.update_depth) {
         state.depth[x] = depth;
     }
     state.id[x] = poly.id;
-    state.translucent[x] = poly.translucent;
+    state.translucent[x] = translucent;
 }
 
 /// Polygon `poly` on line `y`: its interior, its edges (a wire frame) or its one dot.

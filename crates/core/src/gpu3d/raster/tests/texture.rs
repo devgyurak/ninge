@@ -11,48 +11,48 @@ use super::*;
 use crate::gpu3d::polygon::Ram;
 use crate::gpu3d::raster::texture::{Texel, modulate, wrap};
 
-const WHITE: u16 = 0x7FFF;
+pub(super) const WHITE: u16 = 0x7FFF;
 /// DISP3DCNT bit 0: texture mapping on.
-const TEXTURES_ON: u16 = 1;
+pub(super) const TEXTURES_ON: u16 = 1;
 // TEXIMAGE_PARAM bits (`textures.md`).
-const REPEAT_S: u32 = 1 << 16;
-const REPEAT_T: u32 = 1 << 17;
-const FLIP_S: u32 = 1 << 18;
-const FLIP_T: u32 = 1 << 19;
-const COLOR0_CLEAR: u32 = 1 << 29;
-const COLORS4: u32 = 2;
-const COLORS16: u32 = 3;
-const COLORS256: u32 = 4;
+pub(super) const REPEAT_S: u32 = 1 << 16;
+pub(super) const REPEAT_T: u32 = 1 << 17;
+pub(super) const FLIP_S: u32 = 1 << 18;
+pub(super) const FLIP_T: u32 = 1 << 19;
+pub(super) const COLOR0_CLEAR: u32 = 1 << 29;
+pub(super) const COLORS4: u32 = 2;
+pub(super) const COLORS16: u32 = 3;
+pub(super) const COLORS256: u32 = 4;
 /// Where the test's texture memory puts palette slot 0 in its buffer: after the 4 image slots.
-const PALETTE_AT: usize = 0x8_0000;
+pub(super) const PALETTE_AT: usize = 0x8_0000;
 
 /// TEXIMAGE_PARAM for a texture at byte offset `offset`, `8 << size` texels each way, of `format`,
 /// with `flags` (repeat, flip, colour 0).
-fn param(offset: u32, size: u32, format: u32, flags: u32) -> u32 {
+pub(super) fn param(offset: u32, size: u32, format: u32, flags: u32) -> u32 {
     (offset / 8) | (size << 20) | (size << 23) | (format << 26) | flags
 }
 
 /// The texture memory of a test: the four image slots at 0, 128 KiB, ..., the six palette slots
 /// after them, and the image slots in `unmapped` backed by no bank.
-struct TexMem {
-    vram: Vec<u8>,
+pub(super) struct TexMem {
+    pub(super) vram: Vec<u8>,
     unmapped: [bool; 4],
 }
 
 impl TexMem {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             vram: vec![0; PALETTE_AT + 6 * 0x4000],
             unmapped: [false; 4],
         }
     }
 
-    fn image(mut self, offset: usize, bytes: &[u8]) -> Self {
+    pub(super) fn image(mut self, offset: usize, bytes: &[u8]) -> Self {
         self.vram[offset..offset + bytes.len()].copy_from_slice(bytes);
         self
     }
 
-    fn palette(mut self, offset: usize, colors: &[u16]) -> Self {
+    pub(super) fn palette(mut self, offset: usize, colors: &[u16]) -> Self {
         colors.iter().enumerate().for_each(|(k, c)| {
             let at = PALETTE_AT + offset + 2 * k;
             self.vram[at..at + 2].copy_from_slice(&c.to_le_bytes());
@@ -60,12 +60,12 @@ impl TexMem {
         self
     }
 
-    fn without_slot(mut self, slot: usize) -> Self {
+    pub(super) fn without_slot(mut self, slot: usize) -> Self {
         self.unmapped[slot] = true;
         self
     }
 
-    fn view(&self) -> Textures<'_> {
+    pub(super) fn view(&self) -> Textures<'_> {
         let image = [0, 1, 2, 3].map(|n| (!self.unmapped[n]).then_some(n as u32 * 0x2_0000));
         let palette = [0, 1, 2, 3, 4, 5].map(|n| Some(PALETTE_AT as u32 + n * 0x4000));
         Textures::from_slots(&self.vram, image, palette)
@@ -73,18 +73,18 @@ impl TexMem {
 }
 
 /// A distinct 15-bit colour for each palette index.
-fn colour(k: u16) -> u16 {
+pub(super) fn colour(k: u16) -> u16 {
     (k & 31) | (((k * 3) & 31) << 5) | (((k * 7) & 31) << 10)
 }
 
 /// The colours `colour(0)`, `colour(1)`, ... for `n` palette entries.
-fn palette_of(n: u16) -> Vec<u16> {
+pub(super) fn palette_of(n: u16) -> Vec<u16> {
     (0..n).map(colour).collect()
 }
 
 /// A quad from `(x0, y0)` to `(x1, y1)` whose S and T run from `(s0, t0)` to `(s1, t1)` texels,
 /// white, at depth `z`.
-fn tquad(rect: (i32, i32, i32, i32), z: i32, st: (i16, i16, i16, i16)) -> Vec<Vertex> {
+pub(super) fn tquad(rect: (i32, i32, i32, i32), z: i32, st: (i16, i16, i16, i16)) -> Vec<Vertex> {
     let (x0, y0, x1, y1) = rect;
     let (s0, t0, s1, t1) = st;
     let at = |x, y, s, t| Vertex {
@@ -101,12 +101,12 @@ fn tquad(rect: (i32, i32, i32, i32), z: i32, st: (i16, i16, i16, i16)) -> Vec<Ve
 }
 
 /// The unit quad of most tests: pixels 16..24 on both axes, one texel per pixel.
-fn unit_quad() -> Vec<Vertex> {
+pub(super) fn unit_quad() -> Vec<Vertex> {
     tquad((16, 16, 24, 24), 0, (0, 0, 8, 8))
 }
 
 /// A scene of textured polygons `(attr, TEXIMAGE_PARAM, PLTT_BASE, vertices)`.
-fn textured(polygons: &[(u32, u32, u32, Vec<Vertex>)]) -> Ram {
+pub(super) fn textured(polygons: &[(u32, u32, u32, Vec<Vertex>)]) -> Ram {
     let plain: Vec<(u32, Vec<Vertex>)> = polygons.iter().map(|p| (p.0, p.3.clone())).collect();
     let mut ram = scene(&plain);
     polygons.iter().enumerate().for_each(|(k, p)| {
@@ -117,7 +117,7 @@ fn textured(polygons: &[(u32, u32, u32, Vec<Vertex>)]) -> Ram {
 }
 
 /// All lines of `ram` with texture mapping on, drawn over texture memory `mem`.
-fn draw_with(ram: &Ram, disp3dcnt: u16, mem: &TexMem) -> Vec<Line3d> {
+pub(super) fn draw_with(ram: &Ram, disp3dcnt: u16, mem: &TexMem) -> Vec<Line3d> {
     let frame = Frame::new(Scene { ram, swap_bits: 0 }, &regs(), disp3dcnt);
     let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
     frame.draw(&SequentialExecutor, &mem.view(), &mut lines);
@@ -126,7 +126,7 @@ fn draw_with(ram: &Ram, disp3dcnt: u16, mem: &TexMem) -> Vec<Line3d> {
 
 /// The pixels of the 8x8 block at `(16, 16)` that do not show `want[y][x]` at alpha 31:
 /// `(x, y, colour, alpha)` of each.
-fn block_diffs(lines: &[Line3d], want: &[[u16; 8]; 8]) -> Vec<(usize, usize, u16, u8)> {
+pub(super) fn block_diffs(lines: &[Line3d], want: &[[u16; 8]; 8]) -> Vec<(usize, usize, u16, u8)> {
     (0..64)
         .filter(|k| {
             let p = at(lines, 16 + k % 8, 16 + k / 8);
@@ -140,7 +140,7 @@ fn block_diffs(lines: &[Line3d], want: &[[u16; 8]; 8]) -> Vec<(usize, usize, u16
 }
 
 /// The 8x8 grid of `f(x, y)`.
-fn grid(f: impl Fn(u16, u16) -> u16) -> [[u16; 8]; 8] {
+pub(super) fn grid(f: impl Fn(u16, u16) -> u16) -> [[u16; 8]; 8] {
     std::array::from_fn(|y| std::array::from_fn(|x| f(x as u16, y as u16)))
 }
 

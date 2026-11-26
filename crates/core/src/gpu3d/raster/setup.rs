@@ -4,6 +4,7 @@
 //! coordinates to the screen", "Which pixels a polygon covers", "The rear plane").
 
 use super::Frame;
+use super::texture::{self, DISP3DCNT_TEXTURE, Tex};
 use crate::gpu3d::polygon::{MAX_POLYGON_VERTICES, Vertex};
 use crate::gpu3d::render::{RenderRegs, Scene};
 
@@ -11,12 +12,16 @@ use crate::gpu3d::render::{RenderRegs, Scene};
 pub(super) const FRAC: u32 = 8;
 /// One pixel in a screen coordinate.
 pub(super) const ONE: i64 = 1 << FRAC;
-/// The attributes interpolated across a polygon: 1/W, the three colour channels times 1/W, depth.
-pub(super) const ATTRS: usize = 5;
+/// The attributes interpolated across a polygon: 1/W, the three colour channels times 1/W, depth,
+/// and S and T times 1/W.
+pub(super) const ATTRS: usize = 7;
 pub(super) type Attrs = [i64; ATTRS];
 /// Index of 1/W in [`Attrs`]; the channels follow, the depth is last.
 pub(super) const IW: usize = 0;
 pub(super) const DEPTH: usize = 4;
+/// Index of S (1.11.4) times 1/W; T follows.
+pub(super) const S: usize = 5;
+pub(super) const T: usize = 6;
 /// 1/W is held with this many fractional bits.
 pub(super) const IW_ONE: i64 = 1 << 40;
 /// The most a screen coordinate may be from 0, in 1/256 pixel (65536 pixels).
@@ -30,6 +35,7 @@ const ATTR_BACK: u32 = 1 << 6;
 const ATTR_FRONT: u32 = 1 << 7;
 const ATTR_ALPHA_SHIFT: u32 = 16;
 const ATTR_ID_SHIFT: u32 = 24;
+const MODE_MODULATION: u32 = 0;
 const MODE_SHADOW: u32 = 3;
 /// POLYGON_ATTR bit 14: the depth test passes on equal depth, not less.
 const ATTR_DEPTH_EQUAL: u32 = 1 << 14;
@@ -65,6 +71,8 @@ pub(super) struct PolyDraw {
     /// Index of its first vertex in the frame's vertex list, and how many it has.
     pub(super) first: usize,
     pub(super) count: usize,
+    /// The texture the pixels are modulated with, if the polygon has one that is drawn.
+    pub(super) tex: Option<Tex>,
     /// The polygon ID, 6 bits.
     pub(super) id: u8,
     /// The alpha of the polygon's pixels, 5 bits: 31 for an opaque polygon, a wire frame and a line
@@ -113,10 +121,9 @@ pub(super) struct Clear {
     pub(super) id: u8,
 }
 
-/// A 5-bit channel expanded to 6 bits: `X x 2 + 1`, but 0 stays 0 (`rasterizer.md`, "Colour along
-/// a polygon").
+/// A 5-bit channel expanded to 6 bits (`texture::expand6`).
 fn expand6(c5: u16) -> i64 {
-    if c5 == 0 { 0 } else { i64::from(c5) * 2 + 1 }
+    i64::from(texture::expand6(c5))
 }
 
 /// The 15-bit CLEAR_DEPTH as 24 bits: `X x 200h + ((X + 1) / 8000h) x 1FFh`
@@ -156,7 +163,15 @@ fn to_screen(v: &Vertex, viewport: u32) -> ScreenVertex {
     ScreenVertex {
         x: sx,
         y: sy,
-        attrs: [iw, channel(0), channel(5), channel(10), depth],
+        attrs: [
+            iw,
+            channel(0),
+            channel(5),
+            channel(10),
+            depth,
+            i64::from(v.s) * iw,
+            i64::from(v.t) * iw,
+        ],
     }
 }
 
@@ -255,6 +270,13 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
         frame.polygons.push(PolyDraw {
             first: frame.vertices.len(),
             count: screen.len(),
+            // TODO(phase7, #50): decal (mode 1) comes with the alpha formats; toon and highlight
+            // (mode 2) are #51, and a shadow polygon draws no texture.
+            tex: if mode == MODE_MODULATION && disp3dcnt & DISP3DCNT_TEXTURE != 0 {
+                Tex::parse(p.texture, p.palette)
+            } else {
+                None
+            },
             id: ((p.attr >> ATTR_ID_SHIFT) & 0x3F) as u8,
             // TODO(hw-unverified): a wire frame (alpha 31 here) goes through the alpha test like
             // any pixel (`rasterizer.md`, "Unverified").

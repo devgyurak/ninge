@@ -47,7 +47,7 @@ impl Machine {
         let gpu = self.io.gpu3d();
         let frame = Frame3d::new(gpu.scene(), gpu.render_regs(), gpu.disp3dcnt());
         let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; SCREEN_HEIGHT];
-        frame.draw(&SequentialExecutor, &mut lines);
+        frame.draw(&SequentialExecutor, &self.memory.textures(), &mut lines);
         self.frame3d.clear();
         self.frame3d.extend(lines.iter().flatten());
     }

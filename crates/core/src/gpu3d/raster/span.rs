@@ -11,18 +11,25 @@
 // stated by the source (`rasterizer.md`, "Unverified").
 
 use super::LineState;
-use super::setup::{ATTRS, Attrs, DEPTH, FRAC, IW, IW_ONE, MAX_DEPTH, ONE, PolyDraw, ScreenVertex};
+use super::setup::{
+    ATTRS, Attrs, DEPTH, FRAC, IW, IW_ONE, MAX_DEPTH, ONE, PolyDraw, S, ScreenVertex, T,
+};
+use super::texture;
 use crate::SCREEN_WIDTH;
+use crate::bus::Textures;
 use crate::gpu2d::{Line3d, Pixel3d};
 
 /// A weight of 1.0 in `lerp`.
 const WEIGHT_ONE: i64 = 1 << 16;
 
-/// `a` toward `b` by `t` (0 to [`WEIGHT_ONE`]), per attribute. The product stays under 2^63: a
-/// channel difference is at most 63 x 2^40 (1/W is at most 2^40) and `t` at most 2^16.
+/// `a` toward `b` by `t` (0 to [`WEIGHT_ONE`]), per attribute. The product is taken in 128 bits: S
+/// times 1/W is up to 2^55, so a difference times `t` (2^16) would not fit 64.
 pub(super) fn lerp(a: &Attrs, b: &Attrs, t: i64) -> Attrs {
     let mut out = [0; ATTRS];
-    (0..ATTRS).for_each(|k| out[k] = a[k] + (((b[k] - a[k]) * t) >> 16));
+    (0..ATTRS).for_each(|k| {
+        // The result lies between `a[k]` and `b[k]`, so it fits 64 bits again.
+        out[k] = a[k] + ((i128::from(b[k] - a[k]) * i128::from(t)) >> 16) as i64;
+    });
     out
 }
 
@@ -84,6 +91,14 @@ fn crossings(vs: &[ScreenVertex], y: i64, closed: bool) -> Option<(Cross, Cross)
     left.zip(right)
 }
 
+/// `n / d` rounded to the nearest whole, for a positive `d`: S and T are interpolated in 1/16 texel
+/// steps, so an interpolation that lands a hair under a whole texel (a 1/65536 weight cannot hit
+/// every span exactly) still reads that texel.
+// TODO(hw-unverified): the rounding of the interpolated S and T (`textures.md`, "Unverified").
+fn round_div(n: i64, d: i64) -> i64 {
+    (2 * n + d).div_euclid(2 * d)
+}
+
 /// The tolerance of the equal depth test, either way, in the 24-bit depth (`rasterizer.md`,
 /// "Depth").
 const EQUAL_TOLERANCE: u32 = 0x200;
@@ -91,12 +106,16 @@ const EQUAL_TOLERANCE: u32 = 0x200;
 /// Writes one pixel of attributes `attrs` at `x` if it passes the depth test: closer than what the
 /// line holds, or equal to it within [`EQUAL_TOLERANCE`] for a polygon that asks for that
 /// (`rasterizer.md`, "Depth").
-fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut Line3d) {
+fn plot(
+    x: i64,
+    attrs: &Attrs,
+    poly: &PolyDraw,
+    textures: &Textures<'_>,
+    state: &mut LineState,
+    out: &mut Line3d,
+) {
     let Ok(x) = usize::try_from(x) else { return };
     if x >= SCREEN_WIDTH {
-        return;
-    }
-    if poly.alpha <= poly.alpha_ref {
         return;
     }
     let iw = attrs[IW].max(1);
@@ -120,6 +139,23 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     if !passes || again {
         return;
     }
+    // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
+    // (`rasterizer.md`, "Unverified").
+    let vertex = [1, 2, 3].map(|k| (attrs[k] / iw).clamp(0, 63) as u8);
+    // A textured pixel's colour and alpha come from the texel and the vertex colour; its alpha is
+    // what the alpha test, the blend and the buffers see (`textures.md`, "Texture alpha,
+    // translucency and the buffers"). TODO(hw-unverified): S and T are perspective correct, floor
+    // to the texel (`textures.md`, "Unverified").
+    let (own, alpha) = match &poly.tex {
+        Some(tex) => {
+            let texel = tex.texel(textures, round_div(attrs[S], iw), round_div(attrs[T], iw));
+            texture::modulate(texel, vertex, poly.alpha)
+        }
+        None => (vertex, poly.alpha),
+    };
+    if alpha <= poly.alpha_ref {
+        return;
+    }
     if poly.shadow {
         // The mask pass only sets the stencil where it passes the depth test. The render pass draws
         // nothing where the flag is set, whichever face of the volume it is, and where the flag is
@@ -140,9 +176,6 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
             return;
         }
     }
-    // TODO(hw-unverified): the colour is perspective correct and narrows by dropping the low bit
-    // (`rasterizer.md`, "Unverified").
-    let own = [1, 2, 3].map(|k| (attrs[k] / iw).clamp(0, 63) as u8);
     // The alpha already in the output stands for the buffer's alpha; nothing else changes `out`
     // while the polygons draw.
     let below = out[x].alpha;
@@ -151,7 +184,7 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     // two; it is skipped for an opaque pixel, with blending off and over alpha 0 (`rasterizer.md`,
     // "Translucency, draw order and the rear plane").
     let color6 = if blended {
-        let a = u16::from(poly.alpha);
+        let a = u16::from(alpha);
         // TODO(hw-unverified): the 5-bit formula is applied to 6-bit channels and narrowed after
         // (`rasterizer.md`, "Unverified").
         let mix =
@@ -164,11 +197,7 @@ fn plot(x: i64, attrs: &Attrs, poly: &PolyDraw, state: &mut LineState, out: &mut
     let narrow = |c: u8| u16::from(c >> 1);
     out[x] = Pixel3d {
         color: narrow(color6[0]) | narrow(color6[1]) << 5 | narrow(color6[2]) << 10,
-        alpha: if blended {
-            poly.alpha.max(below)
-        } else {
-            poly.alpha
-        },
+        alpha: if blended { alpha.max(below) } else { alpha },
     };
     state.color6[x] = color6;
     // A shadow polygon writes no depth in either pass (`rasterizer.md`, "Shadow polygons").
@@ -184,6 +213,7 @@ pub(super) fn draw_polygon(
     poly: &PolyDraw,
     vertices: &[ScreenVertex],
     y: usize,
+    textures: &Textures<'_>,
     state: &mut LineState,
     out: &mut Line3d,
 ) {
@@ -203,19 +233,26 @@ pub(super) fn draw_polygon(
     // colour (`rasterizer.md`), whatever its type.
     if let Some((dot_x, dot_y)) = poly.dot {
         if dot_y == y as i64 {
-            plot(dot_x, &vs[0].attrs, poly, state, out);
+            plot(dot_x, &vs[0].attrs, poly, textures, state, out);
         }
         return;
     }
     if poly.wire {
-        wire(poly, vs, row, state, out);
+        wire(poly, vs, row, textures, state, out);
     } else {
-        fill(poly, vs, row, state, out);
+        fill(poly, vs, row, textures, state, out);
     }
 }
 
 /// The interior of an opaque polygon on row `row`.
-fn fill(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, out: &mut Line3d) {
+fn fill(
+    poly: &PolyDraw,
+    vs: &[ScreenVertex],
+    row: i64,
+    textures: &Textures<'_>,
+    state: &mut LineState,
+    out: &mut Line3d,
+) {
     let Some((left, right)) = crossings(vs, row, !poly.exclude_edges || poly.flat) else {
         return;
     };
@@ -240,14 +277,21 @@ fn fill(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, o
             (((x << FRAC) - left.x) << 16) / span
         };
         let attrs = lerp(&left.attrs, &right.attrs, t.clamp(0, WEIGHT_ONE));
-        plot(x, &attrs, poly, state, out);
+        plot(x, &attrs, poly, textures, state, out);
     });
 }
 
 /// The edges of a wire frame on row `row`: each edge covers the whole x range it crosses within the
 /// row's band, one pixel for a steep edge, at the fixed alpha of 31.
 // TODO(hw-unverified): the line algorithm is the model's (`rasterizer.md`, "Unverified").
-fn wire(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, out: &mut Line3d) {
+fn wire(
+    poly: &PolyDraw,
+    vs: &[ScreenVertex],
+    row: i64,
+    textures: &Textures<'_>,
+    state: &mut LineState,
+    out: &mut Line3d,
+) {
     let (band_lo, band_hi) = (row - ONE / 2, row + ONE / 2 - 1);
     (0..vs.len()).for_each(|i| {
         let (a, b) = (&vs[i], &vs[(i + 1) % vs.len()]);
@@ -276,7 +320,7 @@ fn wire(poly: &PolyDraw, vs: &[ScreenVertex], row: i64, state: &mut LineState, o
         let (x_lo, x_hi) = (round(xa.min(xb)), round(xa.max(xb)));
         (x_lo..=x_hi).for_each(|x| {
             let t = (ta + tb) / 2;
-            plot(x, &lerp(&a.attrs, &b.attrs, t), poly, state, out);
+            plot(x, &lerp(&a.attrs, &b.attrs, t), poly, textures, state, out);
         });
     });
 }

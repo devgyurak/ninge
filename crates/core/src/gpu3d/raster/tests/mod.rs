@@ -8,9 +8,11 @@ mod depth;
 mod fill;
 mod interp;
 mod shadow;
+mod texture;
 
 use super::Frame;
 use crate::SCREEN_WIDTH;
+use crate::bus::Textures;
 use crate::gpu2d::{Line3d, Pixel3d};
 use crate::gpu3d::executor::SequentialExecutor;
 use crate::gpu3d::polygon::{Polygon, Ram, Vertex};
@@ -95,11 +97,16 @@ pub(super) fn opaque(id: u32) -> u32 {
     OPAQUE | FRONT_BACK | id << 24
 }
 
+/// Texture memory with no bank behind any slot: every read is 0.
+pub(super) fn no_textures() -> Textures<'static> {
+    Textures::from_slots(&[], [None; 4], [None; 6])
+}
+
 /// All 192 lines of `ram` under DISP3DCNT `disp3dcnt` and registers `regs`.
 pub(super) fn draw(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs) -> Vec<Line3d> {
     let frame = Frame::new(Scene { ram, swap_bits: 0 }, regs, disp3dcnt);
     let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
-    frame.draw(&SequentialExecutor, &mut lines);
+    frame.draw(&SequentialExecutor, &no_textures(), &mut lines);
     lines
 }
 
@@ -107,7 +114,7 @@ pub(super) fn draw(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs) -> Vec<Line3d> 
 pub(super) fn draw_all(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs, swap_bits: u8) -> Vec<Line3d> {
     let frame = Frame::new(Scene { ram, swap_bits }, regs, disp3dcnt);
     let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
-    frame.draw(&SequentialExecutor, &mut lines);
+    frame.draw(&SequentialExecutor, &no_textures(), &mut lines);
     lines
 }
 
@@ -115,7 +122,7 @@ pub(super) fn draw_all(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs, swap_bits: 
 pub(super) fn draw_swap(ram: &Ram, swap_bits: u8) -> Vec<Line3d> {
     let frame = Frame::new(Scene { ram, swap_bits }, &regs(), 0);
     let mut lines = vec![[Pixel3d::default(); SCREEN_WIDTH]; crate::SCREEN_HEIGHT];
-    frame.draw(&SequentialExecutor, &mut lines);
+    frame.draw(&SequentialExecutor, &no_textures(), &mut lines);
     lines
 }
 
@@ -126,7 +133,7 @@ pub(super) fn draw_plain(ram: &Ram, disp3dcnt: u16, regs: &RenderRegs) -> Vec<Li
     lines
         .iter_mut()
         .enumerate()
-        .for_each(|(y, line)| frame.draw_line(y, line));
+        .for_each(|(y, line)| frame.draw_line(y, &no_textures(), line));
     lines
 }
 

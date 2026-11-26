@@ -9,17 +9,19 @@
 //! model"). The per-line working state (depth, polygon ID) is a pair of stack arrays: nothing
 //! allocates on the pixel path. The snapshot is a pure function of the scene and the registers, so
 //! it is never saved; only the finished output is (`Machine::frame3d`).
-// TODO(phase7): the resolve pass (edge marking, fog, anti-aliasing) is #51; textures, toon and
-// decal shading are #50 and #51; the rear bitmap is #50.
+// TODO(phase7): the resolve pass (edge marking, fog, anti-aliasing) and toon shading are #51; the
+// rear bitmap and the remaining texture formats are #50.
 
 mod setup;
 mod span;
 #[cfg(test)]
 mod tests;
+mod texture;
 
 use super::executor::ScanlineExecutor;
 use super::render::{RenderRegs, Scene};
 use crate::SCREEN_WIDTH;
+use crate::bus::Textures;
 use crate::gpu2d::{Line3d, Pixel3d};
 use setup::{Clear, PolyDraw, ScreenVertex};
 
@@ -53,8 +55,8 @@ impl Frame {
     }
 
     /// Draws line `y` into `out`: the rear plane, then every polygon in order. Reads only the
-    /// snapshot and writes only `out`.
-    pub(crate) fn draw_line(&self, y: usize, out: &mut Line3d) {
+    /// snapshot and the texture memory `textures`, and writes only `out`.
+    pub(crate) fn draw_line(&self, y: usize, textures: &Textures<'_>, out: &mut Line3d) {
         let clear = Pixel3d {
             color: self.clear.color,
             alpha: self.clear.alpha,
@@ -68,12 +70,17 @@ impl Frame {
             stencil: [false; SCREEN_WIDTH],
         };
         self.polygons.iter().for_each(|poly| {
-            span::draw_polygon(poly, &self.vertices, y, &mut state, out);
+            span::draw_polygon(poly, &self.vertices, y, textures, &mut state, out);
         });
     }
 
     /// Draws every line of `lines` (one per screen line) through `executor`.
-    pub(crate) fn draw<E: ScanlineExecutor>(&self, executor: &E, lines: &mut [Line3d]) {
-        executor.for_each_line(lines, |y, line| self.draw_line(y, line));
+    pub(crate) fn draw<E: ScanlineExecutor>(
+        &self,
+        executor: &E,
+        textures: &Textures<'_>,
+        lines: &mut [Line3d],
+    ) {
+        executor.for_each_line(lines, |y, line| self.draw_line(y, textures, line));
     }
 }

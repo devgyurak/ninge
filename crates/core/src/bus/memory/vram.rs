@@ -408,6 +408,18 @@ impl<'a> Textures<'a> {
         Self { vram, slots }
     }
 
+    /// Texture memory over `vram` with image slot *n* at `image[n]` and palette slot *n* at
+    /// `palette[n]` (byte offsets, `None` where no bank backs the slot), for the rasterizer's
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn from_slots(
+        vram: &'a [u8],
+        image: [Option<u32>; TEX_IMAGE_SLOTS],
+        palette: [Option<u32>; TEX_PALETTE_SLOTS],
+    ) -> Self {
+        Self::new(vram, TexSlots { image, palette })
+    }
+
     /// The byte at `offset` (0 to 512 KiB) of the texture image space; past it, 0.
     // TODO(hw-unverified): a slot no bank backs, and an offset past the space, read 0
     // (`vram-banks.md`, "Unverified").

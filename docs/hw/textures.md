@@ -107,9 +107,10 @@ of slot 1; 1024x1024 cannot exist because slots 0 and 2 are not adjacent.
 
 TEXCOORD gives S and T as 1.11.4 fixed point, in texels (1.0 is one texel). The model
 interpolates them across the polygon in perspective-correct fashion, with the same 1/W weight as
-the colour (`rasterizer.md`, "Colour along a polygon"), keeps extra fractional bits during the
-interpolation and takes the integer texel as the **floor** of the interpolated S or T (the value
-shifted right by 4). Then, per axis with size *n*:
+the colour (`rasterizer.md`, "Colour along a polygon"), rounds the interpolated S and T to the nearest
+1/16 texel (the precision of the 1.11.4 inputs, so a span the weights cannot hit exactly still reads
+the texel it should) and takes the integer texel as the **floor** of that (the value shifted right
+by 4), sampling at the pixel's top left corner. Then, per axis with size *n*:
 
 - **Clamp** (repeat bit clear): the texel is held to *0 .. n - 1*, so the edge texels repeat
   outwards. GBATEK: "the texture coordinates are clipped to MinMax(0, Size-1)".

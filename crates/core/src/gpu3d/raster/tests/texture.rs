@@ -144,14 +144,25 @@ pub(super) fn grid(f: impl Fn(u16, u16) -> u16) -> [[u16; 8]; 8] {
     std::array::from_fn(|y| std::array::from_fn(|x| f(x as u16, y as u16)))
 }
 
+/// A colour for palette index `k` of up to 255 that differs in every index: red `k mod 32`, green
+/// `k / 32`.
+fn wide(k: u16) -> u16 {
+    (k & 31) | ((k >> 5) << 5)
+}
+
 #[test]
 fn given_a_256_color_texture_when_one_texel_maps_to_a_pixel_then_each_pixel_shows_its_palette_colour()
  {
-    let bytes: Vec<u8> = (0..64).collect();
-    let mem = TexMem::new().image(0, &bytes).palette(0, &palette_of(64));
+    // Texel i has index 4i + 3, up to 255, so a lost high bit would show.
+    let bytes: Vec<u8> = (0..64u8).map(|i| 4 * i + 3).collect();
+    let palette: Vec<u16> = (0..256).map(wide).collect();
+    let mem = TexMem::new().image(0, &bytes).palette(0, &palette);
     let ram = textured(&[(opaque(1), param(0, 0, COLORS256, 0), 0, unit_quad())]);
     let lines = draw_with(&ram, TEXTURES_ON, &mem);
-    assert_eq!(block_diffs(&lines, &grid(|x, y| colour(y * 8 + x))), vec![]);
+    assert_eq!(
+        block_diffs(&lines, &grid(|x, y| wide(4 * (y * 8 + x) + 3))),
+        vec![]
+    );
 }
 
 #[test]
@@ -491,4 +502,16 @@ fn given_a_polygon_with_perspective_when_s_is_interpolated_then_it_follows_1_ove
     let ram = textured(&[(opaque(1), param(0, 1, COLORS256, 0), 0, perspective_quad())]);
     let lines = draw_with(&ram, TEXTURES_ON, &mem);
     assert_eq!(at(&lines, 24, 16).color, colour(5));
+}
+
+#[test]
+fn given_a_wire_frame_when_its_top_edge_is_textured_then_each_pixel_reads_its_own_texel() {
+    // The top edge of the unit quad runs over texture row 0, one texel to a pixel: pixel k of the
+    // edge shows index k.
+    let bytes: Vec<u8> = (0..64).collect();
+    let mem = TexMem::new().image(0, &bytes).palette(0, &palette_of(64));
+    let ram = textured(&[(FRONT_BACK, param(0, 0, COLORS256, 0), 0, unit_quad())]);
+    let lines = draw_with(&ram, TEXTURES_ON, &mem);
+    let got: Vec<u16> = (16..24).map(|x| at(&lines, x, 16).color).collect();
+    assert_eq!(got, (0..8).map(colour).collect::<Vec<_>>());
 }

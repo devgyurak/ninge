@@ -47,7 +47,8 @@ _start:
     nop
     nop
 
-    @ Engine A on the upper screen, the 3D engine on, texture mapping on.
+    @ Engine A on the upper screen, the 3D engine on, texture mapping and blending on (DISP3DCNT 09h; the lower
+    @ edge of the translucent-ordered regions depends on the blending).
     ldr r0, =POWCNT1
     ldr r1, =0x800F
     strh r1, [r0]

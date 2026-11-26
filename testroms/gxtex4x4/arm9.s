@@ -416,7 +416,7 @@ texdata:
     .word 0x00000000
 texdata_end:
 paldata:
-    .word 0x08947A8A
+    .word 0x0CB57A8A
     .word 0x0C417FFF
     .word 0x00000000
     .word 0x00000000

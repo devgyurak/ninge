@@ -1,0 +1,2 @@
+# Golden frames for testroms/gxrearbmp. Format and review flow: tests/golden/README.md.
+frames=4 top=0b00ea15462998a5 bottom=1a0564b2e8de2325

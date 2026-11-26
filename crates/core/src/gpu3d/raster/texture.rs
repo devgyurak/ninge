@@ -148,7 +148,7 @@ impl Tex {
             Format::Compressed => return self.compressed(mem, x, y),
             Format::Direct => {
                 // Bit 15 is the alpha, 31 when set and 0 when clear; there is no palette.
-                let half = byte(2 * i) | byte(2 * i + 1) << 8;
+                let half = u32::from(mem.image_half(self.image + 2 * i));
                 let alpha = if half & 0x8000 != 0 { OPAQUE } else { 0 };
                 return Texel {
                     color: (half & 0x7FFF) as u16,
@@ -181,9 +181,7 @@ impl Tex {
             2 => Some(SLOT_BYTES + SLOT_BYTES / 2 + within),
             _ => None,
         };
-        let half = info.map_or(0, |a| {
-            u32::from(mem.image_byte(a)) | u32::from(mem.image_byte(a + 1)) << 8
-        });
+        let half = info.map_or(0, |a| u32::from(mem.image_half(a)));
         let (mode, base) = (
             half >> BLOCK_MODE_SHIFT,
             self.palette + (half & BLOCK_OFFSET_MASK) * BLOCK_OFFSET_UNIT,

@@ -55,10 +55,12 @@ const DISP3DCNT_ALPHA_TEST: u16 = 1 << 2;
 const DISP3DCNT_BLEND: u16 = 1 << 3;
 /// The alpha of an opaque pixel (`texture::OPAQUE`) as a POLYGON_ATTR field.
 pub(super) const OPAQUE: u32 = texture::OPAQUE as u32;
+/// DISP3DCNT bit 0: texture mapping on, and bit 14: the rear plane is the bitmaps in texture slots 2
+/// and 3.
+const DISP3DCNT_TEXTURE: u16 = 1;
+const DISP3DCNT_REAR_BITMAP: u16 = 1 << 14;
 // DISP3DCNT bits that change which edges draw.
 const DISP3DCNT_ANTIALIAS: u16 = 1 << 4;
-/// DISP3DCNT bit 0: texture mapping on.
-const DISP3DCNT_TEXTURE: u16 = 1;
 const DISP3DCNT_EDGE_MARKING: u16 = 1 << 5;
 
 /// One vertex on the screen: a position in 1/256 pixel (y down, line 0 first) and its attributes.
@@ -117,9 +119,19 @@ pub(super) struct PolyDraw {
     pub(super) y_max: i64,
 }
 
+/// The scroll of the rear bitmaps: CLRIMAGE_OFFSET's X in bits 0-7 and Y in bits 8-14.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct RearBitmap {
+    pub(super) x: u8,
+    pub(super) y: u8,
+}
+
 /// The rear plane's value for a pixel nothing covers.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Clear {
+    /// The rear bitmaps in texture slots 2 and 3 (DISP3DCNT bit 14), with the scroll offsets; `None`
+    /// for the uniform plane of CLEAR_COLOR and CLEAR_DEPTH.
+    pub(super) bitmap: Option<RearBitmap>,
     pub(super) color: u16,
     /// The colour as 6-bit channels (`X x 2 + 1`, 0 stays 0).
     pub(super) color6: [u8; 3],
@@ -199,7 +211,7 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
     let mut frame = Frame {
         vertices: Vec::with_capacity(ram.vertices.len()),
         polygons: Vec::with_capacity(ram.polygons.len()),
-        clear: clear_from(regs),
+        clear: clear_from(regs, disp3dcnt),
     };
     let marked = disp3dcnt & (DISP3DCNT_EDGE_MARKING | DISP3DCNT_ANTIALIAS) != 0;
     ram.polygons.iter().for_each(|p| {
@@ -363,10 +375,16 @@ pub(super) fn build(scene: Scene<'_>, regs: &RenderRegs, disp3dcnt: u16) -> Fram
 }
 
 /// The rear plane from CLEAR_COLOR and CLEAR_DEPTH.
-fn clear_from(regs: &RenderRegs) -> Clear {
+fn clear_from(regs: &RenderRegs, disp3dcnt: u16) -> Clear {
     // TODO(hw-unverified): the clear colour is the 15-bit register value as it is; whether it is
     // expanded to 6 bits like a vertex colour is not stated (`rasterizer.md`, "Unverified").
     Clear {
+        // TODO(hw-unverified): the Y offset is bits 8-14 as the register stores them, so 0 to 127
+        // (`textures.md`, "Unverified").
+        bitmap: (disp3dcnt & DISP3DCNT_REAR_BITMAP != 0).then_some(RearBitmap {
+            x: (regs.clrimage_offset & 0xFF) as u8,
+            y: ((regs.clrimage_offset >> 8) & 0x7F) as u8,
+        }),
         color: (regs.clear_color & 0x7FFF) as u16,
         color6: [0, 5, 10].map(|shift| expand6(((regs.clear_color >> shift) & 0x1F) as u16) as u8),
         alpha: ((regs.clear_color >> 16) & 0x1F) as u8,

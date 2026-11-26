@@ -7,6 +7,7 @@ mod alpha;
 mod depth;
 mod fill;
 mod interp;
+mod rear;
 mod shadow;
 mod texalpha;
 mod texcomp;

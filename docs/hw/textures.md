@@ -49,8 +49,9 @@ for every other palette format. The direct format does not use it. The palette s
 ### DISP3DCNT and the rear plane
 
 Bit 0 turns texturing on; bit 14 turns the rear bitmap on. CLRIMAGE_OFFSET holds the bitmap's X
-scroll in bits 0-7 and its Y scroll in bits 8-15 (GBATEK's text says bits 8-14 for Y and in the
-same line "0..255"; 8 bits are needed for that range, see "Unverified"). The scroll registers are
+scroll in bits 0-7 and its Y scroll in bits 8-14, as the register stores them
+(`geometry-engine.md`); GBATEK's text says bits 8-14 for Y and in the same line "0..255", which
+needs 8 bits, so the model's Y scroll is 0 to 127 (see "Unverified"). The scroll registers are
 also reachable as the upper half of CLEAR_DEPTH, which is the same halfword (GBATEK: CLEAR_DEPTH
 bits 16-31 are CLRIMAGE_OFFSET).
 
@@ -169,7 +170,7 @@ a whole 128 KiB slot: the **colour** bitmap in texture slot 2 (image offset 0x40
 
 - Colour entry: bits 0-14 colour, bit 15 alpha (0 transparent, 1 solid; 0 and 31 as a 5-bit alpha).
 - Depth entry: bits 0-14 depth, expanded to 24 bits as for CLEAR_DEPTH (`rasterizer.md`, "Depth");
-  bit 15 is the fog flag the pixel starts with (stored for #51, which implements fog).
+  bit 15 is the fog flag the pixel starts with (the model does not keep it until fog, #51).
 - The polygon ID of every rear pixel still comes from CLEAR_COLOR bits 24-29.
 - Screen pixel (*x*, *line*) reads entry (*(x + X offset) mod 256*, *(line + Y offset) mod 256*),
   row-major, 2 bytes per entry. The visible part is 256x192; the bottom 64 rows are off screen
@@ -230,8 +231,12 @@ Everything GBATEK does not state. Each item gets `TODO(hw-unverified)` at its co
 - Whether the flip bit with repeat clear does anything (the model: nothing). — `gpu3d/raster/` —
   verify by a test ROM.
 - CLRIMAGE_OFFSET's Y field width (bits 8-14 per one GBATEK line, 0..255 per the next; the model
-  uses bits 8-15) and what X, Y offsets beyond the bitmap do (the model: modulo 256). —
+  uses bits 8-14 as the register stores them) and what X, Y offsets beyond the bitmap do (the
+  model: modulo 256). —
   `gpu3d/raster/` — verify by a test ROM with a marked bitmap row.
+- Whether the depth bitmap applies under a transparent rear pixel (alpha 0), which the model does
+  (a polygon is depth-tested against it). — `gpu3d/raster/rear.rs` — verify by a test ROM that
+  draws over a transparent tile with a nearest depth.
 - What the rear bitmap does with an unmapped slot (the model: reads 0). — `gpu3d/raster/` — verify
   by a test ROM with one slot unmapped.
 - That a shadow polygon (mode 3) draws no texture (the model: its pixels are the vertex colour).

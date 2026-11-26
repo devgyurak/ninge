@@ -9,9 +9,9 @@
 //! model"). The per-line working state (depth, polygon ID) is a pair of stack arrays: nothing
 //! allocates on the pixel path. The snapshot is a pure function of the scene and the registers, so
 //! it is never saved; only the finished output is (`Machine::frame3d`).
-// TODO(phase7): the resolve pass (edge marking, fog, anti-aliasing) and toon shading are #51; the
-// rear bitmap is #50.
+// TODO(phase7): the resolve pass (edge marking, fog, anti-aliasing) and toon shading are #51.
 
+mod rear;
 mod setup;
 mod span;
 #[cfg(test)]
@@ -61,7 +61,10 @@ impl Frame {
             color: self.clear.color,
             alpha: self.clear.alpha,
         };
-        out.fill(clear);
+        // The bitmap plane writes every pixel itself.
+        if self.clear.bitmap.is_none() {
+            out.fill(clear);
+        }
         let mut state = LineState {
             depth: [self.clear.depth; SCREEN_WIDTH],
             id: [self.clear.id; SCREEN_WIDTH],
@@ -69,6 +72,9 @@ impl Frame {
             translucent: [false; SCREEN_WIDTH],
             stencil: [false; SCREEN_WIDTH],
         };
+        if let Some(bitmap) = &self.clear.bitmap {
+            rear::fill(y, bitmap, textures, &mut state, out);
+        }
         self.polygons.iter().for_each(|poly| {
             span::draw_polygon(poly, &self.vertices, y, textures, &mut state, out);
         });

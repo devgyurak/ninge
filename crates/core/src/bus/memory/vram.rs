@@ -433,6 +433,12 @@ impl<'a> Textures<'a> {
         )
     }
 
+    /// The little-endian halfword at byte `offset` of the texture image space; bytes no bank backs,
+    /// or past the space, read 0.
+    pub fn image_half(&self, offset: u32) -> u16 {
+        u16::from(self.image_byte(offset)) | u16::from(self.image_byte(offset + 1)) << 8
+    }
+
     /// The 15-bit colour at byte `offset` (0 to 96 KiB) of the texture palette space. An odd offset
     /// reads the colour that holds it.
     // TODO(hw-unverified): a slot no bank backs, and an offset past the 96 KiB, read colour 0, and
